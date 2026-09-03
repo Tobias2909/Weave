@@ -13,7 +13,8 @@ Rectangle {
 
     visible: showing
     height: showing ? (expanded && hasStreams ? 116 : 34) : 0
-    color: Theme.colors.surface
+    color: Qt.rgba(Theme.colors.surface.r, Theme.colors.surface.g,
+                   Theme.colors.surface.b, Theme.washed ? 0.62 : 1.0)
 
     Rectangle {
         anchors.bottom: parent.bottom
@@ -98,7 +99,9 @@ Rectangle {
         clip: true
         model: App.liveStreams
 
-        ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
+        // No visible bar. The wheel scrolls it and a bar across a band this
+        // short is more clutter than help.
+        ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AlwaysOff }
 
         delegate: Rectangle {
             id: streamCard

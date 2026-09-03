@@ -1,0 +1,28 @@
+name = "Bloom"
+
+[colors]
+background = "#140d16"
+surface = "#1e1422"
+surfaceRaised = "#2a1c30"
+border = "#452a4c"
+text = "#fdeaf6"
+textMuted = "#c39cba"
+accent = "#ff6fd8"
+accentHover = "#ff97e3"
+live = "#ff5c8a"
+progress = "#ff6fd8"
+watchedDim = "#8a5f80"
+badgeBackground = "#000000b0"
+badgeText = "#fff2fa"
+error = "#ffc069"
+twitch = "#b06bff"
+youtube = "#ff5c7a"
+
+# Two colours meeting, which is what makes it read as a wash rather than a fade.
+[gradient]
+angle = 30
+stops = [
+  { position = 0.0, color = "#7a2360" },
+  { position = 0.35, color = "#3d1b46" },
+  { position = 1.0, color = "#140d16" },
+]

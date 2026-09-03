@@ -6,7 +6,8 @@ import QtQuick.Layouts
 // shows whatever is on screen even when mpv moved on by itself.
 Rectangle {
     id: panel
-    color: Theme.colors.surface
+    color: Qt.rgba(Theme.colors.surface.r, Theme.colors.surface.g,
+                   Theme.colors.surface.b, Theme.washed ? 0.62 : 1.0)
 
     Rectangle {
         anchors.left: parent.left

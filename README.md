@@ -31,6 +31,8 @@ This is the first milestone. Working right now
 * A detail panel beside the feed showing what is playing, with views, likes,
   an estimated dislike count and the top comment threads, resizable and
   remembered
+* Themes as files you can write yourself, four of them built in, some with a
+  gradient that washes across the window
 * A grid of cards in a dark window, sized to the space it has
 * A duration badge, view and like counts, the channel icon, and a progress line
   showing where you stopped, read out of the resume files `mpv` already writes
@@ -42,9 +44,9 @@ This is the first milestone. Working right now
 * A visible banner whenever a source reports a problem, because a scraper that
   returns nothing looks exactly like a quiet day
 
-Coming in later milestones, roughly in this order. The theme system, a YouTube
-Music area that plays audio inside Weave, search and playlists and history, and
-a diagnostics page.
+Coming in later milestones, roughly in this order. A YouTube Music area that
+plays audio inside Weave, search and playlists and history, and a diagnostics
+page.
 
 The detail panel follows `mpv` rather than the grid, so it shows whatever is on
 screen even when `mpv` moved to the next thing by itself. Closing it closes it
@@ -104,6 +106,33 @@ nothing to type. It is approved once and then remembered, and every channel you
 follow is tracked from that moment on, so they show up in the feed and can go
 into groups like anything else. There is also a Connect button in the live bar
 itself if you would rather not use the terminal.
+
+## Themes
+
+A theme is a file. It has a name, a set of named colours, and an optional
+gradient. The ones that ship with Weave are in exactly the same format as one
+you write, so any of them is a working starting point and none of them is
+privileged.
+
+```sh
+python -m weave themes
+python -m weave themes use Ember
+python -m weave themes export Ember
+```
+
+Exporting copies a theme into `~/.config/weave/themes`, where you can edit it.
+The running window repaints as you save, which is the only time anyone is
+editing a palette. There is a picker in the toolbar as well.
+
+A file that is wrong in some way still loads. Colours it leaves out keep their
+default, colours it invents are reported and ignored, and a value that is not a
+colour is reported and skipped rather than handed to the interface where it
+would fail quietly at paint time.
+
+The gradient takes an angle and a list of stops. Zero runs straight down the
+window and forty five starts at the top left corner, so a corner glow is one
+line. Whichever bars sit over a gradient go slightly translucent, otherwise they
+would cover the very corner the light comes from.
 
 ## Pictures are kept on disk
 

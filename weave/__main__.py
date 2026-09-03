@@ -12,7 +12,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from . import config, ids, imagecache, paths, tokens
+from . import config, ids, imagecache, paths, themes, tokens
 from .sources import twitch
 from .db import Database
 from .net import Fetcher, Throttle
@@ -409,6 +409,46 @@ def _cmd_live(_args) -> int:
     return 0
 
 
+def _cmd_themes(args) -> int:
+    if args.action == "export":
+        source = next((t for t in themes.available()
+                       if t.name.lower() == args.name.lower() and t.source), None)
+        if source is None:
+            print(f"no theme named {args.name!r}", file=sys.stderr)
+            return 1
+        themes.user_dir().mkdir(parents=True, exist_ok=True)
+        target = themes.user_dir() / source.source.name
+        if target.exists():
+            print(f"{target} already exists, so nothing was written", file=sys.stderr)
+            return 1
+        target.write_text(source.source.read_text())
+        print(f"copied to {target}")
+        print("edit it and the running window repaints as you save")
+        return 0
+
+    db = Database(paths.DB_FILE)
+    if args.action == "use":
+        found = next((t for t in themes.available()
+                      if t.name.lower() == args.name.lower()), None)
+        if found is None:
+            print(f"no theme named {args.name!r}", file=sys.stderr)
+            return 1
+        db.set_state("theme", found.name)
+        print(f"using {found.name}")
+        return 0
+
+    current = db.get_state("theme", themes.DEFAULT_NAME)
+    for theme in themes.available():
+        mark = "*" if theme.name == current else " "
+        where = "built in" if theme.builtin else str(theme.source)
+        wash = f"gradient at {theme.gradient['angle']:.0f} degrees" if theme.gradient else "flat"
+        print(f"{mark} {theme.name:<20} {wash:<28} {where}")
+        for problem in theme.problems:
+            print(f"    problem {problem}")
+    print(f"\nyour own themes go in {themes.user_dir()}")
+    return 0
+
+
 def _cmd_gui(_args) -> int:
     from .app import run
     return run(sys.argv[:1])
@@ -438,6 +478,15 @@ def main() -> int:
     twitch_parser.set_defaults(func=_cmd_twitch)
 
     subparsers.add_parser("live", help="show who is live right now").set_defaults(func=_cmd_live)
+
+    theme_parser = subparsers.add_parser("themes", help="list, choose or copy a theme")
+    theme_actions = theme_parser.add_subparsers(dest="action")
+    theme_actions.add_parser("list", help="show what is available")
+    theme_use = theme_actions.add_parser("use", help="choose one")
+    theme_use.add_argument("name")
+    theme_copy = theme_actions.add_parser("export", help="copy one into your config to edit")
+    theme_copy.add_argument("name")
+    theme_parser.set_defaults(func=_cmd_themes, action="list")
 
     cache = subparsers.add_parser("cache", help="report or clean the image cache")
     cache.add_argument("--prune", action="store_true", help="drop what is past the retention window")

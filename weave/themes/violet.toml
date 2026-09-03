@@ -1,0 +1,29 @@
+name = "Violet Glow"
+
+[colors]
+background = "#120f1c"
+surface = "#1b1630"
+surfaceRaised = "#251e40"
+border = "#372c5c"
+text = "#f0eaff"
+textMuted = "#a99cc9"
+accent = "#c264ff"
+accentHover = "#d68cff"
+live = "#ff5c8a"
+progress = "#ff4d94"
+watchedDim = "#6b5f8c"
+badgeBackground = "#000000b0"
+badgeText = "#f7f2ff"
+error = "#ffb020"
+twitch = "#a970ff"
+youtube = "#ff5c7a"
+
+# The light comes from one corner and falls away across the window. An angle of
+# zero runs straight down, and forty five starts at the top left corner.
+[gradient]
+angle = 45
+stops = [
+  { position = 0.0, color = "#3a1d6e" },
+  { position = 0.55, color = "#1b1630" },
+  { position = 1.0, color = "#120f1c" },
+]

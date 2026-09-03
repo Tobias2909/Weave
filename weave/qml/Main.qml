@@ -13,6 +13,11 @@ ApplicationWindow {
            ? "Weave  ·  " + App.channelInfo.title : "Weave"
     color: Theme.colors.background
 
+    ThemeBackground {
+        anchors.fill: parent
+        z: -1
+    }
+
     // Which video the context menu is acting on.
     property string menuKey: ""
     property string menuChannelKey: ""
@@ -43,9 +48,16 @@ ApplicationWindow {
         nameField.selectAll()
     }
 
+    // A panel over a gradient is translucent, otherwise the bars would cover
+    // the corner the light comes from and the wash would never be seen.
+    readonly property real panelOpacity: Theme.washed ? 0.62 : 1.0
+    function panelColour(role) {
+        return Qt.rgba(role.r, role.g, role.b, root.panelOpacity)
+    }
+
     header: ToolBar {
         background: Rectangle {
-            color: Theme.colors.surface
+            color: root.panelColour(Theme.colors.surface)
             Rectangle {
                 anchors.bottom: parent.bottom
                 width: parent.width
@@ -90,6 +102,11 @@ ApplicationWindow {
             FlatButton {
                 text: "Import subscriptions"
                 onClicked: App.importSubscriptions()
+            }
+
+            FlatButton {
+                text: Theme.current
+                onClicked: themeMenu.popup()
             }
 
             Item { Layout.fillWidth: true }
@@ -159,7 +176,7 @@ ApplicationWindow {
         anchors.bottom: parent.bottom
         anchors.topMargin: banner.height
         width: 214
-        color: Theme.colors.surface
+        color: root.panelColour(Theme.colors.surface)
 
         Rectangle {
             anchors.right: parent.right
@@ -419,6 +436,30 @@ ApplicationWindow {
         MenuItem {
             text: "Put in a new box"
             onTriggered: { videoMenu.dismiss(); root.askForName(-1, root.menuKey, "") }
+        }
+    }
+
+    Menu {
+        id: themeMenu
+        objectName: "themeMenu"
+
+        Instantiator {
+            model: Theme.names
+            onObjectAdded: (index, object) => {
+                object.owner = themeMenu
+                themeMenu.insertItem(index, object)
+            }
+            onObjectRemoved: (index, object) => themeMenu.removeItem(object)
+            delegate: MenuItem {
+                required property var modelData
+                property var owner: null
+                text: (modelData === Theme.current ? "✓  " : "   ") + modelData
+                onTriggered: {
+                    Theme.select(modelData)
+                    if (owner)
+                        owner.dismiss()
+                }
+            }
         }
     }
 
