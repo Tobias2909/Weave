@@ -43,21 +43,25 @@ Item {
             anchors.bottomMargin: 16
             spacing: 14
 
-            Rectangle {
-                width: 72
-                height: 72
-                radius: 36
-                clip: true
-                color: Theme.colors.surfaceRaised
-                border.width: 2
-                border.color: Theme.colors.surface
+            Item {
+                width: 76
+                height: 76
 
-                Image {
+                RoundedImage {
                     anchors.fill: parent
+                    anchors.margins: 2
+                    circle: true
                     source: header.info.avatar ? header.info.avatar : ""
-                    asynchronous: true
-                    cache: true
-                    fillMode: Image.PreserveAspectCrop
+                }
+
+                // A ring, so the icon reads against whatever the banner is.
+                Rectangle {
+                    anchors.fill: parent
+                    radius: width / 2
+                    color: "transparent"
+                    border.width: 2
+                    border.color: Theme.colors.surface
+                    antialiasing: true
                 }
             }
 

@@ -36,7 +36,7 @@ threshold = 0.7
 # visit, so the stored copy is kept for this instead.
 image_days = 7
 # Ceiling for the image cache. A thumbnail averages about 17 KB.
-image_max_mb = 200
+image_max_mb = 300
 
 [ui]
 # How far one wheel notch moves the grid, counted in card rows. A Flickable on

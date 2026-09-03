@@ -50,7 +50,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "image_days": 7,
         # Ceiling for the image cache. Measured, a thumbnail averages 17.5 KB,
         # so several thousand videos plus avatars and banners fit in this.
-        "image_max_mb": 200,
+        "image_max_mb": 300,
     },
     "ui": {
         # How far one wheel notch moves the grid, counted in card rows. A

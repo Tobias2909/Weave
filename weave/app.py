@@ -11,6 +11,7 @@ whether a menu closes when an entry is chosen.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Callable
@@ -18,6 +19,7 @@ from typing import Callable
 from PySide6.QtCore import QTimer, QUrl
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQuick import QQuickWindow
 from PySide6.QtQuickControls2 import QQuickStyle
 
 from . import config, imagecache, paths
@@ -29,6 +31,22 @@ from .sources.progress import default_dir as default_watch_later
 from .ui.theme import Theme
 
 QML_DIR = Path(__file__).parent / "qml"
+
+
+def _effects_available() -> bool:
+    """Whether a shader effect will actually draw.
+
+    The software scene graph cannot run one, and reports nothing rather than
+    failing, so a masked picture would simply be missing. The backend name is
+    empty until the scene graph starts, which is after QML has to be loaded, so
+    the environment is read first and the answer is corrected once the window
+    exists.
+    """
+    forced = (os.environ.get("QT_QUICK_BACKEND")
+              or os.environ.get("QMLSCENE_DEVICE") or "").lower()
+    if forced in ("software", "softwarecontext"):
+        return False
+    return QQuickWindow.sceneGraphBackend() != "software"
 
 
 def _restore_geometry(window, db: Database) -> None:
@@ -73,6 +91,10 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
     context.setContextProperty("App", bridge)
     context.setContextProperty("Theme", theme)
     context.setContextProperty("feedModel", model)
+    # Rounding a picture needs a shader, and the software scene graph cannot
+    # run one. Told to QML so it can fall back to square pictures rather than
+    # drawing nothing at all.
+    context.setContextProperty("EffectsAvailable", _effects_available())
     engine.addImportPath(str(QML_DIR))
     engine.load(QUrl.fromLocalFile(str(QML_DIR / "Main.qml")))
     if not engine.rootObjects():
@@ -80,6 +102,9 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
         return 1
 
     window = engine.rootObjects()[0]
+    # The backend is known for certain now, so correct the guess. Re-setting a
+    # context property re-evaluates the bindings that read it.
+    context.setContextProperty("EffectsAvailable", _effects_available())
     _restore_geometry(window, db)
 
     player.start()

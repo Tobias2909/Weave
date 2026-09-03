@@ -50,20 +50,17 @@ Rectangle {
             height: width * 9 / 16
 
             Rectangle {
+                id: thumbnailFrame
                 anchors.fill: parent
-                radius: 6
+                radius: 8
                 color: Theme.colors.background
-                clip: true
 
-                Image {
+                RoundedImage {
                     anchors.fill: parent
+                    radius: parent.radius
                     source: card.thumbnail
-                    asynchronous: true
-                    cache: true
-                    fillMode: Image.PreserveAspectCrop
-                    // Thumbnails come straight from the image CDN rather than
-                    // through the request throttle, which only guards the
-                    // endpoints that can rate limit us.
+                    // Pictures are served by the disk cache provider, so the
+                    // source is already an image:// address.
                 }
 
                 // A moving thumbnail replaces the still on hover in a later step.
@@ -78,6 +75,10 @@ Rectangle {
                     anchors.bottom: parent.bottom
                     height: 3
                     color: Theme.colors.badgeBackground
+                    // Matches the frame so the bar does not poke out past the
+                    // rounded corners. Qt clamps this to half the height.
+                    bottomLeftRadius: thumbnailFrame.radius
+                    bottomRightRadius: thumbnailFrame.radius
 
                     Rectangle {
                         anchors.left: parent.left
@@ -85,6 +86,7 @@ Rectangle {
                         anchors.bottom: parent.bottom
                         width: parent.width * Math.min(1, card.progress)
                         color: Theme.colors.progress
+                        bottomLeftRadius: thumbnailFrame.radius
                     }
                 }
             }
@@ -134,25 +136,16 @@ Rectangle {
                 onTapped: card.channelRequested()
             }
 
-            Rectangle {
-                width: 18
-                height: 18
-                radius: 9
-                clip: true
-                color: Theme.colors.surfaceRaised
+            RoundedImage {
+                width: 24
+                height: 24
+                circle: true
                 visible: card.channelAvatar !== ""
-
-                Image {
-                    anchors.fill: parent
-                    source: card.channelAvatar
-                    asynchronous: true
-                    cache: true
-                    fillMode: Image.PreserveAspectCrop
-                }
+                source: card.channelAvatar
             }
 
             Text {
-                width: channelRow.width - (card.channelAvatar !== "" ? 24 : 0)
+                width: channelRow.width - (card.channelAvatar !== "" ? 30 : 0)
                 text: card.channelTitle
                 color: channelHover.hovered ? Theme.colors.text : Theme.colors.textMuted
                 font.pixelSize: 12
