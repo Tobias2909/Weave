@@ -65,6 +65,14 @@ Shorts are found without a request wherever possible. A known duration past
 three minutes settles it for free, and only videos short enough to actually be
 one get a lookup.
 
+## Nothing is thrown away
+
+Video rows are inserted and never pruned. A channel feed publishes only its
+newest fifteen entries, so each refresh adds whatever is new and only refreshes
+the counts on what is already known. A channel's stored history therefore grows
+as it publishes, rather than being replaced by the current window, and watched
+marks and box membership survive every later refresh.
+
 ## What a refresh costs
 
 Measured on a subscription list of 455 channels. The import takes about two
@@ -184,7 +192,12 @@ python -m weave box delete Later
 
 Inside the window, left click a card to play it in `mpv`, click the channel name
 to open that channel's page, and right click for a menu that plays, opens the
-channel, toggles the watched mark, and puts the video into or out of any box. The box in the header adds a channel, the button beside it imports
+channel, toggles the watched mark, and puts the video into or out of any box.
+
+A wheel over the grid moves half a card row per notch, which is set by
+`scroll_rows_per_notch` in the config if that feels wrong. A wheel over the list
+on the left moves the selection instead of scrolling it, so stepping through the
+boxes and back to the whole feed is one gesture. The box in the header adds a channel, the button beside it imports
 your subscriptions, and the list down the left filters the feed to one group.
 
 ## Configuration

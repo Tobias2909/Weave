@@ -77,6 +77,46 @@ class Videos(DatabaseCase):
         self.assertEqual(len(self.db.feed()), 1)
 
 
+class Accumulation(DatabaseCase):
+    """A channel feed publishes only its newest fifteen entries, so the stored
+    history has to grow across polls rather than being replaced by each one."""
+
+    def setUp(self):
+        super().setUp()
+        self.db.add_channel("yt:UC1", "youtube", "UC1", "One")
+
+    def test_a_later_poll_adds_rather_than_replaces(self):
+        first_window = [self.video(f"aaaaaaaaaa{n}", published_at=100 + n) for n in range(3)]
+        self.db.upsert_videos(first_window)
+        # A later poll sees two new videos, and the oldest has dropped out of
+        # the window entirely.
+        second_window = [self.video(f"aaaaaaaaaa{n}", published_at=100 + n) for n in (1, 2)]
+        second_window += [self.video(f"bbbbbbbbbb{n}", published_at=200 + n) for n in range(2)]
+        self.db.upsert_videos(second_window)
+        stored = {r["ext_id"] for r in self.db.feed(hide_watched=False)}
+        self.assertEqual(len(stored), 5)
+        self.assertIn("aaaaaaaaaa0", stored)     # gone from the window, still stored
+
+    def test_a_video_that_left_the_window_is_never_pruned(self):
+        self.db.upsert_videos([self.video("aaaaaaaaaaa", published_at=100)])
+        for _ in range(5):
+            self.db.upsert_videos([self.video("bbbbbbbbbbb", published_at=200)])
+        self.assertIn("aaaaaaaaaaa", {r["ext_id"] for r in self.db.feed(hide_watched=False)})
+
+    def test_watched_state_survives_later_polls(self):
+        self.db.upsert_videos([self.video("aaaaaaaaaaa", published_at=100)])
+        self.db.set_watched("yt:aaaaaaaaaaa", 1.0, "mpv")
+        self.db.upsert_videos([self.video("aaaaaaaaaaa", title="Renamed", published_at=100)])
+        self.assertTrue(self.db.is_watched("yt:aaaaaaaaaaa"))
+
+    def test_box_membership_survives_later_polls(self):
+        self.db.upsert_videos([self.video("aaaaaaaaaaa", published_at=100)])
+        box = self.db.create_box("Keep")
+        self.db.add_to_box(box, "yt:aaaaaaaaaaa")
+        self.db.upsert_videos([self.video("aaaaaaaaaaa", title="Renamed", published_at=100)])
+        self.assertEqual(self.db.boxes()[0]["items"], 1)
+
+
 class ShortsClassification(DatabaseCase):
     def setUp(self):
         super().setUp()

@@ -2,12 +2,18 @@
 
 Startup order matters. The window is shown against the cached database first
 and the refresh starts behind it, so launching never waits on the network.
+
+run() takes an optional on_ready hook, called once with the engine, the bridge
+and the window. It exists so an offscreen script can drive the real interface,
+which is the only way to check things a clean startup never touches, such as
+whether a menu closes when an entry is chosen.
 """
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Callable
 
 from PySide6.QtCore import QTimer, QUrl
 from PySide6.QtGui import QGuiApplication
@@ -39,7 +45,7 @@ def _save_geometry(window, db: Database) -> None:
         db.set_state(name, str(int(getattr(window, prop)())))
 
 
-def run(argv: list[str]) -> int:
+def run(argv: list[str], on_ready: Callable | None = None) -> int:
     paths.ensure_dirs()
     cfg = config.load()
     db = Database(paths.DB_FILE)
@@ -92,6 +98,8 @@ def run(argv: list[str]) -> int:
         player.stop()
 
     app.aboutToQuit.connect(shutdown)
+    if on_ready is not None:
+        on_ready(engine, bridge, window)
     exit_code = app.exec()
 
     # Tear the engine down while the objects it referenced are still alive.

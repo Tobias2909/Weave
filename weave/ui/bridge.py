@@ -146,6 +146,11 @@ class Bridge(QObject):
     viewId = Property(int, _get_view_id, notify=viewChanged)
     channelInfo = Property("QVariantMap", _get_channel_info, notify=viewChanged)
 
+    def _get_scroll_rows(self) -> float:
+        return self._cfg.scroll_rows_per_notch
+
+    scrollRowsPerNotch = Property(float, _get_scroll_rows, constant=True)
+
     def _set_status(self, text: str) -> None:
         if text != self._status:
             self._status = text
@@ -187,6 +192,33 @@ class Bridge(QObject):
         self._view_channel = channel_key
         self.viewChanged.emit()
         self.reload()
+
+    def _selectable(self) -> list[tuple[str, int]]:
+        """Everything the sidebar offers, in the order it is drawn. All first,
+        then groups, then boxes. A channel page is not in here because it is
+        not reachable from the sidebar."""
+        entries: list[tuple[str, int]] = [(ALL, -1)]
+        entries.extend((GROUP, int(row["id"])) for row in self._db.groups())
+        entries.extend((BOX, int(row["id"])) for row in self._db.boxes())
+        return entries
+
+    @Slot(int)
+    def stepSelection(self, delta: int) -> None:
+        """Move up or down the sidebar. From a channel page this lands on All
+        going one way and on the last entry going the other, since a channel
+        page has no place in the list."""
+        entries = self._selectable()
+        if not entries:
+            return
+        current = (self._view_kind, self._view_id)
+        try:
+            index = entries.index(current)
+        except ValueError:
+            index = 0 if delta > 0 else len(entries) - 1
+        else:
+            index = max(0, min(len(entries) - 1, index + (1 if delta > 0 else -1)))
+        kind, view_id = entries[index]
+        self._set_view(kind, view_id)
 
     @Slot(int)
     def selectGroup(self, group_id: int) -> None:

@@ -23,6 +23,17 @@ ApplicationWindow {
     property int namingBoxId: -1
     property string namingVideoKey: ""
 
+    // Keeps a newly selected sidebar row on screen once the list is longer
+    // than the sidebar.
+    function revealRow(item) {
+        var top = item.mapToItem(sidebarColumn, 0, 0).y
+        var bottom = top + item.height
+        if (top < sidebarFlick.contentY)
+            sidebarFlick.contentY = Math.max(0, top)
+        else if (bottom > sidebarFlick.contentY + sidebarFlick.height)
+            sidebarFlick.contentY = bottom - sidebarFlick.height
+    }
+
     function askForName(boxId, videoKey, current) {
         root.namingBoxId = boxId
         root.namingVideoKey = videoKey
@@ -157,12 +168,34 @@ ApplicationWindow {
             color: Theme.colors.border
         }
 
+        // A wheel over the sidebar moves the selection rather than scrolling
+        // the list, which is what makes stepping through the boxes and back to
+        // All a single gesture. Small touchpad deltas are accumulated so one
+        // flick does not jump several entries.
+        WheelHandler {
+            property real carried: 0
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+            onWheel: function (event) {
+                carried += event.angleDelta.y
+                while (carried >= 120) {
+                    carried -= 120
+                    App.stepSelection(-1)
+                }
+                while (carried <= -120) {
+                    carried += 120
+                    App.stepSelection(1)
+                }
+            }
+        }
+
         Flickable {
+            id: sidebarFlick
             anchors.fill: parent
             anchors.topMargin: 8
             anchors.bottomMargin: 8
             contentHeight: sidebarColumn.height
             clip: true
+            interactive: false
             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
             Column {
@@ -182,6 +215,7 @@ ApplicationWindow {
                                                    : (App.viewKind === "group"
                                                       && App.viewId === modelData.id)
                         onActivated: App.selectGroup(modelData.id)
+                        onRevealRequested: root.revealRow(this)
                     }
                 }
 
@@ -201,6 +235,7 @@ ApplicationWindow {
                         count: modelData.items
                         selected: App.viewKind === "box" && App.viewId === modelData.id
                         onActivated: App.selectBox(modelData.id)
+                        onRevealRequested: root.revealRow(this)
                         onContextRequested: {
                             boxMenu.boxId = modelData.id
                             boxMenu.boxName = modelData.name
@@ -253,13 +288,12 @@ ApplicationWindow {
 
         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-        // A Flickable scrolls by about sixty pixels a notch, while a card row
-        // here is nearly three hundred tall, so a single row cost about five
-        // notches. One notch now moves most of a row. A touchpad sends smaller
-        // angle deltas continuously, so dividing by a full notch keeps it
-        // proportional for both devices.
+        // A Flickable scrolls about sixty pixels a notch, a fifth of a card row
+        // here, which made scrolling feel stuck. The step is counted in rows
+        // and set in the config, since how far a notch should move is taste. A
+        // touchpad sends smaller angle deltas continuously, so dividing by a
+        // whole notch keeps it proportional on both devices.
         WheelHandler {
-            property real rowsPerNotch: 0.8
             acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
             onWheel: function (event) {
                 var notches = event.angleDelta.y / 120
@@ -267,7 +301,7 @@ ApplicationWindow {
                     return
                 var limit = Math.max(0, grid.contentHeight - grid.height)
                 grid.contentY = Math.max(0, Math.min(limit,
-                    grid.contentY - notches * grid.cellHeight * rowsPerNotch))
+                    grid.contentY - notches * grid.cellHeight * App.scrollRowsPerNotch))
             }
         }
 
@@ -316,18 +350,26 @@ ApplicationWindow {
         id: videoMenu
         objectName: "videoMenu"
 
+        // Every entry dismisses the menu itself. A Menu is supposed to close
+        // on its own when an item fires, and it did not here, so it is done
+        // explicitly rather than left to chance.
         MenuItem {
             text: "Play in mpv"
-            onTriggered: App.play(root.menuKey)
+            onTriggered: { App.play(root.menuKey); videoMenu.dismiss() }
         }
         MenuItem {
             text: "Open the channel"
-            onTriggered: App.openChannel(root.menuChannelKey)
+            onTriggered: { App.openChannel(root.menuChannelKey); videoMenu.dismiss() }
         }
         MenuItem {
             text: root.menuWatched ? "Mark as not watched" : "Mark as watched"
-            onTriggered: root.menuWatched ? App.markUnwatched(root.menuKey)
-                                          : App.markWatched(root.menuKey)
+            onTriggered: {
+                if (root.menuWatched)
+                    App.markUnwatched(root.menuKey)
+                else
+                    App.markWatched(root.menuKey)
+                videoMenu.dismiss()
+            }
         }
 
         MenuSeparator {}
@@ -349,13 +391,14 @@ ApplicationWindow {
                         App.removeFromBox(modelData.id, root.menuKey)
                     else
                         App.addToBox(modelData.id, root.menuKey)
+                    videoMenu.dismiss()
                 }
             }
         }
 
         MenuItem {
             text: "Put in a new box"
-            onTriggered: root.askForName(-1, root.menuKey, "")
+            onTriggered: { videoMenu.dismiss(); root.askForName(-1, root.menuKey, "") }
         }
     }
 
@@ -366,11 +409,15 @@ ApplicationWindow {
 
         MenuItem {
             text: "Rename"
-            onTriggered: root.askForName(boxMenu.boxId, "", boxMenu.boxName)
+            onTriggered: {
+                var id = boxMenu.boxId, name = boxMenu.boxName
+                boxMenu.dismiss()
+                root.askForName(id, "", name)
+            }
         }
         MenuItem {
             text: "Delete the box"
-            onTriggered: App.deleteBox(boxMenu.boxId)
+            onTriggered: { App.deleteBox(boxMenu.boxId); boxMenu.dismiss() }
         }
     }
 

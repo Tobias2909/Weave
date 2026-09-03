@@ -29,3 +29,8 @@ min_request_interval_ms = 250
 # Fraction of the duration that counts as watched. Reaching the end always
 # counts, whatever this is set to.
 threshold = 0.7
+
+[ui]
+# How far one wheel notch moves the grid, counted in card rows. A Flickable on
+# its own moves about sixty pixels, which is a fifth of a row here.
+scroll_rows_per_notch = 0.5

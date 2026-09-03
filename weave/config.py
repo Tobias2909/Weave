@@ -43,6 +43,12 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "classify_interval_s": 21600,
     },
     "watched": {"threshold": 0.7},
+    "ui": {
+        # How far one wheel notch moves the grid, counted in card rows. A
+        # Flickable on its own moves about sixty pixels, which is a fifth of a
+        # row here and made scrolling feel stuck. Taste, so it lives here.
+        "scroll_rows_per_notch": 0.5,
+    },
 }
 
 
@@ -76,6 +82,10 @@ class Config:
     @property
     def min_request_interval_s(self) -> float:
         return max(0.0, int(self.get("poll", "min_request_interval_ms")) / 1000.0)
+
+    @property
+    def scroll_rows_per_notch(self) -> float:
+        return min(3.0, max(0.05, float(self.get("ui", "scroll_rows_per_notch"))))
 
     @property
     def watched_threshold(self) -> float:

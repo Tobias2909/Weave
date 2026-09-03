@@ -10,6 +10,9 @@ Rectangle {
 
     signal activated()
     signal contextRequested()
+    signal revealRequested()
+
+    onSelectedChanged: if (selected) revealRequested()
 
     height: 32
     color: selected ? Theme.colors.surfaceRaised : "transparent"
