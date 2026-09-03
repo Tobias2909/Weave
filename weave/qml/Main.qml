@@ -278,11 +278,22 @@ ApplicationWindow {
         onCloseRequested: App.selectGroup(-1)
     }
 
+    DetailPanel {
+        id: detailPanel
+        objectName: "detailPanel"
+        anchors.right: parent.right
+        anchors.top: liveBar.visible ? liveBar.bottom : parent.top
+        anchors.topMargin: liveBar.visible ? 0 : banner.height
+        anchors.bottom: parent.bottom
+        width: App.panelWidth
+        visible: App.detailOpen
+    }
+
     GridView {
         id: grid
         objectName: "grid"
         anchors.left: sidebar.right
-        anchors.right: parent.right
+        anchors.right: detailPanel.visible ? detailPanel.left : parent.right
         anchors.top: channelHeader.visible ? channelHeader.bottom
                                           : (liveBar.visible ? liveBar.bottom : parent.top)
         anchors.bottom: parent.bottom

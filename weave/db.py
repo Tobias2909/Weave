@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -145,6 +145,8 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("channels", "banner_url", "TEXT"),
     ("channels", "follower_count", "INTEGER"),
     ("channels", "details_fetched_at", "INTEGER"),
+    ("videos", "dislikes", "INTEGER"),
+    ("videos", "dislikes_at", "INTEGER"),
 )
 
 
@@ -228,6 +230,11 @@ class Database:
                 (key, platform, ext_id, title, avatar_url, int(time.time())),
             )
             return existed is None
+
+    def channels_missing_avatar(self, platform: str = "twitch") -> list[str]:
+        return [row["ext_id"] for row in self.conn.execute(
+            "SELECT ext_id FROM channels WHERE platform=? AND "
+            "(avatar_url IS NULL OR avatar_url = '')", (platform,))]
 
     def channels_due(self, interval_s: int, platform: str = "youtube") -> list[sqlite3.Row]:
         """Channels whose last poll is older than the interval.
@@ -414,6 +421,20 @@ class Database:
                 (SHORTS_CEILING_S,),
             )
             return conn.total_changes - before
+
+    def set_dislikes(self, video_key: str, count: int | None) -> None:
+        with self.conn as conn:
+            conn.execute("UPDATE videos SET dislikes=?, dislikes_at=? WHERE key=?",
+                         (count, int(time.time()), video_key))
+
+    def video(self, key: str) -> dict | None:
+        """One video with everything the detail panel shows."""
+        row = self.conn.execute(
+            "SELECT v.*, c.title AS channel_title, c.avatar_url, "
+            "       w.video_key IS NOT NULL AS watched "
+            "FROM videos v JOIN channels c ON c.key = v.channel_key "
+            "LEFT JOIN watched w ON w.video_key = v.key WHERE v.key=?", (key,)).fetchone()
+        return dict(row) if row else None
 
     def set_short(self, video_key: str, value: bool) -> None:
         with self.conn as conn:

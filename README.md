@@ -27,6 +27,9 @@ This is the first milestone. Working right now
   subscriber count and everything stored from it
 * A live bar across the top showing who is streaming right now, Twitch and
   YouTube together, busiest first, on its own faster timer
+* A detail panel beside the feed showing what is playing, with views, likes,
+  an estimated dislike count and the top comment threads, resizable and
+  remembered
 * A grid of cards in a dark window, sized to the space it has
 * A duration badge, view and like counts, the channel icon, and a progress line
   showing where you stopped, read out of the resume files `mpv` already writes
@@ -38,9 +41,17 @@ This is the first milestone. Working right now
 * A visible banner whenever a source reports a problem, because a scraper that
   returns nothing looks exactly like a quiet day
 
-Coming in later milestones, roughly in this order. A detail panel with comments,
-the theme system, a YouTube Music area that plays audio inside Weave, search and
-playlists and history, and a diagnostics page.
+Coming in later milestones, roughly in this order. The theme system, a YouTube
+Music area that plays audio inside Weave, search and playlists and history, and
+a diagnostics page.
+
+The detail panel follows `mpv` rather than the grid, so it shows whatever is on
+screen even when `mpv` moved to the next thing by itself. Closing it closes it
+until the next video starts. Views and likes are already stored, so they appear
+at once, while the dislike count and the comments are fetched when a video is
+actually being looked at, since comments cost several seconds each time. The
+dislike count is an estimate published by returnyoutubedislike rather than a
+number from YouTube, and it says so.
 
 A box is not a YouTube playlist. It lives only in your own database, holds
 whatever you put in it, and keeps the order you put things in rather than the

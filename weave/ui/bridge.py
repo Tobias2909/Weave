@@ -19,8 +19,8 @@ from ..config import Config
 from ..db import Database
 from ..imagecache import qml_source
 from ..player.mpv import Player
-from ..poller import (ChannelAdder, ChannelDetailsFetcher, FeedPoller, LiveWatcher,
-                      SubsImporter, TwitchLogin)
+from ..poller import (ChannelAdder, ChannelDetailsFetcher, DetailFetcher, FeedPoller,
+                      LiveWatcher, SubsImporter, TwitchLogin)
 from .feed_model import FeedModel
 
 ALL = "all"
@@ -40,6 +40,7 @@ class Bridge(QObject):
     viewChanged = Signal()
     liveChanged = Signal()
     twitchChanged = Signal()
+    detailChanged = Signal()
 
     def __init__(self, db: Database, cfg: Config, model: FeedModel,
                  player: Player, parent: QObject | None = None) -> None:
@@ -57,6 +58,12 @@ class Bridge(QObject):
         self._twitch: TwitchLogin | None = None
         self._twitch_status = ""
         self._twitch_needs_login = False
+        self._detail: DetailFetcher | None = None
+        self._detail_key = ""
+        self._detail_comments: list = []
+        self._detail_threads = 5
+        self._detail_loading = False
+        self._detail_closed = False
 
         self._busy = False
         self._problems: list[str] = []
@@ -68,8 +75,10 @@ class Bridge(QObject):
 
         self._hide_watched = self._db.get_state("hide_watched", "1") == "1"
         self._live_collapsed = self._db.get_state("live_collapsed", "0") == "1"
+        self._panel_width = int(self._db.get_state("panel_width", "380") or 380)
 
         self._player.watched.connect(self._on_watched)
+        self._player.nowPlaying.connect(self._on_now_playing)
         self._player.failed.connect(self._on_player_failed)
         if self._player.error:
             self._problems.append(self._player.error)
@@ -186,6 +195,45 @@ class Bridge(QObject):
         return self._live_collapsed
 
     liveCollapsed = Property(bool, _get_live_collapsed, notify=liveChanged)
+
+    def _get_detail(self) -> dict:
+        row = self._db.video(self._detail_key) if self._detail_key else None
+        if not row:
+            return {}
+        return {
+            "key": row["key"],
+            "title": row["title"],
+            "channelKey": row["channel_key"],
+            "channelTitle": row["channel_title"] or "",
+            "channelAvatar": qml_source(row["avatar_url"]),
+            "thumbnail": qml_source(row["thumbnail_url"]),
+            "ageText": fmt.age_text(row["published_at"]),
+            "durationText": fmt.duration_text(row["duration_s"]),
+            "viewsText": fmt.count_text(row["views"]),
+            "likesText": fmt.count_text(row["likes"]),
+            # An estimate rather than a count, and said so in the panel.
+            "dislikesText": fmt.count_text(row["dislikes"]),
+            "watched": bool(row["watched"]),
+            "isLive": row["live_status"] == "is_live",
+        }
+
+    def _get_detail_open(self) -> bool:
+        return bool(self._detail_key) and not self._detail_closed
+
+    def _get_detail_comments(self) -> list:
+        return list(self._detail_comments)
+
+    def _get_detail_loading(self) -> bool:
+        return self._detail_loading
+
+    def _get_panel_width(self) -> int:
+        return self._panel_width
+
+    detail = Property("QVariantMap", _get_detail, notify=detailChanged)
+    detailOpen = Property(bool, _get_detail_open, notify=detailChanged)
+    detailComments = Property("QVariantList", _get_detail_comments, notify=detailChanged)
+    detailLoading = Property(bool, _get_detail_loading, notify=detailChanged)
+    panelWidth = Property(int, _get_panel_width, notify=detailChanged)
 
     def _get_scroll_rows(self) -> float:
         return self._cfg.scroll_rows_per_notch
@@ -392,6 +440,86 @@ class Bridge(QObject):
         self.hideWatchedChanged.emit()
         self.reload()
 
+    # ---- the detail panel ------------------------------------------------
+
+    @Slot(str)
+    def openDetail(self, key: str) -> None:
+        """Show one video. Reopens the panel if it was closed, since asking for
+        a video is asking to see it."""
+        if not key:
+            return
+        self._detail_closed = False
+        if key == self._detail_key:
+            self.detailChanged.emit()
+            return
+        self._detail_key = key
+        self._detail_comments = []
+        self._detail_threads = 5
+        self.detailChanged.emit()
+        self._start_detail()
+
+    @Slot()
+    def closeDetail(self) -> None:
+        """Closed until the next video starts, rather than closed for good. It
+        mirrors what is playing, so the next thing that plays brings it back."""
+        self._detail_closed = True
+        if self._detail is not None and self._detail.isRunning():
+            self._detail.cancel()
+        self.detailChanged.emit()
+
+    @Slot()
+    def loadMoreComments(self) -> None:
+        if self._detail_loading or not self._detail_key:
+            return
+        self._detail_threads += 10
+        self._start_detail()
+
+    @Slot(int)
+    def setPanelWidth(self, width: int) -> None:
+        width = max(300, min(560, int(width)))
+        if width == self._panel_width:
+            return
+        self._panel_width = width
+        self._db.set_state("panel_width", str(width))
+        self.detailChanged.emit()
+
+    def _start_detail(self) -> None:
+        row = self._db.video(self._detail_key)
+        if not row:
+            return
+        if self._detail is not None and self._detail.isRunning():
+            self._detail.cancel()
+            self._detail.wait(3000)
+        self._detail_loading = True
+        self.detailChanged.emit()
+        self._detail = DetailFetcher(self._db, self._cfg, row["key"], row["ext_id"],
+                                     ids.watch_url(row["platform"], row["ext_id"]),
+                                     self._detail_threads, self)
+        self._detail.votes.connect(self._on_votes)
+        self._detail.comments.connect(self._on_comments)
+        self._detail.failed.connect(self._on_detail_failed)
+        self._detail.start()
+
+    def _on_votes(self, key: str, _count: int) -> None:
+        if key == self._detail_key:
+            self.detailChanged.emit()
+
+    def _on_comments(self, key: str, threads: list) -> None:
+        self._detail_loading = False
+        if key == self._detail_key:
+            self._detail_comments = threads
+        self.detailChanged.emit()
+
+    def _on_detail_failed(self, source: str, message: str) -> None:
+        self._detail_loading = False
+        self.detailChanged.emit()
+        self._set_status(f"could not load the {source}, {message}")
+
+    def _on_now_playing(self, key: str, _title: str) -> None:
+        """The panel follows mpv, so whatever starts playing is what it shows,
+        including a track mpv moved to on its own."""
+        self.openDetail(key)
+
     # ---- twitch ----------------------------------------------------------
 
     @Slot()
@@ -478,7 +606,7 @@ class Bridge(QObject):
         already gone, so any short wait here is invisible.
         """
         threads = [self._poller, self._adder, self._importer, self._details,
-                   self._live, self._twitch]
+                   self._live, self._twitch, self._detail]
         live = [thread for thread in threads if thread is not None and thread.isRunning()]
         for thread in live:
             thread.cancel()
@@ -525,6 +653,12 @@ class Bridge(QObject):
 
     def _on_twitch_done(self, imported: int) -> None:
         self._twitch_needs_login = False
+        self._detail: DetailFetcher | None = None
+        self._detail_key = ""
+        self._detail_comments: list = []
+        self._detail_threads = 5
+        self._detail_loading = False
+        self._detail_closed = False
         self._twitch_status = (f"Twitch connected, {imported} followed channels added"
                                if imported else "Twitch connected")
         self.twitchChanged.emit()
@@ -545,6 +679,12 @@ class Bridge(QObject):
 
     def _on_live(self, count: int) -> None:
         self._twitch_needs_login = False
+        self._detail: DetailFetcher | None = None
+        self._detail_key = ""
+        self._detail_comments: list = []
+        self._detail_threads = 5
+        self._detail_loading = False
+        self._detail_closed = False
         self.liveChanged.emit()
         self.twitchChanged.emit()
 

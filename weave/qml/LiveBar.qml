@@ -12,7 +12,7 @@ Rectangle {
     readonly property bool expanded: !App.liveCollapsed
 
     visible: showing
-    height: showing ? (expanded && hasStreams ? 150 : 34) : 0
+    height: showing ? (expanded && hasStreams ? 116 : 34) : 0
     color: Theme.colors.surface
 
     Rectangle {
@@ -106,8 +106,17 @@ Rectangle {
         }
 
         delegate: Rectangle {
+            id: streamCard
             required property var modelData
-            width: 260
+
+            // Sized to what it holds. The thumbnail fills the card's height and
+            // the text beside it is vertically centred, so the card has no
+            // empty band along the bottom.
+            readonly property int inset: 7
+            readonly property int pictureHeight: strip.height - inset * 2
+            readonly property int pictureWidth: Math.round(pictureHeight * 16 / 9)
+
+            width: pictureWidth + inset * 3 + 168
             height: strip.height
             radius: 8
             color: cardHover.hovered ? Theme.colors.surfaceRaised : Theme.colors.background
@@ -115,64 +124,95 @@ Rectangle {
             border.color: cardHover.hovered ? Theme.colors.accent : Theme.colors.border
 
             HoverHandler { id: cardHover }
-            TapHandler { onTapped: App.playLive(modelData.channelKey) }
+            TapHandler { onTapped: App.playLive(streamCard.channelKeyOf) }
+            readonly property string channelKeyOf: modelData.channelKey
 
-            Row {
-                anchors.fill: parent
-                anchors.margins: 8
-                spacing: 8
+            Item {
+                id: picture
+                x: streamCard.inset
+                y: streamCard.inset
+                width: streamCard.pictureWidth
+                height: streamCard.pictureHeight
 
                 RoundedImage {
-                    width: 96
-                    height: 54
+                    anchors.fill: parent
                     radius: 6
                     source: modelData.thumbnail
                 }
 
-                Column {
-                    width: parent.width - 104
-                    spacing: 2
+                // Says which platform without spending a line of text on it.
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.bottom: parent.bottom
+                    anchors.margins: 4
+                    radius: 3
+                    width: platformLabel.implicitWidth + 8
+                    height: platformLabel.implicitHeight + 3
+                    color: modelData.platform === "twitch" ? Theme.colors.live
+                                                           : Theme.colors.badgeBackground
+                    Label {
+                        id: platformLabel
+                        anchors.centerIn: parent
+                        text: modelData.platform === "twitch" ? "LIVE" : "YOUTUBE"
+                        color: Theme.colors.badgeText
+                        font.pixelSize: 9
+                        font.bold: true
+                    }
+                }
+            }
 
-                    Row {
-                        spacing: 5
-                        RoundedImage {
-                            width: 16
-                            height: 16
-                            circle: true
-                            visible: modelData.avatar !== ""
-                            source: modelData.avatar
-                        }
-                        Label {
-                            text: modelData.name
-                            color: Theme.colors.text
-                            font.pixelSize: 12
-                            font.weight: Font.DemiBold
-                            elide: Text.ElideRight
-                            width: Math.max(0, parent.parent.width - (modelData.avatar !== "" ? 21 : 0))
-                        }
+            Column {
+                anchors.left: picture.right
+                anchors.leftMargin: streamCard.inset
+                anchors.right: parent.right
+                anchors.rightMargin: streamCard.inset
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 3
+
+                Row {
+                    width: parent.width
+                    spacing: 6
+
+                    RoundedImage {
+                        width: 20
+                        height: 20
+                        circle: true
+                        visible: modelData.avatar !== ""
+                        source: modelData.avatar
                     }
 
                     Label {
-                        width: parent.width
-                        text: modelData.title
-                        color: Theme.colors.textMuted
-                        font.pixelSize: 11
+                        width: parent.width - (modelData.avatar !== "" ? 26 : 0)
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: modelData.name
+                        color: Theme.colors.text
+                        font.pixelSize: 13
+                        font.weight: Font.DemiBold
                         elide: Text.ElideRight
                     }
+                }
 
-                    Label {
-                        width: parent.width
-                        color: Theme.colors.textMuted
-                        font.pixelSize: 11
-                        elide: Text.ElideRight
-                        text: {
-                            var parts = []
-                            if (modelData.game !== "") parts.push(modelData.game)
-                            if (modelData.viewersText !== "")
-                                parts.push(modelData.viewersText + " watching")
-                            if (modelData.platform === "youtube") parts.push("YouTube")
-                            return parts.join("  ·  ")
-                        }
+                Label {
+                    width: parent.width
+                    text: modelData.title
+                    color: Theme.colors.textMuted
+                    font.pixelSize: 11
+                    wrapMode: Text.Wrap
+                    maximumLineCount: 2
+                    elide: Text.ElideRight
+                }
+
+                Label {
+                    width: parent.width
+                    color: Theme.colors.textMuted
+                    font.pixelSize: 11
+                    elide: Text.ElideRight
+                    text: {
+                        var parts = []
+                        if (modelData.game !== "") parts.push(modelData.game)
+                        if (modelData.viewersText !== "")
+                            parts.push(modelData.viewersText + " watching")
+                        return parts.join("  ·  ")
                     }
                 }
             }

@@ -22,6 +22,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from PySide6.QtCore import QObject, QThread, Signal
 
 from .classify import classify_channel
+from .imagecache import qml_source
 from .config import Config
 from .db import Database
 from .net import Cancelled as FetchCancelled
@@ -29,6 +30,8 @@ from .net import Fetcher, Throttle
 from .process import Cancelled as ProcessCancelled
 from .sources import channel as channel_source
 from . import tokens
+from .sources import comments as comment_source
+from .sources import dislikes as dislike_source
 from .sources import rss, shorts, subs, sweep, tabs, twitch
 
 
@@ -400,6 +403,13 @@ class LiveWatcher(QThread):
             self.failed.emit(f"{type(exc).__name__}: {exc}")
             return
 
+        # A stream says nothing about what its broadcaster looks like, so the
+        # icons are fetched once per channel and stored alongside it.
+        try:
+            self._fetch_missing_avatars(client)
+        except twitch.TwitchError:
+            pass
+
         known = {row["key"] for row in self._db.channels(platform="twitch")}
         rows = [{
             "channel_key": stream.key, "login": stream.login,
@@ -410,3 +420,85 @@ class LiveWatcher(QThread):
         self._db.replace_live("twitch", rows)
         self._db.close()
         self.updated.emit(len(rows))
+
+    def _fetch_missing_avatars(self, client: "twitch.Client") -> None:
+        missing = self._db.channels_missing_avatar("twitch")
+        if not missing or self._cancel.is_set():
+            return
+        for login, display, picture in client.users(missing):
+            self._db.add_channel(f"twitch:{login}", "twitch", login, display, picture or None)
+
+
+class DetailFetcher(QThread):
+    """Everything the detail panel needs that is not already stored.
+
+    The dislike count and the comments come from different places and take very
+    different amounts of time, so each is reported as it lands rather than the
+    panel waiting for both.
+    """
+
+    votes = Signal(str, int)              # video key, dislikes
+    comments = Signal(str, "QVariantList")
+    failed = Signal(str, str)
+
+    def __init__(self, db: Database, cfg: Config, video_key: str, ext_id: str,
+                 url: str, threads: int = 5, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._db = db
+        self._cfg = cfg
+        self._key = video_key
+        self._ext_id = ext_id
+        self._url = url
+        self._threads = threads
+        self._cancel = threading.Event()
+        self._throttle = Throttle(2, cfg.min_request_interval_s)
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def run(self) -> None:
+        fetcher = Fetcher(self._throttle, cancel=self._cancel)
+        try:
+            if not self._cancel.is_set():
+                self._fetch_votes(fetcher)
+            if not self._cancel.is_set():
+                self._fetch_comments()
+        finally:
+            fetcher.close()
+            self._db.close()
+
+    def _fetch_votes(self, fetcher: Fetcher) -> None:
+        try:
+            found = dislike_source.fetch(fetcher, self._ext_id)
+        except Exception as exc:                                    # noqa: BLE001
+            self.failed.emit("dislikes", f"{type(exc).__name__}: {exc}")
+            return
+        if found.dislikes is not None:
+            self._db.set_dislikes(self._key, found.dislikes)
+            self.votes.emit(self._key, found.dislikes)
+
+    def _fetch_comments(self) -> None:
+        try:
+            threads = comment_source.fetch(self._cfg, self._url, self._threads,
+                                           self._throttle, self._cancel)
+        except ProcessCancelled:
+            return
+        except comment_source.CommentsError as exc:
+            self.failed.emit("comments", str(exc))
+            return
+        self.comments.emit(self._key, [self._as_map(thread) for thread in threads])
+
+    @staticmethod
+    def _as_map(comment) -> dict:
+        return {
+            "author": comment.author,
+            # Through the cache like every other picture.
+            "avatar": qml_source(comment.avatar_url),
+            "text": comment.text,
+            "likes": comment.likes,
+            "when": comment.when,
+            "pinned": comment.pinned,
+            "byUploader": comment.by_uploader,
+            "verified": comment.verified,
+            "replies": [DetailFetcher._as_map(reply) for reply in comment.replies],
+        }

@@ -254,6 +254,25 @@ class Client:
             streams.extend(parse_streams(payload))
         return streams
 
+    def users(self, logins: list[str]) -> list[tuple[str, str, str]]:
+        """Login, display name and picture for particular channels.
+
+        A stream carries no picture of its broadcaster, so the icons shown in
+        the live bar come from here instead, asked once per channel and stored.
+        """
+        found: list[tuple[str, str, str]] = []
+        for start in range(0, len(logins), BATCH):
+            chunk = logins[start:start + BATCH]
+            if not chunk:
+                continue
+            payload = self._get("users", [("login", login) for login in chunk])
+            for item in payload.get("data") or []:
+                login = str(item.get("login") or "").lower()
+                if login:
+                    found.append((login, str(item.get("display_name") or login),
+                                  str(item.get("profile_image_url") or "")))
+        return found
+
     def follows(self, user_id: str) -> list[tuple[str, str]]:
         """Every channel the account follows, as login and display name."""
         found: list[tuple[str, str]] = []
