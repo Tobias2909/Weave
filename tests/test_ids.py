@@ -85,9 +85,25 @@ class ParseChannelRef(unittest.TestCase):
     def test_bare_handle(self):
         self.assertEqual(ids.parse_channel_ref("@examplechannel").kind, "handle")
 
-    def test_legacy_user_url(self):
+    def test_legacy_url_forms_keep_their_prefix(self):
+        # youtube.com/user/x and youtube.com/@x are different addresses that
+        # can resolve to different channels, so the prefix has to survive.
         ref = ids.parse_channel_ref("https://www.youtube.com/user/somebody")
-        self.assertEqual((ref.kind, ref.value), ("handle", "somebody"))
+        self.assertEqual((ref.kind, ref.value), ("handle", "user/somebody"))
+        ref = ids.parse_channel_ref("https://www.youtube.com/c/somebody")
+        self.assertEqual((ref.kind, ref.value), ("handle", "c/somebody"))
+
+    def test_url_property_rebuilds_each_form(self):
+        cases = {
+            "UCabcdefghijklmnopqrstuv": "https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv",
+            "@examplechannel": "https://www.youtube.com/@examplechannel",
+            "https://www.youtube.com/user/somebody": "https://www.youtube.com/user/somebody",
+            "https://www.youtube.com/c/somebody": "https://www.youtube.com/c/somebody",
+            "https://twitch.tv/ExampleChannel": "https://www.twitch.tv/examplechannel",
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(ids.parse_channel_ref(text).url, expected)
 
     def test_twitch_url(self):
         ref = ids.parse_channel_ref("https://twitch.tv/ExampleChannel")

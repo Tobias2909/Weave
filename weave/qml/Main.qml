@@ -40,7 +40,7 @@ ApplicationWindow {
             TextField {
                 id: addField
                 Layout.preferredWidth: 300
-                placeholderText: "Add a channel id or a twitch.tv link"
+                placeholderText: "Add a channel, a handle or a twitch.tv link"
                 color: Theme.colors.text
                 placeholderTextColor: Theme.colors.textMuted
                 background: Rectangle {
@@ -50,10 +50,10 @@ ApplicationWindow {
                     border.color: addField.activeFocus ? Theme.colors.accent : Theme.colors.border
                 }
                 onAccepted: {
-                    if (App.addChannel(text)) {
+                    // Keep the text when it was not even understood, so a typo
+                    // can be corrected rather than retyped.
+                    if (App.addChannel(text))
                         text = ""
-                        App.refresh()
-                    }
                 }
             }
 
@@ -170,7 +170,7 @@ ApplicationWindow {
             horizontalAlignment: Text.AlignHCenter
             color: Theme.colors.textMuted
             font.pixelSize: 14
-            text: "Nothing here yet.\nAdd a channel above, then press Refresh."
+            text: App.emptyHint
         }
     }
 }

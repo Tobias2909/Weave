@@ -102,12 +102,25 @@ def twitch_login(text: str) -> str | None:
 
 @dataclass(frozen=True)
 class ChannelRef:
-    """A requested channel. `kind` is "id" when it can be stored right
-    away, or "handle" when it still needs one network call to resolve."""
+    """A requested channel.
+
+    `kind` is "id" when it can be stored right away, or "handle" when it still
+    needs one lookup. For a handle, `value` holds the URL path rather than the
+    bare name, so `@name`, `c/name` and `user/name` stay distinguishable. They
+    are not interchangeable and can point at different channels.
+    """
 
     platform: str
     kind: str
     value: str
+
+    @property
+    def url(self) -> str:
+        if self.platform == "twitch":
+            return f"https://www.twitch.tv/{self.value}"
+        if self.kind == "id":
+            return f"https://www.youtube.com/channel/{self.value}"
+        return f"https://www.youtube.com/{self.value}"
 
 
 def parse_channel_ref(text: str) -> ChannelRef | None:
@@ -143,7 +156,9 @@ def parse_channel_ref(text: str) -> ChannelRef | None:
         if head.startswith("@"):
             return ChannelRef("youtube", "handle", head)
         if head in ("c", "user") and len(segments) >= 2:
-            return ChannelRef("youtube", "handle", segments[1])
+            # Keep the prefix. youtube.com/user/x and youtube.com/@x are
+            # different addresses and can resolve to different channels.
+            return ChannelRef("youtube", "handle", f"{head}/{segments[1]}")
 
     # A bare word is deliberately rejected. It could be a Twitch login or a
     # YouTube name, and guessing turns a typo into a tracked channel. Finding a

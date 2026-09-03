@@ -78,3 +78,30 @@ class FeedPoller(QThread):
 
     def _poll_one(self, fetcher: Fetcher, channel_id: str) -> rss.FeedResult:
         return rss.fetch(fetcher, channel_id)
+
+
+class ChannelAdder(QThread):
+    """Resolves a channel reference off the interface thread.
+
+    Resolving a handle costs about half a second, which is short enough not to
+    need a progress bar and long enough to be felt as a freeze if it ran on the
+    interface thread.
+    """
+
+    added = Signal(str, str, str, str)   # key, platform, ext_id, title
+    failed = Signal(str)
+
+    def __init__(self, ref, cfg: Config, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._ref = ref
+        self._throttle = Throttle(1, cfg.min_request_interval_s)
+
+    def run(self) -> None:
+        from .sources.resolve import ResolveError, resolve
+
+        try:
+            result = resolve(self._ref, throttle=self._throttle)
+        except ResolveError as exc:
+            self.failed.emit(str(exc))
+            return
+        self.added.emit(result.key, result.platform, result.ext_id, result.title or "")

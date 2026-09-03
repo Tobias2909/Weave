@@ -12,7 +12,8 @@ you asked for, in the order they published.
 
 This is the first milestone. Working right now
 
-* Tracking YouTube channels, with their videos stored in a local SQLite database
+* Tracking YouTube channels by id, by handle or by any channel URL, with their
+  videos stored in a local SQLite database
 * A feed built from channel RSS, which needs no login and carries exact publish
   times together with exact view and like counts
 * A grid of cards in a dark window, sized to the space it has
@@ -52,7 +53,7 @@ package manager of most other distributions.
 |---|---|
 | The application | `python`, `pyside6`, `python-requests`, `python-platformdirs` |
 | Playback | `mpv` |
-| YouTube data beyond RSS | `yt-dlp`, plus `deno` or `nodejs` for the JS challenges it has to solve |
+| Adding a channel, and YouTube data beyond RSS | `yt-dlp`, plus `deno` or `nodejs` for the JS challenges it has to solve |
 | Twitch playback | `streamlink` |
 | The music area, later | `python-ytmusicapi` |
 
@@ -79,20 +80,32 @@ weave
 Add a channel, then refresh.
 
 ```sh
+python -m weave add @somechannel
+python -m weave add https://www.youtube.com/@somechannel
 python -m weave add UCabcdefghijklmnopqrstuv
 python -m weave add https://twitch.tv/somechannel
 python -m weave channels
+python -m weave remove yt:UCabcdefghijklmnopqrstuv
 python -m weave poll
 python -m weave
 ```
 
-A YouTube channel id starts with `UC` and is 24 characters long. You can read it
-off a channel URL of the form `youtube.com/channel/UC...`. Handles of the form
-`youtube.com/@name` need one lookup to resolve and arrive with the subscriptions
-import in the next milestone.
+Any of those forms works, including a legacy URL of the form
+`youtube.com/user/name` or `youtube.com/c/name`. A bare word with no `@` and no
+URL around it is rejected on purpose, because it could be a Twitch login or a
+YouTube name and guessing would turn a typo into a tracked channel.
+
+Every YouTube channel is looked up as it is added, which takes about half a
+second. That catches a mistyped id immediately rather than at the next refresh,
+and it fills in the channel name straight away. If the lookup itself fails, from
+a missing `yt-dlp` or a dead network, a plain id is still stored and only a
+definite missing channel is refused.
+
+Twitch channels are accepted but add no rows to the feed yet. They belong to the
+live bar, which is a later milestone.
 
 Inside the window, left click plays a video in `mpv` and right click toggles its
-watched mark.
+watched mark. The box in the header adds a channel.
 
 ## Configuration
 

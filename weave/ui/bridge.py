@@ -12,7 +12,7 @@ from PySide6.QtCore import Property, QObject, Signal, Slot
 from ..config import Config
 from ..db import Database
 from ..player.mpv import Player
-from ..poller import FeedPoller
+from ..poller import ChannelAdder, FeedPoller
 from .feed_model import FeedModel
 
 
@@ -21,6 +21,7 @@ class Bridge(QObject):
     busyChanged = Signal()
     hideWatchedChanged = Signal()
     problemsChanged = Signal()
+    emptyHintChanged = Signal()
 
     def __init__(self, db: Database, cfg: Config, model: FeedModel,
                  player: Player, parent: QObject | None = None) -> None:
@@ -30,6 +31,7 @@ class Bridge(QObject):
         self._model = model
         self._player = player
         self._poller: FeedPoller | None = None
+        self._adder: ChannelAdder | None = None
         self._busy = False
         self._problems: list[str] = []
 
@@ -59,7 +61,23 @@ class Bridge(QObject):
     def _get_problems(self) -> list:
         return list(self._problems)
 
+    def _get_empty_hint(self) -> str:
+        """What to say when the grid is empty. There are three different
+        reasons for that and they need three different answers."""
+        counts = self._db.counts()
+        if not counts["channels"]:
+            return "Nothing here yet.\nAdd a channel above, then press Refresh."
+        youtube = len(self._db.channels(platform="youtube"))
+        if not youtube:
+            return ("Only Twitch channels are tracked so far.\n"
+                    "Twitch appears in the live bar, which is not built yet, so it "
+                    "produces no rows here.\nAdd a YouTube channel to fill the feed.")
+        if not counts["videos"]:
+            return "No videos stored yet.\nPress Refresh to fetch them."
+        return "Everything here is watched.\nTurn off Hide watched to see it again."
+
     status = Property(str, _get_status, notify=statusChanged)
+    emptyHint = Property(str, _get_empty_hint, notify=emptyHintChanged)
     busy = Property(bool, _get_busy, notify=busyChanged)
     hideWatched = Property(bool, _get_hide_watched, notify=hideWatchedChanged)
     problems = Property("QVariantList", _get_problems, notify=problemsChanged)
@@ -84,6 +102,7 @@ class Bridge(QObject):
     @Slot()
     def reload(self) -> None:
         self._model.reload(hide_watched=self._hide_watched)
+        self.emptyHintChanged.emit()
 
     @Slot()
     def refresh(self) -> None:
@@ -131,19 +150,43 @@ class Bridge(QObject):
 
     @Slot(str, result=bool)
     def addChannel(self, text: str) -> bool:
-        """Only accepts references that need no network call yet. Handles and
-        the search flow arrive with the subscriptions import."""
+        """Accepts a channel id, an @handle, a legacy channel URL or a Twitch
+        link. Returns whether the reference was understood at all. Resolving a
+        handle then happens in the background.
+        """
         from .. import ids
 
         ref = ids.parse_channel_ref(text)
-        if not ref or ref.kind != "id":
-            self._set_status("could not read that channel reference")
+        if not ref:
+            self._set_status("could not read that as a channel")
             return False
-        self._db.add_channel(ids.channel_key(ref.value, ref.platform), ref.platform, ref.value)
-        self._set_status(f"added {ref.value}")
+        if self._adder is not None and self._adder.isRunning():
+            self._set_status("still adding the previous channel")
+            return False
+
+        self._set_status(f"resolving {ref.value}")
+        self._adder = ChannelAdder(ref, self._cfg, self)
+        self._adder.added.connect(self._on_channel_added)
+        self._adder.failed.connect(self._on_channel_failed)
+        self._adder.start()
         return True
 
     # ---- reactions -------------------------------------------------------
+
+    def _on_channel_added(self, key: str, platform: str, ext_id: str, title: str) -> None:
+        self._db.add_channel(key, platform, ext_id, title or None)
+        label = title or ext_id
+        if platform == "twitch":
+            # Say this plainly. A Twitch channel adding no rows to the feed
+            # looks broken otherwise.
+            self._set_status(f"added {label}, which will show in the live bar rather than the feed")
+            self.reload()
+        else:
+            self._set_status(f"added {label}, fetching videos")
+            self.refresh()
+
+    def _on_channel_failed(self, message: str) -> None:
+        self._set_status(f"could not add that channel, {message}")
 
     def _on_watched(self, key: str, progress: float) -> None:
         self._db.set_watched(key, progress, "mpv")
