@@ -20,12 +20,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from PySide6.QtCore import QObject, QThread, Signal
 
+from .classify import classify_channel
 from .config import Config
 from .db import Database
 from .net import Cancelled as FetchCancelled
 from .net import Fetcher, Throttle
 from .process import Cancelled as ProcessCancelled
-from .sources import rss, shorts, subs, sweep
+from .sources import rss, shorts, subs, sweep, tabs
 
 
 class FeedPoller(QThread):
@@ -54,6 +55,8 @@ class FeedPoller(QThread):
             polled, touched, failures = self._phase_rss(fetcher)
             if not self._cancel.is_set():
                 touched += self._phase_sweep()
+            if not self._cancel.is_set():
+                self._phase_classify()
             if not self._cancel.is_set():
                 self._phase_shorts(fetcher)
         except (FetchCancelled, ProcessCancelled):
@@ -129,6 +132,40 @@ class FeedPoller(QThread):
         return filled
 
     # ---- phase 3 ---------------------------------------------------------
+
+    def _phase_classify(self) -> None:
+        limit = self._cfg.classify_per_cycle
+        if not limit:
+            return
+        channels = self._db.channels_needing_classification(
+            self._cfg.classify_interval_s, limit)
+        total = len(channels)
+        if not total:
+            return
+
+        done = 0
+        with ThreadPoolExecutor(max_workers=self._cfg.max_concurrency) as pool:
+            futures = {
+                pool.submit(classify_channel, self._db, row["key"], row["ext_id"],
+                            self._throttle, self._cancel): row["key"]
+                for row in channels
+            }
+            for future in as_completed(futures):
+                if self._cancel.is_set():
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    return
+                try:
+                    future.result()
+                except ProcessCancelled:
+                    return
+                except tabs.TabError as exc:
+                    self.failure.emit(futures[future], f"listing, {exc}")
+                except Exception as exc:                            # noqa: BLE001
+                    self.failure.emit(futures[future], f"{type(exc).__name__}: {exc}")
+                done += 1
+                self.progress.emit("kinds", done, total)
+
+    # ---- phase 4 ---------------------------------------------------------
 
     def _phase_shorts(self, fetcher: Fetcher) -> None:
         limit = self._cfg.shorts_per_cycle

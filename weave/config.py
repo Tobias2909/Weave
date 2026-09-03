@@ -32,7 +32,15 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         # thirteen seconds and covers far more than what is on screen.
         "sweep_limit": 1000,
         # How many undecided videos get the Shorts redirect test per cycle.
-        "shorts_per_cycle": 40,
+        # That test is only the fallback for a video in neither channel
+        # listing, so it stays small.
+        "shorts_per_cycle": 20,
+        # How many channels get their listings read per cycle, and how long a
+        # channel's answer is trusted before asking again. A channel whose
+        # videos are all decided is never asked, so in the steady state this is
+        # only the channels that just gained a video.
+        "classify_per_cycle": 40,
+        "classify_interval_s": 21600,
     },
     "watched": {"threshold": 0.7},
 }
@@ -92,6 +100,14 @@ class Config:
     @property
     def shorts_per_cycle(self) -> int:
         return max(0, int(self.get("poll", "shorts_per_cycle")))
+
+    @property
+    def classify_per_cycle(self) -> int:
+        return max(0, int(self.get("poll", "classify_per_cycle")))
+
+    @property
+    def classify_interval_s(self) -> int:
+        return max(0, int(self.get("poll", "classify_interval_s")))
 
 
 def load(path: Path | None = None) -> Config:

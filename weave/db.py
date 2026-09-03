@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -103,6 +103,13 @@ class VideoRow:
         return f"{prefix}:{self.ext_id}"
 
 
+# Columns added after the first release. Listed rather than folded into the
+# schema above so an existing database gains them too.
+_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("channels", "last_classified_at", "INTEGER"),
+)
+
+
 class Database:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -129,8 +136,18 @@ class Database:
             self._local.conn = None
 
     def _migrate(self) -> None:
+        """Create what is missing, then apply column additions in order.
+
+        Additions are done by inspecting the table rather than by trusting the
+        recorded version, so a database that was created at an older version
+        and a database that was half upgraded both end up in the same place.
+        """
         with self.conn as conn:
             conn.executescript(_SCHEMA)
+            for table, column, definition in _ADDED_COLUMNS:
+                existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+                if column not in existing:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
             conn.execute(
                 "INSERT INTO meta(key, value) VALUES('schema_version', ?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -207,6 +224,54 @@ class Database:
         return self.conn.execute(
             "SELECT 1 FROM videos WHERE channel_key=? LIMIT 1", (key,)
         ).fetchone() is not None
+
+    def channels_needing_classification(self, interval_s: int, limit: int = 40) -> list[sqlite3.Row]:
+        """Channels that still hold videos of unknown kind.
+
+        A channel whose videos are all decided needs no request at all, so in
+        the steady state this is only the channels that just gained a video.
+        """
+        cutoff = int(time.time()) - max(0, interval_s)
+        return list(self.conn.execute(
+            """
+            SELECT c.* FROM channels c
+            WHERE c.platform = 'youtube'
+              AND (c.last_classified_at IS NULL OR c.last_classified_at <= ?)
+              AND EXISTS (SELECT 1 FROM videos v
+                           WHERE v.channel_key = c.key AND v.is_short IS NULL)
+            ORDER BY c.last_classified_at IS NOT NULL, c.last_classified_at
+            LIMIT ?
+            """,
+            (cutoff, limit),
+        ))
+
+    def mark_classified(self, key: str) -> None:
+        with self.conn as conn:
+            conn.execute("UPDATE channels SET last_classified_at=? WHERE key=?",
+                         (int(time.time()), key))
+
+    def set_kind(self, channel_key: str, ext_ids: set[str], is_short: bool) -> int:
+        """Record which of a channel's stored videos are Shorts and which are
+        not. Only touches rows that are still undecided, so a decision already
+        made is never overwritten."""
+        if not ext_ids:
+            return 0
+        with self.conn as conn:
+            before = conn.total_changes
+            conn.executemany(
+                "UPDATE videos SET is_short=? WHERE channel_key=? AND ext_id=? "
+                "AND is_short IS NULL",
+                [(1 if is_short else 0, channel_key, ext_id) for ext_id in ext_ids],
+            )
+            return conn.total_changes - before
+
+    def unclassified_count(self, channel_key: str | None = None) -> int:
+        if channel_key is None:
+            return int(self.conn.execute(
+                "SELECT COUNT(*) FROM videos WHERE is_short IS NULL").fetchone()[0])
+        return int(self.conn.execute(
+            "SELECT COUNT(*) FROM videos WHERE is_short IS NULL AND channel_key=?",
+            (channel_key,)).fetchone()[0])
 
     def mark_polled(self, key: str, error: str | None = None) -> None:
         with self.conn as conn:
@@ -285,18 +350,22 @@ class Database:
             conn.execute("UPDATE videos SET is_short=? WHERE key=?", (1 if value else 0, video_key))
 
     def videos_needing_short_check(self, limit: int = 40) -> list[sqlite3.Row]:
-        """Candidates for the redirect test.
+        """Stragglers for the per video redirect test.
 
-        A known duration past the ceiling has already been settled for free, so
-        only videos short enough to actually be a Short get a request. A video
-        with no duration yet is deliberately not a candidate. Testing those
-        would mean thousands of requests, and the sweep gives them a duration
-        soon enough. Newest first, since those are the ones being looked at.
+        The channel tabs decide almost everything, so this is the fallback for
+        a video that appeared in neither of them, which happens for a premiere
+        or a stream that has not settled into a tab yet.
+
+        Restricting this to videos of known short duration was a mistake worth
+        remembering. Most stored videos never get a duration, because the
+        subscriptions sweep only reaches the newest entries, so that rule left
+        the vast majority permanently unclassified and hid nothing at all.
+        Newest first, since those are the ones being looked at.
         """
         return list(self.conn.execute(
             "SELECT key, ext_id FROM videos "
             "WHERE platform='youtube' AND is_short IS NULL "
-            "  AND duration_s IS NOT NULL AND duration_s <= ? "
+            "  AND (duration_s IS NULL OR duration_s <= ?) "
             "ORDER BY published_at DESC NULLS LAST LIMIT ?",
             (SHORTS_CEILING_S, limit),
         ))

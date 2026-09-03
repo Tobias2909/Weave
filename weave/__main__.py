@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import argparse
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from . import config, ids, paths
 from .db import Database
 from .net import Fetcher, Throttle
-from .sources import rss, subs
+from .classify import classify_channel
+from .sources import rss, subs, tabs
 from .sources.resolve import ResolveError, resolve
 
 
@@ -90,8 +92,12 @@ def _cmd_poll(_args) -> int:
     seen: dict[str, int] = {}
 
     def on_progress(phase: str, done: int, total: int) -> None:
-        if seen.get(phase) != total or done == total:
+        # Only redraw on a terminal. Piped into a log, a carriage return does
+        # not overwrite and every tick becomes its own line.
+        if sys.stdout.isatty():
             print(f"  {phase} {done} of {total}", end="\r", flush=True)
+        elif seen.get(phase) != total:
+            print(f"  {phase} of {total}")
         seen[phase] = total
 
     failures: list[str] = []
@@ -108,6 +114,45 @@ def _cmd_poll(_args) -> int:
     print(f"done, {counts['channels']} channels, {counts['videos']} videos, "
           f"{len(failures)} problems")
     return 1 if failures else 0
+
+
+def _cmd_classify(args) -> int:
+    """Backfill in one go, rather than waiting for the poller to work through
+    a few channels per cycle."""
+    cfg = config.load()
+    db = Database(paths.DB_FILE)
+    throttle = Throttle(cfg.max_concurrency, cfg.min_request_interval_s)
+
+    pending = db.channels_needing_classification(0, limit=999999)
+    total = len(pending)
+    if not total:
+        print(f"nothing to do, {db.unclassified_count()} videos are undecided and "
+              f"every channel has been asked recently")
+        return 0
+    print(f"{total} channels to ask, {db.unclassified_count()} videos undecided")
+
+    marked_short = marked_long = failed = 0
+    with ThreadPoolExecutor(max_workers=cfg.max_concurrency) as pool:
+        futures = {pool.submit(classify_channel, db, row["key"], row["ext_id"], throttle):
+                   row["key"] for row in pending}
+        for index, future in enumerate(as_completed(futures), start=1):
+            try:
+                got_short, got_long = future.result()
+            except tabs.TabError as exc:
+                failed += 1
+                if args.verbose:
+                    print(f"  {futures[future]} failed, {exc}", file=sys.stderr)
+            else:
+                marked_short += got_short
+                marked_long += got_long
+            if sys.stdout.isatty():
+                print(f"  {index} of {total} channels", end="\r", flush=True)
+    if sys.stdout.isatty():
+        print(" " * 40, end="\r")
+    print(f"done, {marked_short} Shorts hidden, {marked_long} settled as long form, "
+          f"{failed} channels failed")
+    print(f"{db.unclassified_count()} videos are still undecided")
+    return 0
 
 
 def _cmd_import(_args) -> int:
@@ -198,6 +243,11 @@ def main() -> int:
     subparsers.add_parser("channels", help="list tracked channels").set_defaults(func=_cmd_channels)
     subparsers.add_parser("poll", help="refresh every feed without a window").set_defaults(func=_cmd_poll)
     subparsers.add_parser("import", help="track every channel you subscribe to").set_defaults(func=_cmd_import)
+
+    classify = subparsers.add_parser(
+        "classify", help="ask every channel which of its videos are Shorts")
+    classify.add_argument("-v", "--verbose", action="store_true", help="name each failure")
+    classify.set_defaults(func=_cmd_classify)
 
     group = subparsers.add_parser("group", help="organise channels into groups")
     group_actions = group.add_subparsers(dest="action", required=True)

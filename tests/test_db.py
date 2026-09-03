@@ -85,20 +85,22 @@ class ShortsClassification(DatabaseCase):
                                self.video("bbbbbbbbbbb"),      # short enough to test
                                self.video("ccccccccccc")])     # duration still unknown
 
-    def test_unknown_duration_is_not_a_candidate(self):
-        # Testing those would be thousands of requests for no gain, and the
-        # sweep gives them a duration soon enough.
-        self.assertEqual(self.db.videos_needing_short_check(), [])
+    def test_unknown_duration_is_still_a_candidate(self):
+        # It has to be. Most stored videos never get a duration, because the
+        # subscriptions sweep only reaches the newest entries, so excluding
+        # them left the whole feed unclassified and hid nothing.
+        self.assertIn("ccccccccccc",
+                      [r["ext_id"] for r in self.db.videos_needing_short_check()])
 
     def test_a_long_duration_settles_it_with_no_request(self):
         self.db.fill_details([("yt:aaaaaaaaaaa", SHORTS_CEILING_S + 1, None)])
         row = next(r for r in self.db.feed() if r["ext_id"] == "aaaaaaaaaaa")
         self.assertEqual(row["is_short"], 0)
 
-    def test_only_short_enough_videos_get_a_request(self):
+    def test_a_settled_long_video_stops_being_a_candidate(self):
         self.db.fill_details([("yt:aaaaaaaaaaa", 3600, None), ("yt:bbbbbbbbbbb", 45, None)])
-        self.assertEqual([r["ext_id"] for r in self.db.videos_needing_short_check()],
-                         ["bbbbbbbbbbb"])
+        self.assertNotIn("aaaaaaaaaaa",
+                         [r["ext_id"] for r in self.db.videos_needing_short_check()])
 
     def test_a_confirmed_short_leaves_the_feed(self):
         self.db.set_short("yt:bbbbbbbbbbb", True)
@@ -106,6 +108,51 @@ class ShortsClassification(DatabaseCase):
 
     def test_an_unclassified_video_still_shows(self):
         self.assertIn("ccccccccccc", [r["ext_id"] for r in self.db.feed()])
+
+
+class TabClassification(DatabaseCase):
+    def setUp(self):
+        super().setUp()
+        self.db.add_channel("yt:UC1", "youtube", "UC1", "One")
+        self.db.upsert_videos([self.video("aaaaaaaaaaa"), self.video("bbbbbbbbbbb"),
+                               self.video("ccccccccccc")])
+
+    def test_marking_from_the_tabs(self):
+        self.assertEqual(self.db.set_kind("yt:UC1", {"aaaaaaaaaaa"}, is_short=True), 1)
+        self.assertEqual(self.db.set_kind("yt:UC1", {"bbbbbbbbbbb"}, is_short=False), 1)
+        kinds = {r["ext_id"]: r["is_short"] for r in
+                 self.db.conn.execute("SELECT ext_id, is_short FROM videos")}
+        self.assertEqual(kinds, {"aaaaaaaaaaa": 1, "bbbbbbbbbbb": 0, "ccccccccccc": None})
+
+    def test_a_video_in_neither_tab_stays_undecided_and_keeps_showing(self):
+        self.db.set_kind("yt:UC1", {"aaaaaaaaaaa"}, is_short=True)
+        self.db.set_kind("yt:UC1", {"bbbbbbbbbbb"}, is_short=False)
+        self.assertIn("ccccccccccc", [r["ext_id"] for r in self.db.feed()])
+
+    def test_a_decision_is_never_overwritten(self):
+        self.db.set_kind("yt:UC1", {"aaaaaaaaaaa"}, is_short=True)
+        self.assertEqual(self.db.set_kind("yt:UC1", {"aaaaaaaaaaa"}, is_short=False), 0)
+
+    def test_ids_from_another_channel_are_ignored(self):
+        self.db.add_channel("yt:UC2", "youtube", "UC2", "Two")
+        self.assertEqual(self.db.set_kind("yt:UC2", {"aaaaaaaaaaa"}, is_short=True), 0)
+
+    def test_only_channels_with_undecided_videos_need_a_request(self):
+        self.assertEqual([c["key"] for c in self.db.channels_needing_classification(0)],
+                         ["yt:UC1"])
+        self.db.set_kind("yt:UC1", {"aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"},
+                         is_short=False)
+        self.assertEqual(self.db.channels_needing_classification(0), [])
+
+    def test_a_recent_check_is_not_repeated(self):
+        self.db.mark_classified("yt:UC1")
+        self.assertEqual(self.db.channels_needing_classification(21600), [])
+        self.assertEqual(len(self.db.channels_needing_classification(0)), 1)
+
+    def test_unclassified_counts(self):
+        self.assertEqual(self.db.unclassified_count(), 3)
+        self.db.set_kind("yt:UC1", {"aaaaaaaaaaa"}, is_short=True)
+        self.assertEqual(self.db.unclassified_count("yt:UC1"), 2)
 
 
 class Groups(DatabaseCase):
