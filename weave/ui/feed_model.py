@@ -12,6 +12,7 @@ from PySide6.QtCore import QAbstractListModel, QByteArray, QModelIndex, Qt
 from .. import format as fmt
 from .. import ids
 from ..db import Database
+from ..imagecache import qml_source
 from ..sources import progress as mpv_progress
 
 ROLES = (
@@ -70,8 +71,8 @@ class FeedModel(QAbstractListModel):
             "title": row["title"],
             "channelKey": row["channel_key"],
             "channelTitle": row["channel_title"] or "",
-            "channelAvatar": row["avatar_url"] or "",
-            "thumbnail": row["thumbnail_url"] or "",
+            "channelAvatar": qml_source(row["avatar_url"]),
+            "thumbnail": qml_source(row["thumbnail_url"]),
             "ageText": fmt.age_text(row["published_at"]),
             "durationText": fmt.duration_text(row["duration_s"]),
             "viewsText": fmt.count_text(row["views"]),

@@ -65,6 +65,27 @@ Shorts are found without a request wherever possible. A known duration past
 three minutes settles it for free, and only videos short enough to actually be
 one get a lookup.
 
+## Pictures are kept on disk
+
+Thumbnails, channel icons and banners are cached in `~/.cache/weave/images` and
+served from there, so going back to a view costs nothing and a restart does not
+download the feed again. A thumbnail averages about 17 KB, so a few thousand
+videos come to well under a hundred megabytes.
+
+Pictures are kept for a week and the cache has a ceiling, both set in the
+config. Whatever has aged out or spilled over is cleared at startup, oldest
+first. To look or to clean up by hand.
+
+```sh
+python -m weave cache
+python -m weave cache --prune
+python -m weave cache --clear
+```
+
+The retention is ours rather than the server's on purpose. A thumbnail is served
+with a lifetime of a few minutes, so anything following that would go back to
+the network on nearly every visit for a picture that never changes.
+
 ## Nothing is thrown away
 
 Video rows are inserted and never pruned. A channel feed publishes only its
@@ -194,7 +215,7 @@ Inside the window, left click a card to play it in `mpv`, click the channel name
 to open that channel's page, and right click for a menu that plays, opens the
 channel, toggles the watched mark, and puts the video into or out of any box.
 
-A wheel over the grid moves half a card row per notch, which is set by
+A wheel over the grid glides half a card row per notch, which is set by
 `scroll_rows_per_notch` in the config if that feels wrong. A wheel over the list
 on the left moves the selection instead of scrolling it, so stepping through the
 boxes and back to the whole feed is one gesture. The box in the header adds a channel, the button beside it imports

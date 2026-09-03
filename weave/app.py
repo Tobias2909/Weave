@@ -20,7 +20,7 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 
-from . import config, paths
+from . import config, imagecache, paths
 from .db import Database
 from .player.mpv import Player
 from .ui.bridge import Bridge
@@ -66,6 +66,9 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
     bridge = Bridge(db, cfg, model, player)
 
     engine = QQmlApplicationEngine()
+    # Installed before anything loads, so the very first images already go
+    # through it.
+    imagecache.install(engine, paths.IMAGE_CACHE, cfg.image_max_mb, cfg.image_days)
     context = engine.rootContext()
     context.setContextProperty("App", bridge)
     context.setContextProperty("Theme", theme)

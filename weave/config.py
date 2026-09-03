@@ -43,6 +43,15 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "classify_interval_s": 21600,
     },
     "watched": {"threshold": 0.7},
+    "cache": {
+        # Images live on disk this long. The server asks for five minutes,
+        # which would mean going back to the network on nearly every visit, so
+        # the stored copy is kept for this instead.
+        "image_days": 7,
+        # Ceiling for the image cache. Measured, a thumbnail averages 17.5 KB,
+        # so several thousand videos plus avatars and banners fit in this.
+        "image_max_mb": 200,
+    },
     "ui": {
         # How far one wheel notch moves the grid, counted in card rows. A
         # Flickable on its own moves about sixty pixels, which is a fifth of a
@@ -82,6 +91,14 @@ class Config:
     @property
     def min_request_interval_s(self) -> float:
         return max(0.0, int(self.get("poll", "min_request_interval_ms")) / 1000.0)
+
+    @property
+    def image_days(self) -> int:
+        return max(1, int(self.get("cache", "image_days")))
+
+    @property
+    def image_max_mb(self) -> int:
+        return max(16, int(self.get("cache", "image_max_mb")))
 
     @property
     def scroll_rows_per_notch(self) -> float:

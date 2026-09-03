@@ -11,7 +11,7 @@ import argparse
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from . import config, ids, paths
+from . import config, ids, imagecache, paths
 from .db import Database
 from .net import Fetcher, Throttle
 from .classify import classify_channel
@@ -285,6 +285,28 @@ def _cmd_box(args) -> int:
     return 0 if changed else 1
 
 
+def _cmd_cache(args) -> int:
+    cfg = config.load()
+    directory = paths.IMAGE_CACHE
+    if args.clear:
+        removed, freed = imagecache.prune(directory, 0)
+        print(f"cleared {removed} files, {freed / 1024 / 1024:.1f} MB")
+        return 0
+    if args.prune:
+        aged, freed = imagecache.prune(directory, cfg.image_days * 86400)
+        spilled, more = imagecache.enforce_ceiling(directory, cfg.image_max_mb * 1024 * 1024)
+        print(f"removed {aged} files older than {cfg.image_days} days and {spilled} "
+              f"over the ceiling, {(freed + more) / 1024 / 1024:.1f} MB")
+        return 0
+
+    total = imagecache.size_bytes(directory)
+    files = sum(1 for path in directory.rglob("*") if path.is_file()) if directory.exists() else 0
+    print(f"image cache at {directory}")
+    print(f"  {files} files, {total / 1024 / 1024:.1f} MB of a {cfg.image_max_mb} MB ceiling")
+    print(f"  images are kept for {cfg.image_days} days")
+    return 0
+
+
 def _cmd_gui(_args) -> int:
     from .app import run
     return run(sys.argv[:1])
@@ -305,6 +327,11 @@ def main() -> int:
     subparsers.add_parser("channels", help="list tracked channels").set_defaults(func=_cmd_channels)
     subparsers.add_parser("poll", help="refresh every feed without a window").set_defaults(func=_cmd_poll)
     subparsers.add_parser("import", help="track every channel you subscribe to").set_defaults(func=_cmd_import)
+
+    cache = subparsers.add_parser("cache", help="report or clean the image cache")
+    cache.add_argument("--prune", action="store_true", help="drop what is past the retention window")
+    cache.add_argument("--clear", action="store_true", help="drop everything")
+    cache.set_defaults(func=_cmd_cache)
 
     classify = subparsers.add_parser(
         "classify", help="ask every channel which of its videos are Shorts")

@@ -1,0 +1,232 @@
+"""On disk caching for thumbnails, avatars and banners.
+
+Without this every picture is downloaded again on every launch and on every
+trip back to a view, because Qt's own image cache is memory only and does not
+survive the process.
+
+Two things were measured on the way to this design and are worth not repeating.
+
+A QML Image does not use the engine's network manager. Setting a disk cache on
+that manager looks right, changes nothing, and fails silently. The picture
+loads, the manager sees no request at all, and the cache directory stays empty.
+Images are fetched by a manager the engine builds from its network manager
+factory, and subclassing that factory from Python crashes inside
+QQmlTypeLoader::createNetworkAccessManager. So neither route is usable here.
+
+What works is an image provider, which is also the only one of the three that
+puts the retention rule in our hands rather than the server's. A thumbnail
+arrives with a cache lifetime of a few minutes, so an HTTP cache would go back
+to the network on nearly every visit even though the picture never changes.
+
+Measured sizes on a real subscription list. A thumbnail averages 17.5 KB, so
+every visible video would come to about 81 MB, and 456 channel avatars come to
+about 5 MB. The default ceiling leaves room for that plus banners.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import tempfile
+import time
+from pathlib import Path
+
+import requests
+from PySide6.QtCore import QRunnable, QThreadPool
+from PySide6.QtGui import QImage
+from PySide6.QtQuick import QQuickAsyncImageProvider, QQuickImageResponse, QQuickTextureFactory
+
+from . import __version__
+
+PROVIDER_ID = "cached"
+SECONDS_PER_DAY = 86400
+USER_AGENT = f"Weave/{__version__} (+https://github.com/Tobias2909/Weave)"
+
+# Pictures come from an image CDN rather than an endpoint that rate limits, so
+# they do not go through the request throttle. This cap is about not opening
+# fifty sockets at once while scrolling.
+MAX_PARALLEL = 6
+REQUEST_TIMEOUT_S = 20.0
+
+
+def qml_source(url: str | None) -> str:
+    """Wrap a picture URL so QML fetches it through the cache.
+
+    Built here rather than in QML so there is one place that knows about the
+    provider, and so a missing picture stays an empty string.
+    """
+    url = (url or "").strip()
+    if not url.startswith("http"):
+        return ""
+    return f"image://{PROVIDER_ID}/{url}"
+
+
+def path_for(directory: Path, url: str) -> Path:
+    """Where a picture is kept. Hashed, because a URL is not a filename, and
+    spread over a first byte of the digest so no directory holds thousands of
+    entries."""
+    digest = hashlib.sha1(url.encode()).hexdigest()
+    return directory / digest[:2] / digest
+
+
+class _Response(QQuickImageResponse, QRunnable):
+    """Serves one picture, from disk when it is there and from the network
+    otherwise."""
+
+    def __init__(self, url: str, directory: Path, ttl_seconds: int) -> None:
+        QQuickImageResponse.__init__(self)
+        QRunnable.__init__(self)
+        self._url = url
+        self._path = path_for(directory, url)
+        self._ttl = ttl_seconds
+        self._image = QImage()
+        self._error = ""
+        # The engine owns the response and deletes it once it has finished, so
+        # the thread pool must not delete it as well.
+        self.setAutoDelete(False)
+
+    def run(self) -> None:
+        try:
+            if self._load_from_disk() or self._download():
+                pass
+            else:
+                self._error = f"could not load {self._url}"
+        except Exception as exc:                                    # noqa: BLE001
+            self._error = f"{type(exc).__name__}: {exc}"
+        self.finished.emit()
+
+    def _fresh(self) -> bool:
+        try:
+            return time.time() - self._path.stat().st_mtime < self._ttl
+        except OSError:
+            return False
+
+    def _load_from_disk(self) -> bool:
+        if not self._fresh():
+            return False
+        return self._image.load(str(self._path))
+
+    def _download(self) -> bool:
+        response = requests.get(self._url, timeout=REQUEST_TIMEOUT_S,
+                                headers={"User-Agent": USER_AGENT})
+        if response.status_code != 200:
+            self._error = f"HTTP {response.status_code} for {self._url}"
+            return False
+        payload = response.content
+        if not self._image.loadFromData(payload):
+            self._error = f"unreadable image at {self._url}"
+            return False
+        self._store(payload)
+        return True
+
+    def _store(self, payload: bytes) -> None:
+        """Write through a temporary file in the same directory, so a picture
+        interrupted halfway never becomes a corrupt cache entry."""
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            handle, temporary = tempfile.mkstemp(dir=self._path.parent)
+            with os.fdopen(handle, "wb") as sink:
+                sink.write(payload)
+            os.replace(temporary, self._path)
+        except OSError:
+            # A cache that cannot be written is not a reason to fail the
+            # picture, it just means it is fetched again next time.
+            pass
+
+    def textureFactory(self) -> QQuickTextureFactory:
+        return QQuickTextureFactory.textureFactoryForImage(self._image)
+
+    def errorString(self) -> str:
+        return self._error
+
+
+class CachedImageProvider(QQuickAsyncImageProvider):
+    def __init__(self, directory: Path, ttl_seconds: int) -> None:
+        super().__init__()
+        self._directory = directory
+        self._ttl = ttl_seconds
+        self._pool = QThreadPool()
+        self._pool.setMaxThreadCount(MAX_PARALLEL)
+
+    def requestImageResponse(self, image_id: str, requested_size):
+        response = _Response(image_id, self._directory, self._ttl)
+        self._pool.start(response)
+        return response
+
+
+def size_bytes(directory: Path) -> int:
+    if not directory.exists():
+        return 0
+    total = 0
+    for path in directory.rglob("*"):
+        try:
+            if path.is_file():
+                total += path.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def prune(directory: Path, ttl_seconds: int) -> tuple[int, int]:
+    """Delete pictures past the retention window. Returns the file count and
+    the bytes freed."""
+    if not directory.exists():
+        return 0, 0
+    cutoff = time.time() - max(0, ttl_seconds)
+    removed = freed = 0
+    for path in directory.rglob("*"):
+        if not path.is_file():
+            continue
+        try:
+            stat = path.stat()
+            if stat.st_mtime < cutoff:
+                size = stat.st_size
+                path.unlink()
+                removed += 1
+                freed += size
+        except OSError:
+            continue
+    return removed, freed
+
+
+def enforce_ceiling(directory: Path, max_bytes: int) -> tuple[int, int]:
+    """Drop the oldest pictures until the cache fits. Age alone cannot bound
+    the size, since a week of heavy use could exceed any ceiling."""
+    if not directory.exists():
+        return 0, 0
+    files = []
+    total = 0
+    for path in directory.rglob("*"):
+        try:
+            if path.is_file():
+                stat = path.stat()
+                files.append((stat.st_mtime, stat.st_size, path))
+                total += stat.st_size
+        except OSError:
+            continue
+    if total <= max_bytes:
+        return 0, 0
+
+    removed = freed = 0
+    for _mtime, size, path in sorted(files):
+        if total - freed <= max_bytes:
+            break
+        try:
+            path.unlink()
+        except OSError:
+            continue
+        removed += 1
+        freed += size
+    return removed, freed
+
+
+def install(engine, directory: Path, max_mb: int, ttl_days: int) -> CachedImageProvider:
+    """Register the provider, after clearing out what has aged out or spilled
+    over since the last run."""
+    ttl_seconds = max(1, ttl_days) * SECONDS_PER_DAY
+    directory.mkdir(parents=True, exist_ok=True)
+    prune(directory, ttl_seconds)
+    enforce_ceiling(directory, max(16, max_mb) * 1024 * 1024)
+    provider = CachedImageProvider(directory, ttl_seconds)
+    engine.addImageProvider(PROVIDER_ID, provider)
+    return provider

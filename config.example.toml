@@ -30,6 +30,14 @@ min_request_interval_ms = 250
 # counts, whatever this is set to.
 threshold = 0.7
 
+[cache]
+# Thumbnails, avatars and banners live on disk this long. The server asks for
+# five minutes, which would mean going back to the network on nearly every
+# visit, so the stored copy is kept for this instead.
+image_days = 7
+# Ceiling for the image cache. A thumbnail averages about 17 KB.
+image_max_mb = 200
+
 [ui]
 # How far one wheel notch moves the grid, counted in card rows. A Flickable on
 # its own moves about sixty pixels, which is a fifth of a row here.

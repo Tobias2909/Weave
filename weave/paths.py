@@ -20,12 +20,12 @@ CACHE_DIR = Path(_dirs.user_cache_dir)
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 THEMES_DIR = CONFIG_DIR / "themes"
 DB_FILE = STATE_DIR / "weave.db"
-THUMB_CACHE = CACHE_DIR / "thumbs"
+IMAGE_CACHE = CACHE_DIR / "images"
 MOVING_CACHE = CACHE_DIR / "moving"
 
 
 def ensure_dirs() -> None:
-    for path in (CONFIG_DIR, THEMES_DIR, STATE_DIR, THUMB_CACHE, MOVING_CACHE):
+    for path in (CONFIG_DIR, THEMES_DIR, STATE_DIR, IMAGE_CACHE, MOVING_CACHE):
         path.mkdir(parents=True, exist_ok=True)
 
 

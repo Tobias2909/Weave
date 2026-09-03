@@ -17,6 +17,7 @@ from .. import format as fmt
 from .. import ids
 from ..config import Config
 from ..db import Database
+from ..imagecache import qml_source
 from ..player.mpv import Player
 from ..poller import ChannelAdder, ChannelDetailsFetcher, FeedPoller, SubsImporter
 from .feed_model import FeedModel
@@ -106,8 +107,8 @@ class Bridge(QObject):
         return {
             "key": found.get("key", ""),
             "title": found.get("title") or found.get("ext_id", ""),
-            "avatar": found.get("avatar_url") or "",
-            "banner": found.get("banner_url") or "",
+            "avatar": qml_source(found.get("avatar_url")),
+            "banner": qml_source(found.get("banner_url")),
             "followers": found.get("follower_count") or 0,
             "followersText": fmt.count_text(found.get("follower_count")),
             "videos": found.get("video_count") or 0,
