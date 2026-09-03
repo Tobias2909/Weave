@@ -111,12 +111,19 @@ Rectangle {
             readonly property int pictureHeight: strip.height - inset * 2
             readonly property int pictureWidth: Math.round(pictureHeight * 16 / 9)
 
+            // Which platform, said with colour rather than with a badge. Kept
+            // to an edge and a tinted border so a card is never washed in it.
+            readonly property color mark: modelData.platform === "twitch"
+                                          ? Theme.colors.twitch : Theme.colors.youtube
+
             width: pictureWidth + inset * 3 + 168
             height: strip.height
             radius: 8
             color: cardHover.hovered ? Theme.colors.surfaceRaised : Theme.colors.background
             border.width: 1
-            border.color: cardHover.hovered ? Theme.colors.accent : Theme.colors.border
+            border.color: cardHover.hovered
+                          ? mark
+                          : Qt.rgba(mark.r, mark.g, mark.b, 0.35)
 
             HoverHandler { id: cardHover }
             TapHandler { onTapped: App.playLive(streamCard.channelKeyOf) }
@@ -135,25 +142,18 @@ Rectangle {
                     source: modelData.thumbnail
                 }
 
-                // Says which platform without spending a line of text on it.
-                Rectangle {
-                    anchors.left: parent.left
-                    anchors.bottom: parent.bottom
-                    anchors.margins: 4
-                    radius: 3
-                    width: platformLabel.implicitWidth + 8
-                    height: platformLabel.implicitHeight + 3
-                    color: modelData.platform === "twitch" ? Theme.colors.live
-                                                           : Theme.colors.badgeBackground
-                    Label {
-                        id: platformLabel
-                        anchors.centerIn: parent
-                        text: modelData.platform === "twitch" ? "LIVE" : "YOUTUBE"
-                        color: Theme.colors.badgeText
-                        font.pixelSize: 9
-                        font.bold: true
-                    }
-                }
+            }
+
+            // A thin edge in the platform's colour. Enough to tell them apart
+            // at a glance without taking any room.
+            Rectangle {
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                width: 3
+                topLeftRadius: streamCard.radius
+                bottomLeftRadius: streamCard.radius
+                color: streamCard.mark
             }
 
             Column {

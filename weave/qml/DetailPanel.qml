@@ -133,9 +133,13 @@ Rectangle {
                     ]
                     Label {
                         required property var modelData
-                        visible: modelData.value !== undefined && modelData.value !== ""
-                        text: modelData.label === "" ? modelData.value
-                                                     : modelData.value + " " + modelData.label
+                        // A binding is evaluated even while the item is
+                        // hidden, so an absent field has to become an empty
+                        // string here rather than reaching the text property
+                        // as undefined.
+                        readonly property string value: modelData.value ? modelData.value : ""
+                        visible: value !== ""
+                        text: modelData.label === "" ? value : value + " " + modelData.label
                         color: Theme.colors.textMuted
                         font.pixelSize: 11
                     }

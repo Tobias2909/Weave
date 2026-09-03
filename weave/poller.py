@@ -373,6 +373,7 @@ class LiveWatcher(QThread):
         self._db = db
         self._cfg = cfg
         self._cancel = threading.Event()
+        self._throttle = Throttle(2, cfg.min_request_interval_s)
 
     def cancel(self) -> None:
         self._cancel.set()
@@ -419,7 +420,14 @@ class LiveWatcher(QThread):
             "started_at": stream.started_at, "thumbnail_url": stream.thumbnail_url,
         } for stream in streams if stream.key in known]
         self._db.replace_live("twitch", rows)
-        youtube = self._check_youtube()
+        try:
+            youtube = self._check_youtube()
+        except Exception as exc:                                    # noqa: BLE001
+            # One half failing must not cost the other. Before this, a mistake
+            # in here stopped the whole check and the update was never
+            # reported, so the Twitch results never reached the bar either.
+            self.failed.emit(f"{type(exc).__name__}: {exc}")
+            youtube = 0
         self._db.close()
         self.updated.emit(len(rows) + youtube)
 

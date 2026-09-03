@@ -23,6 +23,10 @@ DARK = {
     "accent": "#7c5cff",
     "accentHover": "#9a80ff",
     "live": "#ff4d4f",
+    # Platform marks. Used as a thin edge and a tinted border
+    # rather than as a fill, so a card is never washed in them.
+    "twitch": "#9146ff",
+    "youtube": "#ff3d3d",
     "progress": "#ff3b30",
     "watchedDim": "#5a6072",
     "badgeBackground": "#000000b0",
