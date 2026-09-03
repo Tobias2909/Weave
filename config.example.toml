@@ -28,7 +28,7 @@ min_request_interval_ms = 250
 [watched]
 # Fraction of the duration that counts as watched. Reaching the end always
 # counts, whatever this is set to.
-threshold = 0.7
+threshold = 0.85
 
 [cache]
 # Thumbnails, avatars and banners live on disk this long. The server asks for

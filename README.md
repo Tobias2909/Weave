@@ -31,7 +31,7 @@ This is the first milestone. Working right now
 * Shorts filtered out of the feed
 * Left click plays the video in `mpv`
 * Watched state derived by observing `mpv` over its own IPC socket, either when
-  a file reaches the end or once 70 percent of it has been seen
+  a file reaches the end or once 85 percent of it has been seen
 * A hide watched toggle that filters rather than deletes, so nothing is ever lost
 * A visible banner whenever a source reports a problem, because a scraper that
   returns nothing looks exactly like a quiet day

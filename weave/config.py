@@ -42,7 +42,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "classify_per_cycle": 40,
         "classify_interval_s": 21600,
     },
-    "watched": {"threshold": 0.7},
+    "watched": {"threshold": 0.85},
     "cache": {
         # Images live on disk this long. The server asks for five minutes,
         # which would mean going back to the network on nearly every visit, so

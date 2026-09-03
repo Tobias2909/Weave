@@ -407,10 +407,18 @@ ApplicationWindow {
         Instantiator {
             id: boxEntries
             model: App.boxes
-            onObjectAdded: (index, object) => videoMenu.insertItem(index + 4, object)
+            // A delegate created here does not inherit this file's id scope, so
+            // it cannot see videoMenu, and reaching for it raises a reference
+            // error that also leaves the menu open. The menu is handed to each
+            // entry from out here, where the id does resolve.
+            onObjectAdded: (index, object) => {
+                object.owner = videoMenu
+                videoMenu.insertItem(index + 4, object)
+            }
             onObjectRemoved: (index, object) => videoMenu.removeItem(object)
             delegate: MenuItem {
                 required property var modelData
+                property var owner: null
                 text: (App.boxesHolding(root.menuKey).indexOf(modelData.id) >= 0
                        ? "✓  " : "   ") + modelData.name
                 onTriggered: {
@@ -418,7 +426,8 @@ ApplicationWindow {
                         App.removeFromBox(modelData.id, root.menuKey)
                     else
                         App.addToBox(modelData.id, root.menuKey)
-                    videoMenu.dismiss()
+                    if (owner)
+                        owner.dismiss()
                 }
             }
         }

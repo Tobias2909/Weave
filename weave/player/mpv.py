@@ -40,6 +40,7 @@ DEFAULT_SOCKET = "mpv-ff2mpv.sock"
 _OBS_PATH = 1
 _OBS_DURATION = 2
 _OBS_TIME_POS = 3
+_OBS_SEEKABLE = 4
 
 
 class PlayerNotFound(RuntimeError):
@@ -81,8 +82,14 @@ class _IpcWatcher(QThread):
     Watched is decided here rather than by mpv, so the rule is Weave's own.
     Reaching the end always counts. Otherwise the highest playback position
     seen, divided by the duration, has to reach the configured threshold.
-    A live stream reports no usable duration, so it never marks watched, which
-    is the behaviour we want.
+
+    A live stream is never marked, and guarding that needs care. mpv reports a
+    duration for one, but it is the length of the sliding window rather than of
+    the stream, measured at about fifteen seconds, so a few seconds of watching
+    already looks like most of the video and the stream is marked watched
+    almost at once. Two independent guards catch it. Weave says so when it
+    starts one itself, and mpv reports a live stream as not seekable, which
+    covers a stream started from somewhere else.
     """
 
     nowPlaying = Signal(str, str)     # key, media title
@@ -101,9 +108,21 @@ class _IpcWatcher(QThread):
         self._key: str | None = None
         self._title = ""
         self._duration: float | None = None
+        self._seekable: bool | None = None
+        # Set before a handoff and consumed by the file that follows, so it
+        # applies to what Weave started and not to whatever mpv moves on to by
+        # itself. Clearing it on a path change instead would clear it before
+        # the file it was meant for had even loaded.
+        self._pending_live = False
+        self._live_current = False
         self._max_pos = 0.0
         self._reported: set[str] = set()
         self._last_whole_second = -1
+
+    def set_live_hint(self, live: bool) -> None:
+        """Told by Weave when it hands over something it knows is live."""
+        with self._hint_lock:
+            self._pending_live = live
 
     def set_twitch_hint(self, login: str | None) -> None:
         """A resolved Twitch playlist names the channel nowhere, so the login
@@ -146,6 +165,7 @@ class _IpcWatcher(QThread):
             self._send(sock, {"command": ["observe_property", _OBS_PATH, "path"]})
             self._send(sock, {"command": ["observe_property", _OBS_DURATION, "duration"]})
             self._send(sock, {"command": ["observe_property", _OBS_TIME_POS, "time-pos"]})
+            self._send(sock, {"command": ["observe_property", _OBS_SEEKABLE, "seekable"]})
             self._read_forever(sock)
         finally:
             self.connectionChanged.emit(False)
@@ -193,6 +213,8 @@ class _IpcWatcher(QThread):
             self._on_new_path(data)
         elif name == "duration":
             self._duration = float(data) if isinstance(data, (int, float)) and data > 0 else None
+        elif name == "seekable":
+            self._seekable = data if isinstance(data, bool) else None
         elif name == "time-pos":
             if not isinstance(data, (int, float)):
                 return
@@ -209,6 +231,7 @@ class _IpcWatcher(QThread):
     def _on_new_path(self, path) -> None:
         self._flush(reached_end=False)
         self._duration = None
+        self._seekable = None
         self._max_pos = 0.0
         self._last_whole_second = -1
         if not isinstance(path, str):
@@ -216,6 +239,8 @@ class _IpcWatcher(QThread):
             return
         with self._hint_lock:
             hint = self._twitch_hint
+            self._live_current = self._pending_live
+            self._pending_live = False
         self._key = ids.key_for_media_path(path, twitch_hint=hint)
         if self._key:
             self.nowPlaying.emit(self._key, self._title or "")
@@ -225,15 +250,26 @@ class _IpcWatcher(QThread):
             return None
         return min(1.0, self._max_pos / self._duration)
 
+    def _is_live(self) -> bool:
+        """Either guard is enough. Weave knows what it started, and mpv knows
+        that a live stream cannot be seeked."""
+        with self._hint_lock:
+            hinted = self._live_current or self._pending_live
+        return hinted or self._seekable is False
+
     def _check_threshold(self) -> None:
+        if self._is_live():
+            return
         progress = self._progress()
         if self._key and progress is not None and progress >= self._threshold:
             self._report(progress)
 
     def _flush(self, reached_end: bool) -> None:
-        progress = self._progress()
-        if not self._key:
+        # Reaching the end of a live stream means the broadcast stopped, not
+        # that it was watched.
+        if not self._key or self._is_live():
             return
+        progress = self._progress()
         if reached_end:
             self._report(progress if progress is not None else 1.0)
         elif progress is not None and progress >= self._threshold:
@@ -284,11 +320,12 @@ class Player(QObject):
         self._watcher.stop()
         self._watcher.wait(3000)
 
-    def play(self, url: str, twitch_login: str | None = None) -> bool:
+    def play(self, url: str, twitch_login: str | None = None, live: bool = False) -> bool:
         if not self._command:
             self.failed.emit(self._error or "no player configured")
             return False
         self._watcher.set_twitch_hint(twitch_login)
+        self._watcher.set_live_hint(live)
         try:
             subprocess.Popen(
                 [*self._command, url],

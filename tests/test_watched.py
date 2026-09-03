@@ -82,17 +82,75 @@ class Rule(unittest.TestCase):
         self.assertEqual(self.watcher._max_pos, 0.0)
         self.assertIsNone(self.watcher._duration)
 
-    def test_live_stream_never_marks_watched(self):
-        # A live stream reports duration 0, so no progress can be computed.
+    def test_a_live_stream_is_never_marked(self):
+        # The trap this guards. mpv reports a duration for a live stream, but
+        # it is the length of the sliding window rather than of the stream,
+        # measured at about fifteen seconds, so a few seconds of watching
+        # already looks like most of the video.
         self.feed("path", YT)
-        self.feed("duration", 0)
-        for pos in range(0, 600, 30):
+        self.feed("seekable", False)
+        self.feed("duration", 15.0)
+        for pos in range(0, 600, 5):
             self.feed("time-pos", float(pos))
+        self.assertEqual(self.marked, [])
+
+    def test_a_live_stream_ending_is_not_a_video_being_finished(self):
+        self.feed("path", YT)
+        self.feed("seekable", False)
+        self.feed("duration", 15.0)
+        self.feed("time-pos", 14.0)
         self.watcher._handle({"event": "end-file", "reason": "eof"})
+        self.assertEqual(self.marked, [])
+
+    def test_weave_saying_it_is_live_is_enough_on_its_own(self):
+        # Covers a stream whose seekable flag has not arrived yet.
+        self.watcher.set_live_hint(True)
+        self.load(YT)
+        self.feed("time-pos", 99.0)
+        self.watcher._handle({"event": "end-file", "reason": "eof"})
+        self.assertEqual(self.marked, [])
+
+    def test_mpv_saying_it_is_not_seekable_is_enough_on_its_own(self):
+        # Covers a stream started from somewhere other than Weave.
+        self.load(YT)
+        self.feed("seekable", False)
+        self.feed("time-pos", 99.0)
+        self.assertEqual(self.marked, [])
+
+    def test_an_ordinary_seekable_video_is_still_marked(self):
+        self.load(YT)
+        self.feed("seekable", True)
+        self.feed("time-pos", 71.0)
         self.assertEqual([k for k, _ in self.marked], ["yt:aaaaaaaaaaa"])
-        # Reaching the end of a stream still counts, but nothing marked it on
-        # progress alone during those ten minutes.
-        self.assertEqual(len(self.marked), 1)
+
+    def test_weaves_live_flag_applies_to_the_file_it_started(self):
+        # The flag is set before the handoff, so it has to survive until the
+        # path arrives and then be consumed by it.
+        self.watcher.set_live_hint(True)
+        self.load(YT)
+        self.feed("time-pos", 99.0)
+        self.assertEqual(self.marked, [])
+
+    def test_weaves_live_flag_does_not_carry_to_a_later_track(self):
+        # mpv moving on by itself must start from a clean slate, otherwise a
+        # normal video after a stream could never be marked.
+        self.watcher.set_live_hint(True)
+        self.load(YT)
+        self.feed("time-pos", 99.0)
+        self.load(YT_OTHER)
+        self.feed("seekable", True)
+        self.feed("time-pos", 95.0)
+        self.assertEqual([k for k, _ in self.marked], ["yt:bbbbbbbbbbb"])
+
+    def test_the_live_flag_does_not_leak_to_the_next_video(self):
+        self.feed("path", YT)
+        self.feed("seekable", False)
+        self.feed("duration", 15.0)
+        self.feed("time-pos", 14.0)
+        self.load(YT_OTHER)
+        self.feed("seekable", True)
+        self.feed("time-pos", 90.0)
+        self.assertEqual([k for k, _ in self.marked], ["yt:bbbbbbbbbbb"])
 
     def test_unidentifiable_path_is_ignored(self):
         self.load("/home/user/holiday.mkv")

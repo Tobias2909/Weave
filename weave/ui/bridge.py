@@ -327,7 +327,10 @@ class Bridge(QObject):
         if not row:
             return
         login = key.split(":", 1)[1] if key.startswith("twitch:") else None
-        if self._player.play(row["url"], twitch_login=login):
+        # A Twitch entry is only ever a live channel for now, and a YouTube one
+        # says so in the row. Either way mpv must not mark it watched.
+        live = bool(row["isLive"]) or login is not None
+        if self._player.play(row["url"], twitch_login=login, live=live):
             self._set_status(f"playing {row['title']}")
 
     @Slot(str)
