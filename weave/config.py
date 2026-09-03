@@ -17,12 +17,22 @@ from . import paths
 
 DEFAULTS: dict[str, dict[str, Any]] = {
     "youtube": {"browser_profile": "auto"},
-    "player": {"command": "auto", "ipc_socket": "auto"},
+    "player": {"command": "auto", "ipc_socket": "auto", "watch_later_dir": "auto"},
     "poll": {
         "feed_interval_s": 900,
         "live_interval_s": 90,
-        "max_concurrency": 4,
-        "min_request_interval_ms": 250,
+        # The gap is global, so a full sweep costs channels times the gap
+        # whatever the concurrency is. At 100 ms, several hundred channels take
+        # under a minute, which is fine off the interface thread. Raising the
+        # gap makes a large subscription list crawl.
+        "max_concurrency": 8,
+        "min_request_interval_ms": 100,
+        # How deep the subscriptions sweep goes when filling in durations.
+        # It paginates at roughly 77 ids a second, so a thousand costs about
+        # thirteen seconds and covers far more than what is on screen.
+        "sweep_limit": 1000,
+        # How many undecided videos get the Shorts redirect test per cycle.
+        "shorts_per_cycle": 40,
     },
     "watched": {"threshold": 0.7},
 }
@@ -70,6 +80,18 @@ class Config:
     @property
     def ipc_socket(self) -> str:
         return str(self.get("player", "ipc_socket"))
+
+    @property
+    def watch_later_dir(self) -> str:
+        return str(self.get("player", "watch_later_dir"))
+
+    @property
+    def sweep_limit(self) -> int:
+        return max(0, int(self.get("poll", "sweep_limit")))
+
+    @property
+    def shorts_per_cycle(self) -> int:
+        return max(0, int(self.get("poll", "shorts_per_cycle")))
 
 
 def load(path: Path | None = None) -> Config:

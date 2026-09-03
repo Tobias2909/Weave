@@ -12,7 +12,7 @@ from PySide6.QtCore import Property, QObject, Signal, Slot
 from ..config import Config
 from ..db import Database
 from ..player.mpv import Player
-from ..poller import ChannelAdder, FeedPoller
+from ..poller import ChannelAdder, FeedPoller, SubsImporter
 from .feed_model import FeedModel
 
 
@@ -22,6 +22,8 @@ class Bridge(QObject):
     hideWatchedChanged = Signal()
     problemsChanged = Signal()
     emptyHintChanged = Signal()
+    groupsChanged = Signal()
+    selectedGroupChanged = Signal()
 
     def __init__(self, db: Database, cfg: Config, model: FeedModel,
                  player: Player, parent: QObject | None = None) -> None:
@@ -32,6 +34,8 @@ class Bridge(QObject):
         self._player = player
         self._poller: FeedPoller | None = None
         self._adder: ChannelAdder | None = None
+        self._importer: SubsImporter | None = None
+        self._selected_group = -1          # -1 is the All view
         self._busy = False
         self._problems: list[str] = []
 
@@ -76,8 +80,21 @@ class Bridge(QObject):
             return "No videos stored yet.\nPress Refresh to fetch them."
         return "Everything here is watched.\nTurn off Hide watched to see it again."
 
+    def _get_groups(self) -> list:
+        """All first, then the configured groups. Shipped as one list so QML has no
+        special case for the All row."""
+        rows = [{"id": -1, "name": "All", "members": len(self._db.channels()),
+                 "unwatched": self._db.unwatched_total()}]
+        rows.extend(self._db.groups())
+        return rows
+
+    def _get_selected_group(self) -> int:
+        return self._selected_group
+
     status = Property(str, _get_status, notify=statusChanged)
     emptyHint = Property(str, _get_empty_hint, notify=emptyHintChanged)
+    groups = Property("QVariantList", _get_groups, notify=groupsChanged)
+    selectedGroup = Property(int, _get_selected_group, notify=selectedGroupChanged)
     busy = Property(bool, _get_busy, notify=busyChanged)
     hideWatched = Property(bool, _get_hide_watched, notify=hideWatchedChanged)
     problems = Property("QVariantList", _get_problems, notify=problemsChanged)
@@ -101,21 +118,41 @@ class Bridge(QObject):
 
     @Slot()
     def reload(self) -> None:
-        self._model.reload(hide_watched=self._hide_watched)
+        group = None if self._selected_group < 0 else self._selected_group
+        self._model.reload(hide_watched=self._hide_watched, group_id=group)
         self.emptyHintChanged.emit()
+        self.groupsChanged.emit()
+
+    @Slot(int)
+    def selectGroup(self, group_id: int) -> None:
+        if group_id == self._selected_group:
+            return
+        self._selected_group = group_id
+        self.selectedGroupChanged.emit()
+        self.reload()
 
     @Slot()
     def refresh(self) -> None:
-        """Manual refresh. Also the button that resets the poll timers."""
+        """The button. Takes every channel and resets the timer."""
+        self._start_poll(force_all=True)
+
+    @Slot()
+    def poll(self) -> None:
+        """The timer. Takes only the channels actually due, so a large
+        subscription list is spread out instead of arriving as one burst."""
+        self._start_poll(force_all=False)
+
+    def _start_poll(self, force_all: bool) -> None:
         if self._busy:
             return
         self._problems = [p for p in self._problems if not p.startswith("feed ")]
         self.problemsChanged.emit()
         self._set_busy(True)
         self._set_status("refreshing")
-        self._poller = FeedPoller(self._db, self._cfg, self)
+        self._poller = FeedPoller(self._db, self._cfg, force_all, self)
         self._poller.progress.connect(
-            lambda done, total: self._set_status(f"refreshing {done} of {total}"))
+            lambda phase, done, total: self._set_status(
+                f"{phase} {done} of {total}" if total > 1 else phase))
         self._poller.failure.connect(self._on_poll_failure)
         self._poller.finished_poll.connect(self._on_poll_finished)
         self._poller.start()
@@ -148,6 +185,16 @@ class Bridge(QObject):
         self.hideWatchedChanged.emit()
         self.reload()
 
+    @Slot()
+    def importSubscriptions(self) -> None:
+        if self._importer is not None and self._importer.isRunning():
+            return
+        self._set_status("importing the subscription list")
+        self._importer = SubsImporter(self._db, self._cfg, self)
+        self._importer.imported.connect(self._on_imported)
+        self._importer.failed.connect(self._on_import_failed)
+        self._importer.start()
+
     @Slot(str, result=bool)
     def addChannel(self, text: str) -> bool:
         """Accepts a channel id, an @handle, a legacy channel URL or a Twitch
@@ -171,6 +218,22 @@ class Bridge(QObject):
         self._adder.start()
         return True
 
+    def shutdown(self, timeout_ms: int = 15000) -> None:
+        """Stop every background thread before Qt tears them down.
+
+        Qt treats destroying a running QThread as fatal and aborts the whole
+        process, so closing the window during a refresh crashed on exit. All
+        threads are cancelled first and then waited on, so they stop in
+        parallel rather than one after another. This runs after the window is
+        already gone, so any short wait here is invisible.
+        """
+        threads = [self._poller, self._adder, self._importer]
+        live = [thread for thread in threads if thread is not None and thread.isRunning()]
+        for thread in live:
+            thread.cancel()
+        for thread in live:
+            thread.wait(timeout_ms)
+
     # ---- reactions -------------------------------------------------------
 
     def _on_channel_added(self, key: str, platform: str, ext_id: str, title: str) -> None:
@@ -187,6 +250,17 @@ class Bridge(QObject):
 
     def _on_channel_failed(self, message: str) -> None:
         self._set_status(f"could not add that channel, {message}")
+
+    def _on_imported(self, found: int, added: int) -> None:
+        self._set_status(f"{found} subscriptions found, {added} newly tracked")
+        self.reload()
+        if added:
+            self.refresh()
+
+    def _on_import_failed(self, message: str) -> None:
+        self._problems.append(f"subscription import, {message}")
+        self.problemsChanged.emit()
+        self._set_status(f"could not import the subscriptions, {message}")
 
     def _on_watched(self, key: str, progress: float) -> None:
         self._db.set_watched(key, progress, "mpv")

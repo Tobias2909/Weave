@@ -15,11 +15,12 @@ agree with what yt-dlp returns.
 
 from __future__ import annotations
 
-import subprocess
+import threading
 from dataclasses import dataclass
 
 from ..ids import CHANNEL_ID, ChannelRef, channel_key
 from ..net import Throttle
+from ..process import Cancelled, Result, Timeout, run as run_process
 
 # Asking for zero items returns the playlist level fields and downloads no
 # entries at all, which is what keeps this to about half a second.
@@ -58,7 +59,7 @@ def parse_output(text: str) -> tuple[str, str | None]:
 
 
 def resolve(ref: ChannelRef, throttle: Throttle | None = None,
-            timeout: float = 60.0) -> ResolvedChannel:
+            timeout: float = 60.0, cancel: threading.Event | None = None) -> ResolvedChannel:
     """Resolve a reference to something storable.
 
     A YouTube id is looked up too, not only a handle. The lookup costs the same
@@ -77,9 +78,8 @@ def resolve(ref: ChannelRef, throttle: Throttle | None = None,
     if ref.platform != "youtube":
         return ResolvedChannel(ref.platform, ref.value, None)
 
-    def run() -> subprocess.CompletedProcess:
-        return subprocess.run([*_COMMAND, ref.url], capture_output=True,
-                              text=True, timeout=timeout)
+    def run() -> Result:
+        return run_process([*_COMMAND, ref.url], cancel=cancel, timeout=timeout)
 
     try:
         if throttle is not None:
@@ -87,9 +87,11 @@ def resolve(ref: ChannelRef, throttle: Throttle | None = None,
                 result = run()
         else:
             result = run()
+    except Cancelled:
+        raise
     except FileNotFoundError as exc:
         return _unverified(ref, "yt-dlp is not installed", exc)
-    except subprocess.TimeoutExpired as exc:
+    except Timeout as exc:
         return _unverified(ref, "the lookup timed out", exc)
 
     if result.returncode != 0:

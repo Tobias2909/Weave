@@ -20,6 +20,10 @@ from . import __version__
 USER_AGENT = f"Weave/{__version__} (+https://github.com/Tobias2909/Weave)"
 
 
+class Cancelled(RuntimeError):
+    """Raised when a shutdown interrupts a request."""
+
+
 class HttpError(RuntimeError):
     def __init__(self, status: int, url: str) -> None:
         super().__init__(f"HTTP {status} for {url}")
@@ -59,16 +63,26 @@ class Fetcher:
     up after `attempts` tries so a poll cannot hang forever on a dead host.
     """
 
-    def __init__(self, throttle: Throttle, timeout: float = 20.0, attempts: int = 3) -> None:
+    def __init__(self, throttle: Throttle, timeout: float = 15.0, attempts: int = 3,
+                 cancel: threading.Event | None = None) -> None:
         self.throttle = throttle
         self.timeout = timeout
         self.attempts = max(1, attempts)
+        # Set when the application is shutting down. Retries and backoff stop
+        # immediately, so quitting waits at most one in flight request rather
+        # than a full retry ladder.
+        self.cancel = cancel
         self._session = requests.Session()
         self._session.headers["User-Agent"] = USER_AGENT
+
+    def _cancelled(self) -> bool:
+        return self.cancel is not None and self.cancel.is_set()
 
     def get_bytes(self, url: str) -> bytes:
         last: Exception | None = None
         for attempt in range(self.attempts):
+            if self._cancelled():
+                raise Cancelled("cancelled")
             with self.throttle.slot():
                 try:
                     response = self._session.get(url, timeout=self.timeout)
@@ -86,8 +100,21 @@ class Fetcher:
             else:
                 delay = 2.0 * (attempt + 1)
             if attempt + 1 < self.attempts:
-                time.sleep(min(delay, 30.0))
+                if self.cancel is not None:
+                    if self.cancel.wait(min(delay, 30.0)):
+                        raise Cancelled("cancelled")
+                else:
+                    time.sleep(min(delay, 30.0))
         raise last if last else HttpError(0, url)
+
+    def head_status(self, url: str, cookies: dict[str, str] | None = None) -> tuple[str, str]:
+        """Fetch without following redirects, returning the status and the
+        Location header. Used by tests that read a redirect as an answer rather
+        than as something to follow."""
+        with self.throttle.slot():
+            response = self._session.get(url, timeout=self.timeout, allow_redirects=False,
+                                         cookies=cookies or {})
+        return response.status_code, response.headers.get("Location", "")
 
     def close(self) -> None:
         self._session.close()

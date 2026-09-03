@@ -23,6 +23,7 @@ DARK = {
     "accent": "#7c5cff",
     "accentHover": "#9a80ff",
     "live": "#ff4d4f",
+    "progress": "#ff3b30",
     "watchedDim": "#5a6072",
     "badgeBackground": "#000000b0",
     "badgeText": "#f2f4f8",

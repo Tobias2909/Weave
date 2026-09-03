@@ -19,6 +19,7 @@ from .db import Database
 from .player.mpv import Player
 from .ui.bridge import Bridge
 from .ui.feed_model import FeedModel
+from .sources.progress import default_dir as default_watch_later
 from .ui.theme import Theme
 
 QML_DIR = Path(__file__).parent / "qml"
@@ -51,7 +52,10 @@ def run(argv: list[str]) -> int:
     app.setOrganizationName("Weave")
 
     theme = Theme()
-    model = FeedModel(db)
+    configured = cfg.watch_later_dir
+    watch_later = (default_watch_later() if configured == "auto"
+                   else paths.expand(configured))
+    model = FeedModel(db, watch_later_dir=watch_later)
     player = Player(cfg)
     bridge = Bridge(db, cfg, model, player)
 
@@ -73,16 +77,26 @@ def run(argv: list[str]) -> int:
 
     feed_timer = QTimer()
     feed_timer.setInterval(cfg.feed_interval_s * 1000)
-    feed_timer.timeout.connect(bridge.refresh)
+    feed_timer.timeout.connect(bridge.poll)
     feed_timer.start()
 
     # Refresh once the window has actually painted.
-    QTimer.singleShot(400, bridge.refresh)
+    QTimer.singleShot(400, bridge.poll)
 
     def shutdown() -> None:
         feed_timer.stop()
         _save_geometry(window, db)
+        # Order matters. Background threads first, then the watcher, then the
+        # engine, so nothing is destroyed while it is still running.
+        bridge.shutdown()
         player.stop()
 
     app.aboutToQuit.connect(shutdown)
-    return app.exec()
+    exit_code = app.exec()
+
+    # Tear the engine down while the objects it referenced are still alive.
+    # Letting both go out of scope together leaves the order to the
+    # interpreter, and the wrong order segfaults after a clean exit.
+    engine.clearComponentCache()
+    del engine
+    return exit_code

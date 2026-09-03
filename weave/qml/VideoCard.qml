@@ -1,13 +1,14 @@
 import QtQuick
 import QtQuick.Controls
 
-// One video. Every color comes from the Theme role map, never a literal, so
+// One video. Every colour comes from the Theme role map, never a literal, so
 // the planned gradient themes need no changes in here.
 Rectangle {
     id: card
 
     property string title: ""
     property string channelTitle: ""
+    property string channelAvatar: ""
     property string thumbnail: ""
     property string ageText: ""
     property string durationText: ""
@@ -15,6 +16,7 @@ Rectangle {
     property string likesText: ""
     property bool watched: false
     property bool isLive: false
+    property real progress: 0
 
     signal playRequested()
     signal detailsRequested()
@@ -62,14 +64,36 @@ Rectangle {
                     // through the request throttle, which only guards the
                     // endpoints that can rate limit us.
                 }
+
+                // A moving thumbnail replaces the still on hover in a later step.
+
+                // Where playback stopped, read out of mpv's own resume files.
+                // Present only while a video is partially watched, because a
+                // video that reached the end leaves no resume file behind.
+                Rectangle {
+                    visible: card.progress > 0
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    height: 3
+                    color: Theme.colors.badgeBackground
+
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        width: parent.width * Math.min(1, card.progress)
+                        color: Theme.colors.progress
+                    }
+                }
             }
 
-            // A moving thumbnail replaces this still on hover in a later step.
             Rectangle {
                 visible: card.durationText !== "" || card.isLive
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
                 anchors.margins: 6
+                anchors.bottomMargin: card.progress > 0 ? 9 : 6
                 radius: 3
                 color: card.isLive ? Theme.colors.live : Theme.colors.badgeBackground
                 width: badge.implicitWidth + 10
@@ -96,12 +120,35 @@ Rectangle {
             elide: Text.ElideRight
         }
 
-        Text {
+        Row {
             width: parent.width
-            text: card.channelTitle
-            color: Theme.colors.textMuted
-            font.pixelSize: 12
-            elide: Text.ElideRight
+            spacing: 6
+
+            Rectangle {
+                width: 18
+                height: 18
+                radius: 9
+                clip: true
+                color: Theme.colors.surfaceRaised
+                visible: card.channelAvatar !== ""
+                anchors.verticalCenter: undefined
+
+                Image {
+                    anchors.fill: parent
+                    source: card.channelAvatar
+                    asynchronous: true
+                    cache: true
+                    fillMode: Image.PreserveAspectCrop
+                }
+            }
+
+            Text {
+                width: parent.width - (card.channelAvatar !== "" ? 24 : 0)
+                text: card.channelTitle
+                color: Theme.colors.textMuted
+                font.pixelSize: 12
+                elide: Text.ElideRight
+            }
         }
 
         Text {

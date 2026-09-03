@@ -12,17 +12,20 @@ from PySide6.QtCore import QAbstractListModel, QByteArray, QModelIndex, Qt
 from .. import format as fmt
 from .. import ids
 from ..db import Database
+from ..sources import progress as mpv_progress
 
 ROLES = (
-    "key", "title", "channelTitle", "thumbnail", "ageText",
+    "key", "title", "channelTitle", "channelAvatar", "thumbnail", "ageText",
     "durationText", "viewsText", "likesText", "watched", "url", "isLive",
+    "progress",
 )
 
 
 class FeedModel(QAbstractListModel):
-    def __init__(self, db: Database, parent=None) -> None:
+    def __init__(self, db: Database, watch_later_dir=None, parent=None) -> None:
         super().__init__(parent)
         self._db = db
+        self._watch_later_dir = watch_later_dir
         self._rows: list[dict] = []
         self._role_ids = {
             Qt.ItemDataRole.UserRole + index: name for index, name in enumerate(ROLES)
@@ -42,8 +45,20 @@ class FeedModel(QAbstractListModel):
 
     def reload(self, hide_watched: bool = True, group_id: int | None = None) -> None:
         rows = self._db.feed(hide_watched=hide_watched, group_id=group_id)
+        built = [self._build(row) for row in rows]
+
+        # Partial progress comes from mpv's own resume files rather than being
+        # tracked here. Looked up in one pass for the rows actually on screen.
+        positions = mpv_progress.positions_for([r["url"] for r in built],
+                                               self._watch_later_dir)
+        for item, row in zip(built, rows):
+            seconds = positions.get(item["url"])
+            duration = row["duration_s"]
+            item["progress"] = (min(1.0, seconds / duration)
+                                if seconds and duration and duration > 0 else 0.0)
+
         self.beginResetModel()
-        self._rows = [self._build(row) for row in rows]
+        self._rows = built
         self.endResetModel()
 
     @staticmethod
@@ -52,6 +67,7 @@ class FeedModel(QAbstractListModel):
             "key": row["key"],
             "title": row["title"],
             "channelTitle": row["channel_title"] or "",
+            "channelAvatar": row["avatar_url"] or "",
             "thumbnail": row["thumbnail_url"] or "",
             "ageText": fmt.age_text(row["published_at"]),
             "durationText": fmt.duration_text(row["duration_s"]),
@@ -60,6 +76,7 @@ class FeedModel(QAbstractListModel):
             "watched": bool(row["watched"]),
             "url": ids.watch_url(row["platform"], row["ext_id"]),
             "isLive": row["live_status"] == "is_live",
+            "progress": 0.0,
         }
 
     def key_at(self, row: int) -> str | None:

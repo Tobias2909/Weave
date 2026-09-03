@@ -16,7 +16,14 @@ This is the first milestone. Working right now
   videos stored in a local SQLite database
 * A feed built from channel RSS, which needs no login and carries exact publish
   times together with exact view and like counts
+* A one command import of every channel you subscribe to, names and channel
+  icons included
+* Channel groups, so the feed can be filtered down to the channels you care
+  about at that moment, with an unwatched count beside each group
 * A grid of cards in a dark window, sized to the space it has
+* A duration badge, view and like counts, the channel icon, and a progress line
+  showing where you stopped, read out of the resume files `mpv` already writes
+* Shorts filtered out of the feed
 * Left click plays the video in `mpv`
 * Watched state derived by observing `mpv` over its own IPC socket, either when
   a file reaches the end or once 70 percent of it has been seen
@@ -24,10 +31,37 @@ This is the first milestone. Working right now
 * A visible banner whenever a source reports a problem, because a scraper that
   returns nothing looks exactly like a quiet day
 
-Coming in later milestones, roughly in this order. Channel groups and a
-subscriptions import, a live bar for Twitch and YouTube streams, a detail panel
-with likes and comments, the theme system, a YouTube Music area that plays audio
-inside Weave, search and playlists and history, and a diagnostics page.
+Coming in later milestones, roughly in this order. A live bar for Twitch and
+YouTube streams, a detail panel with comments, the theme system, a YouTube Music
+area that plays audio inside Weave, search and playlists and history, and a
+diagnostics page.
+
+## How the feed is built
+
+Two sources, because neither is enough alone.
+
+Channel RSS carries an exact publish time, exact view counts and exact like
+counts, and needs no login at all. It carries no duration and no live flag.
+
+The subscriptions feed carries duration and the live flag but no publish time
+whatsoever. So the feed is built from RSS and one sweep of the subscriptions
+feed joins the missing columns in by video id.
+
+That split is deliberate. RSS is the part that has to keep working, so when the
+login rots or the private endpoints change shape, what you lose is duration
+badges and the Shorts filter rather than the feed itself.
+
+Shorts are found without a request wherever possible. A known duration past
+three minutes settles it for free, and only videos short enough to actually be
+one get a lookup.
+
+## What a refresh costs
+
+Measured on a subscription list of 455 channels. The import takes about two
+seconds. A full refresh of every channel takes a little over a minute in the
+background while the window stays usable, and it found 6054 videos. The Refresh
+button always takes every channel, while the timer only takes the channels
+actually due, so the usual case is far smaller than a full sweep.
 
 ## How playback works
 
@@ -79,6 +113,14 @@ weave
 
 Add a channel, then refresh.
 
+Import everything you already subscribe to.
+
+```sh
+python -m weave import
+```
+
+Or track channels one at a time.
+
 ```sh
 python -m weave add @somechannel
 python -m weave add https://www.youtube.com/@somechannel
@@ -104,8 +146,20 @@ definite missing channel is refused.
 Twitch channels are accepted but add no rows to the feed yet. They belong to the
 live bar, which is a later milestone.
 
+Sort channels into groups. A group can hold both YouTube and Twitch channels,
+and a channel can be in as many groups as you like.
+
+```sh
+python -m weave group create Gaming
+python -m weave group add Gaming yt:UCabcdefghijklmnopqrstuv twitch:somechannel
+python -m weave group list
+python -m weave group remove Gaming twitch:somechannel
+python -m weave group delete Gaming
+```
+
 Inside the window, left click plays a video in `mpv` and right click toggles its
-watched mark. The box in the header adds a channel.
+watched mark. The box in the header adds a channel, the button beside it imports
+your subscriptions, and the list down the left filters the feed to one group.
 
 ## Configuration
 
@@ -139,8 +193,9 @@ python -m unittest discover -s tests -t .
 ```
 
 They cover the parts where a silent mistake would be expensive. Video and
-channel identity, the RSS parser, the watched rule, and display formatting. There
-are no interface tests, because they cost more than they find.
+channel identity, the RSS parser, the watched rule, display formatting, the
+storage rules, the Shorts decision, resume position lookup, and cancellation.
+There are no interface tests, because they cost more than they find.
 
 ## A note on how this talks to YouTube
 

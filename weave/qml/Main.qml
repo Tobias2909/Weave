@@ -57,6 +57,24 @@ ApplicationWindow {
                 }
             }
 
+            Button {
+                text: "Import subscriptions"
+                onClicked: App.importSubscriptions()
+                contentItem: Label {
+                    text: parent.text
+                    color: Theme.colors.textMuted
+                    font.pixelSize: 12
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    radius: 6
+                    color: parent.hovered ? Theme.colors.surfaceRaised : "transparent"
+                    border.width: 1
+                    border.color: Theme.colors.border
+                }
+            }
+
             Item { Layout.fillWidth: true }
 
             Label {
@@ -128,9 +146,82 @@ ApplicationWindow {
         }
     }
 
+    // Groups live here. Membership is managed with the group subcommands for
+    // now, this side is the filter.
+    Rectangle {
+        id: sidebar
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.topMargin: banner.height
+        width: 210
+        color: Theme.colors.surface
+
+        Rectangle {
+            anchors.right: parent.right
+            width: 1
+            height: parent.height
+            color: Theme.colors.border
+        }
+
+        ListView {
+            id: groupList
+            anchors.fill: parent
+            anchors.topMargin: 10
+            anchors.bottomMargin: 10
+            clip: true
+            model: App.groups
+            spacing: 2
+
+            delegate: Rectangle {
+                required property var modelData
+                width: groupList.width
+                height: 34
+                color: modelData.id === App.selectedGroup ? Theme.colors.surfaceRaised
+                                                          : "transparent"
+
+                Rectangle {
+                    visible: modelData.id === App.selectedGroup
+                    width: 3
+                    height: parent.height
+                    color: Theme.colors.accent
+                }
+
+                HoverHandler { id: rowHover }
+                TapHandler { onTapped: App.selectGroup(modelData.id) }
+
+                Label {
+                    anchors.left: parent.left
+                    anchors.leftMargin: 14
+                    anchors.right: countLabel.left
+                    anchors.rightMargin: 6
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: modelData.name
+                    elide: Text.ElideRight
+                    font.pixelSize: 13
+                    color: modelData.id === App.selectedGroup || rowHover.hovered
+                           ? Theme.colors.text : Theme.colors.textMuted
+                }
+
+                Label {
+                    id: countLabel
+                    anchors.right: parent.right
+                    anchors.rightMargin: 12
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: modelData.unwatched > 0 ? modelData.unwatched : ""
+                    font.pixelSize: 11
+                    color: Theme.colors.textMuted
+                }
+            }
+        }
+    }
+
     GridView {
         id: grid
-        anchors.fill: parent
+        anchors.left: sidebar.right
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
         anchors.topMargin: banner.height + 10
         anchors.leftMargin: 10
         anchors.rightMargin: 10
@@ -158,6 +249,8 @@ ApplicationWindow {
                 likesText: model.likesText
                 watched: model.watched
                 isLive: model.isLive
+                channelAvatar: model.channelAvatar
+                progress: model.progress
                 onPlayRequested: App.play(model.key)
                 onDetailsRequested: model.watched ? App.markUnwatched(model.key)
                                                   : App.markWatched(model.key)
