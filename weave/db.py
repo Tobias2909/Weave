@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -90,6 +90,22 @@ CREATE TABLE IF NOT EXISTS videos (
 
 CREATE INDEX IF NOT EXISTS videos_published  ON videos (published_at DESC);
 CREATE INDEX IF NOT EXISTS videos_by_channel ON videos (channel_key);
+
+-- Who is live right now. Rewritten wholesale on every check rather than
+-- updated, because a channel going offline is the absence of a row and there
+-- is nothing to update it from.
+CREATE TABLE IF NOT EXISTS live_streams (
+    channel_key   TEXT PRIMARY KEY,
+    platform      TEXT NOT NULL,
+    login         TEXT,
+    display_name  TEXT,
+    title         TEXT,
+    game          TEXT,
+    viewers       INTEGER NOT NULL DEFAULT 0,
+    started_at    TEXT,
+    thumbnail_url TEXT,
+    seen_at       INTEGER NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS watched (
     video_key  TEXT PRIMARY KEY,
@@ -554,6 +570,58 @@ class Database:
     def boxes_holding(self, video_key: str) -> list[int]:
         return [int(row["box_id"]) for row in self.conn.execute(
             "SELECT box_id FROM box_items WHERE video_key=?", (video_key,))]
+
+    # ---- who is live -----------------------------------------------------
+
+    def replace_live(self, platform: str, rows: list[dict]) -> int:
+        """Swap in the current picture for one platform.
+
+        Replacing rather than updating because a channel that has gone offline
+        shows up as a missing row, not as a changed one.
+        """
+        now = int(time.time())
+        with self.conn as conn:
+            conn.execute("DELETE FROM live_streams WHERE platform=?", (platform,))
+            conn.executemany(
+                "INSERT INTO live_streams(channel_key, platform, login, display_name, "
+                "  title, game, viewers, started_at, thumbnail_url, seen_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(channel_key) DO NOTHING",
+                [(r["channel_key"], platform, r.get("login"), r.get("display_name"),
+                  r.get("title"), r.get("game"), int(r.get("viewers") or 0),
+                  r.get("started_at"), r.get("thumbnail_url"), now) for r in rows],
+            )
+        return len(rows)
+
+    def live_now(self) -> list[dict]:
+        """Everything live, both platforms, busiest first.
+
+        A YouTube stream carries no viewer count here, since neither the feed
+        nor the sweep reports one, so those sort after the Twitch entries.
+        """
+        rows = [dict(row) for row in self.conn.execute(
+            "SELECT l.*, c.title AS channel_title, c.avatar_url "
+            "FROM live_streams l LEFT JOIN channels c ON c.key = l.channel_key")]
+        for row in self.conn.execute(
+            "SELECT v.key AS video_key, v.ext_id, v.title, v.thumbnail_url, "
+            "       v.channel_key, c.title AS channel_title, c.avatar_url "
+            "FROM videos v JOIN channels c ON c.key = v.channel_key "
+            "WHERE v.live_status = 'is_live'"
+        ):
+            rows.append({
+                "channel_key": row["channel_key"], "platform": "youtube",
+                "login": row["ext_id"], "display_name": row["channel_title"] or "",
+                "title": row["title"], "game": "", "viewers": 0,
+                "started_at": None, "thumbnail_url": row["thumbnail_url"],
+                "channel_title": row["channel_title"], "avatar_url": row["avatar_url"],
+                "video_key": row["video_key"],
+            })
+        rows.sort(key=lambda row: (-int(row.get("viewers") or 0),
+                                   (row.get("display_name") or "").lower()))
+        return rows
+
+    def live_keys(self) -> set[str]:
+        return {row["channel_key"] for row in
+                self.conn.execute("SELECT channel_key FROM live_streams")}
 
     def unwatched_total(self) -> int:
         return int(self.conn.execute(

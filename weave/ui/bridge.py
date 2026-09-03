@@ -19,7 +19,8 @@ from ..config import Config
 from ..db import Database
 from ..imagecache import qml_source
 from ..player.mpv import Player
-from ..poller import ChannelAdder, ChannelDetailsFetcher, FeedPoller, SubsImporter
+from ..poller import (ChannelAdder, ChannelDetailsFetcher, FeedPoller, LiveWatcher,
+                      SubsImporter, TwitchLogin)
 from .feed_model import FeedModel
 
 ALL = "all"
@@ -37,6 +38,8 @@ class Bridge(QObject):
     groupsChanged = Signal()
     boxesChanged = Signal()
     viewChanged = Signal()
+    liveChanged = Signal()
+    twitchChanged = Signal()
 
     def __init__(self, db: Database, cfg: Config, model: FeedModel,
                  player: Player, parent: QObject | None = None) -> None:
@@ -50,6 +53,10 @@ class Bridge(QObject):
         self._adder: ChannelAdder | None = None
         self._importer: SubsImporter | None = None
         self._details: ChannelDetailsFetcher | None = None
+        self._live: LiveWatcher | None = None
+        self._twitch: TwitchLogin | None = None
+        self._twitch_status = ""
+        self._twitch_needs_login = False
 
         self._busy = False
         self._problems: list[str] = []
@@ -60,6 +67,7 @@ class Bridge(QObject):
         self._view_channel = ""
 
         self._hide_watched = self._db.get_state("hide_watched", "1") == "1"
+        self._live_collapsed = self._db.get_state("live_collapsed", "0") == "1"
 
         self._player.watched.connect(self._on_watched)
         self._player.failed.connect(self._on_player_failed)
@@ -146,6 +154,38 @@ class Bridge(QObject):
     viewKind = Property(str, _get_view_kind, notify=viewChanged)
     viewId = Property(int, _get_view_id, notify=viewChanged)
     channelInfo = Property("QVariantMap", _get_channel_info, notify=viewChanged)
+
+    def _get_live(self) -> list:
+        rows = []
+        for row in self._db.live_now():
+            rows.append({
+                "channelKey": row["channel_key"],
+                "platform": row["platform"],
+                "login": row.get("login") or "",
+                "name": row.get("display_name") or row.get("channel_title") or "",
+                "title": row.get("title") or "",
+                "game": row.get("game") or "",
+                "viewers": int(row.get("viewers") or 0),
+                "viewersText": fmt.count_text(row.get("viewers") or None),
+                "thumbnail": qml_source(row.get("thumbnail_url")),
+                "avatar": qml_source(row.get("avatar_url")),
+            })
+        return rows
+
+    def _get_twitch_status(self) -> str:
+        return self._twitch_status
+
+    def _get_twitch_needs_login(self) -> bool:
+        return self._twitch_needs_login
+
+    liveStreams = Property("QVariantList", _get_live, notify=liveChanged)
+    twitchStatus = Property(str, _get_twitch_status, notify=twitchChanged)
+    twitchNeedsLogin = Property(bool, _get_twitch_needs_login, notify=twitchChanged)
+
+    def _get_live_collapsed(self) -> bool:
+        return self._live_collapsed
+
+    liveCollapsed = Property(bool, _get_live_collapsed, notify=liveChanged)
 
     def _get_scroll_rows(self) -> float:
         return self._cfg.scroll_rows_per_notch
@@ -352,6 +392,52 @@ class Bridge(QObject):
         self.hideWatchedChanged.emit()
         self.reload()
 
+    # ---- twitch ----------------------------------------------------------
+
+    @Slot()
+    def connectTwitch(self) -> None:
+        if self._twitch is not None and self._twitch.isRunning():
+            return
+        self._twitch_status = "asking Twitch for a code"
+        self.twitchChanged.emit()
+        self._twitch = TwitchLogin(self._db, self._cfg, self)
+        self._twitch.codeReady.connect(self._on_twitch_code)
+        self._twitch.finished_login.connect(self._on_twitch_done)
+        self._twitch.failed.connect(self._on_twitch_failed)
+        self._twitch.start()
+
+    @Slot()
+    def refreshLive(self) -> None:
+        if self._live is not None and self._live.isRunning():
+            return
+        self._live = LiveWatcher(self._db, self._cfg, self)
+        self._live.updated.connect(self._on_live)
+        self._live.needsLogin.connect(self._on_twitch_needs_login)
+        self._live.failed.connect(
+            lambda message: self._set_status(f"could not check Twitch, {message}"))
+        self._live.start()
+
+    @Slot(bool)
+    def setLiveCollapsed(self, value: bool) -> None:
+        if value == self._live_collapsed:
+            return
+        self._live_collapsed = value
+        self._db.set_state("live_collapsed", "1" if value else "0")
+        self.liveChanged.emit()
+
+    @Slot(str)
+    def playLive(self, channel_key: str) -> None:
+        row = next((entry for entry in self._get_live()
+                    if entry["channelKey"] == channel_key), None)
+        if not row:
+            return
+        if row["platform"] == "twitch":
+            url = ids.watch_url("twitch", row["login"])
+            self._player.play(url, twitch_login=row["login"], live=True)
+        else:
+            self._player.play(ids.watch_url("youtube", row["login"]), live=True)
+        self._set_status(f"playing {row['name']}")
+
     @Slot()
     def importSubscriptions(self) -> None:
         if self._importer is not None and self._importer.isRunning():
@@ -391,7 +477,8 @@ class Bridge(QObject):
         parallel rather than one after another. This runs after the window is
         already gone, so any short wait here is invisible.
         """
-        threads = [self._poller, self._adder, self._importer, self._details]
+        threads = [self._poller, self._adder, self._importer, self._details,
+                   self._live, self._twitch]
         live = [thread for thread in threads if thread is not None and thread.isRunning()]
         for thread in live:
             thread.cancel()
@@ -425,6 +512,41 @@ class Bridge(QObject):
         self._problems.append(f"subscription import, {message}")
         self.problemsChanged.emit()
         self._set_status(f"could not import the subscriptions, {message}")
+
+    def _on_twitch_code(self, user_code: str, address: str) -> None:
+        """The address already contains the code, so the browser lands on a
+        page with nothing to type."""
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+
+        self._twitch_status = f"approve {user_code} in the browser"
+        self.twitchChanged.emit()
+        QDesktopServices.openUrl(QUrl(address))
+
+    def _on_twitch_done(self, imported: int) -> None:
+        self._twitch_needs_login = False
+        self._twitch_status = (f"Twitch connected, {imported} followed channels added"
+                               if imported else "Twitch connected")
+        self.twitchChanged.emit()
+        self._set_status(self._twitch_status)
+        self.reload()
+        self.refreshLive()
+
+    def _on_twitch_failed(self, message: str) -> None:
+        self._twitch_status = f"Twitch login failed, {message}"
+        self.twitchChanged.emit()
+        self._set_status(self._twitch_status)
+
+    def _on_twitch_needs_login(self) -> None:
+        if not self._twitch_needs_login:
+            self._twitch_needs_login = True
+            self._twitch_status = "not connected to Twitch"
+            self.twitchChanged.emit()
+
+    def _on_live(self, count: int) -> None:
+        self._twitch_needs_login = False
+        self.liveChanged.emit()
+        self.twitchChanged.emit()
 
     def _on_watched(self, key: str, progress: float) -> None:
         self._db.set_watched(key, progress, "mpv")

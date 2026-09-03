@@ -109,6 +109,11 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
 
     player.start()
 
+    live_timer = QTimer()
+    live_timer.setInterval(cfg.live_interval_s * 1000)
+    live_timer.timeout.connect(bridge.refreshLive)
+    live_timer.start()
+
     feed_timer = QTimer()
     feed_timer.setInterval(cfg.feed_interval_s * 1000)
     feed_timer.timeout.connect(bridge.poll)
@@ -116,9 +121,11 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
 
     # Refresh once the window has actually painted.
     QTimer.singleShot(400, bridge.poll)
+    QTimer.singleShot(600, bridge.refreshLive)
 
     def shutdown() -> None:
         feed_timer.stop()
+        live_timer.stop()
         _save_geometry(window, db)
         # Order matters. Background threads first, then the watcher, then the
         # engine, so nothing is destroyed while it is still running.

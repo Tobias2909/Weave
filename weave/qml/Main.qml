@@ -259,12 +259,20 @@ ApplicationWindow {
 
     // ---- content ---------------------------------------------------------
 
-    ChannelHeader {
-        id: channelHeader
+    LiveBar {
+        id: liveBar
         anchors.left: sidebar.right
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.topMargin: banner.height
+    }
+
+    ChannelHeader {
+        id: channelHeader
+        anchors.left: sidebar.right
+        anchors.right: parent.right
+        anchors.top: liveBar.visible ? liveBar.bottom : parent.top
+        anchors.topMargin: liveBar.visible ? 0 : banner.height
         info: App.channelInfo
         visible: App.viewKind === "channel"
         onCloseRequested: App.selectGroup(-1)
@@ -275,9 +283,11 @@ ApplicationWindow {
         objectName: "grid"
         anchors.left: sidebar.right
         anchors.right: parent.right
-        anchors.top: channelHeader.visible ? channelHeader.bottom : parent.top
+        anchors.top: channelHeader.visible ? channelHeader.bottom
+                                          : (liveBar.visible ? liveBar.bottom : parent.top)
         anchors.bottom: parent.bottom
-        anchors.topMargin: channelHeader.visible ? 8 : banner.height + 10
+        anchors.topMargin: channelHeader.visible ? 8
+                                                 : (liveBar.visible ? 10 : banner.height + 10)
         anchors.leftMargin: 10
         anchors.rightMargin: 10
         clip: true

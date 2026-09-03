@@ -25,6 +25,8 @@ This is the first milestone. Working right now
   whenever you like
 * A channel page, reached by clicking a channel name, showing its banner, its
   subscriber count and everything stored from it
+* A live bar across the top showing who is streaming right now, Twitch and
+  YouTube together, busiest first, on its own faster timer
 * A grid of cards in a dark window, sized to the space it has
 * A duration badge, view and like counts, the channel icon, and a progress line
   showing where you stopped, read out of the resume files `mpv` already writes
@@ -36,10 +38,9 @@ This is the first milestone. Working right now
 * A visible banner whenever a source reports a problem, because a scraper that
   returns nothing looks exactly like a quiet day
 
-Coming in later milestones, roughly in this order. A live bar for Twitch and
-YouTube streams, a detail panel with comments, the theme system, a YouTube Music
-area that plays audio inside Weave, search and playlists and history, and a
-diagnostics page.
+Coming in later milestones, roughly in this order. A detail panel with comments,
+the theme system, a YouTube Music area that plays audio inside Weave, search and
+playlists and history, and a diagnostics page.
 
 A box is not a YouTube playlist. It lives only in your own database, holds
 whatever you put in it, and keeps the order you put things in rather than the
@@ -64,6 +65,32 @@ badges and the Shorts filter rather than the feed itself.
 Shorts are found without a request wherever possible. A known duration past
 three minutes settles it for free, and only videos short enough to actually be
 one get a lookup.
+
+## Connecting Twitch
+
+Twitch needs an application of your own, which takes a minute and is done once.
+At `dev.twitch.tv` create an application, set its **client type to public**, and
+copy the client id into `~/.config/weave/config.toml`. The console insists on a
+redirect address but the login used here never touches it, so `http://localhost`
+is fine.
+
+A client id is public by design and ships inside every browser extension that
+talks to Twitch. There is no client secret anywhere in this, and the only
+secrets stored are your tokens, which are written to the state directory readable
+by nobody but you.
+
+```sh
+python -m weave twitch login
+python -m weave twitch status
+python -m weave live
+python -m weave twitch logout
+```
+
+The login opens a Twitch page that already has the code filled in, so there is
+nothing to type. It is approved once and then remembered, and every channel you
+follow is tracked from that moment on, so they show up in the feed and can go
+into groups like anything else. There is also a Connect button in the live bar
+itself if you would rather not use the terminal.
 
 ## Pictures are kept on disk
 

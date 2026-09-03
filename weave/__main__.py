@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from . import config, ids, imagecache, paths
+from . import config, ids, imagecache, paths, tokens
+from .sources import twitch
 from .db import Database
 from .net import Fetcher, Throttle
 from .classify import classify_channel
@@ -307,6 +309,106 @@ def _cmd_cache(args) -> int:
     return 0
 
 
+def _cmd_twitch(args) -> int:
+    cfg = config.load()
+    client_id = cfg.twitch_client_id
+
+    if args.action == "logout":
+        print("logged out" if tokens.clear() else "there was nothing stored")
+        return 0
+
+    if not client_id:
+        print("no Twitch client id is configured. Register an application at "
+              "dev.twitch.tv, set its client type to public, and put the client id "
+              "in the config file.", file=sys.stderr)
+        return 1
+
+    if args.action == "status":
+        stored = tokens.load()
+        if stored is None:
+            print("not connected. Run `weave twitch login`")
+            return 1
+        try:
+            who = twitch.validate(stored.access_token)
+        except twitch.NeedsLogin:
+            print("the stored login is no longer valid. Run `weave twitch login`",
+                  file=sys.stderr)
+            return 1
+        print(f"connected as {who.get('login')}, scopes {who.get('scopes')}")
+        return 0
+
+    # login
+    import webbrowser
+
+    try:
+        login = twitch.start_login(client_id)
+    except twitch.TwitchError as exc:
+        print(f"could not start the login, {exc}", file=sys.stderr)
+        return 1
+
+    print(f"open {login.verification_uri}")
+    print(f"the code {login.user_code} is already filled in on that page")
+    webbrowser.open(login.verification_uri)
+
+    deadline = time.monotonic() + login.expires_in
+    while time.monotonic() < deadline:
+        time.sleep(login.interval)
+        try:
+            got = twitch.poll_login(client_id, login.device_code)
+        except twitch.AuthPending:
+            continue
+        except twitch.TwitchError as exc:
+            print(f"login failed, {exc}", file=sys.stderr)
+            return 1
+        tokens.save(got)
+        client = twitch.Client(client_id, got, on_tokens=tokens.save)
+        db = Database(paths.DB_FILE)
+        added = 0
+        for follow_login, display in client.follows(client.account_id()):
+            if db.add_channel(f"twitch:{follow_login}", "twitch", follow_login, display):
+                added += 1
+        print(f"connected, {added} followed channels added")
+        return 0
+
+    print("the login was not approved in time", file=sys.stderr)
+    return 1
+
+
+def _cmd_live(_args) -> int:
+    cfg = config.load()
+    db = Database(paths.DB_FILE)
+    stored = tokens.load()
+    if cfg.twitch_client_id and stored is not None:
+        try:
+            client = twitch.Client(cfg.twitch_client_id, stored, on_tokens=tokens.save)
+            streams = client.followed_streams(client.account_id())
+            tracked = {row["ext_id"].lower() for row in db.channels(platform="twitch")}
+            missing = sorted(tracked - {stream.login for stream in streams})
+            if missing:
+                streams.extend(client.streams_for(missing))
+            known = {row["key"] for row in db.channels(platform="twitch")}
+            db.replace_live("twitch", [{
+                "channel_key": s.key, "login": s.login, "display_name": s.display_name,
+                "title": s.title, "game": s.game, "viewers": s.viewers,
+                "started_at": s.started_at, "thumbnail_url": s.thumbnail_url,
+            } for s in streams if s.key in known])
+        except twitch.NeedsLogin:
+            print("not connected to Twitch. Run `weave twitch login`", file=sys.stderr)
+        except twitch.TwitchError as exc:
+            print(f"could not check Twitch, {exc}", file=sys.stderr)
+
+    rows = db.live_now()
+    if not rows:
+        print("nobody is live")
+        return 0
+    for row in rows:
+        viewers = f"{row['viewers']:>7}" if row["viewers"] else "       "
+        platform = "twitch " if row["platform"] == "twitch" else "youtube"
+        name = (row.get("display_name") or row.get("channel_title") or "")[:22]
+        print(f"{platform} {viewers}  {name:<22} {(row.get('title') or '')[:52]}")
+    return 0
+
+
 def _cmd_gui(_args) -> int:
     from .app import run
     return run(sys.argv[:1])
@@ -327,6 +429,15 @@ def main() -> int:
     subparsers.add_parser("channels", help="list tracked channels").set_defaults(func=_cmd_channels)
     subparsers.add_parser("poll", help="refresh every feed without a window").set_defaults(func=_cmd_poll)
     subparsers.add_parser("import", help="track every channel you subscribe to").set_defaults(func=_cmd_import)
+
+    twitch_parser = subparsers.add_parser("twitch", help="connect this Twitch account")
+    twitch_actions = twitch_parser.add_subparsers(dest="action", required=True)
+    twitch_actions.add_parser("login", help="approve Weave in the browser, once")
+    twitch_actions.add_parser("status", help="check the stored login")
+    twitch_actions.add_parser("logout", help="forget the stored login")
+    twitch_parser.set_defaults(func=_cmd_twitch)
+
+    subparsers.add_parser("live", help="show who is live right now").set_defaults(func=_cmd_live)
 
     cache = subparsers.add_parser("cache", help="report or clean the image cache")
     cache.add_argument("--prune", action="store_true", help="drop what is past the retention window")

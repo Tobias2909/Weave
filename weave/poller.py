@@ -16,6 +16,7 @@ so a few hundred channels cannot become a few hundred simultaneous requests.
 from __future__ import annotations
 
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from PySide6.QtCore import QObject, QThread, Signal
@@ -27,7 +28,8 @@ from .net import Cancelled as FetchCancelled
 from .net import Fetcher, Throttle
 from .process import Cancelled as ProcessCancelled
 from .sources import channel as channel_source
-from .sources import rss, shorts, subs, sweep, tabs
+from . import tokens
+from .sources import rss, shorts, subs, sweep, tabs, twitch
 
 
 class FeedPoller(QThread):
@@ -287,3 +289,124 @@ class ChannelDetailsFetcher(QThread):
                                      details.banner_url, details.follower_count)
         self._db.close()
         self.fetched.emit(self._key)
+
+
+class TwitchLogin(QThread):
+    """The device code login, and the follow list that comes with it.
+
+    Twitch hands back an address that already contains the code, so the browser
+    can be opened straight at a page with nothing to type.
+    """
+
+    codeReady = Signal(str, str)          # user code, address to open
+    finished_login = Signal(int)          # channels imported
+    failed = Signal(str)
+
+    def __init__(self, db: Database, cfg: Config, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._db = db
+        self._cfg = cfg
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def run(self) -> None:
+        client_id = self._cfg.twitch_client_id
+        if not client_id:
+            self.failed.emit("no Twitch client id is configured")
+            return
+        try:
+            login = twitch.start_login(client_id)
+        except twitch.TwitchError as exc:
+            self.failed.emit(str(exc))
+            return
+
+        self.codeReady.emit(login.user_code, login.verification_uri)
+        deadline = time.monotonic() + login.expires_in
+        while not self._cancel.is_set() and time.monotonic() < deadline:
+            if self._cancel.wait(login.interval):
+                return
+            try:
+                got = twitch.poll_login(client_id, login.device_code)
+            except twitch.AuthPending:
+                continue
+            except twitch.TwitchError as exc:
+                self.failed.emit(str(exc))
+                return
+            tokens.save(got)
+            self.finished_login.emit(self._import_follows(client_id, got))
+            return
+        if not self._cancel.is_set():
+            self.failed.emit("the login was not approved in time")
+
+    def _import_follows(self, client_id: str, got: twitch.Tokens) -> int:
+        """Track every followed channel, so they appear in the feed and can go
+        into groups like any other."""
+        try:
+            client = twitch.Client(client_id, got, on_tokens=tokens.save)
+            follows = client.follows(client.account_id())
+        except twitch.TwitchError:
+            return 0
+        added = 0
+        for login, display in follows:
+            if self._db.add_channel(f"twitch:{login}", "twitch", login, display):
+                added += 1
+        self._db.close()
+        return added
+
+
+class LiveWatcher(QThread):
+    """Who is live right now. Runs on its own timer, far more often than the
+    feed, because a live bar that is fifteen minutes stale is wrong."""
+
+    updated = Signal(int)
+    needsLogin = Signal()
+    failed = Signal(str)
+
+    def __init__(self, db: Database, cfg: Config, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._db = db
+        self._cfg = cfg
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def run(self) -> None:
+        client_id = self._cfg.twitch_client_id
+        stored = tokens.load()
+        if not client_id or stored is None:
+            self.needsLogin.emit()
+            return
+        try:
+            client = twitch.Client(client_id, stored, on_tokens=tokens.save)
+            streams = client.followed_streams(client.account_id())
+
+            # Channels added by hand are not necessarily followed, so they are
+            # asked about separately and merged.
+            tracked = {row["ext_id"].lower()
+                       for row in self._db.channels(platform="twitch")}
+            missing = sorted(tracked - {stream.login for stream in streams})
+            if missing and not self._cancel.is_set():
+                streams.extend(client.streams_for(missing))
+        except twitch.NeedsLogin:
+            self.needsLogin.emit()
+            return
+        except twitch.TwitchError as exc:
+            self.failed.emit(str(exc))
+            return
+        except Exception as exc:                                    # noqa: BLE001
+            self.failed.emit(f"{type(exc).__name__}: {exc}")
+            return
+
+        known = {row["key"] for row in self._db.channels(platform="twitch")}
+        rows = [{
+            "channel_key": stream.key, "login": stream.login,
+            "display_name": stream.display_name, "title": stream.title,
+            "game": stream.game, "viewers": stream.viewers,
+            "started_at": stream.started_at, "thumbnail_url": stream.thumbnail_url,
+        } for stream in streams if stream.key in known]
+        self._db.replace_live("twitch", rows)
+        self._db.close()
+        self.updated.emit(len(rows))
