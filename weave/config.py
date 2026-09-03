@@ -43,6 +43,13 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "classify_interval_s": 21600,
     },
     "watched": {"threshold": 0.85},
+    "twitch": {
+        # From a Twitch application you register once at dev.twitch.tv. A
+        # client id is public by design, it ships inside every browser
+        # extension that talks to Twitch, but it identifies your developer
+        # account so it stays out of the repository.
+        "client_id": "",
+    },
     "cache": {
         # Images live on disk this long. The server asks for five minutes,
         # which would mean going back to the network on nearly every visit, so
@@ -91,6 +98,10 @@ class Config:
     @property
     def min_request_interval_s(self) -> float:
         return max(0.0, int(self.get("poll", "min_request_interval_ms")) / 1000.0)
+
+    @property
+    def twitch_client_id(self) -> str:
+        return str(self.get("twitch", "client_id")).strip()
 
     @property
     def image_days(self) -> int:

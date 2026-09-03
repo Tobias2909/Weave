@@ -30,6 +30,14 @@ min_request_interval_ms = 250
 # counts, whatever this is set to.
 threshold = 0.85
 
+[twitch]
+# From a Twitch application you register once at dev.twitch.tv. A client id is
+# public by design, it ships inside every browser extension that talks to
+# Twitch, but it identifies your developer account, so this file is not
+# committed. Set the application's client type to public. The redirect URL the
+# console asks for is not used by the login Weave performs.
+client_id = ""
+
 [cache]
 # Thumbnails, avatars and banners live on disk this long. The server asks for
 # five minutes, which would mean going back to the network on nearly every
