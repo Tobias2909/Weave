@@ -1,0 +1,31 @@
+# Copy this file to ~/.config/weave/config.toml and edit it.
+# Every value shown here is the built in default, so an empty config is valid.
+
+[youtube]
+# Where yt-dlp reads cookies from. Either a path to a Firefox family profile
+# directory, or "auto" to let yt-dlp discover a browser by itself.
+# Chromium family browsers work through yt-dlp but are untested here, because
+# they need the desktop keyring to derive a decryption key.
+browser_profile = "auto"
+
+[player]
+# "auto" prefers mpv-ff2mpv-single.sh when it is on PATH, because that wrapper
+# already handles URL canonicalization, Twitch resolving and single instance
+# reuse. It falls back to plain mpv.
+command = "auto"
+# mpv JSON IPC socket. "auto" resolves to $XDG_RUNTIME_DIR/mpv-ff2mpv.sock,
+# which is the socket the wrapper creates.
+ipc_socket = "auto"
+
+[poll]
+feed_interval_s = 900
+live_interval_s = 90
+# One global throttle sits in front of every outbound request, so no feature
+# can burst even by accident.
+max_concurrency = 4
+min_request_interval_ms = 250
+
+[watched]
+# Fraction of the duration that counts as watched. Reaching the end always
+# counts, whatever this is set to.
+threshold = 0.7

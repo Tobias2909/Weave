@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+
+# local state that must never be committed
+config.toml
+*.db
+*.db-wal
+*.db-shm

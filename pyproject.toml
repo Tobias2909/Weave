@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "weave"
+version = "0.1.0"
+description = "A personal YouTube and Twitch client that hands playback to mpv"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "Tobias2909" }]
+dependencies = [
+    "PySide6>=6.6",
+    "requests>=2.31",
+    "platformdirs>=4.0",
+]
+
+[project.optional-dependencies]
+# Needed only by the music area. Kept optional so the feed works without it.
+music = ["ytmusicapi>=1.7"]
+
+[project.scripts]
+weave = "weave.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/Tobias2909/Weave"
+
+[tool.setuptools.packages.find]
+include = ["weave*"]
+
+[tool.setuptools.package-data]
+weave = ["qml/*.qml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

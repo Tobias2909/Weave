@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Weave
+GenericName=Video Feed
+Comment=A personal YouTube and Twitch feed that plays in mpv
+Exec=weave
+Icon=multimedia-video-player
+Terminal=false
+Categories=AudioVideo;Video;Player;
+Keywords=youtube;twitch;video;feed;mpv;
+StartupWMClass=Weave
