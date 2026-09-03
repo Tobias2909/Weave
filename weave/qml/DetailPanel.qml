@@ -58,7 +58,10 @@ Rectangle {
         }
     }
 
+    SmoothScroll { flickable: panelBody }
+
     Flickable {
+        id: panelBody
         anchors.top: panelHead.bottom
         anchors.left: parent.left
         anchors.right: parent.right

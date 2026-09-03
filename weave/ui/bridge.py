@@ -79,6 +79,7 @@ class Bridge(QObject):
 
         self._player.watched.connect(self._on_watched)
         self._player.nowPlaying.connect(self._on_now_playing)
+        self._player.stopped.connect(self._on_player_stopped)
         self._player.failed.connect(self._on_player_failed)
         if self._player.error:
             self._problems.append(self._player.error)
@@ -514,6 +515,16 @@ class Bridge(QObject):
         self._detail_loading = False
         self.detailChanged.emit()
         self._set_status(f"could not load the {source}, {message}")
+
+    def _on_player_stopped(self) -> None:
+        """Nothing is playing any more, so there is nothing for the panel to
+        mirror. The next video brings it back."""
+        self._detail_key = ""
+        self._detail_comments = []
+        self._detail_closed = False
+        if self._detail is not None and self._detail.isRunning():
+            self._detail.cancel()
+        self.detailChanged.emit()
 
     def _on_now_playing(self, key: str, _title: str) -> None:
         """The panel follows mpv, so whatever starts playing is what it shows,

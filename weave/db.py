@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -147,6 +147,7 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("channels", "details_fetched_at", "INTEGER"),
     ("videos", "dislikes", "INTEGER"),
     ("videos", "dislikes_at", "INTEGER"),
+    ("videos", "live_viewers", "INTEGER"),
 )
 
 
@@ -436,6 +437,20 @@ class Database:
             "LEFT JOIN watched w ON w.video_key = v.key WHERE v.key=?", (key,)).fetchone()
         return dict(row) if row else None
 
+    def set_live_state(self, video_key: str, viewers: int | None, still_live: bool) -> None:
+        """A stream that has stopped becomes an ordinary video rather than
+        vanishing, so it stays in the feed and only leaves the live bar."""
+        with self.conn as conn:
+            conn.execute(
+                "UPDATE videos SET live_viewers=?, live_status=? WHERE key=?",
+                (viewers if still_live else None,
+                 "is_live" if still_live else "was_live", video_key))
+
+    def live_youtube(self, limit: int = 12) -> list[sqlite3.Row]:
+        return list(self.conn.execute(
+            "SELECT key, ext_id FROM videos WHERE live_status='is_live' "
+            "ORDER BY live_viewers IS NULL DESC, published_at DESC LIMIT ?", (limit,)))
+
     def set_short(self, video_key: str, value: bool) -> None:
         with self.conn as conn:
             conn.execute("UPDATE videos SET is_short=? WHERE key=?", (1 if value else 0, video_key))
@@ -616,22 +631,26 @@ class Database:
     def live_now(self) -> list[dict]:
         """Everything live, both platforms, busiest first.
 
-        A YouTube stream carries no viewer count here, since neither the feed
-        nor the sweep reports one, so those sort after the Twitch entries.
+        YouTube streams carry a viewer count too, fetched separately because
+        neither the feed nor the sweep reports one, so both platforms order
+        against each other in a single row.
         """
         rows = [dict(row) for row in self.conn.execute(
             "SELECT l.*, c.title AS channel_title, c.avatar_url "
             "FROM live_streams l LEFT JOIN channels c ON c.key = l.channel_key")]
         for row in self.conn.execute(
             "SELECT v.key AS video_key, v.ext_id, v.title, v.thumbnail_url, "
-            "       v.channel_key, c.title AS channel_title, c.avatar_url "
+            "       v.live_viewers, v.channel_key, c.title AS channel_title, c.avatar_url "
             "FROM videos v JOIN channels c ON c.key = v.channel_key "
             "WHERE v.live_status = 'is_live'"
         ):
             rows.append({
                 "channel_key": row["channel_key"], "platform": "youtube",
                 "login": row["ext_id"], "display_name": row["channel_title"] or "",
-                "title": row["title"], "game": "", "viewers": 0,
+                "title": row["title"], "game": "",
+                # A real number now, so a busy stream sorts among the Twitch
+                # ones instead of always landing at the end of the bar.
+                "viewers": int(row["live_viewers"] or 0),
                 "started_at": None, "thumbnail_url": row["thumbnail_url"],
                 "channel_title": row["channel_title"], "avatar_url": row["avatar_url"],
                 "video_key": row["video_key"],

@@ -75,6 +75,14 @@ Rectangle {
         }
     }
 
+    // A wheel over the strip moves it sideways, since there is nowhere
+    // vertical for it to go.
+    SmoothScroll {
+        flickable: strip
+        horizontal: true
+        step: 200
+    }
+
     ListView {
         id: strip
         visible: bar.expanded && bar.hasStreams
@@ -91,19 +99,6 @@ Rectangle {
         model: App.liveStreams
 
         ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
-
-        // A wheel over the strip moves it sideways, since there is nowhere
-        // vertical for it to go.
-        WheelHandler {
-            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-            onWheel: function (event) {
-                var notches = event.angleDelta.y / 120
-                if (notches === 0)
-                    return
-                var limit = Math.max(0, strip.contentWidth - strip.width)
-                strip.contentX = Math.max(0, Math.min(limit, strip.contentX - notches * 180))
-            }
-        }
 
         delegate: Rectangle {
             id: streamCard

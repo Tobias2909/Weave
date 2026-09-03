@@ -309,48 +309,11 @@ ApplicationWindow {
 
         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-        // A Flickable scrolls about sixty pixels a notch, a fifth of a card row
-        // here, which made scrolling feel stuck. The step is counted in rows
-        // and set in the config, since how far a notch should move is taste. A
-        // touchpad sends smaller angle deltas continuously, so dividing by a
-        // whole notch keeps it proportional on both devices.
-        //
-        // The move is animated rather than assigned, so a notch glides instead
-        // of teleporting. Successive notches add to the animation's target
-        // rather than restarting from where the view happens to be, which is
-        // what makes several quick notches travel the full distance instead of
-        // swallowing each other.
-        NumberAnimation {
-            id: scrollAnimation
-            target: grid
-            property: "contentY"
-            duration: 160
-            easing.type: Easing.OutCubic
-        }
-
-        // A drag or a flick takes over from the animation.
-        onMovementStarted: scrollAnimation.stop()
-        onDraggingChanged: if (dragging) scrollAnimation.stop()
-
-        WheelHandler {
-            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-            onWheel: function (event) {
-                var notches = event.angleDelta.y / 120
-                if (notches === 0)
-                    return
-                var limit = Math.max(0, grid.contentHeight - grid.height)
-                var from = scrollAnimation.running ? scrollAnimation.to : grid.contentY
-                var to = Math.max(0, Math.min(limit,
-                    from - notches * grid.cellHeight * App.scrollRowsPerNotch))
-                if (to === grid.contentY) {
-                    scrollAnimation.stop()
-                    return
-                }
-                scrollAnimation.stop()
-                scrollAnimation.from = grid.contentY
-                scrollAnimation.to = to
-                scrollAnimation.start()
-            }
+        // Sized in card rows and set in the config, since how far a notch
+        // should move is taste.
+        SmoothScroll {
+            flickable: grid
+            step: grid.cellHeight * App.scrollRowsPerNotch
         }
 
         delegate: Item {

@@ -31,6 +31,7 @@ from .process import Cancelled as ProcessCancelled
 from .sources import channel as channel_source
 from . import tokens
 from .sources import comments as comment_source
+from .sources import livecheck
 from .sources import dislikes as dislike_source
 from .sources import rss, shorts, subs, sweep, tabs, twitch
 
@@ -418,8 +419,26 @@ class LiveWatcher(QThread):
             "started_at": stream.started_at, "thumbnail_url": stream.thumbnail_url,
         } for stream in streams if stream.key in known]
         self._db.replace_live("twitch", rows)
+        youtube = self._check_youtube()
         self._db.close()
-        self.updated.emit(len(rows))
+        self.updated.emit(len(rows) + youtube)
+
+    def _check_youtube(self) -> int:
+        """Give the YouTube streams a viewer count so they order against the
+        Twitch ones, and drop the ones that have finished."""
+        found = 0
+        for row in self._db.live_youtube():
+            if self._cancel.is_set():
+                break
+            try:
+                state = livecheck.check(self._cfg, row["ext_id"], self._throttle, self._cancel)
+            except ProcessCancelled:
+                break
+            except livecheck.LiveCheckError:
+                continue
+            self._db.set_live_state(row["key"], state.viewers, state.still_live)
+            found += 1 if state.still_live else 0
+        return found
 
     def _fetch_missing_avatars(self, client: "twitch.Client") -> None:
         missing = self._db.channels_missing_avatar("twitch")

@@ -95,6 +95,7 @@ class _IpcWatcher(QThread):
     nowPlaying = Signal(str, str)     # key, media title
     watched = Signal(str, float)      # key, progress
     connectionChanged = Signal(bool)
+    stopped = Signal()                # mpv went away
 
     def __init__(self, socket_path: Path, threshold: float, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -118,6 +119,7 @@ class _IpcWatcher(QThread):
         self._max_pos = 0.0
         self._reported: set[str] = set()
         self._last_whole_second = -1
+        self._had_session = False
 
     def set_live_hint(self, live: bool) -> None:
         """Told by Weave when it hands over something it knows is live."""
@@ -142,24 +144,43 @@ class _IpcWatcher(QThread):
     # ---- main loop -------------------------------------------------------
 
     def run(self) -> None:
+        """Reconnects for as long as it is wanted.
+
+        A player that has gone away is noticed by the reconnect being refused,
+        not by the socket file disappearing. mpv leaves that file behind when
+        it exits, so its presence proves nothing, while connecting to it raises
+        a connection refused straight away.
+        """
         backoff = 0.5
         while not self._stop.is_set():
             if not self._socket_path.exists():
+                self._announce_gone()
                 self._stop.wait(backoff)
                 backoff = min(backoff * 1.5, 5.0)
                 continue
             try:
                 self._session()
+                # A session that simply ended may be a hiccup, so the next
+                # connection attempt is what decides.
                 backoff = 0.5
             except OSError:
+                self._announce_gone()
                 self._stop.wait(backoff)
                 backoff = min(backoff * 1.5, 5.0)
+
+    def _announce_gone(self) -> None:
+        if not self._had_session:
+            return
+        self._had_session = False
+        self._key = None
+        self.stopped.emit()
 
     def _session(self) -> None:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(5.0)
         sock.connect(str(self._socket_path))
         self._sock = sock
+        self._had_session = True
         self.connectionChanged.emit(True)
         try:
             self._send(sock, {"command": ["observe_property", _OBS_PATH, "path"]})
@@ -174,6 +195,7 @@ class _IpcWatcher(QThread):
                 sock.close()
             except OSError:
                 pass
+
 
     @staticmethod
     def _send(sock: socket.socket, payload: dict) -> None:
@@ -205,7 +227,12 @@ class _IpcWatcher(QThread):
             self._on_property(message.get("name"), message.get("data"))
         elif event == "end-file":
             self._flush(reached_end=message.get("reason") == "eof")
-        elif event in ("shutdown", "idle"):
+        elif event == "shutdown":
+            # A clean exit says so. A killed one does not, which is what the
+            # refused reconnect covers.
+            self._flush(reached_end=False)
+            self._announce_gone()
+        elif event == "idle":
             self._flush(reached_end=False)
 
     def _on_property(self, name: str | None, data) -> None:
@@ -288,6 +315,7 @@ class Player(QObject):
     nowPlaying = Signal(str, str)
     watched = Signal(str, float)
     connectionChanged = Signal(bool)
+    stopped = Signal()
     failed = Signal(str)
 
     def __init__(self, cfg: Config, parent: QObject | None = None) -> None:
@@ -304,6 +332,7 @@ class Player(QObject):
         self._watcher.nowPlaying.connect(self.nowPlaying)
         self._watcher.watched.connect(self.watched)
         self._watcher.connectionChanged.connect(self.connectionChanged)
+        self._watcher.stopped.connect(self.stopped)
 
     @property
     def command(self) -> list[str] | None:

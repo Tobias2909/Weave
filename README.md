@@ -26,7 +26,8 @@ This is the first milestone. Working right now
 * A channel page, reached by clicking a channel name, showing its banner, its
   subscriber count and everything stored from it
 * A live bar across the top showing who is streaming right now, Twitch and
-  YouTube together, busiest first, on its own faster timer
+  YouTube together in one row ordered by how many are watching, on its own
+  faster timer
 * A detail panel beside the feed showing what is playing, with views, likes,
   an estimated dislike count and the top comment threads, resizable and
   remembered
@@ -47,7 +48,8 @@ a diagnostics page.
 
 The detail panel follows `mpv` rather than the grid, so it shows whatever is on
 screen even when `mpv` moved to the next thing by itself. Closing it closes it
-until the next video starts. Views and likes are already stored, so they appear
+until the next video starts, and closing `mpv` closes it too, since there is then
+nothing for it to mirror. Views and likes are already stored, so they appear
 at once, while the dislike count and the comments are fetched when a video is
 actually being looked at, since comments cost several seconds each time. The
 dislike count is an estimate published by returnyoutubedislike rather than a

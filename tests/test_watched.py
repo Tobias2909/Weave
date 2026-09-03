@@ -30,6 +30,8 @@ class Rule(unittest.TestCase):
         self.watcher._handle({"event": "property-change", "name": name, "data": data})
 
     def load(self, path, duration=100.0):
+        # A real session sets this when it connects.
+        self.watcher._had_session = True
         self.feed("path", path)
         self.feed("duration", duration)
 
@@ -167,6 +169,29 @@ class Rule(unittest.TestCase):
         self.load(m3u8)
         self.feed("time-pos", 99.0)
         self.assertEqual([k for k, _ in self.marked], ["twitch:examplechannel"])
+
+    def test_a_clean_exit_is_announced(self):
+        # The panel mirrors what is playing, so it needs to know when there is
+        # nothing playing any more.
+        gone = []
+        self.watcher.stopped.connect(lambda: gone.append(True))
+        self.load(YT)
+        self.watcher._handle({"event": "shutdown"})
+        self.assertEqual(len(gone), 1)
+
+    def test_an_exit_is_only_announced_once(self):
+        gone = []
+        self.watcher.stopped.connect(lambda: gone.append(True))
+        self.load(YT)
+        self.watcher._handle({"event": "shutdown"})
+        self.watcher._handle({"event": "shutdown"})
+        self.assertEqual(len(gone), 1)
+
+    def test_nothing_is_announced_before_anything_connected(self):
+        gone = []
+        self.watcher.stopped.connect(lambda: gone.append(True))
+        self.watcher._announce_gone()
+        self.assertEqual(gone, [])
 
     def test_now_playing_is_announced(self):
         self.load(YT)
