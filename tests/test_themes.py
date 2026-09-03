@@ -76,6 +76,26 @@ class Loading(unittest.TestCase):
         self.assertIsNone(got.gradient)
         self.assertTrue(got.problems)
 
+    def test_a_radial_gradient(self):
+        got = self.write('name = "T"\n[gradient]\ntype = "radial"\n'
+                         'origin_x = 1.0\norigin_y = 1.0\nradius = 1.3\nstops = ['
+                         '{ position = 0.0, color = "#ffffff" },'
+                         '{ position = 1.0, color = "#000000" }]\n')
+        self.assertEqual(got.gradient["type"], "radial")
+        self.assertEqual((got.gradient["originX"], got.gradient["originY"]), (1.0, 1.0))
+        self.assertEqual(got.gradient["radius"], 1.3)
+
+    def test_an_unknown_gradient_kind_falls_back_to_linear(self):
+        got = self.write('name = "T"\n[gradient]\ntype = "spiral"\nstops = ['
+                         '{ position = 0.0, color = "#ffffff" },'
+                         '{ position = 1.0, color = "#000000" }]\n')
+        self.assertEqual(got.gradient["type"], "linear")
+        self.assertTrue(any("spiral" in p for p in got.problems))
+
+    def test_a_gradient_with_no_kind_is_linear(self):
+        got = self.write(GOOD)
+        self.assertEqual(got.gradient["type"], "linear")
+
     def test_gradient_stops_are_sorted_and_clamped(self):
         got = self.write('name = "T"\n[gradient]\nangle = 400\nstops = ['
                          '{ position = 2.0, color = "#000000" },'
@@ -91,7 +111,7 @@ class Loading(unittest.TestCase):
 class Discovery(unittest.TestCase):
     def test_the_built_ins_all_load_without_problems(self):
         built = [t for t in themes.available() if t.builtin]
-        self.assertGreaterEqual(len(built), 4)
+        self.assertGreaterEqual(len(built), 8)
         for theme in built:
             with self.subTest(theme=theme.name):
                 self.assertEqual(theme.problems, [])

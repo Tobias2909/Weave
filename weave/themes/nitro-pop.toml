@@ -1,0 +1,29 @@
+name = "Nitro Pop"
+
+[colors]
+background = "#140a1f"
+surface = "#1e1030"
+surfaceRaised = "#2b1745"
+border = "#48246b"
+text = "#fdeeff"
+textMuted = "#bda2d8"
+accent = "#ff4fd8"
+accentHover = "#ff7ce4"
+live = "#ff4d6d"
+progress = "#ff4fd8"
+watchedDim = "#7a5f96"
+badgeBackground = "#000000b0"
+badgeText = "#fff2ff"
+error = "#ffc94d"
+twitch = "#a970ff"
+youtube = "#ff5470"
+
+# Three colours across a shallow diagonal. Loud on purpose.
+[gradient]
+type = "linear"
+angle = 60
+stops = [
+  { position = 0.0, color = "#ff2fa0" },
+  { position = 0.45, color = "#5b2bd6" },
+  { position = 1.0, color = "#140a1f" },
+]

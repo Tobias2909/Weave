@@ -1,0 +1,33 @@
+name = "Aurora"
+
+[colors]
+background = "#080f14"
+surface = "#0f1a22"
+surfaceRaised = "#16252f"
+border = "#223d4a"
+text = "#e6f7ff"
+textMuted = "#8fb2c4"
+accent = "#35e0c8"
+accentHover = "#6cf0dc"
+live = "#ff6b81"
+progress = "#35e0c8"
+watchedDim = "#4f6d7a"
+badgeBackground = "#000000b0"
+badgeText = "#eafcff"
+error = "#ffcf5c"
+twitch = "#9d7bff"
+youtube = "#ff6b81"
+
+# A glow sitting on the top left corner rather than a line across the window.
+# The origin is in fractions of the window and the radius in fractions of its
+# diagonal, so it looks the same whatever size the window is.
+[gradient]
+type = "radial"
+origin_x = 0.0
+origin_y = 0.0
+radius = 1.15
+stops = [
+  { position = 0.0, color = "#1f7a6e" },
+  { position = 0.4, color = "#123645" },
+  { position = 1.0, color = "#080f14" },
+]

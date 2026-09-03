@@ -1,0 +1,32 @@
+name = "Ultraviolet"
+
+[colors]
+background = "#0b0714"
+surface = "#140d24"
+surfaceRaised = "#1d1435"
+border = "#332255"
+text = "#efe8ff"
+textMuted = "#a494c9"
+accent = "#8b5cff"
+accentHover = "#a983ff"
+live = "#ff4fa3"
+progress = "#8b5cff"
+watchedDim = "#665a85"
+badgeBackground = "#000000b0"
+badgeText = "#f6f1ff"
+error = "#ffca66"
+twitch = "#a970ff"
+youtube = "#ff5c8a"
+
+# The unusual one. The light sits off the bottom right corner, so the window
+# gets brighter as it goes down instead of up.
+[gradient]
+type = "radial"
+origin_x = 1.05
+origin_y = 1.1
+radius = 1.3
+stops = [
+  { position = 0.0, color = "#4a2094" },
+  { position = 0.45, color = "#160e29" },
+  { position = 1.0, color = "#0b0714" },
+]

@@ -1,0 +1,29 @@
+name = "Sunset Drive"
+
+[colors]
+background = "#170d14"
+surface = "#22131c"
+surfaceRaised = "#2f1a26"
+border = "#4d2739"
+text = "#ffeef0"
+textMuted = "#d0a3ae"
+accent = "#ff7a3d"
+accentHover = "#ffa06b"
+live = "#ff4d6d"
+progress = "#ff7a3d"
+watchedDim = "#8c6070"
+badgeBackground = "#000000b0"
+badgeText = "#fff4f0"
+error = "#ffd166"
+twitch = "#b57bff"
+youtube = "#ff5470"
+
+# Almost horizontal, so the warm end runs along the top of the window.
+[gradient]
+type = "linear"
+angle = 20
+stops = [
+  { position = 0.0, color = "#ff8a3d" },
+  { position = 0.35, color = "#b03a6b" },
+  { position = 1.0, color = "#170d14" },
+]

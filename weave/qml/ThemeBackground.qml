@@ -30,18 +30,28 @@ Item {
             if (!ground.washed)
                 return
 
-            // Zero runs straight down the window, forty five starts at the top
-            // left corner. The line is the window's span along that direction,
-            // so every stop lands where the author meant it to.
-            var radians = ground.spec.angle * Math.PI / 180
-            var dx = Math.sin(radians)
-            var dy = Math.cos(radians)
-            var span = Math.abs(width * dx) + Math.abs(height * dy)
-            var cx = width / 2
-            var cy = height / 2
-            var gradient = context.createLinearGradient(
-                cx - dx * span / 2, cy - dy * span / 2,
-                cx + dx * span / 2, cy + dy * span / 2)
+            var gradient
+            if (ground.spec.type === "radial") {
+                // Placed in fractions of the window and sized in fractions of
+                // its diagonal, so a theme looks the same at any window size.
+                var ox = ground.spec.originX * width
+                var oy = ground.spec.originY * height
+                var reach = Math.sqrt(width * width + height * height) * ground.spec.radius
+                gradient = context.createRadialGradient(ox, oy, 0, ox, oy, reach)
+            } else {
+                // Zero runs straight down the window, forty five starts at the
+                // top left corner. The line is the window's span along that
+                // direction, so every stop lands where the author meant it to.
+                var radians = ground.spec.angle * Math.PI / 180
+                var dx = Math.sin(radians)
+                var dy = Math.cos(radians)
+                var span = Math.abs(width * dx) + Math.abs(height * dy)
+                var cx = width / 2
+                var cy = height / 2
+                gradient = context.createLinearGradient(
+                    cx - dx * span / 2, cy - dy * span / 2,
+                    cx + dx * span / 2, cy + dy * span / 2)
+            }
 
             for (var i = 0; i < ground.spec.stops.length; i++)
                 gradient.addColorStop(ground.spec.stops[i].position,

@@ -41,6 +41,14 @@ class Theme(QObject):
         self._settle.timeout.connect(self.reload)
         self._rewatch()
 
+        # The themes subcommand writes the choice to the database, and a window
+        # that is already open has no way to hear about it. Checking now and
+        # then is one small read and keeps the two in step.
+        self._follow = QTimer(self)
+        self._follow.setInterval(3000)
+        self._follow.timeout.connect(self._follow_stored_choice)
+        self._follow.start()
+
     # ---- what QML reads --------------------------------------------------
 
     def _get_colors(self) -> dict:
@@ -106,3 +114,10 @@ class Theme(QObject):
 
     def _on_disk_changed(self, _path: str) -> None:
         self._settle.start()
+
+    def _follow_stored_choice(self) -> None:
+        if self._db is None:
+            return
+        stored = self._db.get_state("theme", self._loaded.name)
+        if stored and stored != self._loaded.name:
+            self.select(stored)

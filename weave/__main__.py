@@ -435,6 +435,7 @@ def _cmd_themes(args) -> int:
             return 1
         db.set_state("theme", found.name)
         print(f"using {found.name}")
+        print("a window that is already open picks this up within a few seconds")
         return 0
 
     current = db.get_state("theme", themes.DEFAULT_NAME)

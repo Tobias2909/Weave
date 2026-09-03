@@ -1,0 +1,32 @@
+name = "Mint Fade"
+
+[colors]
+background = "#101512"
+surface = "#18201c"
+surfaceRaised = "#212b25"
+border = "#2f3d34"
+text = "#e8f2ec"
+textMuted = "#93a89c"
+accent = "#4fd69c"
+accentHover = "#7ee6ba"
+live = "#ff6b6b"
+progress = "#4fd69c"
+watchedDim = "#5b6f63"
+badgeBackground = "#000000b0"
+badgeText = "#f0fbf5"
+error = "#ffc861"
+twitch = "#9d7bff"
+youtube = "#ff6b6b"
+
+# Deliberately quiet. A small glow, close to the background, for a theme you
+# can look at all evening.
+[gradient]
+type = "radial"
+origin_x = 0.12
+origin_y = 0.0
+radius = 0.75
+stops = [
+  { position = 0.0, color = "#1c3a2c" },
+  { position = 0.5, color = "#141b17" },
+  { position = 1.0, color = "#101512" },
+]

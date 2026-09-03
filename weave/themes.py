@@ -105,13 +105,36 @@ def _gradient(raw: dict | None, problems: list[str]) -> dict | None:
         return None
 
     cleaned.sort(key=lambda stop: stop["position"])
+
+    kind = raw.get("type", "linear")
+    if kind not in ("linear", "radial"):
+        problems.append(f"{kind} is not a kind of gradient")
+        kind = "linear"
+
     angle = raw.get("angle", 0)
     if not isinstance(angle, (int, float)):
         problems.append("the gradient angle is not a number")
         angle = 0
-    # Zero runs straight down the window and forty five starts at the top left
-    # corner, which is the shape a corner glow wants.
-    return {"angle": float(angle) % 360.0, "stops": cleaned}
+
+    def fraction(name: str, fallback: float) -> float:
+        value = raw.get(name, fallback)
+        if not isinstance(value, (int, float)):
+            problems.append(f"the gradient {name} is not a number")
+            return fallback
+        return float(value)
+
+    # A linear angle of zero runs straight down the window and forty five
+    # starts at the top left corner. A radial one is placed by origin, given in
+    # fractions of the window, with a radius in fractions of its diagonal, so a
+    # theme looks the same whatever size the window is.
+    return {
+        "type": kind,
+        "angle": float(angle) % 360.0,
+        "originX": max(-1.0, min(2.0, fraction("origin_x", 0.0))),
+        "originY": max(-1.0, min(2.0, fraction("origin_y", 0.0))),
+        "radius": max(0.05, min(3.0, fraction("radius", 1.0))),
+        "stops": cleaned,
+    }
 
 
 def load_file(path: Path) -> Loaded | None:

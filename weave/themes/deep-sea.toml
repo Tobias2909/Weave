@@ -1,0 +1,32 @@
+name = "Deep Sea"
+
+[colors]
+background = "#060b16"
+surface = "#0d1424"
+surfaceRaised = "#141d33"
+border = "#1f2b4a"
+text = "#e4ecff"
+textMuted = "#8b9ac2"
+accent = "#4f8cff"
+accentHover = "#7fabff"
+live = "#ff5c8a"
+progress = "#4f8cff"
+watchedDim = "#4b5878"
+badgeBackground = "#000000b0"
+badgeText = "#eef3ff"
+error = "#ffc861"
+twitch = "#8f7bff"
+youtube = "#ff5c7a"
+
+# Lit from just above the middle of the top edge, which pushes the darkness
+# into both upper corners.
+[gradient]
+type = "radial"
+origin_x = 0.5
+origin_y = -0.15
+radius = 1.0
+stops = [
+  { position = 0.0, color = "#17407a" },
+  { position = 0.45, color = "#0a1428" },
+  { position = 1.0, color = "#060b16" },
+]
