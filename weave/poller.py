@@ -26,6 +26,7 @@ from .db import Database
 from .net import Cancelled as FetchCancelled
 from .net import Fetcher, Throttle
 from .process import Cancelled as ProcessCancelled
+from .sources import channel as channel_source
 from .sources import rss, shorts, subs, sweep, tabs
 
 
@@ -253,3 +254,36 @@ class SubsImporter(QThread):
                 added += 1
         self._db.close()
         self.imported.emit(len(channels), added)
+
+
+class ChannelDetailsFetcher(QThread):
+    """Fills in a channel's banner and subscriber count the first time its page
+    is opened."""
+
+    fetched = Signal(str)
+    failed = Signal(str, str)
+
+    def __init__(self, db: Database, cfg: Config, channel_key: str, ext_id: str,
+                 parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._db = db
+        self._key = channel_key
+        self._ext_id = ext_id
+        self._throttle = Throttle(1, cfg.min_request_interval_s)
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def run(self) -> None:
+        try:
+            details = channel_source.fetch(self._ext_id, self._throttle, self._cancel)
+        except ProcessCancelled:
+            return
+        except channel_source.DetailsError as exc:
+            self.failed.emit(self._key, str(exc))
+            return
+        self._db.set_channel_details(self._key, details.title, details.avatar_url,
+                                     details.banner_url, details.follower_count)
+        self._db.close()
+        self.fetched.emit(self._key)

@@ -7,15 +7,34 @@ ApplicationWindow {
     visible: true
     width: 1400
     height: 900
-    minimumWidth: 640
-    minimumHeight: 480
-    title: "Weave"
+    minimumWidth: 760
+    minimumHeight: 520
+    title: App.viewKind === "channel" && App.channelInfo.title
+           ? "Weave  ·  " + App.channelInfo.title : "Weave"
     color: Theme.colors.background
+
+    // Which video the context menu is acting on.
+    property string menuKey: ""
+    property string menuChannelKey: ""
+    property bool menuWatched: false
+
+    // Reused by the sidebar plus button, by renaming, and by the menu entry
+    // that makes a new box out of the video being clicked.
+    property int namingBoxId: -1
+    property string namingVideoKey: ""
+
+    function askForName(boxId, videoKey, current) {
+        root.namingBoxId = boxId
+        root.namingVideoKey = videoKey
+        nameField.text = current
+        namePopup.open()
+        nameField.forceActiveFocus()
+        nameField.selectAll()
+    }
 
     header: ToolBar {
         background: Rectangle {
             color: Theme.colors.surface
-            border.width: 0
             Rectangle {
                 anchors.bottom: parent.bottom
                 width: parent.width
@@ -39,7 +58,7 @@ ApplicationWindow {
 
             TextField {
                 id: addField
-                Layout.preferredWidth: 300
+                Layout.preferredWidth: 260
                 placeholderText: "Add a channel, a handle or a twitch.tv link"
                 color: Theme.colors.text
                 placeholderTextColor: Theme.colors.textMuted
@@ -57,22 +76,9 @@ ApplicationWindow {
                 }
             }
 
-            Button {
+            FlatButton {
                 text: "Import subscriptions"
                 onClicked: App.importSubscriptions()
-                contentItem: Label {
-                    text: parent.text
-                    color: Theme.colors.textMuted
-                    font.pixelSize: 12
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                }
-                background: Rectangle {
-                    radius: 6
-                    color: parent.hovered ? Theme.colors.surfaceRaised : "transparent"
-                    border.width: 1
-                    border.color: Theme.colors.border
-                }
             }
 
             Item { Layout.fillWidth: true }
@@ -82,7 +88,7 @@ ApplicationWindow {
                 color: Theme.colors.textMuted
                 font.pixelSize: 12
                 elide: Text.ElideRight
-                Layout.maximumWidth: 420
+                Layout.maximumWidth: 380
             }
 
             Switch {
@@ -98,29 +104,18 @@ ApplicationWindow {
                 }
             }
 
-            Button {
+            FlatButton {
                 text: App.busy ? "Refreshing" : "Refresh"
+                accent: true
                 enabled: !App.busy
                 onClicked: App.refresh()
-                contentItem: Label {
-                    text: parent.text
-                    color: Theme.colors.text
-                    font.pixelSize: 12
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                }
-                background: Rectangle {
-                    radius: 6
-                    color: parent.enabled ? (parent.hovered ? Theme.colors.accentHover
-                                                            : Theme.colors.accent)
-                                          : Theme.colors.border
-                }
             }
         }
     }
 
-    // A source that fails silently is the failure mode this whole app has to
-    // guard against, so problems are visible here rather than only in settings.
+    // A source that fails silently is the failure mode this whole application
+    // has to guard against, so problems are visible here rather than only in
+    // the settings.
     Rectangle {
         id: banner
         visible: App.problems.length > 0
@@ -128,33 +123,31 @@ ApplicationWindow {
         width: parent.width
         height: visible ? 32 : 0
         color: Theme.colors.surfaceRaised
-        z: 2
+        z: 3
 
-        RowLayout {
+        Label {
             anchors.fill: parent
             anchors.leftMargin: 14
-            anchors.rightMargin: 8
-            Label {
-                text: App.problems.length + " problem"
-                      + (App.problems.length === 1 ? "" : "s") + "  ·  "
-                      + App.problems[App.problems.length - 1]
-                color: Theme.colors.error
-                font.pixelSize: 12
-                elide: Text.ElideRight
-                Layout.fillWidth: true
-            }
+            anchors.rightMargin: 12
+            verticalAlignment: Text.AlignVCenter
+            text: App.problems.length + " problem"
+                  + (App.problems.length === 1 ? "" : "s") + "  ·  "
+                  + App.problems[App.problems.length - 1]
+            color: Theme.colors.error
+            font.pixelSize: 12
+            elide: Text.ElideRight
         }
     }
 
-    // Groups live here. Membership is managed with the group subcommands for
-    // now, this side is the filter.
+    // ---- sidebar ---------------------------------------------------------
+
     Rectangle {
         id: sidebar
         anchors.left: parent.left
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.topMargin: banner.height
-        width: 210
+        width: 214
         color: Theme.colors.surface
 
         Rectangle {
@@ -164,65 +157,92 @@ ApplicationWindow {
             color: Theme.colors.border
         }
 
-        ListView {
-            id: groupList
+        Flickable {
             anchors.fill: parent
-            anchors.topMargin: 10
-            anchors.bottomMargin: 10
+            anchors.topMargin: 8
+            anchors.bottomMargin: 8
+            contentHeight: sidebarColumn.height
             clip: true
-            model: App.groups
-            spacing: 2
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-            delegate: Rectangle {
-                required property var modelData
-                width: groupList.width
-                height: 34
-                color: modelData.id === App.selectedGroup ? Theme.colors.surfaceRaised
-                                                          : "transparent"
+            Column {
+                id: sidebarColumn
+                width: parent.width
+                spacing: 2
 
-                Rectangle {
-                    visible: modelData.id === App.selectedGroup
-                    width: 3
-                    height: parent.height
-                    color: Theme.colors.accent
+                SidebarHeading { text: "Channels" }
+
+                Repeater {
+                    model: App.groups
+                    SidebarRow {
+                        width: sidebarColumn.width
+                        label: modelData.name
+                        count: modelData.unwatched
+                        selected: modelData.id < 0 ? App.viewKind === "all"
+                                                   : (App.viewKind === "group"
+                                                      && App.viewId === modelData.id)
+                        onActivated: App.selectGroup(modelData.id)
+                    }
                 }
 
-                HoverHandler { id: rowHover }
-                TapHandler { onTapped: App.selectGroup(modelData.id) }
+                Item { width: 1; height: 10 }
 
-                Label {
-                    anchors.left: parent.left
-                    anchors.leftMargin: 14
-                    anchors.right: countLabel.left
-                    anchors.rightMargin: 6
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: modelData.name
-                    elide: Text.ElideRight
-                    font.pixelSize: 13
-                    color: modelData.id === App.selectedGroup || rowHover.hovered
-                           ? Theme.colors.text : Theme.colors.textMuted
+                SidebarHeading {
+                    text: "Boxes"
+                    actionText: "+"
+                    onAction: root.askForName(-1, "", "")
+                }
+
+                Repeater {
+                    model: App.boxes
+                    SidebarRow {
+                        width: sidebarColumn.width
+                        label: modelData.name
+                        count: modelData.items
+                        selected: App.viewKind === "box" && App.viewId === modelData.id
+                        onActivated: App.selectBox(modelData.id)
+                        onContextRequested: {
+                            boxMenu.boxId = modelData.id
+                            boxMenu.boxName = modelData.name
+                            boxMenu.popup()
+                        }
+                    }
                 }
 
                 Label {
-                    id: countLabel
-                    anchors.right: parent.right
-                    anchors.rightMargin: 12
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: modelData.unwatched > 0 ? modelData.unwatched : ""
-                    font.pixelSize: 11
+                    visible: App.boxes.length === 0
+                    width: sidebarColumn.width - 28
+                    x: 14
+                    text: "A box holds videos you pick yourself. Make one with the plus above."
                     color: Theme.colors.textMuted
+                    font.pixelSize: 11
+                    wrapMode: Text.Wrap
                 }
             }
         }
     }
 
-    GridView {
-        id: grid
+    // ---- content ---------------------------------------------------------
+
+    ChannelHeader {
+        id: channelHeader
         anchors.left: sidebar.right
         anchors.right: parent.right
         anchors.top: parent.top
+        anchors.topMargin: banner.height
+        info: App.channelInfo
+        visible: App.viewKind === "channel"
+        onCloseRequested: App.selectGroup(-1)
+    }
+
+    GridView {
+        id: grid
+        objectName: "grid"
+        anchors.left: sidebar.right
+        anchors.right: parent.right
+        anchors.top: channelHeader.visible ? channelHeader.bottom : parent.top
         anchors.bottom: parent.bottom
-        anchors.topMargin: banner.height + 10
+        anchors.topMargin: channelHeader.visible ? 8 : banner.height + 10
         anchors.leftMargin: 10
         anchors.rightMargin: 10
         clip: true
@@ -233,6 +253,24 @@ ApplicationWindow {
 
         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
+        // A Flickable scrolls by about sixty pixels a notch, while a card row
+        // here is nearly three hundred tall, so a single row cost about five
+        // notches. One notch now moves most of a row. A touchpad sends smaller
+        // angle deltas continuously, so dividing by a full notch keeps it
+        // proportional for both devices.
+        WheelHandler {
+            property real rowsPerNotch: 0.8
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+            onWheel: function (event) {
+                var notches = event.angleDelta.y / 120
+                if (notches === 0)
+                    return
+                var limit = Math.max(0, grid.contentHeight - grid.height)
+                grid.contentY = Math.max(0, Math.min(limit,
+                    grid.contentY - notches * grid.cellHeight * rowsPerNotch))
+            }
+        }
+
         delegate: Item {
             width: grid.cellWidth
             height: grid.cellHeight
@@ -242,6 +280,7 @@ ApplicationWindow {
                 anchors.margins: 6
                 title: model.title
                 channelTitle: model.channelTitle
+                channelAvatar: model.channelAvatar
                 thumbnail: model.thumbnail
                 ageText: model.ageText
                 durationText: model.durationText
@@ -249,11 +288,15 @@ ApplicationWindow {
                 likesText: model.likesText
                 watched: model.watched
                 isLive: model.isLive
-                channelAvatar: model.channelAvatar
                 progress: model.progress
                 onPlayRequested: App.play(model.key)
-                onDetailsRequested: model.watched ? App.markUnwatched(model.key)
-                                                  : App.markWatched(model.key)
+                onChannelRequested: App.openChannel(model.channelKey)
+                onMenuRequested: {
+                    root.menuKey = model.key
+                    root.menuChannelKey = model.channelKey
+                    root.menuWatched = model.watched
+                    videoMenu.popup()
+                }
             }
         }
 
@@ -264,6 +307,143 @@ ApplicationWindow {
             color: Theme.colors.textMuted
             font.pixelSize: 14
             text: App.emptyHint
+        }
+    }
+
+    // ---- menus and the name popup ---------------------------------------
+
+    Menu {
+        id: videoMenu
+        objectName: "videoMenu"
+
+        MenuItem {
+            text: "Play in mpv"
+            onTriggered: App.play(root.menuKey)
+        }
+        MenuItem {
+            text: "Open the channel"
+            onTriggered: App.openChannel(root.menuChannelKey)
+        }
+        MenuItem {
+            text: root.menuWatched ? "Mark as not watched" : "Mark as watched"
+            onTriggered: root.menuWatched ? App.markUnwatched(root.menuKey)
+                                          : App.markWatched(root.menuKey)
+        }
+
+        MenuSeparator {}
+
+        // Built from the box list at the moment the menu opens, with a tick
+        // beside the boxes this video is already in, so one menu both adds and
+        // removes.
+        Instantiator {
+            id: boxEntries
+            model: App.boxes
+            onObjectAdded: (index, object) => videoMenu.insertItem(index + 4, object)
+            onObjectRemoved: (index, object) => videoMenu.removeItem(object)
+            delegate: MenuItem {
+                required property var modelData
+                text: (App.boxesHolding(root.menuKey).indexOf(modelData.id) >= 0
+                       ? "✓  " : "   ") + modelData.name
+                onTriggered: {
+                    if (App.boxesHolding(root.menuKey).indexOf(modelData.id) >= 0)
+                        App.removeFromBox(modelData.id, root.menuKey)
+                    else
+                        App.addToBox(modelData.id, root.menuKey)
+                }
+            }
+        }
+
+        MenuItem {
+            text: "Put in a new box"
+            onTriggered: root.askForName(-1, root.menuKey, "")
+        }
+    }
+
+    Menu {
+        id: boxMenu
+        property int boxId: -1
+        property string boxName: ""
+
+        MenuItem {
+            text: "Rename"
+            onTriggered: root.askForName(boxMenu.boxId, "", boxMenu.boxName)
+        }
+        MenuItem {
+            text: "Delete the box"
+            onTriggered: App.deleteBox(boxMenu.boxId)
+        }
+    }
+
+    Popup {
+        id: namePopup
+        objectName: "namePopup"
+        anchors.centerIn: parent
+        width: 340
+        padding: 16
+        modal: true
+        focus: true
+        background: Rectangle {
+            radius: 8
+            color: Theme.colors.surfaceRaised
+            border.width: 1
+            border.color: Theme.colors.border
+        }
+
+        function commit() {
+            var name = nameField.text.trim()
+            if (name === "") {
+                namePopup.close()
+                return
+            }
+            if (root.namingBoxId >= 0) {
+                App.renameBox(root.namingBoxId, name)
+            } else {
+                var created = App.createBox(name)
+                if (created >= 0 && root.namingVideoKey !== "")
+                    App.addToBox(created, root.namingVideoKey)
+            }
+            namePopup.close()
+        }
+
+        Column {
+            width: parent.width
+            spacing: 10
+
+            Label {
+                text: root.namingBoxId >= 0 ? "Rename the box" : "Name the new box"
+                color: Theme.colors.text
+                font.pixelSize: 14
+                font.weight: Font.DemiBold
+            }
+
+            TextField {
+                id: nameField
+                width: parent.width
+                color: Theme.colors.text
+                placeholderText: "Watch tonight"
+                placeholderTextColor: Theme.colors.textMuted
+                background: Rectangle {
+                    radius: 6
+                    color: Theme.colors.background
+                    border.width: 1
+                    border.color: nameField.activeFocus ? Theme.colors.accent : Theme.colors.border
+                }
+                onAccepted: namePopup.commit()
+            }
+
+            Row {
+                spacing: 8
+                anchors.right: parent.right
+                FlatButton {
+                    text: "Cancel"
+                    onClicked: namePopup.close()
+                }
+                FlatButton {
+                    text: root.namingBoxId >= 0 ? "Rename" : "Create"
+                    accent: true
+                    onClicked: namePopup.commit()
+                }
+            }
         }
     }
 }

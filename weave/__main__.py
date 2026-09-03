@@ -223,6 +223,68 @@ def _cmd_group(args) -> int:
     return 0 if changed else 1
 
 
+def _video_key(text: str) -> str | None:
+    """Accept a video key, a bare id or any watch URL, so a key never has to be
+    typed out by hand."""
+    if text.startswith(("yt:", "twitch:")):
+        return text
+    found = ids.youtube_video_id(text)
+    return ids.video_key(found) if found else None
+
+
+def _cmd_box(args) -> int:
+    db = Database(paths.DB_FILE)
+
+    if args.action == "list":
+        rows = db.boxes()
+        if not rows:
+            print("no boxes yet")
+            return 0
+        for row in rows:
+            print(f"{row['id']:>3}  {row['name']:<28} {row['items']} videos")
+            for video in db.feed(box_id=row["id"], hide_watched=False, limit=500):
+                print(f"       {video['key']:<20} {video['title'][:56]}")
+        return 0
+
+    if args.action == "create":
+        print(f"box {args.name} is id {db.create_box(args.name)}")
+        return 0
+
+    found = db.box_by_name(args.name) if not args.name.isdigit() else {"id": int(args.name)}
+    if not found:
+        print(f"no box named {args.name!r}", file=sys.stderr)
+        return 1
+    box_id = found["id"]
+
+    if args.action == "rename":
+        db.rename_box(box_id, args.new_name)
+        print(f"renamed to {args.new_name}")
+        return 0
+
+    if args.action == "delete":
+        db.delete_box(box_id)
+        print(f"deleted box {args.name}")
+        return 0
+
+    changed = 0
+    for text in args.video:
+        key = _video_key(text)
+        if not key:
+            print(f"could not read {text!r} as a video", file=sys.stderr)
+            continue
+        if args.action == "add":
+            if not db.add_to_box(box_id, key):
+                print(f"{key} is not a stored video, so it cannot go in a box. "
+                      f"Add its channel and refresh first.", file=sys.stderr)
+                continue
+            print(f"put {key} in {args.name}")
+        else:
+            db.remove_from_box(box_id, key)
+            print(f"took {key} out of {args.name}")
+        changed += 1
+    return 0 if changed else 1
+
+
 def _cmd_gui(_args) -> int:
     from .app import run
     return run(sys.argv[:1])
@@ -263,6 +325,24 @@ def main() -> int:
     left.add_argument("name")
     left.add_argument("channel", nargs="+")
     group.set_defaults(func=_cmd_group)
+
+    box = subparsers.add_parser("box", help="collect individual videos into a named box")
+    box_actions = box.add_subparsers(dest="action", required=True)
+    box_actions.add_parser("list", help="show boxes and what is in them")
+    box_new = box_actions.add_parser("create", help="make a new box")
+    box_new.add_argument("name")
+    box_renamed = box_actions.add_parser("rename", help="change a box name")
+    box_renamed.add_argument("name")
+    box_renamed.add_argument("new_name")
+    box_gone = box_actions.add_parser("delete", help="remove a box, the videos stay")
+    box_gone.add_argument("name")
+    box_add = box_actions.add_parser("add", help="put videos in a box")
+    box_add.add_argument("name")
+    box_add.add_argument("video", nargs="+", help="a video key, a bare id or a watch URL")
+    box_take = box_actions.add_parser("remove", help="take videos out of a box")
+    box_take.add_argument("name")
+    box_take.add_argument("video", nargs="+")
+    box.set_defaults(func=_cmd_box)
 
     parser.set_defaults(func=_cmd_gui)
     args = parser.parse_args()

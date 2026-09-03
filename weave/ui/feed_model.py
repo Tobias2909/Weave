@@ -15,7 +15,7 @@ from ..db import Database
 from ..sources import progress as mpv_progress
 
 ROLES = (
-    "key", "title", "channelTitle", "channelAvatar", "thumbnail", "ageText",
+    "key", "title", "channelKey", "channelTitle", "channelAvatar", "thumbnail", "ageText",
     "durationText", "viewsText", "likesText", "watched", "url", "isLive",
     "progress",
 )
@@ -43,8 +43,10 @@ class FeedModel(QAbstractListModel):
         name = self._role_ids.get(role)
         return self._rows[index.row()].get(name) if name else None
 
-    def reload(self, hide_watched: bool = True, group_id: int | None = None) -> None:
-        rows = self._db.feed(hide_watched=hide_watched, group_id=group_id)
+    def reload(self, hide_watched: bool = True, group_id: int | None = None,
+               channel_key: str | None = None, box_id: int | None = None) -> None:
+        rows = self._db.feed(hide_watched=hide_watched, group_id=group_id,
+                             channel_key=channel_key, box_id=box_id)
         built = [self._build(row) for row in rows]
 
         # Partial progress comes from mpv's own resume files rather than being
@@ -66,6 +68,7 @@ class FeedModel(QAbstractListModel):
         return {
             "key": row["key"],
             "title": row["title"],
+            "channelKey": row["channel_key"],
             "channelTitle": row["channel_title"] or "",
             "channelAvatar": row["avatar_url"] or "",
             "thumbnail": row["thumbnail_url"] or "",

@@ -20,6 +20,11 @@ This is the first milestone. Working right now
   icons included
 * Channel groups, so the feed can be filtered down to the channels you care
   about at that moment, with an unwatched count beside each group
+* Boxes, which are named collections of individual videos you pick yourself.
+  Right click any video to put it in one or take it out again, and rename a box
+  whenever you like
+* A channel page, reached by clicking a channel name, showing its banner, its
+  subscriber count and everything stored from it
 * A grid of cards in a dark window, sized to the space it has
 * A duration badge, view and like counts, the channel icon, and a progress line
   showing where you stopped, read out of the resume files `mpv` already writes
@@ -35,6 +40,11 @@ Coming in later milestones, roughly in this order. A live bar for Twitch and
 YouTube streams, a detail panel with comments, the theme system, a YouTube Music
 area that plays audio inside Weave, search and playlists and history, and a
 diagnostics page.
+
+A box is not a YouTube playlist. It lives only in your own database, holds
+whatever you put in it, and keeps the order you put things in rather than the
+order they were published. Real YouTube playlists arrive later and are a
+separate thing.
 
 ## How the feed is built
 
@@ -157,8 +167,24 @@ python -m weave group remove Gaming twitch:somechannel
 python -m weave group delete Gaming
 ```
 
-Inside the window, left click plays a video in `mpv` and right click toggles its
-watched mark. The box in the header adds a channel, the button beside it imports
+A group collects whole channels. A box collects individual videos. Both show up
+in the list down the left.
+
+Collect individual videos into a box. A box takes a video key, a bare id or any
+watch URL.
+
+```sh
+python -m weave box create "Watch tonight"
+python -m weave box add "Watch tonight" https://www.youtube.com/watch?v=dQw4w9WgXcQ
+python -m weave box list
+python -m weave box rename "Watch tonight" Later
+python -m weave box remove Later yt:dQw4w9WgXcQ
+python -m weave box delete Later
+```
+
+Inside the window, left click a card to play it in `mpv`, click the channel name
+to open that channel's page, and right click for a menu that plays, opens the
+channel, toggles the watched mark, and puts the video into or out of any box. The box in the header adds a channel, the button beside it imports
 your subscriptions, and the list down the left filters the feed to one group.
 
 ## Configuration

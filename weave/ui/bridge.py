@@ -1,19 +1,30 @@
 """The single object QML talks to.
 
 Keeping one bridge rather than exposing the database and the poller directly
-means QML never sees a blocking call, and every action the UI can trigger is
-listed in one place.
+means QML never makes a blocking call, and every action the interface can
+trigger is listed in one place.
+
+The current view is one piece of state rather than several independent filters,
+because all, a group, a box and a channel page are mutually exclusive and
+letting them be set separately would allow combinations with no meaning.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import Property, QObject, Signal, Slot
 
+from .. import format as fmt
+from .. import ids
 from ..config import Config
 from ..db import Database
 from ..player.mpv import Player
-from ..poller import ChannelAdder, FeedPoller, SubsImporter
+from ..poller import ChannelAdder, ChannelDetailsFetcher, FeedPoller, SubsImporter
 from .feed_model import FeedModel
+
+ALL = "all"
+GROUP = "group"
+BOX = "box"
+CHANNEL = "channel"
 
 
 class Bridge(QObject):
@@ -23,7 +34,8 @@ class Bridge(QObject):
     problemsChanged = Signal()
     emptyHintChanged = Signal()
     groupsChanged = Signal()
-    selectedGroupChanged = Signal()
+    boxesChanged = Signal()
+    viewChanged = Signal()
 
     def __init__(self, db: Database, cfg: Config, model: FeedModel,
                  player: Player, parent: QObject | None = None) -> None:
@@ -32,19 +44,24 @@ class Bridge(QObject):
         self._cfg = cfg
         self._model = model
         self._player = player
+
         self._poller: FeedPoller | None = None
         self._adder: ChannelAdder | None = None
         self._importer: SubsImporter | None = None
-        self._selected_group = -1          # -1 is the All view
+        self._details: ChannelDetailsFetcher | None = None
+
         self._busy = False
         self._problems: list[str] = []
+        self._status = ""
+
+        self._view_kind = ALL
+        self._view_id = -1
+        self._view_channel = ""
 
         self._hide_watched = self._db.get_state("hide_watched", "1") == "1"
-        self._status = ""
 
         self._player.watched.connect(self._on_watched)
         self._player.failed.connect(self._on_player_failed)
-
         if self._player.error:
             self._problems.append(self._player.error)
 
@@ -65,14 +82,52 @@ class Bridge(QObject):
     def _get_problems(self) -> list:
         return list(self._problems)
 
+    def _get_groups(self) -> list:
+        """All first, then the configured groups. Shipped as one list so QML
+        has no special case for the All row."""
+        rows = [{"id": -1, "name": "All", "members": len(self._db.channels()),
+                 "unwatched": self._db.unwatched_total()}]
+        rows.extend(self._db.groups())
+        return rows
+
+    def _get_boxes(self) -> list:
+        return self._db.boxes()
+
+    def _get_view_kind(self) -> str:
+        return self._view_kind
+
+    def _get_view_id(self) -> int:
+        return self._view_id
+
+    def _get_channel_info(self) -> dict:
+        if self._view_kind != CHANNEL:
+            return {}
+        found = self._db.channel(self._view_channel) or {}
+        return {
+            "key": found.get("key", ""),
+            "title": found.get("title") or found.get("ext_id", ""),
+            "avatar": found.get("avatar_url") or "",
+            "banner": found.get("banner_url") or "",
+            "followers": found.get("follower_count") or 0,
+            "followersText": fmt.count_text(found.get("follower_count")),
+            "videos": found.get("video_count") or 0,
+            "platform": found.get("platform", "youtube"),
+        }
+
     def _get_empty_hint(self) -> str:
-        """What to say when the grid is empty. There are three different
-        reasons for that and they need three different answers."""
+        """What to say when the grid is empty. There are several different
+        reasons for that and they need different answers."""
+        if self._view_kind == BOX:
+            return ("This box is empty.\nRight click any video and put it in here.")
+        if self._view_kind == CHANNEL:
+            return "No videos stored for this channel yet.\nPress Refresh."
         counts = self._db.counts()
         if not counts["channels"]:
             return "Nothing here yet.\nAdd a channel above, then press Refresh."
-        youtube = len(self._db.channels(platform="youtube"))
-        if not youtube:
+        if self._view_kind == GROUP:
+            return ("This group has nothing to show.\n"
+                    "Put channels in it with the group subcommands.")
+        if not len(self._db.channels(platform="youtube")):
             return ("Only Twitch channels are tracked so far.\n"
                     "Twitch appears in the live bar, which is not built yet, so it "
                     "produces no rows here.\nAdd a YouTube channel to fill the feed.")
@@ -80,24 +135,16 @@ class Bridge(QObject):
             return "No videos stored yet.\nPress Refresh to fetch them."
         return "Everything here is watched.\nTurn off Hide watched to see it again."
 
-    def _get_groups(self) -> list:
-        """All first, then the configured groups. Shipped as one list so QML has no
-        special case for the All row."""
-        rows = [{"id": -1, "name": "All", "members": len(self._db.channels()),
-                 "unwatched": self._db.unwatched_total()}]
-        rows.extend(self._db.groups())
-        return rows
-
-    def _get_selected_group(self) -> int:
-        return self._selected_group
-
     status = Property(str, _get_status, notify=statusChanged)
-    emptyHint = Property(str, _get_empty_hint, notify=emptyHintChanged)
-    groups = Property("QVariantList", _get_groups, notify=groupsChanged)
-    selectedGroup = Property(int, _get_selected_group, notify=selectedGroupChanged)
     busy = Property(bool, _get_busy, notify=busyChanged)
     hideWatched = Property(bool, _get_hide_watched, notify=hideWatchedChanged)
     problems = Property("QVariantList", _get_problems, notify=problemsChanged)
+    emptyHint = Property(str, _get_empty_hint, notify=emptyHintChanged)
+    groups = Property("QVariantList", _get_groups, notify=groupsChanged)
+    boxes = Property("QVariantList", _get_boxes, notify=boxesChanged)
+    viewKind = Property(str, _get_view_kind, notify=viewChanged)
+    viewId = Property(int, _get_view_id, notify=viewChanged)
+    channelInfo = Property("QVariantMap", _get_channel_info, notify=viewChanged)
 
     def _set_status(self, text: str) -> None:
         if text != self._status:
@@ -114,22 +161,106 @@ class Bridge(QObject):
         return (f"{counts['channels']} channels, {counts['videos']} videos, "
                 f"{counts['watched']} watched")
 
-    # ---- actions ---------------------------------------------------------
+    # ---- the current view ------------------------------------------------
 
     @Slot()
     def reload(self) -> None:
-        group = None if self._selected_group < 0 else self._selected_group
-        self._model.reload(hide_watched=self._hide_watched, group_id=group)
+        # A channel page and a box both ignore the hide watched toggle. The
+        # channel page is meant to show everything that channel has, and a box
+        # was hand picked, so hiding half of it would be surprising.
+        honour_toggle = self._view_kind in (ALL, GROUP)
+        self._model.reload(
+            hide_watched=self._hide_watched and honour_toggle,
+            group_id=self._view_id if self._view_kind == GROUP else None,
+            box_id=self._view_id if self._view_kind == BOX else None,
+            channel_key=self._view_channel if self._view_kind == CHANNEL else None,
+        )
         self.emptyHintChanged.emit()
         self.groupsChanged.emit()
+        self.boxesChanged.emit()
+
+    def _set_view(self, kind: str, view_id: int = -1, channel_key: str = "") -> None:
+        if (kind, view_id, channel_key) == (self._view_kind, self._view_id, self._view_channel):
+            return
+        self._view_kind = kind
+        self._view_id = view_id
+        self._view_channel = channel_key
+        self.viewChanged.emit()
+        self.reload()
 
     @Slot(int)
     def selectGroup(self, group_id: int) -> None:
-        if group_id == self._selected_group:
+        self._set_view(ALL if group_id < 0 else GROUP, group_id)
+
+    @Slot(int)
+    def selectBox(self, box_id: int) -> None:
+        self._set_view(BOX, box_id)
+
+    @Slot(str)
+    def openChannel(self, channel_key: str) -> None:
+        if not channel_key:
             return
-        self._selected_group = group_id
-        self.selectedGroupChanged.emit()
-        self.reload()
+        self._set_view(CHANNEL, -1, channel_key)
+        found = self._db.channel(channel_key)
+        if found and found["platform"] == "youtube" and \
+                self._db.channel_details_are_stale(channel_key):
+            self._fetch_channel_details(channel_key, found["ext_id"])
+
+    def _fetch_channel_details(self, channel_key: str, ext_id: str) -> None:
+        if self._details is not None and self._details.isRunning():
+            return
+        self._details = ChannelDetailsFetcher(self._db, self._cfg, channel_key, ext_id, self)
+        self._details.fetched.connect(lambda _key: self.viewChanged.emit())
+        self._details.failed.connect(
+            lambda _key, message: self._set_status(f"could not load the channel, {message}"))
+        self._details.start()
+
+    # ---- boxes -----------------------------------------------------------
+
+    @Slot(str, result=int)
+    def createBox(self, name: str) -> int:
+        name = (name or "").strip()
+        if not name:
+            return -1
+        box_id = self._db.create_box(name)
+        self.boxesChanged.emit()
+        self._set_status(f"box {name} is ready")
+        return box_id
+
+    @Slot(int, str)
+    def renameBox(self, box_id: int, name: str) -> None:
+        if not (name or "").strip():
+            return
+        self._db.rename_box(box_id, name)
+        self.boxesChanged.emit()
+        self.viewChanged.emit()
+
+    @Slot(int)
+    def deleteBox(self, box_id: int) -> None:
+        self._db.delete_box(box_id)
+        if self._view_kind == BOX and self._view_id == box_id:
+            self._set_view(ALL, -1)
+        self.boxesChanged.emit()
+
+    @Slot(int, str)
+    def addToBox(self, box_id: int, video_key: str) -> None:
+        self._db.add_to_box(box_id, video_key)
+        self.boxesChanged.emit()
+        if self._view_kind == BOX:
+            self.reload()
+
+    @Slot(int, str)
+    def removeFromBox(self, box_id: int, video_key: str) -> None:
+        self._db.remove_from_box(box_id, video_key)
+        self.boxesChanged.emit()
+        if self._view_kind == BOX:
+            self.reload()
+
+    @Slot(str, result="QVariantList")
+    def boxesHolding(self, video_key: str) -> list:
+        return self._db.boxes_holding(video_key)
+
+    # ---- actions ---------------------------------------------------------
 
     @Slot()
     def refresh(self) -> None:
@@ -199,10 +330,7 @@ class Bridge(QObject):
     def addChannel(self, text: str) -> bool:
         """Accepts a channel id, an @handle, a legacy channel URL or a Twitch
         link. Returns whether the reference was understood at all. Resolving a
-        handle then happens in the background.
-        """
-        from .. import ids
-
+        handle then happens in the background."""
         ref = ids.parse_channel_ref(text)
         if not ref:
             self._set_status("could not read that as a channel")
@@ -222,12 +350,12 @@ class Bridge(QObject):
         """Stop every background thread before Qt tears them down.
 
         Qt treats destroying a running QThread as fatal and aborts the whole
-        process, so closing the window during a refresh crashed on exit. All
-        threads are cancelled first and then waited on, so they stop in
+        process, so closing the window during a refresh used to crash on exit.
+        All threads are cancelled first and then waited on, so they stop in
         parallel rather than one after another. This runs after the window is
         already gone, so any short wait here is invisible.
         """
-        threads = [self._poller, self._adder, self._importer]
+        threads = [self._poller, self._adder, self._importer, self._details]
         live = [thread for thread in threads if thread is not None and thread.isRunning()]
         for thread in live:
             thread.cancel()
@@ -240,8 +368,8 @@ class Bridge(QObject):
         self._db.add_channel(key, platform, ext_id, title or None)
         label = title or ext_id
         if platform == "twitch":
-            # Say this plainly. A Twitch channel adding no rows to the feed
-            # looks broken otherwise.
+            # Said plainly. A Twitch channel adding no rows to the feed looks
+            # broken otherwise.
             self._set_status(f"added {label}, which will show in the live bar rather than the feed")
             self.reload()
         else:
@@ -272,8 +400,8 @@ class Bridge(QObject):
         self.problemsChanged.emit()
         self._set_status(message)
 
-    def _on_poll_failure(self, key: str, message: str) -> None:
-        self._problems.append(f"feed {key}: {message}")
+    def _on_poll_failure(self, source: str, message: str) -> None:
+        self._problems.append(f"feed {source}: {message}")
         self.problemsChanged.emit()
 
     def _on_poll_finished(self, channels: int, touched: int, failures: int) -> None:

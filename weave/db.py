@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -51,6 +51,25 @@ CREATE TABLE IF NOT EXISTS group_members (
     channel_key TEXT    NOT NULL REFERENCES channels(key) ON DELETE CASCADE,
     position    INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (group_id, channel_key)
+);
+
+-- A box is a hand picked collection of individual videos, as opposed to a
+-- group, which collects whole channels. Named "box" rather than "playlist"
+-- because real YouTube playlists arrive later and two things called playlist
+-- in one sidebar would be confusing.
+CREATE TABLE IF NOT EXISTS boxes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL UNIQUE,
+    position   INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS box_items (
+    box_id    INTEGER NOT NULL REFERENCES boxes(id) ON DELETE CASCADE,
+    video_key TEXT    NOT NULL REFERENCES videos(key) ON DELETE CASCADE,
+    position  INTEGER NOT NULL DEFAULT 0,
+    added_at  INTEGER NOT NULL,
+    PRIMARY KEY (box_id, video_key)
 );
 
 CREATE TABLE IF NOT EXISTS videos (
@@ -107,6 +126,9 @@ class VideoRow:
 # schema above so an existing database gains them too.
 _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("channels", "last_classified_at", "INTEGER"),
+    ("channels", "banner_url", "TEXT"),
+    ("channels", "follower_count", "INTEGER"),
+    ("channels", "details_fetched_at", "INTEGER"),
 )
 
 
@@ -224,6 +246,38 @@ class Database:
         return self.conn.execute(
             "SELECT 1 FROM videos WHERE channel_key=? LIMIT 1", (key,)
         ).fetchone() is not None
+
+    def set_channel_details(self, key: str, title: str | None, avatar_url: str | None,
+                            banner_url: str | None, follower_count: int | None) -> None:
+        """Store what the channel page needs. COALESCE again, so a call that
+        found less than an earlier one cannot erase the difference."""
+        with self.conn as conn:
+            conn.execute(
+                "UPDATE channels SET "
+                "  title=COALESCE(?, title), avatar_url=COALESCE(?, avatar_url), "
+                "  banner_url=COALESCE(?, banner_url), "
+                "  follower_count=COALESCE(?, follower_count), details_fetched_at=? "
+                "WHERE key=?",
+                (title, avatar_url, banner_url, follower_count, int(time.time()), key),
+            )
+
+    def channel(self, key: str) -> dict | None:
+        row = self.conn.execute("SELECT * FROM channels WHERE key=?", (key,)).fetchone()
+        if not row:
+            return None
+        found = dict(row)
+        found["video_count"] = int(self.conn.execute(
+            "SELECT COUNT(*) FROM videos WHERE channel_key=? "
+            "AND (is_short IS NULL OR is_short = 0)", (key,)).fetchone()[0])
+        return found
+
+    def channel_details_are_stale(self, key: str, interval_s: int = 604800) -> bool:
+        row = self.conn.execute(
+            "SELECT details_fetched_at FROM channels WHERE key=?", (key,)).fetchone()
+        if not row:
+            return False
+        stamp = row["details_fetched_at"]
+        return stamp is None or stamp <= int(time.time()) - max(0, interval_s)
 
     def channels_needing_classification(self, interval_s: int, limit: int = 40) -> list[sqlite3.Row]:
         """Channels that still hold videos of unknown kind.
@@ -434,6 +488,73 @@ class Database:
             "SELECT c.* FROM channels c JOIN group_members m ON m.channel_key = c.key "
             "WHERE m.group_id=? ORDER BY c.title COLLATE NOCASE", (group_id,)))
 
+    # ---- boxes -----------------------------------------------------------
+
+    def create_box(self, name: str) -> int:
+        name = name.strip()
+        with self.conn as conn:
+            position = conn.execute("SELECT COALESCE(MAX(position), 0) + 1 FROM boxes").fetchone()[0]
+            cursor = conn.execute(
+                "INSERT INTO boxes(name, position, created_at) VALUES(?,?,?) "
+                "ON CONFLICT(name) DO UPDATE SET name=excluded.name RETURNING id",
+                (name, position, int(time.time())),
+            )
+            return int(cursor.fetchone()[0])
+
+    def rename_box(self, box_id: int, name: str) -> None:
+        with self.conn as conn:
+            conn.execute("UPDATE boxes SET name=? WHERE id=?", (name.strip(), box_id))
+
+    def delete_box(self, box_id: int) -> None:
+        with self.conn as conn:
+            conn.execute("DELETE FROM boxes WHERE id=?", (box_id,))
+
+    def set_box_order(self, ordered_ids: list[int]) -> None:
+        with self.conn as conn:
+            conn.executemany("UPDATE boxes SET position=? WHERE id=?", list(enumerate(ordered_ids)))
+
+    def add_to_box(self, box_id: int, video_key: str) -> bool:
+        """Newest addition goes last, so a box keeps the order things were put
+        in rather than the order they were published.
+
+        Returns whether it went in. A box can only hold a video that is
+        actually stored, which the foreign key enforces, so an unknown key is
+        reported rather than raised. That is reachable from the command line,
+        where a URL can name a video this install has never seen.
+        """
+        try:
+            with self.conn as conn:
+                position = conn.execute(
+                    "SELECT COALESCE(MAX(position), 0) + 1 FROM box_items WHERE box_id=?",
+                    (box_id,)).fetchone()[0]
+                conn.execute(
+                    "INSERT INTO box_items(box_id, video_key, position, added_at) "
+                    "VALUES(?,?,?,?) ON CONFLICT DO NOTHING",
+                    (box_id, video_key, position, int(time.time())))
+        except sqlite3.IntegrityError:
+            return False
+        return True
+
+    def remove_from_box(self, box_id: int, video_key: str) -> None:
+        with self.conn as conn:
+            conn.execute("DELETE FROM box_items WHERE box_id=? AND video_key=?",
+                         (box_id, video_key))
+
+    def boxes(self) -> list[dict]:
+        return [dict(row) for row in self.conn.execute(
+            "SELECT b.id, b.name, b.position, "
+            "  (SELECT COUNT(*) FROM box_items i WHERE i.box_id = b.id) AS items "
+            "FROM boxes b ORDER BY b.position, b.id")]
+
+    def box_by_name(self, name: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT id, name, position FROM boxes WHERE name=? COLLATE NOCASE", (name,)).fetchone()
+        return dict(row) if row else None
+
+    def boxes_holding(self, video_key: str) -> list[int]:
+        return [int(row["box_id"]) for row in self.conn.execute(
+            "SELECT box_id FROM box_items WHERE video_key=?", (video_key,))]
+
     def unwatched_total(self) -> int:
         return int(self.conn.execute(
             "SELECT COUNT(*) FROM videos v LEFT JOIN watched w ON w.video_key = v.key "
@@ -441,16 +562,34 @@ class Database:
         ).fetchone()[0])
 
     def feed(self, limit: int = 300, hide_watched: bool = True,
-             group_id: int | None = None) -> list[sqlite3.Row]:
-        # An unclassified video still shows. It is hidden only once the
-        # redirect test has actually proven it is a Short.
+             group_id: int | None = None, channel_key: str | None = None,
+             box_id: int | None = None) -> list[sqlite3.Row]:
+        """The video list for whichever view is showing.
+
+        A box orders by the order things were put in it rather than by publish
+        date, since that is the point of hand picking. Everything else is
+        newest first.
+        """
+        # An unclassified video still shows. It is hidden only once a channel
+        # listing or the redirect test has proven it is a Short.
         where = ["(v.is_short IS NULL OR v.is_short = 0)"]
         args: list[Any] = []
+        join = ""
+        order = "v.published_at DESC NULLS LAST, v.first_seen_at DESC"
+
         if hide_watched:
             where.append("w.video_key IS NULL")
         if group_id is not None:
             where.append("v.channel_key IN (SELECT channel_key FROM group_members WHERE group_id=?)")
             args.append(group_id)
+        if channel_key is not None:
+            where.append("v.channel_key = ?")
+            args.append(channel_key)
+        if box_id is not None:
+            join = "JOIN box_items bi ON bi.video_key = v.key AND bi.box_id = ?"
+            args.insert(0, box_id)
+            order = "bi.position"
+
         args.append(limit)
         return list(self.conn.execute(
             f"""
@@ -458,9 +597,10 @@ class Database:
                    w.video_key IS NOT NULL AS watched
             FROM videos v
             JOIN channels c ON c.key = v.channel_key
+            {join}
             LEFT JOIN watched w ON w.video_key = v.key
             WHERE {' AND '.join(where)}
-            ORDER BY v.published_at DESC NULLS LAST, v.first_seen_at DESC
+            ORDER BY {order}
             LIMIT ?
             """,
             args,

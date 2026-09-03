@@ -208,6 +208,121 @@ class Groups(DatabaseCase):
         self.assertEqual([g["name"] for g in self.db.groups()], ["Tech", "Gaming"])
 
 
+class Boxes(DatabaseCase):
+    def setUp(self):
+        super().setUp()
+        self.db.add_channel("yt:UC1", "youtube", "UC1", "One")
+        self.db.upsert_videos([self.video("aaaaaaaaaaa", published_at=100),
+                               self.video("bbbbbbbbbbb", published_at=200),
+                               self.video("ccccccccccc", published_at=300)])
+        self.box = self.db.create_box("Watch tonight")
+
+    def test_creating_the_same_name_twice_returns_the_same_box(self):
+        self.assertEqual(self.db.create_box("Watch tonight"), self.box)
+
+    def test_order_is_the_order_things_were_put_in(self):
+        # Not publish order. Hand picking is the whole point of a box.
+        self.db.add_to_box(self.box, "yt:aaaaaaaaaaa")
+        self.db.add_to_box(self.box, "yt:ccccccccccc")
+        self.db.add_to_box(self.box, "yt:bbbbbbbbbbb")
+        self.assertEqual([r["ext_id"] for r in self.db.feed(box_id=self.box)],
+                         ["aaaaaaaaaaa", "ccccccccccc", "bbbbbbbbbbb"])
+
+    def test_adding_twice_is_harmless(self):
+        self.assertTrue(self.db.add_to_box(self.box, "yt:aaaaaaaaaaa"))
+        self.assertTrue(self.db.add_to_box(self.box, "yt:aaaaaaaaaaa"))
+        self.assertEqual(self.db.boxes()[0]["items"], 1)
+
+    def test_an_unknown_video_is_reported_not_raised(self):
+        # Reachable from the command line, where a URL can name a video this
+        # install has never seen.
+        self.assertFalse(self.db.add_to_box(self.box, "yt:zzzzzzzzzzz"))
+        self.assertEqual(self.db.boxes()[0]["items"], 0)
+
+    def test_removing(self):
+        self.db.add_to_box(self.box, "yt:aaaaaaaaaaa")
+        self.db.remove_from_box(self.box, "yt:aaaaaaaaaaa")
+        self.assertEqual(self.db.feed(box_id=self.box), [])
+
+    def test_which_boxes_hold_a_video(self):
+        other = self.db.create_box("Music")
+        self.db.add_to_box(self.box, "yt:aaaaaaaaaaa")
+        self.db.add_to_box(other, "yt:aaaaaaaaaaa")
+        self.assertEqual(sorted(self.db.boxes_holding("yt:aaaaaaaaaaa")), sorted([self.box, other]))
+        self.assertEqual(self.db.boxes_holding("yt:bbbbbbbbbbb"), [])
+
+    def test_a_watched_video_stays_in_a_box(self):
+        self.db.add_to_box(self.box, "yt:aaaaaaaaaaa")
+        self.db.set_watched("yt:aaaaaaaaaaa", 1.0, "mpv")
+        self.assertEqual(len(self.db.feed(box_id=self.box, hide_watched=False)), 1)
+
+    def test_a_short_never_appears_even_in_a_box(self):
+        self.db.add_to_box(self.box, "yt:aaaaaaaaaaa")
+        self.db.set_short("yt:aaaaaaaaaaa", True)
+        self.assertEqual(self.db.feed(box_id=self.box, hide_watched=False), [])
+
+    def test_deleting_a_box_keeps_the_videos(self):
+        self.db.add_to_box(self.box, "yt:aaaaaaaaaaa")
+        self.db.delete_box(self.box)
+        self.assertEqual(self.db.boxes(), [])
+        self.assertEqual(len(self.db.feed(hide_watched=False)), 3)
+
+    def test_deleting_a_video_drops_it_from_its_boxes(self):
+        self.db.add_to_box(self.box, "yt:aaaaaaaaaaa")
+        self.db.remove_channel("yt:UC1")
+        self.assertEqual(self.db.boxes()[0]["items"], 0)
+
+    def test_rename_and_lookup(self):
+        self.db.rename_box(self.box, "Later")
+        self.assertEqual(self.db.box_by_name("later")["id"], self.box)
+
+    def test_order_is_settable(self):
+        second = self.db.create_box("Music")
+        self.db.set_box_order([second, self.box])
+        self.assertEqual([b["name"] for b in self.db.boxes()], ["Music", "Watch tonight"])
+
+
+class ChannelPage(DatabaseCase):
+    def setUp(self):
+        super().setUp()
+        self.db.add_channel("yt:UC1", "youtube", "UC1", "One")
+        self.db.add_channel("yt:UC2", "youtube", "UC2", "Two")
+        self.db.upsert_videos([self.video("aaaaaaaaaaa"),
+                               self.video("bbbbbbbbbbb", channel="yt:UC2")])
+
+    def test_details_round_trip(self):
+        self.db.set_channel_details("yt:UC1", "One", "https://a/av.jpg",
+                                    "https://a/ban.jpg", 1580000)
+        found = self.db.channel("yt:UC1")
+        self.assertEqual((found["banner_url"], found["follower_count"], found["video_count"]),
+                         ("https://a/ban.jpg", 1580000, 1))
+
+    def test_a_later_lookup_with_less_detail_cannot_erase_more(self):
+        self.db.set_channel_details("yt:UC1", "One", "https://a/av.jpg", "https://a/ban.jpg", 10)
+        self.db.set_channel_details("yt:UC1", None, None, None, None)
+        found = self.db.channel("yt:UC1")
+        self.assertEqual((found["banner_url"], found["follower_count"]), ("https://a/ban.jpg", 10))
+
+    def test_details_are_stale_until_fetched(self):
+        self.assertTrue(self.db.channel_details_are_stale("yt:UC1"))
+        self.db.set_channel_details("yt:UC1", "One", None, None, None)
+        self.assertFalse(self.db.channel_details_are_stale("yt:UC1"))
+        self.assertTrue(self.db.channel_details_are_stale("yt:UC1", interval_s=0))
+
+    def test_an_unknown_channel_is_not_stale_it_is_absent(self):
+        self.assertFalse(self.db.channel_details_are_stale("yt:UC9"))
+        self.assertIsNone(self.db.channel("yt:UC9"))
+
+    def test_the_page_lists_only_that_channel(self):
+        self.assertEqual([r["ext_id"] for r in self.db.feed(channel_key="yt:UC1")],
+                         ["aaaaaaaaaaa"])
+
+    def test_the_video_count_excludes_shorts(self):
+        self.db.upsert_videos([self.video("ccccccccccc")])
+        self.db.set_short("yt:ccccccccccc", True)
+        self.assertEqual(self.db.channel("yt:UC1")["video_count"], 1)
+
+
 class AppState(DatabaseCase):
     def test_round_trip_with_a_default(self):
         self.assertEqual(self.db.get_state("missing", "fallback"), "fallback")

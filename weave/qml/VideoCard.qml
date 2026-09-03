@@ -19,7 +19,8 @@ Rectangle {
     property real progress: 0
 
     signal playRequested()
-    signal detailsRequested()
+    signal channelRequested()
+    signal menuRequested()
 
     radius: 8
     color: hover.hovered ? Theme.colors.surfaceRaised : Theme.colors.surface
@@ -36,7 +37,7 @@ Rectangle {
     }
     TapHandler {
         acceptedButtons: Qt.RightButton
-        onTapped: card.detailsRequested()
+        onTapped: card.menuRequested()
     }
 
     Column {
@@ -120,9 +121,18 @@ Rectangle {
             elide: Text.ElideRight
         }
 
+        // The channel line is its own click target, so a left click here opens
+        // the channel page rather than starting the video.
         Row {
+            id: channelRow
             width: parent.width
             spacing: 6
+
+            HoverHandler { id: channelHover }
+            TapHandler {
+                gesturePolicy: TapHandler.ReleaseWithinBounds
+                onTapped: card.channelRequested()
+            }
 
             Rectangle {
                 width: 18
@@ -131,7 +141,6 @@ Rectangle {
                 clip: true
                 color: Theme.colors.surfaceRaised
                 visible: card.channelAvatar !== ""
-                anchors.verticalCenter: undefined
 
                 Image {
                     anchors.fill: parent
@@ -143,10 +152,11 @@ Rectangle {
             }
 
             Text {
-                width: parent.width - (card.channelAvatar !== "" ? 24 : 0)
+                width: channelRow.width - (card.channelAvatar !== "" ? 24 : 0)
                 text: card.channelTitle
-                color: Theme.colors.textMuted
+                color: channelHover.hovered ? Theme.colors.text : Theme.colors.textMuted
                 font.pixelSize: 12
+                font.underline: channelHover.hovered
                 elide: Text.ElideRight
             }
         }
