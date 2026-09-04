@@ -134,7 +134,18 @@ reads the same page once and sends the same value. Without it, an account whose
 music lives on a second identity looks like a brand new listener.
 
 Starting a video in `mpv` pauses the music, since two things playing at once is
-never wanted. There is a switch in the player bar if you disagree.
+never wanted. It fades out over about a second rather than cutting off mid note,
+and fades back in when it resumes. There is a switch in the player bar if you
+disagree.
+
+Repeat has three settings rather than two, off, the whole queue, and the one
+track, since repeating a queue and repeating a song are different wants and one
+switch cannot say which.
+
+Sections are arranged by hand with the arrows beside each heading, saved
+addresses included, and the arrangement is kept. Pressing a song plays that song
+and then things like it, the way the music application does, while pressing a
+playlist opens it to look at and starts nothing until something in it is chosen.
 
 The shelves are remembered, so the view has something the moment it opens
 rather than a blank page while several requests are gathered. A fresh copy is

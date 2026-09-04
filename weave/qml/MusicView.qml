@@ -75,68 +75,66 @@ Item {
                 width: shelfArea.width
                 spacing: 16
 
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-                    visible: App.audioSources.length > 0
-
-                    Label {
-                        text: "SAVED"
-                        color: Theme.colors.textMuted
-                        font.pixelSize: 10
-                        font.letterSpacing: 1.2
-                        font.weight: Font.DemiBold
-                    }
-
-                    Flow {
-                        Layout.fillWidth: true
-                        spacing: 10
-                        Repeater {
-                            model: App.audioSources
-                            MusicTile {
-                                required property var modelData
-                                title: modelData.label
-                                subtitle: modelData.live ? "live" : ""
-                                picture: modelData.thumbnail ? modelData.thumbnail : ""
-                                removable: true
-                                onChosen: App.playSource(modelData.id)
-                                onRemoveRequested: App.removeSource(modelData.id)
-                            }
-                        }
-                    }
-                }
-
                 Repeater {
                     model: App.musicShelves
                     ColumnLayout {
+                        id: shelf
                         required property var modelData
                         required property int index
                         // Named, so a tile inside can say which shelf it is in
                         // without colliding with its own index.
                         readonly property int shelfIndex: index
+                        readonly property bool saved: modelData.kind === "saved"
                         Layout.fillWidth: true
                         spacing: 8
 
-                        Label {
-                            text: modelData.title.toUpperCase()
-                            color: Theme.colors.textMuted
-                            font.pixelSize: 10
-                            font.letterSpacing: 1.2
-                            font.weight: Font.DemiBold
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            Label {
+                                text: shelf.modelData.title.toUpperCase()
+                                color: Theme.colors.textMuted
+                                font.pixelSize: 10
+                                font.letterSpacing: 1.2
+                                font.weight: Font.DemiBold
+                            }
+
+                            // Sections are arranged by hand and the order is
+                            // kept, so the ones that matter can sit at the top.
+                            Label {
+                                text: "▲"
+                                color: upHover.hovered ? Theme.colors.accent : Theme.colors.border
+                                font.pixelSize: 10
+                                HoverHandler { id: upHover }
+                                TapHandler { onTapped: App.moveShelf(shelf.modelData.title, -1) }
+                            }
+                            Label {
+                                text: "▼"
+                                color: downHover.hovered ? Theme.colors.accent : Theme.colors.border
+                                font.pixelSize: 10
+                                HoverHandler { id: downHover }
+                                TapHandler { onTapped: App.moveShelf(shelf.modelData.title, 1) }
+                            }
+
+                            Item { Layout.fillWidth: true }
                         }
 
                         Flow {
                             Layout.fillWidth: true
                             spacing: 10
                             Repeater {
-                                model: modelData.items
+                                model: shelf.modelData.items
                                 MusicTile {
                                     required property var modelData
                                     required property int index
                                     title: modelData.title
                                     subtitle: modelData.subtitle
                                     picture: modelData.thumbnail
-                                    onChosen: App.playShelfItem(shelfIndex, index)
+                                    removable: shelf.saved
+                                    onChosen: shelf.saved ? App.playSource(modelData.sourceId)
+                                                          : App.playShelfItem(shelf.shelfIndex, index)
+                                    onRemoveRequested: App.removeSource(modelData.sourceId)
                                 }
                             }
                         }

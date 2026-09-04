@@ -250,9 +250,12 @@ Rectangle {
             onClicked: Audio.setShuffle(!Audio.shuffle)
         }
         FlatButton {
-            text: "Repeat"
-            accent: Audio.repeat
-            onClicked: Audio.setRepeat(!Audio.repeat)
+            // Off, the whole queue, or the one track. A queue that repeats and
+            // a track that repeats are different wants.
+            text: Audio.repeatLabel
+            accent: Audio.repeat > 0
+            Layout.preferredWidth: 92
+            onClicked: Audio.cycleRepeat()
         }
         FlatButton {
             // Two things playing at once is never wanted, but it is a choice.

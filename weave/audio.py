@@ -15,7 +15,8 @@ from __future__ import annotations
 import random
 import threading
 
-from PySide6.QtCore import Property, QObject, QThread, QUrl, Signal, Slot
+from PySide6.QtCore import (Property, QEasingCurve, QObject, QPropertyAnimation, QThread,
+                            QUrl, Signal, Slot)
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 
 from .config import Config
@@ -26,6 +27,12 @@ from .process import Cancelled, Timeout, run as run_process
 # gets better as the picture does. This variant is the sensible middle.
 LIVE_FORMAT = "93"
 MUSIC_FORMAT = "bestaudio"
+
+# Long enough to hear as a fade rather than a cut, short enough not to be a
+# wait before the video starts.
+FADE_MS = 1400
+
+REPEAT_OFF, REPEAT_ALL, REPEAT_ONE = 0, 1, 2
 
 
 class _Resolver(QThread):
@@ -98,7 +105,21 @@ class AudioPlayer(QObject):
         self._resume_at = 0
 
         self._shuffle = (db.get_state("music_shuffle", "0") == "1") if db else False
-        self._repeat = (db.get_state("music_repeat", "0") == "1") if db else False
+        # Off, the whole queue, or the one track. A queue that repeats and a
+        # track that repeats are different wants, and one switch cannot say
+        # which, so it cycles through all three.
+        stored_repeat = (db.get_state("music_repeat", "0") if db else "0") or "0"
+        self._repeat_mode = int(stored_repeat) if stored_repeat.isdigit() else 0
+        self._repeat_mode = max(0, min(2, self._repeat_mode))
+
+        # Volume is faded rather than cut, so a video starting does not chop
+        # the music off mid note.
+        self._fade = QPropertyAnimation(self._output, b"volume", self)
+        self._fade.setDuration(FADE_MS)
+        self._fade.setEasingCurve(QEasingCurve.Type.InOutQuad)
+        self._fade.finished.connect(self._on_fade_done)
+        self._pause_after_fade = False
+        self._level = self._output.volume()
         self._auto_pause = (db.get_state("music_autopause", "1") != "0") if db else True
 
     # ---- what QML reads --------------------------------------------------
@@ -131,13 +152,17 @@ class AudioPlayer(QObject):
         return int(self._player.duration() // 1000)
 
     def _get_volume(self) -> int:
-        return int(round(self._output.volume() * 100))
+        # What was asked for, not what a fade happens to be passing through.
+        return int(round(self._level * 100))
 
     def _get_shuffle(self) -> bool:
         return self._shuffle
 
-    def _get_repeat(self) -> bool:
-        return self._repeat
+    def _get_repeat(self) -> int:
+        return self._repeat_mode
+
+    def _get_repeat_label(self) -> str:
+        return ("Repeat", "Repeat all", "Repeat one")[self._repeat_mode]
 
     def _get_auto_pause(self) -> bool:
         return self._auto_pause
@@ -152,7 +177,7 @@ class AudioPlayer(QObject):
             return []
         place = self._order.index(self._at)
         following = self._order[place + 1:]
-        if self._repeat and not following:
+        if self._repeat_mode == REPEAT_ALL and not following:
             following = self._order[:place]
         return [{
             "title": self._queue[i].get("title", ""),
@@ -171,7 +196,8 @@ class AudioPlayer(QObject):
     length = Property(int, _get_length, notify=progressChanged)
     volume = Property(int, _get_volume, notify=stateChanged)
     shuffle = Property(bool, _get_shuffle, notify=stateChanged)
-    repeat = Property(bool, _get_repeat, notify=stateChanged)
+    repeat = Property(int, _get_repeat, notify=stateChanged)
+    repeatLabel = Property(str, _get_repeat_label, notify=stateChanged)
     autoPause = Property(bool, _get_auto_pause, notify=stateChanged)
     queueLength = Property(int, _get_queue_length, notify=trackChanged)
     upcoming = Property("QVariantList", _get_upcoming, notify=trackChanged)
@@ -234,6 +260,10 @@ class AudioPlayer(QObject):
     def _on_status(self, status) -> None:
         if status == QMediaPlayer.MediaStatus.EndOfMedia:
             self._recovering = False
+            if self._repeat_mode == REPEAT_ONE:
+                self._player.setPosition(0)
+                self._player.play()
+                return
             self.next()
         elif status == QMediaPlayer.MediaStatus.InvalidMedia:
             self._recover()
@@ -259,12 +289,18 @@ class AudioPlayer(QObject):
     @Slot()
     def toggle(self) -> None:
         if self._get_playing():
-            self._player.pause()
-        elif self._queue:
+            self._fade_to(0.0, pause_after=True)
+            return
+        if self._queue:
             if self._player.source().isEmpty():
                 self._start_current()
             else:
+                # Comes back up rather than arriving at full volume.
+                self._fade.stop()
+                self._pause_after_fade = False
+                self._output.setVolume(0.0)
                 self._player.play()
+                self._fade_to(self._level, pause_after=False)
         self.stateChanged.emit()
 
     @Slot(int)
@@ -282,7 +318,7 @@ class AudioPlayer(QObject):
         place = self._order.index(self._at) if self._at in self._order else -1
         if place + 1 < len(self._order):
             self._at = self._order[place + 1]
-        elif self._repeat:
+        elif self._repeat_mode == REPEAT_ALL:
             self._at = self._order[0]
         else:
             self._player.stop()
@@ -315,9 +351,28 @@ class AudioPlayer(QObject):
         enough to be worth a notch."""
         self.setVolume(self._get_volume() + steps * 5)
 
+    def _fade_to(self, level: float, pause_after: bool) -> None:
+        self._fade.stop()
+        self._pause_after_fade = pause_after
+        self._fade.setStartValue(self._output.volume())
+        self._fade.setEndValue(max(0.0, min(1.0, level)))
+        self._fade.start()
+
+    def _on_fade_done(self) -> None:
+        if self._pause_after_fade:
+            self._pause_after_fade = False
+            self._player.pause()
+            # Put the level back, so the next play starts where it should
+            # rather than silent.
+            self._output.setVolume(self._level)
+            self.stateChanged.emit()
+
     @Slot(int)
     def setVolume(self, value: int) -> None:
         value = max(0, min(100, int(value)))
+        self._fade.stop()
+        self._pause_after_fade = False
+        self._level = value / 100
         self._output.setVolume(value / 100)
         if self._db is not None:
             self._db.set_state("music_volume", str(value))
@@ -334,11 +389,18 @@ class AudioPlayer(QObject):
             self._order = [current] + [i for i in self._order if i != current]
         self.stateChanged.emit()
 
-    @Slot(bool)
-    def setRepeat(self, value: bool) -> None:
-        self._repeat = bool(value)
+    @Slot()
+    def cycleRepeat(self) -> None:
+        self._repeat_mode = (self._repeat_mode + 1) % 3
         if self._db is not None:
-            self._db.set_state("music_repeat", "1" if value else "0")
+            self._db.set_state("music_repeat", str(self._repeat_mode))
+        self.stateChanged.emit()
+
+    @Slot(int)
+    def setRepeat(self, mode: int) -> None:
+        self._repeat_mode = max(0, min(2, int(mode)))
+        if self._db is not None:
+            self._db.set_state("music_repeat", str(self._repeat_mode))
         self.stateChanged.emit()
 
     @Slot(bool)
@@ -359,10 +421,9 @@ class AudioPlayer(QObject):
 
     def pause_for_video(self) -> None:
         """Called when mpv starts something. Two things playing at once is
-        never what anyone wanted."""
+        never what anyone wanted, but neither is being cut off mid note."""
         if self._auto_pause and self._get_playing():
-            self._player.pause()
-            self.stateChanged.emit()
+            self._fade_to(0.0, pause_after=True)
 
     def shutdown(self) -> None:
         if self._resolver is not None and self._resolver.isRunning():

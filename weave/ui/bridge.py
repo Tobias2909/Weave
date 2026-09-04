@@ -84,6 +84,7 @@ class Bridge(QObject):
         self._tracks: TrackList | None = None
         self._source_details: list = []
         self._results_label = ""
+        self._autoplay_tracks = False
 
         self._busy = False
         self._problems: list[str] = []
@@ -266,7 +267,38 @@ class Bridge(QObject):
         return self._db.sources()
 
     def _get_shelves(self) -> list:
-        return list(self._shelves)
+        """In the order they were arranged, with anything new on the end."""
+        shelves = list(self._shelves)
+        saved = self._saved_shelf()
+        if saved["items"]:
+            shelves.insert(0, saved)
+
+        wanted = self._shelf_order()
+        if not wanted:
+            return shelves
+        known = {shelf["title"]: shelf for shelf in shelves}
+        ordered = [known.pop(title) for title in wanted if title in known]
+        ordered.extend(shelf for shelf in shelves if shelf["title"] in known)
+        return ordered
+
+    def _saved_shelf(self) -> dict:
+        """Saved addresses are a section like any other, so they can be moved
+        around with the rest rather than being pinned to the top for ever."""
+        return {"title": "Saved", "kind": "saved", "items": [{
+            "title": row["label"], "subtitle": "live" if row["live"] else "",
+            "videoId": "", "playlistId": "", "sourceId": row["id"],
+            "thumbnail": qml_source(row["thumbnail"]),
+        } for row in self._db.sources()]}
+
+    def _shelf_order(self) -> list:
+        stored = self._db.get_state("music_shelf_order")
+        if not stored:
+            return []
+        try:
+            order = json.loads(stored)
+        except ValueError:
+            return []
+        return [str(title) for title in order] if isinstance(order, list) else []
 
     def _get_results_label(self) -> str:
         return self._results_label
@@ -546,6 +578,26 @@ class Bridge(QObject):
             lambda message: self._set_status(f"could not load the shelves, {message}"))
         self._home.start()
 
+    @Slot(str, int)
+    def moveShelf(self, title: str, direction: int) -> None:
+        """Shift one section up or down. Kept by name, so it survives the
+        shelves themselves changing."""
+        titles = [shelf["title"] for shelf in self._get_shelves()]
+        if title not in titles:
+            return
+        at = titles.index(title)
+        to = max(0, min(len(titles) - 1, at + (1 if direction > 0 else -1)))
+        if to == at:
+            return
+        titles.insert(to, titles.pop(at))
+        self._db.set_state("music_shelf_order", json.dumps(titles))
+        self.musicChanged.emit()
+
+    @Slot()
+    def resetShelfOrder(self) -> None:
+        self._db.set_state("music_shelf_order", "")
+        self.musicChanged.emit()
+
     @Slot()
     def clearResults(self) -> None:
         self._results = []
@@ -564,23 +616,33 @@ class Bridge(QObject):
             item = self._shelves[shelf_index]["items"][item_index]
         except (IndexError, KeyError, TypeError):
             return
-        # A song carries both its own id and the id of the radio built from
-        # it, so the song has to win. Checking the playlist first tried to open
-        # a radio as a playlist and quietly did nothing.
-        if not item.get("videoId") and item.get("playlistId"):
-            self._start_tracks(TrackList(self._cfg, "playlist", item["playlistId"],
+        video = item.get("videoId")
+        playlist = item.get("playlistId")
+
+        # A song carries both its own id and the id of the station built from
+        # it. Pressing it plays that song and then things like it, which is
+        # what the music application does, so the station is what to fetch.
+        if video and playlist:
+            self._start_tracks(TrackList(self._cfg, TrackList.RADIO, video,
+                                         item.get("title", ""), self), autoplay=True)
+            return
+        # A playlist is opened to look at. Nothing starts until something in it
+        # is chosen.
+        if playlist:
+            self._start_tracks(TrackList(self._cfg, "playlist", playlist,
                                          item.get("title", ""), self))
             return
-        if item.get("videoId") and self._audio:
+        if video and self._audio:
             self._audio.play_items([{
-                "key": f"yt:{item['videoId']}", "title": item.get("title", ""),
+                "key": f"yt:{video}", "title": item.get("title", ""),
                 "artist": item.get("subtitle", ""), "thumbnail": item.get("thumbnail", ""),
-                "live": False, "url": ids.watch_url("youtube", item["videoId"]),
+                "live": False, "url": ids.watch_url("youtube", video),
             }])
 
-    def _start_tracks(self, worker: TrackList) -> None:
+    def _start_tracks(self, worker: TrackList, autoplay: bool = False) -> None:
         if self._tracks is not None and self._tracks.isRunning():
             return
+        self._autoplay_tracks = autoplay
         self._searching = True
         self.musicChanged.emit()
         self._tracks = worker
@@ -604,7 +666,8 @@ class Bridge(QObject):
         self._results = rows
         self._results_label = label
         self.musicChanged.emit()
-        if rows:
+        # Only a station starts on its own. A list is opened to look at.
+        if rows and self._autoplay_tracks:
             self.playResult(0)
 
     @Slot(str)

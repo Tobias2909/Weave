@@ -662,17 +662,24 @@ class TrackList(QThread):
     def cancel(self) -> None:
         self._cancel.set()
 
+    RADIO = "radio"
+
     def run(self) -> None:
         if self._what == self.LIKED:
             self._liked()
+        elif self._what == self.RADIO:
+            self._radio()
         else:
             self._playlist()
 
-    def _playlist(self) -> None:
+    def _radio(self) -> None:
+        """A station built from one song, which is what a recently played tile
+        stands for. The song itself comes back first, with things like it after
+        it, which is what pressing one in the music application does."""
         from .sources import ytmusic
 
         try:
-            found = ytmusic.playlist_tracks(self._cfg.browser_profile_path, self._playlist_id)
+            found = ytmusic.radio(self._cfg.browser_profile_path, self._playlist_id)
         except ytmusic.MusicError as exc:
             self.failed.emit(str(exc))
             return
@@ -680,6 +687,25 @@ class TrackList(QThread):
             "key": t.key, "videoId": t.video_id, "title": t.title, "artist": t.artist,
             "album": t.album, "duration": t.duration, "thumbnail": qml_source(t.thumbnail_url),
         } for t in found], self._label)
+
+    def _playlist(self) -> None:
+        from .sources import ytmusic
+
+        try:
+            found, offered = ytmusic.playlist_tracks(self._cfg.browser_profile_path,
+                                                     self._playlist_id)
+        except ytmusic.MusicError as exc:
+            self.failed.emit(str(exc))
+            return
+        label = self._label
+        if offered and len(found) < offered:
+            # Otherwise a playlist of mostly removed videos looks like a
+            # failure rather than what it is.
+            label = f"{label}, {len(found)} of {offered} still playable"
+        self.tracks.emit([{
+            "key": t.key, "videoId": t.video_id, "title": t.title, "artist": t.artist,
+            "album": t.album, "duration": t.duration, "thumbnail": qml_source(t.thumbnail_url),
+        } for t in found], label)
 
     def _liked(self) -> None:
         """Liked music, which is a playlist like any other."""

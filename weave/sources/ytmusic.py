@@ -204,7 +204,15 @@ def playlists(profile_path: str, limit: int = 40) -> list[dict]:
             for p in found or [] if p.get("playlistId")]
 
 
-def playlist_tracks(profile_path: str, playlist_id: str, limit: int = 200) -> list[Track]:
+def playlist_tracks(profile_path: str, playlist_id: str,
+                    limit: int = 200) -> tuple[list[Track], int]:
+    """The playable tracks, and how many were offered.
+
+    A playlist can be mostly dead. One here lists three and a half thousand
+    entries of which fewer than a dozen still exist, and an entry that has gone
+    carries no video id at all, so the two numbers are worth reporting rather
+    than leaving it looking as though the fetch failed.
+    """
     try:
         if playlist_id == "LIKED":
             found = client(profile_path).get_liked_songs(limit=limit)
@@ -214,7 +222,8 @@ def playlist_tracks(profile_path: str, playlist_id: str, limit: int = 200) -> li
         raise
     except Exception as exc:                                        # noqa: BLE001
         raise MusicError(f"{type(exc).__name__}: {exc}") from exc
-    return to_tracks((found or {}).get("tracks") or [])
+    offered = (found or {}).get("tracks") or []
+    return to_tracks(offered), len(offered)
 
 
 def radio(profile_path: str, video_id: str, limit: int = 40) -> list[Track]:

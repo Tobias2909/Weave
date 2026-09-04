@@ -43,7 +43,7 @@ class Upcoming(unittest.TestCase):
     def setUp(self):
         self.player = AudioPlayer(Config(raw={}))
         self.player.setShuffle(False)
-        self.player.setRepeat(False)
+        self.player.setRepeat(0)
         # Queued without starting, since starting would resolve an address.
         self.player._queue = [track(name) for name in ("aaa", "bbb", "ccc", "ddd")]
         self.player._rebuild_order()
@@ -58,7 +58,7 @@ class Upcoming(unittest.TestCase):
 
     def test_repeat_wraps_round_at_the_end(self):
         self.player._at = 3
-        self.player.setRepeat(True)
+        self.player.setRepeat(1)
         self.assertEqual([t["title"] for t in self.player.upcoming], ["aaa", "bbb", "ccc"])
 
     def test_it_follows_the_play_order_not_the_queue(self):
@@ -142,3 +142,89 @@ class Recovery(unittest.TestCase):
     def test_nothing_playing_is_not_recovered(self):
         self.player._at = -1
         self.assertFalse(self.player._recover())
+
+
+class Repeat(unittest.TestCase):
+    """Three states, because repeating a queue and repeating a track are
+    different wants and one switch cannot say which."""
+
+    def setUp(self):
+        self.player = AudioPlayer(Config(raw={}))
+        self.player.setRepeat(0)
+        self.player._queue = [track(name) for name in ("aaa", "bbb")]
+        self.player._rebuild_order()
+        self.player._at = 0
+
+    def test_it_cycles(self):
+        self.assertEqual(self.player.repeat, 0)
+        self.player.cycleRepeat()
+        self.assertEqual(self.player.repeat, 1)
+        self.player.cycleRepeat()
+        self.assertEqual(self.player.repeat, 2)
+        self.player.cycleRepeat()
+        self.assertEqual(self.player.repeat, 0)
+
+    def test_each_state_is_named(self):
+        names = []
+        for _ in range(3):
+            names.append(self.player.repeatLabel)
+            self.player.cycleRepeat()
+        self.assertEqual(names, ["Repeat", "Repeat all", "Repeat one"])
+
+    def test_out_of_range_is_clamped(self):
+        self.player.setRepeat(9)
+        self.assertEqual(self.player.repeat, 2)
+        self.player.setRepeat(-4)
+        self.assertEqual(self.player.repeat, 0)
+
+    def test_repeating_one_does_not_advance_at_the_end(self):
+        from PySide6.QtMultimedia import QMediaPlayer
+
+        moved = []
+        self.player.next = lambda: moved.append(True)
+        self.player.setRepeat(2)
+        self.player._on_status(QMediaPlayer.MediaStatus.EndOfMedia)
+        self.assertEqual(moved, [])
+        self.assertEqual(self.player._at, 0)
+
+    def test_repeating_the_queue_does_advance(self):
+        from PySide6.QtMultimedia import QMediaPlayer
+
+        moved = []
+        self.player.next = lambda: moved.append(True)
+        self.player.setRepeat(1)
+        self.player._on_status(QMediaPlayer.MediaStatus.EndOfMedia)
+        self.assertEqual(moved, [True])
+
+    def test_only_the_whole_queue_setting_wraps_what_is_coming(self):
+        self.player._at = 1
+        self.player.setRepeat(2)
+        self.assertEqual(self.player.upcoming, [])
+        self.player.setRepeat(1)
+        self.assertEqual([t["title"] for t in self.player.upcoming], ["aaa"])
+
+
+class Fading(unittest.TestCase):
+    def setUp(self):
+        self.player = AudioPlayer(Config(raw={}))
+        self.player.setVolume(60)
+
+    def test_the_reported_volume_is_what_was_asked_for(self):
+        # Not whatever level a fade happens to be passing through.
+        self.player._output.setVolume(0.02)
+        self.assertEqual(self.player.volume, 60)
+
+    def test_pausing_for_a_video_fades_rather_than_cuts(self):
+        self.player._queue = [track("aaa")]
+        self.player._rebuild_order()
+        self.player._at = 0
+        self.player._get_playing = lambda: True
+        self.player.pause_for_video()
+        self.assertTrue(self.player._fade.state() != self.player._fade.State.Stopped
+                        or self.player._pause_after_fade)
+
+    def test_setting_the_volume_stops_a_fade(self):
+        self.player._fade_to(0.0, pause_after=True)
+        self.player.setVolume(30)
+        self.assertFalse(self.player._pause_after_fade)
+        self.assertEqual(self.player.volume, 30)
