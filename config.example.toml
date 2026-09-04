@@ -30,7 +30,11 @@ live_interval_s = 90
 # One global throttle sits in front of every outbound request, so no feature
 # can burst even by accident.
 max_concurrency = 4
-min_request_interval_ms = 250
+min_request_interval_ms = 220
+# The feed endpoint answers a large burst with a refusal rather than a wait
+# request, so a round asks about the stalest few hundred feeds and the rest
+# wait for the next round. Raising this brings the refusals back.
+channels_per_cycle = 80
 
 [watched]
 # Fraction of the duration that counts as watched. Reaching the end always

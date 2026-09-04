@@ -249,7 +249,8 @@ class Database:
             "SELECT ext_id FROM channels WHERE platform=? AND "
             "(avatar_url IS NULL OR avatar_url = '')", (platform,))]
 
-    def channels_due(self, interval_s: int, platform: str = "youtube") -> list[sqlite3.Row]:
+    def channels_due(self, interval_s: int, platform: str = "youtube",
+                     limit: int | None = None) -> list[sqlite3.Row]:
         """Channels whose last poll is older than the interval.
 
         With several hundred channels a full sweep every cycle is a thundering
@@ -262,8 +263,9 @@ class Database:
             # channel is due rather than none of them.
             "SELECT * FROM channels WHERE platform=? "
             "AND (last_polled_at IS NULL OR last_polled_at <= ?) "
-            "ORDER BY last_polled_at IS NOT NULL, last_polled_at",
-            (platform, cutoff),
+            "ORDER BY last_polled_at IS NOT NULL, last_polled_at "
+            "LIMIT ?",
+            (platform, cutoff, limit if limit is not None else -1),
         ))
 
     def remove_channel(self, key: str) -> None:

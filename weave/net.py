@@ -92,7 +92,10 @@ class Fetcher:
             if response is not None:
                 if response.status_code == 200:
                     return response.content
-                if response.status_code not in (429, 500, 502, 503, 504):
+                # A four hundred and four is included on purpose. This host
+                # answers a burst with one rather than with a busy signal, and
+                # the same address succeeds moments later.
+                if response.status_code not in (404, 429, 500, 502, 503, 504):
                     raise HttpError(response.status_code, url)
                 last = HttpError(response.status_code, url)
                 retry_after = response.headers.get("Retry-After")

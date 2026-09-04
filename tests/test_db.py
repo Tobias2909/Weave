@@ -36,6 +36,21 @@ class Channels(DatabaseCase):
         self.assertEqual(len(self.db.channels_due(900)), 0)   # just polled
         self.assertEqual(len(self.db.channels_due(0)), 1)     # everything is due
 
+    def test_only_a_slice_is_taken_at_a_time(self):
+        # Asking about several hundred feeds at once is what provokes the
+        # endpoint into refusing, so a round takes the stalest few.
+        for n in range(10):
+            self.db.add_channel(f"yt:UC{n}", "youtube", f"UC{n}")
+        self.assertEqual(len(self.db.channels_due(0, limit=4)), 4)
+        self.assertEqual(len(self.db.channels_due(0)), 10)
+
+    def test_the_stalest_are_taken_first(self):
+        self.db.add_channel("yt:UCa", "youtube", "UCa")
+        self.db.add_channel("yt:UCb", "youtube", "UCb")
+        self.db.mark_polled("yt:UCa")
+        first = self.db.channels_due(0, limit=1)[0]["key"]
+        self.assertEqual(first, "yt:UCb")
+
     def test_knows_whether_a_channel_ever_produced_a_video(self):
         # This is what separates a broken feed from a channel that is simply
         # empty, of which a large subscription list has plenty.

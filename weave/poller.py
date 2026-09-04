@@ -77,13 +77,18 @@ class FeedPoller(QThread):
     # ---- phase 1 ---------------------------------------------------------
 
     def _phase_rss(self, fetcher: Fetcher) -> tuple[int, int, int]:
-        channels = (self._db.channels(platform="youtube") if self._force_all
-                    else self._db.channels_due(self._cfg.feed_interval_s))
+        # Even a deliberate refresh takes a slice rather than everything. The
+        # stalest go first, so the whole list comes round within a few rounds,
+        # and nothing asks for several hundred feeds at once.
+        per_round = self._cfg.channels_per_cycle
+        channels = self._db.channels_due(0 if self._force_all else self._cfg.feed_interval_s,
+                                         limit=per_round)
         total = len(channels)
         if not total:
             return 0, 0, 0
 
         touched = failures = done = 0
+        refused: list[str] = []
         with ThreadPoolExecutor(max_workers=self._cfg.max_concurrency) as pool:
             futures = {pool.submit(rss.fetch, fetcher, row["ext_id"]): row["key"]
                        for row in channels}
@@ -103,7 +108,10 @@ class FeedPoller(QThread):
                     failures += 1
                     message = f"{type(exc).__name__}: {exc}"
                     self._db.mark_polled(key, message)
-                    self.failure.emit(key, message)
+                    # Not one report per channel. The endpoint answers a burst
+                    # with a refusal per channel, and a few hundred of those
+                    # say one thing, not a few hundred things.
+                    refused.append(key)
                 else:
                     touched += self._db.upsert_videos(result.videos)
                     if result.channel_title:
@@ -119,6 +127,13 @@ class FeedPoller(QThread):
                         self.failure.emit(key, "returned no entries")
                 done += 1
                 self.progress.emit("feeds", done, total)
+
+        if refused:
+            self.failure.emit(
+                "feeds",
+                f"{len(refused)} of {total} channels did not answer. The feed endpoint "
+                f"replies to a burst with a refusal rather than saying it is busy, so "
+                f"this usually clears on its own")
         return total, touched, failures
 
     # ---- phase 2 ---------------------------------------------------------

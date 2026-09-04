@@ -31,8 +31,15 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         # whatever the concurrency is. At 100 ms, several hundred channels take
         # under a minute, which is fine off the interface thread. Raising the
         # gap makes a large subscription list crawl.
-        "max_concurrency": 8,
-        "min_request_interval_ms": 100,
+        # Gentler than it was. The feed endpoint pushes back on a burst by
+        # answering 404 or 500 rather than saying it is busy, which looks like
+        # a few hundred channels having vanished.
+        "max_concurrency": 4,
+        "min_request_interval_ms": 220,
+        # How many channels one round asks about. Several hundred at once is
+        # what provokes the pushback, and the stalest go first, so everything
+        # comes round within a few rounds anyway.
+        "channels_per_cycle": 80,
         # How deep the subscriptions sweep goes when filling in durations.
         # It paginates at roughly 77 ids a second, so a thousand costs about
         # thirteen seconds and covers far more than what is on screen.
@@ -149,6 +156,10 @@ class Config:
     @property
     def watch_later_dir(self) -> str:
         return str(self.get("player", "watch_later_dir"))
+
+    @property
+    def channels_per_cycle(self) -> int:
+        return max(1, int(self.get("poll", "channels_per_cycle")))
 
     @property
     def sweep_limit(self) -> int:
