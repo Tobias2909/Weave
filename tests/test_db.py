@@ -725,6 +725,47 @@ class Playlists(DatabaseCase):
         row = self.db.playlist_items("PL1")[0]
         self.assertEqual((row["channel_title"], row["channel_key"]), ("Real name", "yt:UC9"))
 
+    def test_the_order_can_be_changed_by_hand(self):
+        self.db.replace_playlists([{"ext_id": "PL1", "title": "One"},
+                                   {"ext_id": "PL2", "title": "Two"},
+                                   {"ext_id": "PL3", "title": "Three"}])
+        order = lambda: [p["ext_id"] for p in self.db.playlists()]
+        self.assertTrue(self.db.move_playlist("PL3", -1))
+        self.assertEqual(order(), ["PL1", "PL3", "PL2"])
+        self.assertTrue(self.db.move_playlist("PL3", 1))
+        self.assertEqual(order(), ["PL1", "PL2", "PL3"])
+
+    def test_moving_past_either_end_is_not_a_move(self):
+        self.db.replace_playlists([{"ext_id": "PL1", "title": "One"},
+                                   {"ext_id": "PL2", "title": "Two"}])
+        self.assertFalse(self.db.move_playlist("PL1", -1))
+        self.assertFalse(self.db.move_playlist("PL2", 1))
+        self.assertFalse(self.db.move_playlist("nope", 1))
+
+    def test_reading_the_list_again_keeps_the_order_chosen_here(self):
+        # A refresh is not a reason to undo an order somebody set.
+        self.db.replace_playlists([{"ext_id": "PL1", "title": "One"},
+                                   {"ext_id": "PL2", "title": "Two"}])
+        self.db.move_playlist("PL2", -1)
+        self.db.replace_playlists([{"ext_id": "PL1", "title": "One"},
+                                   {"ext_id": "PL2", "title": "Two"}])
+        self.assertEqual([p["ext_id"] for p in self.db.playlists()], ["PL2", "PL1"])
+
+    def test_a_new_playlist_goes_on_the_end(self):
+        self.db.replace_playlists([{"ext_id": "PL1", "title": "One"}])
+        self.db.replace_playlists([{"ext_id": "PL9", "title": "New"},
+                                   {"ext_id": "PL1", "title": "One"}])
+        self.assertEqual([p["ext_id"] for p in self.db.playlists()], ["PL1", "PL9"])
+
+    def test_a_hidden_one_moves_with_the_rest(self):
+        # It is out of sight, not out of the order.
+        self.db.replace_playlists([{"ext_id": "PL1", "title": "One"},
+                                   {"ext_id": "PL2", "title": "Two"}])
+        self.db.set_playlist_hidden("PL1", True)
+        self.assertTrue(self.db.move_playlist("PL2", -1))
+        self.assertEqual([p["ext_id"] for p in self.db.playlists(include_hidden=True)],
+                         ["PL2", "PL1"])
+
     def test_reading_the_contents_is_stamped(self):
         self.db.replace_playlists([{"ext_id": "PL1", "title": "One"}])
         self.assertIsNone(self.db.playlist("PL1")["items_at"])

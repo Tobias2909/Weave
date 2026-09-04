@@ -922,6 +922,8 @@ ApplicationWindow {
         // model to be seen.
         property var away: ({})
 
+        // Also called after a move, so the rows redraw in the new order
+        // without the list being rebuilt underneath the pointer by a binding.
         function reload() {
             all = App.allPlaylists
             var map = {}
@@ -1030,18 +1032,47 @@ ApplicationWindow {
 
                     Label {
                         id: countLabel
-                        anchors.right: parent.right
-                        anchors.rightMargin: 4
+                        anchors.right: order.left
+                        anchors.rightMargin: 10
                         anchors.verticalCenter: parent.verticalCenter
                         text: entry.modelData.items ? entry.modelData.items + " videos" : ""
                         color: Theme.colors.textMuted
                         font.pixelSize: 11
                     }
 
-                    // The whole row is the target, not just the box.
+                    // The order here is the order in the sidebar. Reading the
+                    // list again keeps whatever was chosen here, so this is
+                    // not undone by a refresh.
+                    Row {
+                        id: order
+                        anchors.right: parent.right
+                        anchors.rightMargin: 2
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 2
+
+                        FlatButton {
+                            text: "\u25b2"
+                            onClicked: {
+                                App.movePlaylist(entry.modelData.ext_id, -1)
+                                playlistChooser.reload()
+                            }
+                        }
+                        FlatButton {
+                            text: "\u25bc"
+                            onClicked: {
+                                App.movePlaylist(entry.modelData.ext_id, 1)
+                                playlistChooser.reload()
+                            }
+                        }
+                    }
+
+                    // The whole row is the target, not just the box, but not
+                    // the arrows, which do their own thing.
                     MouseArea {
-                        anchors.fill: parent
-                        anchors.leftMargin: box.width
+                        anchors.left: box.right
+                        anchors.right: countLabel.right
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
                         onClicked: playlistChooser.toggle(
                                        entry.modelData.ext_id,
                                        !playlistChooser.away[entry.modelData.ext_id])

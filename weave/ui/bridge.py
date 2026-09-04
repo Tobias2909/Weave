@@ -751,6 +751,11 @@ class Bridge(QObject):
         if playlist_id:
             self._set_view(PLAYLIST, -1, "", playlist_id)
 
+    @Slot(str, int)
+    def movePlaylist(self, playlist_id: str, delta: int) -> None:
+        if self._db.move_playlist(playlist_id, delta):
+            self.playlistsChanged.emit()
+
     @Slot(str, bool)
     def setPlaylistHidden(self, playlist_id: str, hidden: bool) -> None:
         self._db.set_playlist_hidden(playlist_id, hidden)

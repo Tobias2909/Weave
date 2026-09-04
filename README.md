@@ -142,7 +142,9 @@ A long list of playlists would bury everything under it, so the section sits at
 the bottom of the sidebar and each playlist can be hidden on its own. Right
 click one to put it away, or open **Choose which to show** from the section
 menu for a filterable list of all of them, with a button to show or hide the
-lot. Hiding is not forgetting. A hidden
+lot and arrows to put them in the order you want. That order is yours, so
+reading the list again keeps it and only puts genuinely new playlists on the
+end. Hiding is not forgetting. A hidden
 playlist keeps its contents and comes back the moment it is shown again.
 
 A playlist keeps the order it was given rather than being sorted by date, since
@@ -274,7 +276,7 @@ no likes to go and fetch.
 Starting a playlist puts the whole playlist in the player. Moving to the next
 track leaves the last one behind in the list rather than dropping it, so the
 queue is the queue and you can go back to something you have already heard.
-The one playing is marked, and any row can be jumped to.
+The one playing says so, and any row can be jumped to.
 
 Pausing fades out over about a second rather than cutting. The volume stays
 down while it is paused and is raised again by whatever starts it playing,

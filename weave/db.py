@@ -1039,21 +1039,55 @@ class Database:
 
     def replace_playlists(self, rows: list[dict]) -> int:
         """Swap in the current list. One that is gone from YouTube is gone from
-        here, and its contents go with it through the foreign key."""
+        here, and its contents go with it through the foreign key.
+
+        A playlist that is already known keeps the place it has, since that
+        place may have been chosen by hand and reading the list again is not a
+        reason to undo that. New ones go on the end, in the order they came.
+        """
         now = int(time.time())
         with self.conn as conn:
             keep = [row["ext_id"] for row in rows]
             marks = ",".join("?" * len(keep)) or "''"
             conn.execute(f"DELETE FROM playlists WHERE ext_id NOT IN ({marks})", keep)
+            known = {row["ext_id"]: row["position"] for row in
+                     conn.execute("SELECT ext_id, position FROM playlists")}
+            next_place = max(known.values(), default=-1) + 1
+            payload = []
+            for row in rows:
+                place = known.get(row["ext_id"])
+                if place is None:
+                    place = next_place
+                    next_place += 1
+                payload.append((row["ext_id"], row["title"], place, now))
             conn.executemany(
                 "INSERT INTO playlists(ext_id, title, position, seen_at) VALUES(?,?,?,?) "
                 "ON CONFLICT(ext_id) DO UPDATE SET title=excluded.title, "
                 "  position=excluded.position, seen_at=excluded.seen_at",
-                [(row["ext_id"], row["title"], index, now)
-                 for index, row in enumerate(rows)],
+                payload,
             )
         self.set_state("playlists_at", str(now))
         return len(rows)
+
+    def move_playlist(self, playlist_id: str, delta: int) -> bool:
+        """Shift a playlist one place in the sidebar.
+
+        Positions are rewritten from the resulting order rather than swapped,
+        so a list left with gaps by a deletion comes out consecutive either
+        way. Hidden ones move with the rest, since they are only out of sight.
+        """
+        order = [row["ext_id"] for row in self.playlists(include_hidden=True)]
+        if playlist_id not in order:
+            return False
+        was = order.index(playlist_id)
+        now = max(0, min(len(order) - 1, was + delta))
+        if now == was:
+            return False
+        order.insert(now, order.pop(was))
+        with self.conn as conn:
+            conn.executemany("UPDATE playlists SET position=? WHERE ext_id=?",
+                             list(enumerate(order)))
+        return True
 
     def playlists(self, include_hidden: bool = False) -> list[dict]:
         """The playlists, hidden ones left out unless asked for.

@@ -79,6 +79,7 @@ Rectangle {
 
     Popup {
         id: upNext
+        objectName: "upNext"
         y: -height - 8
         x: parent.width - width - 12
         width: 340
@@ -106,6 +107,11 @@ Rectangle {
 
             ListView {
                 id: queued
+                objectName: "queuedList"
+                // Handed to the rows, because a delegate is built in its own
+                // scope and cannot see an id declared out here. Reaching for
+                // one raises a reference error and the row does nothing.
+                property var owner: upNext
                 width: parent.width
                 height: parent.height - 22
                 clip: true
@@ -132,7 +138,7 @@ Rectangle {
                         anchors.fill: parent
                         onClicked: {
                             Audio.jumpTo(queuedRow.modelData.at)
-                            upNext.close()
+                            queuedRow.ListView.view.owner.close()
                         }
                     }
 
@@ -163,10 +169,18 @@ Rectangle {
                         }
                         Label {
                             width: parent.width
-                            visible: (modelData.artist || "") !== ""
-                            text: modelData.artist
-                            color: Theme.colors.textMuted
+                            visible: (modelData.artist || "") !== "" || modelData.current
+                            // The one playing says so, since the list holds
+                            // what has been played as well as what has not.
+                            text: modelData.current
+                                  ? ("Playing now"
+                                     + ((modelData.artist || "") !== ""
+                                        ? "  ·  " + modelData.artist : ""))
+                                  : modelData.artist
+                            color: modelData.current ? Theme.colors.accent
+                                                     : Theme.colors.textMuted
                             font.pixelSize: 10
+                            font.weight: modelData.current ? Font.DemiBold : Font.Normal
                             elide: Text.ElideRight
                         }
                     }
