@@ -165,8 +165,8 @@ class Bridge(QObject):
         if not counts["channels"]:
             return "Nothing here yet.\nAdd a channel above, then press Refresh."
         if self._view_kind == GROUP:
-            return ("This group has nothing to show.\n"
-                    "Put channels in it with the group subcommands.")
+            return ("This group has no channels in it yet.\n"
+                    "Right click a video, or use the Groups button on a channel page.")
         if not len(self._db.channels(platform="youtube")):
             return ("Only Twitch channels are tracked so far.\n"
                     "Twitch appears in the live bar, which is not built yet, so it "
@@ -475,6 +475,65 @@ class Bridge(QObject):
     @Slot(str, result="QVariantList")
     def boxesHolding(self, video_key: str) -> list:
         return self._db.boxes_holding(video_key)
+
+    # ---- groups ----------------------------------------------------------
+    # A group is the channel level twin of a box. Everything below mirrors the
+    # box slots above, because from the interface the two are the same idea
+    # applied to different things.
+
+    @Slot(str, result=int)
+    def createGroup(self, name: str) -> int:
+        name = (name or "").strip()
+        if not name:
+            return -1
+        group_id = self._db.create_group(name)
+        self.groupsChanged.emit()
+        self._set_status(f"group {name} is ready")
+        return group_id
+
+    @Slot(int, str)
+    def renameGroup(self, group_id: int, name: str) -> None:
+        if not (name or "").strip():
+            return
+        self._db.rename_group(group_id, name)
+        self.groupsChanged.emit()
+        self.viewChanged.emit()
+
+    @Slot(int)
+    def deleteGroup(self, group_id: int) -> None:
+        self._db.delete_group(group_id)
+        # Deleting a group keeps its channels, so falling back to All shows
+        # everything that was in it rather than an empty page.
+        if self._view_kind == GROUP and self._view_id == group_id:
+            self._set_view(ALL, -1)
+        self.groupsChanged.emit()
+
+    @Slot(int, int)
+    def moveGroup(self, group_id: int, delta: int) -> None:
+        if self._db.move_group(group_id, delta):
+            self.groupsChanged.emit()
+
+    @Slot(int, str)
+    def addChannelToGroup(self, group_id: int, channel_key: str) -> None:
+        if not channel_key:
+            return
+        self._db.add_to_group(group_id, channel_key)
+        self.groupsChanged.emit()
+        if self._view_kind == GROUP:
+            self.reload()
+
+    @Slot(int, str)
+    def removeChannelFromGroup(self, group_id: int, channel_key: str) -> None:
+        if not channel_key:
+            return
+        self._db.remove_from_group(group_id, channel_key)
+        self.groupsChanged.emit()
+        if self._view_kind == GROUP:
+            self.reload()
+
+    @Slot(str, result="QVariantList")
+    def groupsHolding(self, channel_key: str) -> list:
+        return self._db.groups_holding(channel_key)
 
     # ---- actions ---------------------------------------------------------
 

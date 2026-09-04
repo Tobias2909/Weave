@@ -274,6 +274,44 @@ class Groups(DatabaseCase):
         self.assertEqual(self.db.groups()[0]["unwatched"], 1)
         self.assertEqual(self.db.unwatched_total(), 1)
 
+    def test_which_groups_hold_a_channel(self):
+        # What the tick beside each entry in the channel menu reads.
+        second = self.db.create_group("Second")
+        self.db.add_to_group(self.group, "yt:UC1")
+        self.assertEqual(self.db.groups_holding("yt:UC1"), [self.group])
+        self.db.add_to_group(second, "yt:UC1")
+        self.assertEqual(sorted(self.db.groups_holding("yt:UC1")), sorted([self.group, second]))
+        self.db.remove_from_group(self.group, "yt:UC1")
+        self.assertEqual(self.db.groups_holding("yt:UC1"), [second])
+
+    def test_a_channel_can_be_in_several_groups(self):
+        second = self.db.create_group("Second")
+        self.db.add_to_group(self.group, "yt:UC1")
+        self.db.add_to_group(second, "yt:UC1")
+        self.assertEqual([g["members"] for g in self.db.groups()], [1, 1])
+
+    def test_adding_the_same_channel_twice_changes_nothing(self):
+        self.db.add_to_group(self.group, "yt:UC1")
+        self.db.add_to_group(self.group, "yt:UC1")
+        self.assertEqual(self.db.groups()[0]["members"], 1)
+
+    def test_moving_a_group_up_and_down(self):
+        second = self.db.create_group("Second")
+        third = self.db.create_group("Third")
+        order = lambda: [g["id"] for g in self.db.groups()]
+        self.assertEqual(order(), [self.group, second, third])
+        self.assertTrue(self.db.move_group(third, -1))
+        self.assertEqual(order(), [self.group, third, second])
+        self.assertTrue(self.db.move_group(third, 1))
+        self.assertEqual(order(), [self.group, second, third])
+
+    def test_moving_past_either_end_is_not_a_move(self):
+        second = self.db.create_group("Second")
+        self.assertFalse(self.db.move_group(self.group, -1))
+        self.assertFalse(self.db.move_group(second, 1))
+        self.assertFalse(self.db.move_group(9999, 1))
+        self.assertEqual([g["id"] for g in self.db.groups()], [self.group, second])
+
     def test_deleting_a_group_keeps_the_channels(self):
         self.db.add_to_group(self.group, "yt:UC1")
         self.db.delete_group(self.group)

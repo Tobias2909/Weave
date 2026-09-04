@@ -8,6 +8,7 @@ Item {
     id: header
     property var info: ({})
     signal closeRequested()
+    signal groupsRequested()
 
     height: visible ? 168 : 0
 
@@ -93,12 +94,20 @@ Item {
             }
         }
 
-        FlatButton {
+        Row {
             anchors.right: parent.right
             anchors.top: parent.top
             anchors.margins: 12
-            text: "Back to the feed"
-            onClicked: header.closeRequested()
+            spacing: 8
+
+            FlatButton {
+                text: "Groups"
+                onClicked: header.groupsRequested()
+            }
+            FlatButton {
+                text: "Back to the feed"
+                onClicked: header.closeRequested()
+            }
         }
 
         Rectangle {

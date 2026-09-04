@@ -337,18 +337,32 @@ Twitch channels are accepted but add no rows to the feed yet. They belong to the
 live bar, which is a later milestone.
 
 Sort channels into groups. A group can hold both YouTube and Twitch channels,
-and a channel can be in as many groups as you like.
+and a channel can be in as many groups as you like. Selecting one shows only
+the videos from the channels in it, and **All** at the top is every channel you
+track.
+
+Groups are made in the window. The plus beside **Channels** makes one, right
+clicking a group renames it, moves it or deletes it, and either the **Groups**
+button on a channel page or the **Groups for this channel** entry in a video's
+right click menu files a channel into one. That menu ticks the groups the
+channel is already in, so the same entry both files and unfiles.
+
+Deleting a group keeps its channels, exactly as deleting a box keeps its
+videos.
+
+The same thing from the command line.
 
 ```sh
 python -m weave group create Gaming
 python -m weave group add Gaming yt:UCabcdefghijklmnopqrstuv twitch:somechannel
 python -m weave group list
-python -m weave group remove Gaming twitch:somechannel
-python -m weave group delete Gaming
+python -m weave group rename Gaming Games
+python -m weave group remove Games twitch:somechannel
+python -m weave group delete Games
 ```
 
 A group collects whole channels. A box collects individual videos. Both show up
-in the list down the left.
+in the list down the left and both are managed the same way.
 
 Collect individual videos into a box. A box takes a video key, a bare id or any
 watch URL.

@@ -211,6 +211,11 @@ def _cmd_group(args) -> int:
         print(f"no group named {args.name!r}", file=sys.stderr)
         return 1
 
+    if args.action == "rename":
+        db.rename_group(group_id, args.new_name)
+        print(f"group {args.name} is now {args.new_name}")
+        return 0
+
     if args.action == "delete":
         db.delete_group(group_id)
         print(f"deleted group {args.name}")
@@ -562,6 +567,9 @@ def main() -> int:
     group_actions.add_parser("list", help="show groups and their channels")
     created = group_actions.add_parser("create", help="make a new group")
     created.add_argument("name")
+    group_renamed = group_actions.add_parser("rename", help="change a group name")
+    group_renamed.add_argument("name")
+    group_renamed.add_argument("new_name")
     dropped = group_actions.add_parser("delete", help="remove a group, the channels stay")
     dropped.add_argument("name")
     joined = group_actions.add_parser("add", help="put channels in a group")

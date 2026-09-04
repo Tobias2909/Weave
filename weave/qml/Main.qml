@@ -23,10 +23,13 @@ ApplicationWindow {
     property string menuChannelKey: ""
     property bool menuWatched: false
 
-    // Reused by the sidebar plus button, by renaming, and by the menu entry
-    // that makes a new box out of the video being clicked.
-    property int namingBoxId: -1
-    property string namingVideoKey: ""
+    // The name popup serves boxes and groups alike, so it carries which of
+    // the two it is acting on. The key is the video for a box and the channel
+    // for a group, and is empty when the popup was opened from the sidebar
+    // rather than from something being filed.
+    property string namingKind: "box"
+    property int namingId: -1
+    property string namingKey: ""
 
     // Keeps a newly selected sidebar row on screen once the list is longer
     // than the sidebar.
@@ -39,13 +42,23 @@ ApplicationWindow {
             sidebarFlick.contentY = bottom - sidebarFlick.height
     }
 
-    function askForName(boxId, videoKey, current) {
-        root.namingBoxId = boxId
-        root.namingVideoKey = videoKey
+    function askForName(kind, id, key, current) {
+        root.namingKind = kind
+        root.namingId = id
+        root.namingKey = key
         nameField.text = current
         namePopup.open()
         nameField.forceActiveFocus()
         nameField.selectAll()
+    }
+
+    // Opens the tick list of groups for one channel, from wherever a channel
+    // is on screen.
+    function askForGroups(channelKey) {
+        if (!channelKey)
+            return
+        channelGroupMenu.channelKey = channelKey
+        channelGroupMenu.popup()
     }
 
     // A panel over a gradient is translucent, otherwise the bars would cover
@@ -228,7 +241,11 @@ ApplicationWindow {
                 width: parent.width
                 spacing: 2
 
-                SidebarHeading { text: "Channels" }
+                SidebarHeading {
+                    text: "Channels"
+                    actionText: "+"
+                    onAction: root.askForName("group", -1, "", "")
+                }
 
                 Repeater {
                     model: App.groups
@@ -241,7 +258,26 @@ ApplicationWindow {
                                                       && App.viewId === modelData.id)
                         onActivated: App.selectGroup(modelData.id)
                         onRevealRequested: root.revealRow(this)
+                        // All is not a group anyone made, so it cannot be
+                        // renamed, moved or deleted.
+                        onContextRequested: {
+                            if (modelData.id < 0)
+                                return
+                            groupMenu.groupId = modelData.id
+                            groupMenu.groupName = modelData.name
+                            groupMenu.popup()
+                        }
                     }
+                }
+
+                Label {
+                    visible: App.groups.length <= 1
+                    width: sidebarColumn.width - 28
+                    x: 14
+                    text: "A group holds channels you pick, and shows only their videos. Make one with the plus above."
+                    color: Theme.colors.textMuted
+                    font.pixelSize: 11
+                    wrapMode: Text.Wrap
                 }
 
                 Item { width: 1; height: 10 }
@@ -261,7 +297,7 @@ ApplicationWindow {
                 SidebarHeading {
                     text: "Boxes"
                     actionText: "+"
-                    onAction: root.askForName(-1, "", "")
+                    onAction: root.askForName("box", -1, "", "")
                 }
 
                 Repeater {
@@ -313,6 +349,7 @@ ApplicationWindow {
         info: App.channelInfo
         visible: App.viewKind === "channel"
         onCloseRequested: App.selectGroup(-1)
+        onGroupsRequested: root.askForGroups(App.channelInfo.key)
     }
 
     DetailPanel {
@@ -423,6 +460,14 @@ ApplicationWindow {
             onTriggered: { App.openChannel(root.menuChannelKey); videoMenu.dismiss() }
         }
         MenuItem {
+            text: "Groups for this channel"
+            onTriggered: {
+                var key = root.menuChannelKey
+                videoMenu.dismiss()
+                root.askForGroups(key)
+            }
+        }
+        MenuItem {
             text: root.menuWatched ? "Mark as not watched" : "Mark as watched"
             onTriggered: {
                 if (root.menuWatched)
@@ -445,9 +490,11 @@ ApplicationWindow {
             // it cannot see videoMenu, and reaching for it raises a reference
             // error that also leaves the menu open. The menu is handed to each
             // entry from out here, where the id does resolve.
+            // Five, counting the entries declared above this and the
+            // separator. Adding another entry up there means changing this.
             onObjectAdded: (index, object) => {
                 object.owner = videoMenu
-                videoMenu.insertItem(index + 4, object)
+                videoMenu.insertItem(index + 5, object)
             }
             onObjectRemoved: (index, object) => videoMenu.removeItem(object)
             delegate: MenuItem {
@@ -468,7 +515,7 @@ ApplicationWindow {
 
         MenuItem {
             text: "Put in a new box"
-            onTriggered: { videoMenu.dismiss(); root.askForName(-1, root.menuKey, "") }
+            onTriggered: { videoMenu.dismiss(); root.askForName("box", -1, root.menuKey, "") }
         }
     }
 
@@ -496,6 +543,82 @@ ApplicationWindow {
         }
     }
 
+    // The groups one channel is in, ticked, so one menu both adds and removes.
+    // Opened from a video's menu and from the channel page.
+    Menu {
+        id: channelGroupMenu
+        objectName: "channelGroupMenu"
+        property string channelKey: ""
+
+        Instantiator {
+            id: channelGroupEntries
+            // All is not a real group and cannot hold anything, so it is not
+            // offered. Filtering by id rather than by position, since which
+            // row All occupies is not this file's business.
+            model: App.groups.filter(function (g) { return g.id >= 0 })
+            // A delegate created here does not inherit this file's id scope,
+            // so the menu is handed to each entry from out here.
+            onObjectAdded: (index, object) => {
+                object.owner = channelGroupMenu
+                channelGroupMenu.insertItem(index, object)
+            }
+            onObjectRemoved: (index, object) => channelGroupMenu.removeItem(object)
+            delegate: MenuItem {
+                required property var modelData
+                property var owner: null
+                text: (App.groupsHolding(channelGroupMenu.channelKey).indexOf(modelData.id) >= 0
+                       ? "✓  " : "   ") + modelData.name
+                onTriggered: {
+                    if (App.groupsHolding(channelGroupMenu.channelKey).indexOf(modelData.id) >= 0)
+                        App.removeChannelFromGroup(modelData.id, channelGroupMenu.channelKey)
+                    else
+                        App.addChannelToGroup(modelData.id, channelGroupMenu.channelKey)
+                    if (owner)
+                        owner.dismiss()
+                }
+            }
+        }
+
+        MenuItem {
+            text: "Put in a new group"
+            onTriggered: {
+                var key = channelGroupMenu.channelKey
+                channelGroupMenu.dismiss()
+                root.askForName("group", -1, key, "")
+            }
+        }
+    }
+
+    Menu {
+        id: groupMenu
+        objectName: "groupMenu"
+        property int groupId: -1
+        property string groupName: ""
+
+        MenuItem {
+            text: "Rename"
+            onTriggered: {
+                var id = groupMenu.groupId, name = groupMenu.groupName
+                groupMenu.dismiss()
+                root.askForName("group", id, "", name)
+            }
+        }
+        MenuItem {
+            text: "Move up"
+            onTriggered: { App.moveGroup(groupMenu.groupId, -1); groupMenu.dismiss() }
+        }
+        MenuItem {
+            text: "Move down"
+            onTriggered: { App.moveGroup(groupMenu.groupId, 1); groupMenu.dismiss() }
+        }
+        MenuItem {
+            // The channels themselves are untouched, as with a box and its
+            // videos.
+            text: "Delete the group"
+            onTriggered: { App.deleteGroup(groupMenu.groupId); groupMenu.dismiss() }
+        }
+    }
+
     Menu {
         id: boxMenu
         property int boxId: -1
@@ -506,7 +629,7 @@ ApplicationWindow {
             onTriggered: {
                 var id = boxMenu.boxId, name = boxMenu.boxName
                 boxMenu.dismiss()
-                root.askForName(id, "", name)
+                root.askForName("box", id, "", name)
             }
         }
         MenuItem {
@@ -530,18 +653,28 @@ ApplicationWindow {
             border.color: Theme.colors.border
         }
 
+        readonly property bool aGroup: root.namingKind === "group"
+        readonly property bool renaming: root.namingId >= 0
+
         function commit() {
             var name = nameField.text.trim()
             if (name === "") {
                 namePopup.close()
                 return
             }
-            if (root.namingBoxId >= 0) {
-                App.renameBox(root.namingBoxId, name)
+            if (namePopup.renaming) {
+                if (namePopup.aGroup)
+                    App.renameGroup(root.namingId, name)
+                else
+                    App.renameBox(root.namingId, name)
+            } else if (namePopup.aGroup) {
+                var group = App.createGroup(name)
+                if (group >= 0 && root.namingKey !== "")
+                    App.addChannelToGroup(group, root.namingKey)
             } else {
-                var created = App.createBox(name)
-                if (created >= 0 && root.namingVideoKey !== "")
-                    App.addToBox(created, root.namingVideoKey)
+                var box = App.createBox(name)
+                if (box >= 0 && root.namingKey !== "")
+                    App.addToBox(box, root.namingKey)
             }
             namePopup.close()
         }
@@ -551,7 +684,9 @@ ApplicationWindow {
             spacing: 10
 
             Label {
-                text: root.namingBoxId >= 0 ? "Rename the box" : "Name the new box"
+                text: namePopup.renaming
+                      ? (namePopup.aGroup ? "Rename the group" : "Rename the box")
+                      : (namePopup.aGroup ? "Name the new group" : "Name the new box")
                 color: Theme.colors.text
                 font.pixelSize: 14
                 font.weight: Font.DemiBold
@@ -559,9 +694,10 @@ ApplicationWindow {
 
             TextField {
                 id: nameField
+                objectName: "nameField"
                 width: parent.width
                 color: Theme.colors.text
-                placeholderText: "Watch tonight"
+                placeholderText: namePopup.aGroup ? "Music" : "Watch tonight"
                 placeholderTextColor: Theme.colors.textMuted
                 background: Rectangle {
                     radius: 6
@@ -580,7 +716,7 @@ ApplicationWindow {
                     onClicked: namePopup.close()
                 }
                 FlatButton {
-                    text: root.namingBoxId >= 0 ? "Rename" : "Create"
+                    text: namePopup.renaming ? "Rename" : "Create"
                     accent: true
                     onClicked: namePopup.commit()
                 }

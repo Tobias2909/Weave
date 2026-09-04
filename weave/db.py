@@ -648,6 +648,28 @@ class Database:
             conn.execute("DELETE FROM group_members WHERE group_id=? AND channel_key=?",
                          (group_id, channel_key))
 
+    def groups_holding(self, channel_key: str) -> list[int]:
+        return [int(row["group_id"]) for row in self.conn.execute(
+            "SELECT group_id FROM group_members WHERE channel_key=?", (channel_key,))]
+
+    def move_group(self, group_id: int, delta: int) -> bool:
+        """Shift a group one place in the sidebar.
+
+        Positions are rewritten from the resulting order rather than swapped,
+        so a list that was never ordered, or was left with gaps by a deletion,
+        comes out consecutive either way.
+        """
+        order = [row["id"] for row in self.groups()]
+        if group_id not in order:
+            return False
+        was = order.index(group_id)
+        now = max(0, min(len(order) - 1, was + delta))
+        if now == was:
+            return False
+        order.insert(now, order.pop(was))
+        self.set_group_order(order)
+        return True
+
     def groups(self) -> list[dict]:
         """Groups with their member and unwatched counts, in display order."""
         return [dict(row) for row in self.conn.execute(
