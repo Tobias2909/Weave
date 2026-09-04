@@ -125,9 +125,13 @@ work. The headphone on any video card plays that video as sound with no window.
 Addresses worth returning to can be saved, which is what a round the clock
 stream wants, and they keep their own picture.
 
-Liked music comes from your YouTube likes rather than from YouTube Music. The
-two lists are separate, and on this account the YouTube Music one is empty while
-the YouTube one is not.
+One thing is worth knowing if your library ever looks like somebody else's. A
+Google account can carry more than one YouTube identity, and the cookies alone
+do not say which one is in use. The account index does not select it and neither
+does the channel id, which is answered with a server error. What selects it is a
+numeric page id the web client reads out of the page it was served, so Weave
+reads the same page once and sends the same value. Without it, an account whose
+music lives on a second identity looks like a brand new listener.
 
 Starting a video in `mpv` pauses the music, since two things playing at once is
 never wanted. There is a switch in the player bar if you disagree.

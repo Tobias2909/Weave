@@ -586,8 +586,24 @@ class MusicHome(QThread):
         for shelf in found:
             for item in shelf["items"]:
                 item["thumbnail"] = qml_source(item["thumbnail"])
-        found.insert(0, self._from_youtube())
+        found.insert(0, self._own_playlists())
+        # Kept, but after the music ones, since those are the real thing now.
+        found.append(self._from_youtube())
         self.shelves.emit([shelf for shelf in found if shelf["items"]])
+
+    def _own_playlists(self) -> dict:
+        from .sources import ytmusic
+
+        try:
+            found = ytmusic.playlists(self._cfg.browser_profile_path, limit=40)
+        except ytmusic.MusicError:
+            return {"title": "Your playlists", "items": []}
+        return {"title": "Your playlists", "items": [{
+            "title": entry["title"], "subtitle": (f"{entry['count']} tracks"
+                                                  if entry.get("count") else ""),
+            "videoId": "", "playlistId": entry["id"],
+            "thumbnail": qml_source(entry["thumbnail"]),
+        } for entry in found]}
 
     def _from_youtube(self) -> dict:
         """A shelf of what YouTube itself suggests.
@@ -661,42 +677,9 @@ class TrackList(QThread):
         } for t in found], self._label)
 
     def _liked(self) -> None:
-        """Liked videos come from YouTube rather than YouTube Music. The two
-        lists are separate, and this is the one that has anything in it."""
-        from .cookies import args as cookie_args
-
-        command = ["yt-dlp", "--no-warnings", "--flat-playlist",
-                   *cookie_args(self._cfg), "--playlist-end", "100",
-                   "--print", "%(id)s\t%(title)s\t%(channel)s\t%(duration)s", ":ytfav"]
-        try:
-            result = run_process(command, cancel=self._cancel, timeout=180)
-        except ProcessCancelled:
-            return
-        except Exception as exc:                                    # noqa: BLE001
-            self.failed.emit(f"{type(exc).__name__}: {exc}")
-            return
-
-        rows = []
-        for line in result.stdout.splitlines():
-            parts = line.split("\t")
-            if len(parts) < 2 or len(parts[0]) != 11:
-                continue
-            seconds = parts[3] if len(parts) > 3 else ""
-            try:
-                total = int(float(seconds))
-                length = f"{total // 60}:{total % 60:02d}"
-            except ValueError:
-                length = ""
-            rows.append({
-                "key": f"yt:{parts[0]}", "videoId": parts[0], "title": parts[1],
-                "artist": parts[2] if len(parts) > 2 else "", "album": "",
-                "duration": length,
-                "thumbnail": qml_source(f"https://i.ytimg.com/vi/{parts[0]}/hqdefault.jpg"),
-            })
-        if not rows:
-            self.failed.emit("no liked videos came back")
-            return
-        self.tracks.emit(rows, self._label)
+        """Liked music, which is a playlist like any other."""
+        self._playlist_id = "LIKED"
+        self._playlist()
 
 
 class SourceDetails(QThread):

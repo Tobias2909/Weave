@@ -13,6 +13,7 @@ of well over a hundred kilobytes, which no server will accept.
 from __future__ import annotations
 
 import os
+import re
 import threading
 from dataclasses import dataclass
 from functools import lru_cache
@@ -65,6 +66,44 @@ def cookie_header(profile_path: str) -> str:
     return "; ".join(f"{name}={value}" for name, value in pairs.items())
 
 
+# Which identity the request speaks as. A Google account can carry more than
+# one YouTube identity, and cookies alone do not say which is in use. The
+# account index does not select it, and neither does the channel id, which is
+# answered with a server error. The web client sends a numeric page id that it
+# reads out of the page it was served, and that is what picks the right one.
+#
+# Without it, an account whose music lives on a second identity looks like a
+# brand new listener. Measured on one such account, sending it turned one
+# playlist into seventy four and no liked songs into two thousand.
+_page_id: str | None = None
+_page_id_looked_for = False
+
+PAGE_ID_PATTERN = re.compile(r'"DELEGATED_SESSION_ID"\s*:\s*"(\d{5,40})"')
+
+
+def page_id(profile_path: str, force: bool = False) -> str | None:
+    """Read the identity out of the music page, once per run."""
+    global _page_id, _page_id_looked_for
+    if _page_id_looked_for and not force:
+        return _page_id
+
+    _page_id_looked_for = True
+    try:
+        import requests
+
+        response = requests.get(ORIGIN + "/", timeout=30, headers={
+            "User-Agent": USER_AGENT,
+            "Cookie": cookie_header(profile_path),
+            "Accept-Language": "en-US,en;q=0.9",
+        })
+        found = PAGE_ID_PATTERN.search(response.text)
+        _page_id = found.group(1) if found else None
+    except Exception:                                               # noqa: BLE001
+        # An account with only one identity has none, and that is fine.
+        _page_id = None
+    return _page_id
+
+
 def client(profile_path: str):
     """A signed in client. Built fresh rather than kept, because the
     authorization header is stamped with the time it was made."""
@@ -76,14 +115,18 @@ def client(profile_path: str):
         sapisid = sapisid_from_cookie(cookie)
     except KeyError as exc:
         raise MusicError("the browser profile holds no YouTube login") from exc
-    return YTMusic({
+    headers = {
         "cookie": cookie,
         "authorization": get_authorization(f"{sapisid} {ORIGIN}"),
         "x-goog-authuser": "0",
         "user-agent": USER_AGENT,
         "origin": ORIGIN,
         "accept-language": "en-US,en;q=0.9",
-    })
+    }
+    identity = page_id(profile_path)
+    if identity:
+        headers["x-goog-pageid"] = identity
+    return YTMusic(headers)
 
 
 def _thumb(item: dict) -> str:
