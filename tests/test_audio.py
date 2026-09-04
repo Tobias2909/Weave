@@ -3,6 +3,7 @@
 import unittest
 
 from PySide6.QtCore import QCoreApplication
+from PySide6.QtMultimedia import QMediaPlayer
 
 from weave.audio import (RECOVER_COOLDOWN_S, RECOVER_LIMIT, RECOVER_WINDOW_S,
                          AudioPlayer)
@@ -247,6 +248,131 @@ class Recovering(unittest.TestCase):
         self.player._queue = []
         self.player._at = -1
         self.assertFalse(self.player._recover())
+
+
+class PickingUpWhereItStopped(unittest.TestCase):
+    """What a recovery is for.
+
+    He watched a track restart from the beginning after a dropped connection.
+    The recovery was working; the seek was not. A position set before the new
+    source has loaded is discarded, so it has to wait for the source to say it
+    is ready.
+    """
+
+    def setUp(self):
+        self.player = AudioPlayer(Config(raw={}))
+        self.player._queue = [track("aaa")]
+        self.player._rebuild_order()
+        self.player._at = 0
+        self.seeks = []
+        self.played = []
+        self.player._player.setPosition = self.seeks.append
+        self.player._player.play = lambda: self.played.append(True)
+        self.player._player.setSource = lambda _url: None
+
+    def resolve(self, resume_at):
+        self.player._resume_at = resume_at
+        self.player._on_resolved("yt:aaa", "https://x")
+
+    def test_nothing_is_seeked_while_the_source_is_still_loading(self):
+        self.resolve(65000)
+        self.assertEqual(self.seeks, [])
+
+    def test_and_nothing_is_played_yet_either(self):
+        # Otherwise the first thing heard is the start of the track, which is
+        # the very thing being avoided.
+        self.resolve(65000)
+        self.assertEqual(self.played, [])
+
+    def test_the_position_is_taken_up_once_the_source_has_loaded(self):
+        self.resolve(65000)
+        self.player._on_status(QMediaPlayer.MediaStatus.LoadedMedia)
+        self.assertEqual(self.seeks, [65000])
+        self.assertEqual(self.played, [True])
+
+    def test_it_is_only_taken_up_once(self):
+        self.resolve(65000)
+        self.player._on_status(QMediaPlayer.MediaStatus.LoadedMedia)
+        self.player._on_status(QMediaPlayer.MediaStatus.BufferedMedia)
+        self.assertEqual(self.seeks, [65000])
+
+    def test_an_ordinary_track_starts_at_once_and_from_the_beginning(self):
+        self.resolve(0)
+        self.assertEqual(self.seeks, [])
+        self.assertEqual(self.played, [True])
+
+    def test_loading_an_ordinary_track_seeks_nowhere(self):
+        self.resolve(0)
+        self.player._on_status(QMediaPlayer.MediaStatus.LoadedMedia)
+        self.assertEqual(self.seeks, [])
+
+
+class Stalling(unittest.TestCase):
+    """A reset connection does not always arrive as an error.
+
+    The layers underneath report it as a read error and a session that has been
+    invalidated, and the player can simply stall and sit there. Without this the
+    music stops with a full console and a quiet application.
+    """
+
+    def setUp(self):
+        self.player = AudioPlayer(Config(raw={}))
+        self.player._queue = [track("aaa")]
+        self.player._rebuild_order()
+        self.player._at = 0
+        self.started = []
+        self.player._start_current = lambda: self.started.append(True)
+        self.position = 5000
+        self.player._player.position = lambda: self.position
+
+    def stall(self):
+        self.player._on_status(QMediaPlayer.MediaStatus.StalledMedia)
+
+    def test_a_stall_is_given_a_moment_before_anything_is_done(self):
+        self.stall()
+        self.assertTrue(self.player._stall_timer.isActive())
+        self.assertEqual(self.started, [])
+
+    def test_buffering_that_comes_back_is_left_alone(self):
+        # Ordinary buffering stalls too, and recovering from that would
+        # interrupt something that was about to carry on by itself.
+        self.stall()
+        self.player._on_status(QMediaPlayer.MediaStatus.BufferedMedia)
+        self.assertFalse(self.player._stall_timer.isActive())
+        self.assertEqual(self.started, [])
+
+    def test_a_stall_that_never_moves_is_recovered_from(self):
+        self.stall()
+        self.player._on_stalled_too_long()
+        self.assertEqual(self.started, [True])
+
+    def test_one_that_did_move_is_not(self):
+        self.stall()
+        self.position += 1000
+        self.player._on_stalled_too_long()
+        self.assertEqual(self.started, [])
+
+    def test_a_stall_that_cannot_be_recovered_from_is_said_out_loud(self):
+        reported = []
+        self.player.failed.connect(reported.append)
+        for _ in range(RECOVER_LIMIT):
+            self.player._recover()
+            self.player._recover_at -= RECOVER_COOLDOWN_S + 1
+        self.stall()
+        self.player._on_stalled_too_long()
+        self.assertEqual(len(reported), 1)
+
+    def test_the_end_of_a_track_cancels_the_watch(self):
+        self.stall()
+        self.player._on_status(QMediaPlayer.MediaStatus.EndOfMedia)
+        self.assertFalse(self.player._stall_timer.isActive())
+
+    def test_and_so_does_starting_something_else(self):
+        self.player._start_current = AudioPlayer._start_current.__get__(self.player)
+        self.stall()
+        self.player._player.stop = lambda: None
+        self.player._start_current()
+        self.assertFalse(self.player._stall_timer.isActive())
 
 
 class Fading(unittest.TestCase):

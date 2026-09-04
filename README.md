@@ -281,7 +281,9 @@ The one playing says so, and any row can be jumped to.
 A stream address is signed and gets dropped part way through a track now and
 then, which over a long listen is ordinary rather than exceptional. It is
 recovered from, quietly, by fetching a fresh address and carrying on from the
-same place. A few goes per track, never in a tight loop, and a track that has
+same place. A connection that goes away without saying so leaves the player
+stalled instead of raising anything, so a stall that outlasts ordinary
+buffering and has not moved is treated the same way. A few goes per track, never in a tight loop, and a track that has
 been playing happily for a while starts over with a full set, so an evening of
 occasional drops cannot run out of them.
 

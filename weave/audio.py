@@ -17,7 +17,7 @@ import threading
 import time
 
 from PySide6.QtCore import (Property, QEasingCurve, QObject, QPropertyAnimation, QThread,
-                            QUrl, Signal, Slot)
+                            QTimer, QUrl, Signal, Slot)
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 
 from .config import Config
@@ -41,6 +41,11 @@ FADE_MS = 1400
 RECOVER_LIMIT = 3
 RECOVER_COOLDOWN_S = 2.0
 RECOVER_WINDOW_S = 120.0
+
+# A connection reset does not always arrive as an error. Sometimes the player
+# simply stalls and sits there, so a stall that outlasts ordinary buffering and
+# has not moved is treated as the same dropped address.
+STALL_GRACE_MS = 8000
 
 REPEAT_OFF, REPEAT_ALL, REPEAT_ONE = 0, 1, 2
 
@@ -115,6 +120,10 @@ class AudioPlayer(QObject):
         self._resume_at = 0
         self._recover_at = 0.0
         self._recover_count = 0
+        self._stall_timer = QTimer(self)
+        self._stall_timer.setSingleShot(True)
+        self._stall_timer.timeout.connect(self._on_stalled_too_long)
+        self._stall_at = -1
 
         self._shuffle = (db.get_state("music_shuffle", "0") == "1") if db else False
         # Off, the whole queue, or the one track. A queue that repeats and a
@@ -254,6 +263,7 @@ class AudioPlayer(QObject):
         if not entry:
             return
         self._player.stop()
+        self._stall_timer.stop()
         self._loading = True
         if not self._recovering:
             self._resume_at = 0
@@ -272,12 +282,16 @@ class AudioPlayer(QObject):
             return                       # a later choice overtook this one
         self._loading = False
         self._player.setSource(QUrl(address))
-        if self._resume_at > 0:
-            # Set once the source has enough to seek in.
-            self._player.setPosition(self._resume_at)
-            self._resume_at = 0
         # The restart is done. Whether it holds is the counter's business.
         self._recovering = False
+        if self._resume_at > 0:
+            # Not seeked here. A position set before the new source has loaded
+            # is discarded, and the track then starts from the beginning,
+            # which is what a recovery looked like from the outside. It is
+            # applied once the source says it is loaded, and playing waits for
+            # that, so the first thing heard is the right part of the track.
+            self.stateChanged.emit()
+            return
         self._start_playing()
         self.stateChanged.emit()
 
@@ -288,6 +302,7 @@ class AudioPlayer(QObject):
 
     def _on_status(self, status) -> None:
         if status == QMediaPlayer.MediaStatus.EndOfMedia:
+            self._stall_timer.stop()
             self._forget_recovery()
             if self._repeat_mode == REPEAT_ONE:
                 self._player.setPosition(0)
@@ -295,7 +310,44 @@ class AudioPlayer(QObject):
                 return
             self.next()
         elif status == QMediaPlayer.MediaStatus.InvalidMedia:
+            self._stall_timer.stop()
             self._recover()
+        elif status == QMediaPlayer.MediaStatus.StalledMedia:
+            # Might be ordinary buffering, might be a connection that has gone
+            # away without saying so. Which one it is shows in whether it comes
+            # back, so it is given a moment before being treated as the second.
+            self._stall_at = self._player.position()
+            self._stall_timer.start(STALL_GRACE_MS)
+        elif status in (QMediaPlayer.MediaStatus.LoadedMedia,
+                        QMediaPlayer.MediaStatus.BufferedMedia,
+                        QMediaPlayer.MediaStatus.BufferingMedia):
+            self._stall_timer.stop()
+            self._resume_pending()
+
+    def _resume_pending(self) -> None:
+        """Pick up where a dropped track left off, now that it can be seeked.
+
+        Only a recovery leaves a position waiting, since starting a track for
+        any other reason clears it.
+        """
+        if self._resume_at <= 0:
+            return
+        at, self._resume_at = self._resume_at, 0
+        self._player.setPosition(at)
+        self._start_playing()
+        self.stateChanged.emit()
+
+    def _on_stalled_too_long(self) -> None:
+        """A stall that has not moved is a dropped connection by another name.
+
+        A reset is reported by the layers underneath as a read error and
+        sometimes reaches the player as nothing at all, so without this the
+        music simply stops with a full console and a quiet application.
+        """
+        if not self._current() or self._player.position() != self._stall_at:
+            return
+        if not self._recover():
+            self.failed.emit("the connection was lost and could not be picked up again")
 
     def _on_error(self, _error, message: str) -> None:
         if self._recover():
