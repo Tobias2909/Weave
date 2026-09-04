@@ -20,10 +20,11 @@ from ..db import Database
 from ..imagecache import qml_source
 from ..player.mpv import Player
 from ..poller import (ChannelAdder, ChannelDetailsFetcher, DetailFetcher, FeedPoller,
-                      LiveWatcher, SubsImporter, TwitchLogin)
+                      LiveWatcher, MusicSearch, SubsImporter, TwitchLogin)
 from .feed_model import FeedModel
 
 ALL = "all"
+MUSIC = "music"
 GROUP = "group"
 BOX = "box"
 CHANNEL = "channel"
@@ -41,6 +42,7 @@ class Bridge(QObject):
     liveChanged = Signal()
     twitchChanged = Signal()
     detailChanged = Signal()
+    musicChanged = Signal()
 
     def __init__(self, db: Database, cfg: Config, model: FeedModel,
                  player: Player, parent: QObject | None = None) -> None:
@@ -64,6 +66,10 @@ class Bridge(QObject):
         self._detail_threads = 5
         self._detail_loading = False
         self._detail_closed = False
+        self._audio = None
+        self._search: MusicSearch | None = None
+        self._results: list = []
+        self._searching = False
 
         self._busy = False
         self._problems: list[str] = []
@@ -236,6 +242,19 @@ class Bridge(QObject):
     detailLoading = Property(bool, _get_detail_loading, notify=detailChanged)
     panelWidth = Property(int, _get_panel_width, notify=detailChanged)
 
+    def _get_results(self) -> list:
+        return list(self._results)
+
+    def _get_searching(self) -> bool:
+        return self._searching
+
+    def _get_sources(self) -> list:
+        return self._db.sources()
+
+    musicResults = Property("QVariantList", _get_results, notify=musicChanged)
+    musicSearching = Property(bool, _get_searching, notify=musicChanged)
+    audioSources = Property("QVariantList", _get_sources, notify=musicChanged)
+
     def _get_scroll_rows(self) -> float:
         return self._cfg.scroll_rows_per_notch
 
@@ -263,6 +282,12 @@ class Bridge(QObject):
         # A channel page and a box both ignore the hide watched toggle. The
         # channel page is meant to show everything that channel has, and a box
         # was hand picked, so hiding half of it would be surprising.
+        if self._view_kind == MUSIC:
+            self._model.reload(hide_watched=False, channel_key="__none__")
+            self.emptyHintChanged.emit()
+            self.groupsChanged.emit()
+            self.boxesChanged.emit()
+            return
         honour_toggle = self._view_kind in (ALL, GROUP)
         self._model.reload(
             hide_watched=self._hide_watched and honour_toggle,
@@ -441,6 +466,88 @@ class Bridge(QObject):
         self.hideWatchedChanged.emit()
         self.reload()
 
+    # ---- music -----------------------------------------------------------
+
+    def attach_audio(self, audio) -> None:
+        """Given after construction, since the player needs the config the
+        bridge already holds."""
+        self._audio = audio
+        self._player.nowPlaying.connect(lambda *_a: self._audio.pause_for_video())
+
+    @Slot()
+    def showMusic(self) -> None:
+        self._set_view(MUSIC, -1)
+
+    @Slot(str)
+    def musicSearch(self, query: str) -> None:
+        if self._search is not None and self._search.isRunning():
+            return
+        self._searching = True
+        self.musicChanged.emit()
+        self._search = MusicSearch(self._cfg, query, self)
+        self._search.results.connect(self._on_results)
+        self._search.failed.connect(self._on_search_failed)
+        self._search.start()
+
+    @Slot(int)
+    def playResult(self, index: int) -> None:
+        """Plays from here to the end of the results, which is what a list of
+        songs is for."""
+        if not self._audio or not self._results:
+            return
+        items = [{"key": row["key"], "title": row["title"], "artist": row["artist"],
+                  "thumbnail": row["thumbnail"], "live": False,
+                  "url": ids.watch_url("youtube", row["videoId"])}
+                 for row in self._results]
+        self._audio.play_items(items, max(0, min(index, len(items) - 1)))
+
+    @Slot(int)
+    def playSource(self, source_id: int) -> None:
+        if not self._audio:
+            return
+        found = next((s for s in self._db.sources() if s["id"] == source_id), None)
+        if not found:
+            return
+        self._audio.play_items([{
+            "key": f"source:{found['id']}", "title": found["label"], "artist": "",
+            "thumbnail": "", "live": bool(found["live"]), "url": found["url"],
+        }])
+
+    @Slot(str)
+    def playAudio(self, video_key: str) -> None:
+        """The headphone button on a video card. Same video, no window."""
+        row = self._model.row_for_key(video_key) or {}
+        if not self._audio or not row:
+            return
+        self._audio.play_items([{
+            "key": video_key, "title": row["title"], "artist": row["channelTitle"],
+            "thumbnail": row["thumbnail"], "live": bool(row["isLive"]),
+            "url": row["url"],
+        }])
+        self._set_status(f"listening to {row['title']}")
+
+    @Slot(str, str, bool)
+    def addSource(self, label: str, url: str, live: bool) -> None:
+        if not url.strip():
+            return
+        self._db.add_source(label, url.strip(), live)
+        self.musicChanged.emit()
+
+    @Slot(int)
+    def removeSource(self, source_id: int) -> None:
+        self._db.remove_source(source_id)
+        self.musicChanged.emit()
+
+    def _on_results(self, rows: list) -> None:
+        self._searching = False
+        self._results = rows
+        self.musicChanged.emit()
+
+    def _on_search_failed(self, message: str) -> None:
+        self._searching = False
+        self.musicChanged.emit()
+        self._set_status(f"could not search, {message}")
+
     # ---- the detail panel ------------------------------------------------
 
     @Slot(str)
@@ -617,12 +724,14 @@ class Bridge(QObject):
         already gone, so any short wait here is invisible.
         """
         threads = [self._poller, self._adder, self._importer, self._details,
-                   self._live, self._twitch, self._detail]
+                   self._live, self._twitch, self._detail, self._search]
         live = [thread for thread in threads if thread is not None and thread.isRunning()]
         for thread in live:
             thread.cancel()
         for thread in live:
             thread.wait(timeout_ms)
+        if self._audio is not None:
+            self._audio.shutdown()
 
     # ---- reactions -------------------------------------------------------
 
@@ -664,12 +773,6 @@ class Bridge(QObject):
 
     def _on_twitch_done(self, imported: int) -> None:
         self._twitch_needs_login = False
-        self._detail: DetailFetcher | None = None
-        self._detail_key = ""
-        self._detail_comments: list = []
-        self._detail_threads = 5
-        self._detail_loading = False
-        self._detail_closed = False
         self._twitch_status = (f"Twitch connected, {imported} followed channels added"
                                if imported else "Twitch connected")
         self.twitchChanged.emit()
@@ -690,12 +793,6 @@ class Bridge(QObject):
 
     def _on_live(self, count: int) -> None:
         self._twitch_needs_login = False
-        self._detail: DetailFetcher | None = None
-        self._detail_key = ""
-        self._detail_comments: list = []
-        self._detail_threads = 5
-        self._detail_loading = False
-        self._detail_closed = False
         self.liveChanged.emit()
         self.twitchChanged.emit()
 

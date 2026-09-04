@@ -167,13 +167,21 @@ ApplicationWindow {
         }
     }
 
+    MiniPlayer {
+        id: miniPlayer
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        z: 2
+    }
+
     // ---- sidebar ---------------------------------------------------------
 
     Rectangle {
         id: sidebar
         anchors.left: parent.left
         anchors.top: parent.top
-        anchors.bottom: parent.bottom
+        anchors.bottom: miniPlayer.top
         anchors.topMargin: banner.height
         width: 214
         color: root.panelColour(Theme.colors.surface)
@@ -234,6 +242,18 @@ ApplicationWindow {
                         onActivated: App.selectGroup(modelData.id)
                         onRevealRequested: root.revealRow(this)
                     }
+                }
+
+                Item { width: 1; height: 10 }
+
+                SidebarHeading { text: "Listen" }
+
+                SidebarRow {
+                    width: sidebarColumn.width
+                    label: "Music"
+                    count: 0
+                    selected: App.viewKind === "music"
+                    onActivated: App.showMusic()
                 }
 
                 Item { width: 1; height: 10 }
@@ -301,19 +321,31 @@ ApplicationWindow {
         anchors.right: parent.right
         anchors.top: liveBar.visible ? liveBar.bottom : parent.top
         anchors.topMargin: liveBar.visible ? 0 : banner.height
-        anchors.bottom: parent.bottom
+        anchors.bottom: miniPlayer.top
         width: App.panelWidth
-        visible: App.detailOpen
+        visible: App.detailOpen && App.viewKind !== "music"
+    }
+
+    MusicView {
+        id: musicView
+        objectName: "musicView"
+        visible: App.viewKind === "music"
+        anchors.left: sidebar.right
+        anchors.right: parent.right
+        anchors.top: liveBar.visible ? liveBar.bottom : parent.top
+        anchors.topMargin: liveBar.visible ? 0 : banner.height
+        anchors.bottom: miniPlayer.top
     }
 
     GridView {
         id: grid
         objectName: "grid"
+        visible: App.viewKind !== "music"
         anchors.left: sidebar.right
         anchors.right: detailPanel.visible ? detailPanel.left : parent.right
         anchors.top: channelHeader.visible ? channelHeader.bottom
                                           : (liveBar.visible ? liveBar.bottom : parent.top)
-        anchors.bottom: parent.bottom
+        anchors.bottom: miniPlayer.top
         anchors.topMargin: channelHeader.visible ? 8
                                                  : (liveBar.visible ? 10 : banner.height + 10)
         anchors.leftMargin: 10
@@ -352,6 +384,7 @@ ApplicationWindow {
                 isLive: model.isLive
                 progress: model.progress
                 onPlayRequested: App.play(model.key)
+                onListenRequested: App.playAudio(model.key)
                 onChannelRequested: App.openChannel(model.channelKey)
                 onMenuRequested: {
                     root.menuKey = model.key
@@ -364,7 +397,7 @@ ApplicationWindow {
 
         Label {
             anchors.centerIn: parent
-            visible: grid.count === 0
+            visible: grid.count === 0 && App.viewKind !== "music"
             horizontalAlignment: Text.AlignHCenter
             color: Theme.colors.textMuted
             font.pixelSize: 14

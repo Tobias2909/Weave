@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -105,6 +105,17 @@ CREATE TABLE IF NOT EXISTS live_streams (
     started_at    TEXT,
     thumbnail_url TEXT,
     seen_at       INTEGER NOT NULL
+);
+
+-- Things to listen to that are not in any library. A round the clock stream is
+-- the obvious case, since it is returned to rather than searched for.
+CREATE TABLE IF NOT EXISTS audio_sources (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    label    TEXT NOT NULL,
+    url      TEXT NOT NULL UNIQUE,
+    live     INTEGER NOT NULL DEFAULT 0,
+    position INTEGER NOT NULL DEFAULT 0,
+    added_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS watched (
@@ -662,6 +673,26 @@ class Database:
     def live_keys(self) -> set[str]:
         return {row["channel_key"] for row in
                 self.conn.execute("SELECT channel_key FROM live_streams")}
+
+    # ---- saved audio sources ---------------------------------------------
+
+    def add_source(self, label: str, url: str, live: bool = False) -> None:
+        now = int(time.time())
+        with self.conn as conn:
+            position = conn.execute(
+                "SELECT COALESCE(MAX(position), 0) + 1 FROM audio_sources").fetchone()[0]
+            conn.execute(
+                "INSERT INTO audio_sources(label, url, live, position, added_at) "
+                "VALUES(?,?,?,?,?) ON CONFLICT(url) DO UPDATE SET label=excluded.label",
+                (label.strip() or url, url, 1 if live else 0, position, now))
+
+    def remove_source(self, source_id: int) -> None:
+        with self.conn as conn:
+            conn.execute("DELETE FROM audio_sources WHERE id=?", (source_id,))
+
+    def sources(self) -> list[dict]:
+        return [dict(row) for row in self.conn.execute(
+            "SELECT id, label, url, live FROM audio_sources ORDER BY position, id")]
 
     def unwatched_total(self) -> int:
         return int(self.conn.execute(

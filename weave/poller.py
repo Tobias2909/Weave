@@ -529,3 +529,32 @@ class DetailFetcher(QThread):
             "verified": comment.verified,
             "replies": [DetailFetcher._as_map(reply) for reply in comment.replies],
         }
+
+
+class MusicSearch(QThread):
+    """Searching YouTube Music, off the interface thread."""
+
+    results = Signal("QVariantList")
+    failed = Signal(str)
+
+    def __init__(self, cfg: Config, query: str, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._cfg = cfg
+        self._query = query
+
+    def cancel(self) -> None:
+        pass                                    # one short call, nothing to stop
+
+    def run(self) -> None:
+        from .sources import ytmusic
+
+        try:
+            tracks = ytmusic.search(self._cfg.browser_profile_path, self._query)
+        except ytmusic.MusicError as exc:
+            self.failed.emit(str(exc))
+            return
+        self.results.emit([{
+            "key": track.key, "videoId": track.video_id, "title": track.title,
+            "artist": track.artist, "album": track.album, "duration": track.duration,
+            "thumbnail": qml_source(track.thumbnail_url),
+        } for track in tracks])

@@ -25,6 +25,7 @@ from PySide6.QtQuickControls2 import QQuickStyle
 from . import config, imagecache, paths
 from .db import Database
 from .player.mpv import Player
+from .audio import AudioPlayer
 from .ui.bridge import Bridge
 from .ui.feed_model import FeedModel
 from .sources.progress import default_dir as default_watch_later
@@ -75,13 +76,20 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
     app.setApplicationName("Weave")
     app.setOrganizationName("Weave")
 
-    theme = Theme()
     configured = cfg.watch_later_dir
     watch_later = (default_watch_later() if configured == "auto"
                    else paths.expand(configured))
-    model = FeedModel(db, watch_later_dir=watch_later)
-    player = Player(cfg)
-    bridge = Bridge(db, cfg, model, player)
+
+    # Parented to the application so Qt owns their lifetime. Without an owner
+    # the interpreter can free a context property while the QML engine still
+    # holds a pointer to it, which crashes during teardown rather than during
+    # the run, so it is easy to miss.
+    theme = Theme(db, parent=app)
+    model = FeedModel(db, watch_later_dir=watch_later, parent=app)
+    player = Player(cfg, parent=app)
+    bridge = Bridge(db, cfg, model, player, parent=app)
+    audio = AudioPlayer(cfg, db, parent=app)
+    bridge.attach_audio(audio)
 
     engine = QQmlApplicationEngine()
     # Installed before anything loads, so the very first images already go
@@ -91,6 +99,7 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
     context.setContextProperty("App", bridge)
     context.setContextProperty("Theme", theme)
     context.setContextProperty("feedModel", model)
+    context.setContextProperty("Audio", audio)
     # Rounding a picture needs a shader, and the software scene graph cannot
     # run one. Told to QML so it can fall back to square pictures rather than
     # drawing nothing at all.

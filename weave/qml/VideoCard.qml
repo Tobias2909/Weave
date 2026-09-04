@@ -21,6 +21,7 @@ Rectangle {
     signal playRequested()
     signal channelRequested()
     signal menuRequested()
+    signal listenRequested()
 
     radius: 8
     color: hover.hovered ? Theme.colors.surfaceRaised : Theme.colors.surface
@@ -88,6 +89,27 @@ Rectangle {
                         color: Theme.colors.progress
                         bottomLeftRadius: thumbnailFrame.radius
                     }
+                }
+            }
+
+            // Sound without a window. Only on hover, so it costs no layout.
+            Rectangle {
+                visible: hover.hovered
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: 6
+                width: 26
+                height: 26
+                radius: 13
+                color: listenHover.hovered ? Theme.colors.accent : Theme.colors.badgeBackground
+
+                HoverHandler { id: listenHover }
+                TapHandler { onTapped: card.listenRequested() }
+
+                Text {
+                    anchors.centerIn: parent
+                    text: "🎧"
+                    font.pixelSize: 13
                 }
             }
 

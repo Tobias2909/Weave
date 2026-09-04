@@ -1,0 +1,170 @@
+"""YouTube Music, through ytmusicapi.
+
+Signing in costs nothing extra. The library is reached with the same browser
+cookies everything else here already uses, turned into the headers ytmusicapi
+expects. It decides that a login is a browser login by the presence of an
+authorization header carrying a SAPISIDHASH, which it can compute itself from
+the cookie, so nothing has to be copied out of a developer console.
+
+Only a handful of cookies matter. Handing over the whole jar produces a header
+of well over a hundred kilobytes, which no server will accept.
+"""
+
+from __future__ import annotations
+
+import os
+import threading
+from dataclasses import dataclass
+from functools import lru_cache
+
+ORIGIN = "https://music.youtube.com"
+USER_AGENT = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+              "Chrome/120.0.0.0 Safari/537.36")
+
+# What a signed in request actually needs.
+ESSENTIAL_COOKIES = {
+    "SID", "HSID", "SSID", "APISID", "SAPISID", "LOGIN_INFO", "PREF", "SIDCC",
+    "__Secure-1PAPISID", "__Secure-3PAPISID", "__Secure-1PSID", "__Secure-3PSID",
+    "__Secure-1PSIDTS", "__Secure-3PSIDTS", "__Secure-1PSIDCC", "__Secure-3PSIDCC",
+}
+
+
+class MusicError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class Track:
+    video_id: str
+    title: str
+    artist: str
+    album: str
+    duration: str
+    thumbnail_url: str
+
+    @property
+    def key(self) -> str:
+        return f"yt:{self.video_id}"
+
+
+class _Quiet:
+    def debug(self, *args, **kwargs) -> None:
+        pass
+
+    info = warning = error = debug
+
+
+def cookie_header(profile_path: str) -> str:
+    from yt_dlp.cookies import extract_cookies_from_browser
+
+    jar = extract_cookies_from_browser("firefox", os.path.expanduser(profile_path), _Quiet())
+    pairs = {c.name: c.value for c in jar
+             if "youtube.com" in (c.domain or "") and c.name in ESSENTIAL_COOKIES}
+    if "__Secure-3PAPISID" not in pairs:
+        raise MusicError("the browser profile holds no YouTube login")
+    return "; ".join(f"{name}={value}" for name, value in pairs.items())
+
+
+def client(profile_path: str):
+    """A signed in client. Built fresh rather than kept, because the
+    authorization header is stamped with the time it was made."""
+    from ytmusicapi import YTMusic
+    from ytmusicapi.helpers import get_authorization, sapisid_from_cookie
+
+    cookie = cookie_header(profile_path)
+    try:
+        sapisid = sapisid_from_cookie(cookie)
+    except KeyError as exc:
+        raise MusicError("the browser profile holds no YouTube login") from exc
+    return YTMusic({
+        "cookie": cookie,
+        "authorization": get_authorization(f"{sapisid} {ORIGIN}"),
+        "x-goog-authuser": "0",
+        "user-agent": USER_AGENT,
+        "origin": ORIGIN,
+        "accept-language": "en-US,en;q=0.9",
+    })
+
+
+def _thumb(item: dict) -> str:
+    thumbs = item.get("thumbnails") or []
+    return str(thumbs[-1].get("url") or "") if thumbs else ""
+
+
+def _artist(item: dict) -> str:
+    artists = item.get("artists") or []
+    names = [str(a.get("name")) for a in artists if isinstance(a, dict) and a.get("name")]
+    return ", ".join(names)
+
+
+def to_track(item: dict) -> Track | None:
+    video_id = item.get("videoId")
+    if not isinstance(video_id, str) or not video_id:
+        return None
+    album = item.get("album")
+    return Track(
+        video_id=video_id,
+        title=str(item.get("title") or ""),
+        artist=_artist(item),
+        album=str(album.get("name")) if isinstance(album, dict) else "",
+        duration=str(item.get("duration") or ""),
+        thumbnail_url=_thumb(item),
+    )
+
+
+def to_tracks(items: list) -> list[Track]:
+    out = []
+    for item in items or []:
+        if isinstance(item, dict):
+            track = to_track(item)
+            if track is not None:
+                out.append(track)
+    return out
+
+
+def search(profile_path: str, query: str, limit: int = 25) -> list[Track]:
+    if not query.strip():
+        return []
+    try:
+        return to_tracks(client(profile_path).search(query, filter="songs", limit=limit))
+    except MusicError:
+        raise
+    except Exception as exc:                                        # noqa: BLE001
+        raise MusicError(f"{type(exc).__name__}: {exc}") from exc
+
+
+def playlists(profile_path: str, limit: int = 40) -> list[dict]:
+    try:
+        found = client(profile_path).get_library_playlists(limit=limit)
+    except MusicError:
+        raise
+    except Exception as exc:                                        # noqa: BLE001
+        raise MusicError(f"{type(exc).__name__}: {exc}") from exc
+    return [{"id": str(p.get("playlistId") or ""), "title": str(p.get("title") or ""),
+             "count": p.get("count"), "thumbnail": _thumb(p)}
+            for p in found or [] if p.get("playlistId")]
+
+
+def playlist_tracks(profile_path: str, playlist_id: str, limit: int = 200) -> list[Track]:
+    try:
+        if playlist_id == "LIKED":
+            found = client(profile_path).get_liked_songs(limit=limit)
+        else:
+            found = client(profile_path).get_playlist(playlist_id, limit=limit)
+    except MusicError:
+        raise
+    except Exception as exc:                                        # noqa: BLE001
+        raise MusicError(f"{type(exc).__name__}: {exc}") from exc
+    return to_tracks((found or {}).get("tracks") or [])
+
+
+def radio(profile_path: str, video_id: str, limit: int = 40) -> list[Track]:
+    """A station built from one track, which is where most listening starts
+    when there is no library to speak of."""
+    try:
+        found = client(profile_path).get_watch_playlist(videoId=video_id, limit=limit)
+    except MusicError:
+        raise
+    except Exception as exc:                                        # noqa: BLE001
+        raise MusicError(f"{type(exc).__name__}: {exc}") from exc
+    return to_tracks((found or {}).get("tracks") or [])

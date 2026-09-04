@@ -18,7 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # Needed only by the music area. Kept optional so the feed works without it.
-music = ["ytmusicapi>=1.7"]
+music = ["ytmusicapi>=1.10"]
 
 [project.scripts]
 weave = "weave.__main__:main"

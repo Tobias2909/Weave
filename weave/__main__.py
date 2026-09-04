@@ -442,7 +442,13 @@ def _cmd_themes(args) -> int:
     for theme in themes.available():
         mark = "*" if theme.name == current else " "
         where = "built in" if theme.builtin else str(theme.source)
-        wash = f"gradient at {theme.gradient['angle']:.0f} degrees" if theme.gradient else "flat"
+        if not theme.gradient:
+            wash = "flat"
+        elif theme.gradient["type"] == "radial":
+            wash = (f"glow at {theme.gradient['originX']:.2f}, "
+                    f"{theme.gradient['originY']:.2f}")
+        else:
+            wash = f"gradient at {theme.gradient['angle']:.0f} degrees"
         print(f"{mark} {theme.name:<20} {wash:<28} {where}")
         for problem in theme.problems:
             print(f"    problem {problem}")

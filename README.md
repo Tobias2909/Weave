@@ -31,8 +31,10 @@ This is the first milestone. Working right now
 * A detail panel beside the feed showing what is playing, with views, likes,
   an estimated dislike count and the top comment threads, resizable and
   remembered
-* Themes as files you can write yourself, four of them built in, some with a
+* Themes as files you can write yourself, several built in, some with a
   gradient that washes across the window
+* A music area that plays audio inside Weave rather than handing it to `mpv`,
+  with search, saved addresses, and a player bar that survives switching views
 * A grid of cards in a dark window, sized to the space it has
 * A duration badge, view and like counts, the channel icon, and a progress line
   showing where you stopped, read out of the resume files `mpv` already writes
@@ -44,9 +46,8 @@ This is the first milestone. Working right now
 * A visible banner whenever a source reports a problem, because a scraper that
   returns nothing looks exactly like a quiet day
 
-Coming in later milestones, roughly in this order. A YouTube Music area that
-plays audio inside Weave, search and playlists and history, and a diagnostics
-page.
+Coming in later milestones, roughly in this order. Recommendations, search over
+your feed, playlists and history, and a diagnostics page.
 
 The detail panel follows `mpv` rather than the grid, so it shows whatever is on
 screen even when `mpv` moved to the next thing by itself. Closing it closes it
@@ -106,6 +107,24 @@ nothing to type. It is approved once and then remembered, and every channel you
 follow is tracked from that moment on, so they show up in the feed and can go
 into groups like anything else. There is also a Connect button in the live bar
 itself if you would rather not use the terminal.
+
+## Music
+
+Video goes to `mpv` because that is the point of the application. Audio does not,
+because a separate window for a song makes no sense, so it plays here instead.
+
+Nothing is downloaded. `yt-dlp` resolves a stream address and Qt plays it, which
+reaches the same Premium quality the rest of the setup gets. A live stream has no
+audio only form at all, so one of its combined variants is played with the
+picture discarded, which is how a round the clock radio stream works here.
+
+Signing in costs nothing extra. The library uses the same browser cookies
+everything else does. Search, playlists and station radio all work, and the
+headphone on any video card plays that video as sound with no window. Addresses
+worth returning to can be saved, which is what a round the clock stream wants.
+
+Starting a video in `mpv` pauses the music, since two things playing at once is
+never wanted. There is a switch in the player bar if you disagree.
 
 ## Themes
 
@@ -197,7 +216,7 @@ package manager of most other distributions.
 | Playback | `mpv` |
 | Adding a channel, and YouTube data beyond RSS | `yt-dlp`, plus `deno` or `nodejs` for the JS challenges it has to solve |
 | Twitch playback | `streamlink` |
-| The music area, later | `python-ytmusicapi` |
+| The music area | `python-ytmusicapi` |
 
 ## Install
 
