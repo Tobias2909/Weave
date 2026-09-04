@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -245,6 +245,16 @@ class Database:
                 existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
                 if column not in existing:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+            row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+            was = int(row["value"]) if row else 0
+            if was and was < 10:
+                # Banners stored before this were the uncropped artwork, which
+                # is the wrong shape for the band it goes in and looks like a
+                # picture that failed to load. Forgetting when the details were
+                # fetched makes the next visit to that channel pick the crop.
+                conn.execute(
+                    "UPDATE channels SET details_fetched_at=NULL, banner_url=NULL "
+                    "WHERE banner_url LIKE '%=s0'")
             conn.execute(
                 "INSERT INTO meta(key, value) VALUES('schema_version', ?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",

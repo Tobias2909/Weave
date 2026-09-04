@@ -24,7 +24,9 @@ Item {
             asynchronous: true
             cache: true
             fillMode: Image.PreserveAspectCrop
-            opacity: 0.55
+            // Dimmed, but meant to be seen. The gradient below is what keeps
+            // the text legible, so this does not have to be faint as well.
+            opacity: 0.8
         }
 
         // Keeps the text legible whatever the banner looks like.

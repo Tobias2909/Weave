@@ -5,10 +5,19 @@ them during an import. On a subscription list of several hundred channels that
 would be several hundred calls for pages that may never be looked at, and one
 call costs about six tenths of a second.
 
-Picking the right image out of the response matters. A channel returns its
-banner at six crop widths plus its avatar, and the banner entries are the ones
-carrying a crop parameter. The reliable discriminator is the aspect ratio, since
-an avatar is square and a banner is not.
+Picking the right image out of the response matters, and getting it wrong does
+not look like an error. A channel returns its banner at six crop widths plus its
+avatar. Measured on a live channel, the six crops are the banner as it is
+actually displayed, up to 2560 by 424 at an aspect ratio of about six to one,
+while `banner_uncropped` is the raw 2560 by 1440 artwork the channel owner
+uploaded, of which only a middle strip is ever shown.
+
+So the crops are what a page wants. Taking the uncropped one instead fills a
+wide band with a magnified slice of the middle of a mostly empty image, which
+reads as the banner having failed to load rather than as the wrong picture.
+The uncropped entry is kept only as the fallback for a channel that offers no
+crops, and it carries no width or height, which is why it cannot simply be
+sorted with the rest.
 """
 
 from __future__ import annotations
@@ -28,6 +37,7 @@ _COMMAND = [
 
 AVATAR_ID = "avatar_uncropped"
 BANNER_ID = "banner_uncropped"
+BANNER_RATIO = 3
 
 
 class DetailsError(RuntimeError):
@@ -55,11 +65,11 @@ def _optional_int(text: str) -> int | None:
 def pick_images(thumbnails: list[dict]) -> tuple[str | None, str | None]:
     """Return the avatar and the banner.
 
-    The uncropped entries are preferred when present because they carry no crop
-    parameters. Otherwise the largest square image is the avatar and the widest
-    non square one is the banner.
+    The avatar is square, so the uncropped one is as good as any and is
+    preferred. The banner is not: the widest crop is what gets shown, and the
+    uncropped artwork is only the fallback when there are no crops.
     """
-    avatar = banner = None
+    avatar = uncropped_banner = None
     squares: list[tuple[int, str]] = []
     wides: list[tuple[int, str]] = []
 
@@ -71,21 +81,23 @@ def pick_images(thumbnails: list[dict]) -> tuple[str | None, str | None]:
         if name == AVATAR_ID and not avatar:
             avatar = url
             continue
-        if name == BANNER_ID and not banner:
-            banner = url
+        if name == BANNER_ID and not uncropped_banner:
+            uncropped_banner = url
             continue
         width, height = entry.get("width"), entry.get("height")
         if not isinstance(width, int) or not isinstance(height, int) or not height:
             continue
         if width == height:
             squares.append((width, url))
-        elif width > height:
+        elif width >= BANNER_RATIO * height:
+            # Wide enough to be a banner rather than a landscape picture of
+            # some other kind. The real crops measure about six to one, so
+            # three is a generous floor.
             wides.append((width, url))
 
     if not avatar and squares:
         avatar = max(squares)[1]
-    if not banner and wides:
-        banner = max(wides)[1]
+    banner = max(wides)[1] if wides else uncropped_banner
     return avatar, banner
 
 
