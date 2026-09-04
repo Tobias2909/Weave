@@ -16,7 +16,13 @@ from typing import Any
 from . import paths
 
 DEFAULTS: dict[str, dict[str, Any]] = {
-    "youtube": {"browser_profile": "auto"},
+    "youtube": {
+        "browser_profile": "auto",
+        # Which YouTube identity to speak as. A Google account can carry more
+        # than one, and "auto" follows whichever the browser is using, which is
+        # whichever was last used there. Set a numeric page id to pin one.
+        "music_identity": "auto",
+    },
     "player": {"command": "auto", "ipc_socket": "auto", "watch_later_dir": "auto"},
     "poll": {
         "feed_interval_s": 900,
@@ -98,6 +104,10 @@ class Config:
     @property
     def min_request_interval_s(self) -> float:
         return max(0.0, int(self.get("poll", "min_request_interval_ms")) / 1000.0)
+
+    @property
+    def music_identity(self) -> str:
+        return str(self.get("youtube", "music_identity")).strip()
 
     @property
     def browser_profile_path(self) -> str:

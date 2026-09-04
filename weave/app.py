@@ -26,6 +26,7 @@ from . import config, imagecache, paths
 from .db import Database
 from .player.mpv import Player
 from .audio import AudioPlayer
+from .sources import ytmusic
 from .ui.bridge import Bridge
 from .ui.feed_model import FeedModel
 from .sources.progress import default_dir as default_watch_later
@@ -88,6 +89,10 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
     # the interpreter can free a context property while the QML engine still
     # holds a pointer to it, which crashes during teardown rather than during
     # the run, so it is easy to miss.
+    # A Google account can carry more than one YouTube identity, and requests
+    # have to say which. Auto follows the browser.
+    ytmusic.configure(cfg.music_identity)
+
     theme = Theme(db, parent=app)
     model = FeedModel(db, watch_later_dir=watch_later, parent=app)
     player = Player(cfg, parent=app)

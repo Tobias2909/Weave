@@ -113,10 +113,27 @@ Rectangle {
                 model: Audio.upcoming
                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-                delegate: Row {
+                delegate: Rectangle {
+                    id: queuedRow
                     required property var modelData
                     width: queued.width
                     height: 44
+                    radius: 5
+                    color: queuedHover.hovered ? Theme.colors.surface : "transparent"
+
+                    HoverHandler { id: queuedHover }
+                    // Skip straight to it rather than pressing next repeatedly.
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: {
+                            Audio.jumpTo(queuedRow.modelData.at)
+                            upNext.close()
+                        }
+                    }
+
+                    Row {
+                    anchors.fill: parent
+                    anchors.margins: 4
                     spacing: 8
 
                     RoundedImage {
@@ -147,6 +164,7 @@ Rectangle {
                             font.pixelSize: 10
                             elide: Text.ElideRight
                         }
+                    }
                     }
                 }
             }

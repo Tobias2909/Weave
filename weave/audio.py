@@ -90,8 +90,12 @@ class AudioPlayer(QObject):
         self._player.durationChanged.connect(self.progressChanged)
         self._player.playbackStateChanged.connect(lambda _s: self.stateChanged.emit())
         self._player.mediaStatusChanged.connect(self._on_status)
-        self._player.errorOccurred.connect(
-            lambda _e, message: self.failed.emit(message or "playback failed"))
+        self._player.errorOccurred.connect(self._on_error)
+        # A stream address is signed and can be dropped part way through, which
+        # arrives as a demux failure and stops the music. One silent retry per
+        # track resolves a fresh address and picks up where it left off.
+        self._recovering = False
+        self._resume_at = 0
 
         self._shuffle = (db.get_state("music_shuffle", "0") == "1") if db else False
         self._repeat = (db.get_state("music_repeat", "0") == "1") if db else False
@@ -154,6 +158,8 @@ class AudioPlayer(QObject):
             "title": self._queue[i].get("title", ""),
             "artist": self._queue[i].get("artist", ""),
             "thumbnail": self._queue[i].get("thumbnail", ""),
+            # Where it sits in the queue, so it can be jumped to directly.
+            "at": i,
         } for i in following[:40]]
 
     track = Property("QVariantMap", _get_track, notify=trackChanged)
@@ -196,6 +202,8 @@ class AudioPlayer(QObject):
             return
         self._player.stop()
         self._loading = True
+        if not self._recovering:
+            self._resume_at = 0
         self.trackChanged.emit()
         self.stateChanged.emit()
         if self._resolver is not None and self._resolver.isRunning():
@@ -211,6 +219,10 @@ class AudioPlayer(QObject):
             return                       # a later choice overtook this one
         self._loading = False
         self._player.setSource(QUrl(address))
+        if self._resume_at > 0:
+            # Set once the source has enough to seek in.
+            self._player.setPosition(self._resume_at)
+            self._resume_at = 0
         self._player.play()
         self.stateChanged.emit()
 
@@ -221,7 +233,28 @@ class AudioPlayer(QObject):
 
     def _on_status(self, status) -> None:
         if status == QMediaPlayer.MediaStatus.EndOfMedia:
+            self._recovering = False
             self.next()
+        elif status == QMediaPlayer.MediaStatus.InvalidMedia:
+            self._recover()
+
+    def _on_error(self, _error, message: str) -> None:
+        if self._recover():
+            return
+        self.failed.emit(message or "playback failed")
+
+    def _recover(self) -> bool:
+        """Fetch a fresh address and carry on from the same place.
+
+        Returns whether it is being handled, so a first failure is quiet and a
+        second one is reported rather than looping.
+        """
+        if self._recovering or not self._current():
+            return False
+        self._recovering = True
+        self._resume_at = self._player.position()
+        self._start_current()
+        return True
 
     @Slot()
     def toggle(self) -> None:
@@ -233,6 +266,14 @@ class AudioPlayer(QObject):
             else:
                 self._player.play()
         self.stateChanged.emit()
+
+    @Slot(int)
+    def jumpTo(self, index: int) -> None:
+        """Skip straight to something further down the queue."""
+        if 0 <= index < len(self._queue) and index != self._at:
+            self._recovering = False
+            self._at = index
+            self._start_current()
 
     @Slot()
     def next(self) -> None:

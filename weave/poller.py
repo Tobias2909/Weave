@@ -586,7 +586,12 @@ class MusicHome(QThread):
         for shelf in found:
             for item in shelf["items"]:
                 item["thumbnail"] = qml_source(item["thumbnail"])
-        found.insert(0, self._own_playlists())
+        # What was played recently is the most useful thing to open on.
+        for index, shelf in enumerate(found):
+            if "listen again" in shelf["title"].lower():
+                found.insert(0, found.pop(index))
+                break
+        found.insert(1 if found else 0, self._own_playlists())
         # Kept, but after the music ones, since those are the real thing now.
         found.append(self._from_youtube())
         self.shelves.emit([shelf for shelf in found if shelf["items"]])

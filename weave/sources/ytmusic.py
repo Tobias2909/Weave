@@ -77,6 +77,20 @@ def cookie_header(profile_path: str) -> str:
 # playlist into seventy four and no liked songs into two thousand.
 _page_id: str | None = None
 _page_id_looked_for = False
+_configured_identity: str | None = None
+
+
+def configure(identity: str | None) -> None:
+    """Pin which identity to speak as, rather than reading it off the page.
+
+    Discovery follows whichever identity the browser is currently using, which
+    is the right one almost always, since it is whichever was last used there.
+    This is for the case where somebody keeps two and wants the other."""
+    global _configured_identity, _page_id_looked_for, _page_id
+    value = (identity or "").strip()
+    _configured_identity = value if value and value != "auto" else None
+    _page_id_looked_for = False
+    _page_id = None
 
 PAGE_ID_PATTERN = re.compile(r'"DELEGATED_SESSION_ID"\s*:\s*"(\d{5,40})"')
 
@@ -84,6 +98,8 @@ PAGE_ID_PATTERN = re.compile(r'"DELEGATED_SESSION_ID"\s*:\s*"(\d{5,40})"')
 def page_id(profile_path: str, force: bool = False) -> str | None:
     """Read the identity out of the music page, once per run."""
     global _page_id, _page_id_looked_for
+    if _configured_identity:
+        return _configured_identity
     if _page_id_looked_for and not force:
         return _page_id
 

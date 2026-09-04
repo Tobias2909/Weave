@@ -328,6 +328,7 @@ class Bridge(QObject):
         not reachable from the sidebar."""
         entries: list[tuple[str, int]] = [(ALL, -1)]
         entries.extend((GROUP, int(row["id"])) for row in self._db.groups())
+        entries.append((MUSIC, -1))
         entries.extend((BOX, int(row["id"])) for row in self._db.boxes())
         return entries
 
@@ -524,7 +525,10 @@ class Bridge(QObject):
             item = self._shelves[shelf_index]["items"][item_index]
         except (IndexError, KeyError, TypeError):
             return
-        if item.get("playlistId"):
+        # A song carries both its own id and the id of the radio built from
+        # it, so the song has to win. Checking the playlist first tried to open
+        # a radio as a playlist and quietly did nothing.
+        if not item.get("videoId") and item.get("playlistId"):
             self._start_tracks(TrackList(self._cfg, "playlist", item["playlistId"],
                                          item.get("title", ""), self))
             return

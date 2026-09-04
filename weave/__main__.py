@@ -409,6 +409,26 @@ def _cmd_live(_args) -> int:
     return 0
 
 
+def _cmd_music(args) -> int:
+    from .sources import ytmusic
+
+    cfg = config.load()
+    ytmusic.configure(cfg.music_identity)
+    identity = ytmusic.page_id(cfg.browser_profile_path, force=True)
+    source = "pinned in the config" if cfg.music_identity not in ("", "auto") else "read from the page"
+    print(f"identity {identity or 'none, this account has only one'} ({source})")
+    try:
+        who = ytmusic.client(cfg.browser_profile_path).get_account_info()
+        print(f"speaking as {who.get('accountName')}")
+        print(f"{len(ytmusic.playlists(cfg.browser_profile_path, limit=200))} playlists visible")
+    except Exception as exc:                                        # noqa: BLE001
+        print(f"could not reach YouTube Music, {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    print("\nIf that is the wrong one, sign in to music.youtube.com as the identity you "
+          "want and run this again, or put a number in music_identity in the config.")
+    return 0
+
+
 def _cmd_themes(args) -> int:
     if args.action == "export":
         source = next((t for t in themes.available()
@@ -485,6 +505,10 @@ def main() -> int:
     twitch_parser.set_defaults(func=_cmd_twitch)
 
     subparsers.add_parser("live", help="show who is live right now").set_defaults(func=_cmd_live)
+
+    music = subparsers.add_parser("music", help="check which YouTube identity is in use")
+    music.add_subparsers(dest="action")
+    music.set_defaults(func=_cmd_music)
 
     theme_parser = subparsers.add_parser("themes", help="list, choose or copy a theme")
     theme_actions = theme_parser.add_subparsers(dest="action")

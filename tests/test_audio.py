@@ -91,3 +91,54 @@ class Shuffle(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Jumping(unittest.TestCase):
+    def setUp(self):
+        self.player = AudioPlayer(Config(raw={}))
+        self.player.setShuffle(False)
+        self.player._queue = [track(name) for name in ("aaa", "bbb", "ccc", "ddd")]
+        self.player._rebuild_order()
+        self.player._at = 0
+
+    def test_upcoming_says_where_each_one_sits(self):
+        # So a row in the queue view can be jumped to directly rather than by
+        # pressing next until it arrives.
+        self.assertEqual([t["at"] for t in self.player.upcoming], [1, 2, 3])
+
+    def test_jumping_out_of_range_does_nothing(self):
+        self.player.jumpTo(99)
+        self.assertEqual(self.player._at, 0)
+        self.player.jumpTo(-1)
+        self.assertEqual(self.player._at, 0)
+
+
+class Recovery(unittest.TestCase):
+    """A stream address is signed and can be dropped part way through."""
+
+    def setUp(self):
+        self.player = AudioPlayer(Config(raw={}))
+        self.player._queue = [track("aaa")]
+        self.player._rebuild_order()
+        self.player._at = 0
+        self.started = []
+        self.player._start_current = lambda: self.started.append(True)
+
+    def test_the_first_failure_is_retried_quietly(self):
+        reported = []
+        self.player.failed.connect(reported.append)
+        self.player._on_error(None, "Demuxing failed")
+        self.assertEqual(len(self.started), 1)
+        self.assertEqual(reported, [])
+
+    def test_a_second_failure_is_reported_rather_than_looping(self):
+        reported = []
+        self.player.failed.connect(reported.append)
+        self.player._on_error(None, "Demuxing failed")
+        self.player._on_error(None, "Demuxing failed")
+        self.assertEqual(len(self.started), 1)
+        self.assertEqual(len(reported), 1)
+
+    def test_nothing_playing_is_not_recovered(self):
+        self.player._at = -1
+        self.assertFalse(self.player._recover())

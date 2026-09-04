@@ -8,6 +8,13 @@
 # they need the desktop keyring to derive a decryption key.
 browser_profile = "auto"
 
+# Which YouTube identity to speak as. A Google account can carry more than one,
+# and the cookies alone do not say which is in use. Auto follows whichever the
+# browser is using, which is whichever was last used there and is almost always
+# the right one. If your music library looks like somebody else's, run
+# `weave music identity` and put the number here.
+music_identity = "auto"
+
 [player]
 # "auto" prefers mpv-ff2mpv-single.sh when it is on PATH, because that wrapper
 # already handles URL canonicalization, Twitch resolving and single instance
