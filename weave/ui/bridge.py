@@ -11,6 +11,9 @@ letting them be set separately would allow combinations with no meaning.
 
 from __future__ import annotations
 
+import json
+import time
+
 from PySide6.QtCore import Property, QObject, Signal, Slot
 
 from .. import format as fmt
@@ -29,6 +32,10 @@ MUSIC = "music"
 GROUP = "group"
 BOX = "box"
 CHANNEL = "channel"
+
+# How long the shelves are trusted before being gathered again. They are a
+# recommendation, not a fact, and they cost several seconds to fetch.
+SHELF_LIFETIME_S = 6 * 3600
 
 
 class Bridge(QObject):
@@ -73,6 +80,7 @@ class Bridge(QObject):
         self._searching = False
         self._home: MusicHome | None = None
         self._shelves: list = []
+        self._shelves_age = 0
         self._tracks: TrackList | None = None
         self._source_details: list = []
         self._results_label = ""
@@ -321,6 +329,10 @@ class Bridge(QObject):
         self._view_channel = channel_key
         self.viewChanged.emit()
         self.reload()
+        # Reaching the music view by scrolling the sidebar has to fill it just
+        # as clicking the row does, or the wheel lands on an empty page.
+        if kind == MUSIC and not self._shelves:
+            self.loadHome()
 
     def _selectable(self) -> list[tuple[str, int]]:
         """Everything the sidebar offers, in the order it is drawn. All first,
@@ -495,10 +507,36 @@ class Bridge(QObject):
         if not self._shelves:
             self.loadHome()
 
+    def _remembered_shelves(self) -> list:
+        """What was on the shelves last time, so the view has something the
+        moment it opens instead of a blank page for several seconds."""
+        stored = self._db.get_state("music_shelves")
+        if not stored:
+            return []
+        try:
+            shelves = json.loads(stored)
+        except ValueError:
+            return []
+        return shelves if isinstance(shelves, list) else []
+
     @Slot()
-    def loadHome(self) -> None:
+    def loadHome(self, force: bool = False) -> None:
         """What YouTube Music opens on, which is what fills this view before
-        anything has been searched for."""
+        anything has been searched for.
+
+        What was there last time is shown at once, and a fresh copy is fetched
+        behind it, since the whole set takes several seconds to gather and
+        barely changes between one evening and the next.
+        """
+        if not self._shelves:
+            remembered = self._remembered_shelves()
+            if remembered:
+                self._shelves = remembered
+                self.musicChanged.emit()
+                stamp = self._db.get_state("music_shelves_at", "0") or "0"
+                self._shelves_age = int(stamp) if stamp.isdigit() else 0
+                if not force and time.time() - self._shelves_age < SHELF_LIFETIME_S:
+                    return
         if self._home is not None and self._home.isRunning():
             return
         self._home = MusicHome(self._cfg, self)
@@ -551,7 +589,14 @@ class Bridge(QObject):
 
     def _on_shelves(self, shelves: list) -> None:
         self._shelves = shelves
+        self._shelves_age = int(time.time())
+        self._db.set_state("music_shelves", json.dumps(shelves))
+        self._db.set_state("music_shelves_at", str(self._shelves_age))
         self.musicChanged.emit()
+
+    @Slot()
+    def refreshMusic(self) -> None:
+        self.loadHome(force=True)
 
     def _on_tracks(self, rows: list, label: str) -> None:
         self._searching = False

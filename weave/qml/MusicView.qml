@@ -51,6 +51,12 @@ Item {
                 text: "Back to recommended"
                 onClicked: { query.text = ""; App.clearResults() }
             }
+
+            FlatButton {
+                visible: App.musicResults.length === 0
+                text: "Refresh"
+                onClicked: App.refreshMusic()
+            }
         }
 
         // ---- what is showing --------------------------------------------

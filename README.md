@@ -136,6 +136,10 @@ music lives on a second identity looks like a brand new listener.
 Starting a video in `mpv` pauses the music, since two things playing at once is
 never wanted. There is a switch in the player bar if you disagree.
 
+The shelves are remembered, so the view has something the moment it opens
+rather than a blank page while several requests are gathered. A fresh copy is
+fetched behind that, and there is a refresh button for when it is wanted sooner.
+
 ## Themes
 
 A theme is a file. It has a name, a set of named colours, and an optional
