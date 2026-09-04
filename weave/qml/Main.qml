@@ -142,6 +142,12 @@ ApplicationWindow {
             }
 
             FlatButton {
+                visible: App.viewKind === "recommended"
+                text: "Ask again"
+                onClicked: App.refreshRecommended()
+            }
+
+            FlatButton {
                 text: "Import subscriptions"
                 onClicked: App.importSubscriptions()
             }
@@ -312,6 +318,15 @@ ApplicationWindow {
                 Item { width: 1; height: 10 }
 
                 SidebarHeading { text: "Yours" }
+
+                SidebarRow {
+                    width: sidebarColumn.width
+                    label: "Recommended"
+                    count: 0
+                    selected: App.viewKind === "recommended"
+                    onActivated: App.showRecommended()
+                    onRevealRequested: root.revealRow(this)
+                }
 
                 SidebarRow {
                     width: sidebarColumn.width

@@ -24,7 +24,8 @@ from ..imagecache import qml_source
 from ..player.mpv import Player
 from ..poller import (ChannelAdder, ChannelDetailsFetcher, DetailFetcher, FeedPoller,
                       HistoryImporter, LiveWatcher, MusicHome, MusicSearch,
-                      SourceDetails, TrackList, SubsImporter, TwitchLogin)
+                      RecommendationsFetcher, SourceDetails, TrackList, SubsImporter,
+                      TwitchLogin)
 from .feed_model import FeedModel
 
 ALL = "all"
@@ -34,6 +35,10 @@ BOX = "box"
 CHANNEL = "channel"
 SEARCH = "search"
 HISTORY = "history"
+RECOMMENDED = "recommended"
+
+# How long a set of recommendations is worth showing before asking for another.
+RECOMMENDED_TRUST_S = 6 * 3600
 
 # How long the shelves are trusted before being gathered again. They are a
 # recommendation, not a fact, and they cost several seconds to fetch.
@@ -66,6 +71,7 @@ class Bridge(QObject):
         self._adder: ChannelAdder | None = None
         self._importer: SubsImporter | None = None
         self._history: HistoryImporter | None = None
+        self._recommended: RecommendationsFetcher | None = None
         self._details: ChannelDetailsFetcher | None = None
         self._live: LiveWatcher | None = None
         self._twitch: TwitchLogin | None = None
@@ -163,6 +169,8 @@ class Bridge(QObject):
     def _get_empty_hint(self) -> str:
         """What to say when the grid is empty. There are several different
         reasons for that and they need different answers."""
+        if self._view_kind == RECOMMENDED:
+            return "Nothing suggested yet.\nPress Ask again in the bar."
         if self._view_kind == SEARCH:
             return f"Nothing stored matches {self._search_text}."
         if self._view_kind == HISTORY:
@@ -362,6 +370,12 @@ class Bridge(QObject):
             self.groupsChanged.emit()
             self.boxesChanged.emit()
             return
+        if self._view_kind == RECOMMENDED:
+            # Its own table, not the feed. Shaped the same so one grid draws
+            # both, but nothing here is a video you follow.
+            self._model.show(self._db.recommended())
+            self.emptyHintChanged.emit()
+            return
         # A search and the history both ignore the hide watched toggle. A
         # search is asking for one particular thing, and hiding the watched
         # half of the history would leave nothing at all.
@@ -391,6 +405,8 @@ class Bridge(QObject):
         # then landed on an empty page.
         if kind == MUSIC and not self._shelves:
             self.loadHome()
+        if kind == RECOMMENDED:
+            self._fetch_recommended()
 
     def _selectable(self) -> list[tuple[str, int]]:
         """Everything the sidebar offers, in the order it is drawn. All first,
@@ -398,6 +414,7 @@ class Bridge(QObject):
         not reachable from the sidebar."""
         entries: list[tuple[str, int]] = [(ALL, -1)]
         entries.extend((GROUP, int(row["id"])) for row in self._db.groups())
+        entries.append((RECOMMENDED, -1))
         entries.append((HISTORY, -1))
         entries.append((MUSIC, -1))
         entries.extend((BOX, int(row["id"])) for row in self._db.boxes())
@@ -451,6 +468,32 @@ class Bridge(QObject):
     @Slot()
     def showHistory(self) -> None:
         self._set_view(HISTORY, -1)
+
+    @Slot()
+    def showRecommended(self) -> None:
+        self._set_view(RECOMMENDED, -1)
+
+    @Slot()
+    def refreshRecommended(self) -> None:
+        self._fetch_recommended(force=True)
+
+    def _fetch_recommended(self, force: bool = False) -> None:
+        if self._recommended is not None and self._recommended.isRunning():
+            return
+        age = self._db.recommended_age_s()
+        if not force and age is not None and age < RECOMMENDED_TRUST_S:
+            return
+        self._set_status("asking YouTube what it suggests")
+        self._recommended = RecommendationsFetcher(self._db, self._cfg, parent=self)
+        self._recommended.ready.connect(self._on_recommended)
+        self._recommended.failed.connect(
+            lambda message: self._set_status(f"recommendations, {message}"))
+        self._recommended.start()
+
+    def _on_recommended(self, count: int) -> None:
+        self._set_status(f"{count} suggestions")
+        if self._view_kind == RECOMMENDED:
+            self.reload()
 
     @Slot(int)
     def selectGroup(self, group_id: int) -> None:
@@ -1071,6 +1114,7 @@ class Bridge(QObject):
         already gone, so any short wait here is invisible.
         """
         threads = [self._poller, self._adder, self._importer, self._history,
+                   self._recommended,
                    self._details, self._live, self._twitch, self._detail, self._search,
                    self._home, self._tracks, *self._source_details]
         live = [thread for thread in threads if thread is not None and thread.isRunning()]

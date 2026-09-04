@@ -48,6 +48,7 @@ from .sources import comments as comment_source
 from .sources import livecheck
 from .sources import dislikes as dislike_source
 from .sources import history as history_source
+from .sources import recommended as recommended_source
 from .sources import rss, subs, sweep, twitch
 
 
@@ -377,6 +378,48 @@ class HistoryImporter(QThread):
         marked, missing = self._db.mark_watched_many(keys, "youtube")
         self._db.close()
         self.imported.emit(marked, missing)
+
+
+class RecommendationsFetcher(QThread):
+    """What YouTube suggests, fetched on demand.
+
+    Kept out of the feed and out of the videos table, so a suggestion never
+    looks like something followed.
+    """
+
+    ready = Signal(int)
+    failed = Signal(str)
+
+    def __init__(self, db: Database, cfg: Config, limit: int = 48,
+                 parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._db = db
+        self._cfg = cfg
+        self._limit = limit
+        self._throttle = Throttle(1, cfg.min_request_interval_s)
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def run(self) -> None:
+        _spend(self._db, self._cfg, BROWSE)
+        try:
+            found = recommended_source.fetch(self._cfg, self._limit, self._throttle,
+                                             cancel=self._cancel)
+        except ProcessCancelled:
+            return
+        except recommended_source.RecommendedError as exc:
+            _spend(self._db, self._cfg, BROWSE, count=0, refused=1)
+            self.failed.emit(str(exc))
+            return
+        count = self._db.replace_recommended([{
+            "ext_id": item.ext_id, "title": item.title,
+            "channel_name": item.channel_name, "channel_ext_id": item.channel_ext_id,
+            "duration_s": item.duration_s, "thumbnail_url": item.thumbnail_url,
+        } for item in found])
+        self._db.close()
+        self.ready.emit(count)
 
 
 class ChannelDetailsFetcher(QThread):

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -40,6 +40,21 @@ CREATE TABLE IF NOT EXISTS request_budget (
     count    INTEGER NOT NULL DEFAULT 0,
     refused  INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (endpoint, minute)
+);
+
+-- What YouTube suggests. Kept apart from videos on purpose: these are mostly
+-- from channels that are not tracked, and writing them in there would make
+-- them look like something followed. Replaced wholesale on each refresh,
+-- because yesterday's suggestion is not worth keeping.
+CREATE TABLE IF NOT EXISTS recommended (
+    ext_id         TEXT PRIMARY KEY,
+    title          TEXT NOT NULL,
+    channel_name   TEXT,
+    channel_ext_id TEXT,
+    duration_s     INTEGER,
+    thumbnail_url  TEXT,
+    position       INTEGER NOT NULL,
+    seen_at        INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS channels (
@@ -764,6 +779,62 @@ class Database:
     def boxes_holding(self, video_key: str) -> list[int]:
         return [int(row["box_id"]) for row in self.conn.execute(
             "SELECT box_id FROM box_items WHERE video_key=?", (video_key,))]
+
+    # ---- recommendations -------------------------------------------------
+
+    def replace_recommended(self, rows: list[dict]) -> int:
+        """Swap in a fresh set. Replacing rather than merging, since these are
+        a snapshot of a moment and an old one has no value."""
+        now = int(time.time())
+        with self.conn as conn:
+            conn.execute("DELETE FROM recommended")
+            conn.executemany(
+                "INSERT INTO recommended(ext_id, title, channel_name, channel_ext_id, "
+                "  duration_s, thumbnail_url, position, seen_at) VALUES(?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(ext_id) DO NOTHING",
+                [(row["ext_id"], row["title"], row.get("channel_name"),
+                  row.get("channel_ext_id"), row.get("duration_s"),
+                  row.get("thumbnail_url"), index, now)
+                 for index, row in enumerate(rows)],
+            )
+        self.set_state("recommended_at", str(now))
+        return len(rows)
+
+    def recommended(self, limit: int = 100) -> list[sqlite3.Row]:
+        """Shaped like a feed row so the same grid can draw it.
+
+        The channel is joined in when it happens to be one that is tracked,
+        which is how a recommendation from a channel already followed gets its
+        icon, and left as the bare name otherwise.
+        """
+        return list(self.conn.execute(
+            """
+            SELECT 'yt:' || r.ext_id           AS key,
+                   'youtube'                   AS platform,
+                   r.ext_id                    AS ext_id,
+                   COALESCE(c.key, '')         AS channel_key,
+                   r.title                     AS title,
+                   NULL                        AS published_at,
+                   r.thumbnail_url             AS thumbnail_url,
+                   r.duration_s                AS duration_s,
+                   NULL                        AS views,
+                   NULL                        AS likes,
+                   NULL                        AS live_status,
+                   COALESCE(c.title, r.channel_name) AS channel_title,
+                   c.avatar_url                AS avatar_url,
+                   w.video_key IS NOT NULL     AS watched
+            FROM recommended r
+            LEFT JOIN channels c ON c.ext_id = r.channel_ext_id AND c.platform = 'youtube'
+            LEFT JOIN watched w ON w.video_key = 'yt:' || r.ext_id
+            ORDER BY r.position
+            LIMIT ?
+            """,
+            (limit,),
+        ))
+
+    def recommended_age_s(self) -> int | None:
+        stamp = self.get_state("recommended_at")
+        return None if not stamp else int(time.time()) - int(stamp)
 
     # ---- who is live -----------------------------------------------------
 

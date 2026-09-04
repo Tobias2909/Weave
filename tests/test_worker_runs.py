@@ -133,6 +133,13 @@ class WorkerRuns(unittest.TestCase):
         self.run_worker(poller.HistoryImporter(self.db, self.cfg))
         self.assertTrue(self.db.is_watched("yt:aaaaaaaaaaa"))
 
+    def test_recommendations_fetcher(self):
+        self.patch(poller.recommended_source, "fetch",
+                   lambda *a, **k: [poller.recommended_source.Recommendation(
+                       "aaaaaaaaaaa", "A suggestion", "Someone", "UC9", 100, "t")])
+        self.run_worker(poller.RecommendationsFetcher(self.db, self.cfg))
+        self.assertEqual([r["title"] for r in self.db.recommended()], ["A suggestion"])
+
     def test_live_watcher(self):
         self.patch(poller.tokens, "load", lambda: object())
         self.patch(poller.twitch, "Client", _TwitchClient)
@@ -164,7 +171,8 @@ class WorkerRuns(unittest.TestCase):
         import re
 
         run_here = {"FeedPoller", "SubsImporter", "ChannelDetailsFetcher",
-                    "HistoryImporter", "LiveWatcher", "DetailFetcher"}
+                    "HistoryImporter", "RecommendationsFetcher", "LiveWatcher",
+                    "DetailFetcher"}
         source = Path("weave/poller.py").read_text()
         spenders = {match.group(1)
                     for match in re.finditer(r"class (\w+)\(QThread\):(.*?)(?=\nclass |\Z)",

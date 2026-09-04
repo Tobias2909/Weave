@@ -508,6 +508,55 @@ class SearchAndHistory(DatabaseCase):
         self.assertEqual(self.db.mark_watched_many([], "youtube"), (0, 0))
 
 
+class Recommendations(DatabaseCase):
+    """Kept apart from the feed on purpose, and shaped like it anyway."""
+
+    def rows(self, *ids):
+        return [{"ext_id": i, "title": f"Video {i}", "channel_name": "Someone",
+                 "channel_ext_id": "UC9", "duration_s": 60, "thumbnail_url": "t"}
+                for i in ids]
+
+    def test_nothing_is_written_into_the_feed(self):
+        # The whole point. A suggestion must never look like a channel followed.
+        self.db.replace_recommended(self.rows("aaaaaaaaaaa"))
+        self.assertEqual(self.db.feed(), [])
+        self.assertEqual(self.db.channels(), [])
+
+    def test_a_refresh_replaces_rather_than_accumulates(self):
+        self.db.replace_recommended(self.rows("aaaaaaaaaaa", "bbbbbbbbbbb"))
+        self.db.replace_recommended(self.rows("ccccccccccc"))
+        self.assertEqual([r["ext_id"] for r in self.db.recommended()], ["ccccccccccc"])
+
+    def test_the_order_it_came_in_is_the_order_shown(self):
+        self.db.replace_recommended(self.rows("bbbbbbbbbbb", "aaaaaaaaaaa"))
+        self.assertEqual([r["ext_id"] for r in self.db.recommended()],
+                         ["bbbbbbbbbbb", "aaaaaaaaaaa"])
+
+    def test_a_suggestion_from_a_tracked_channel_gets_its_icon(self):
+        self.db.add_channel("yt:UC9", "youtube", "UC9", "Real name", "http://a/av.jpg")
+        self.db.replace_recommended(self.rows("aaaaaaaaaaa"))
+        row = self.db.recommended()[0]
+        self.assertEqual((row["channel_title"], row["avatar_url"], row["channel_key"]),
+                         ("Real name", "http://a/av.jpg", "yt:UC9"))
+
+    def test_a_suggestion_from_a_stranger_keeps_the_bare_name(self):
+        self.db.replace_recommended(self.rows("aaaaaaaaaaa"))
+        row = self.db.recommended()[0]
+        self.assertEqual((row["channel_title"], row["channel_key"]), ("Someone", ""))
+
+    def test_watched_is_carried_across(self):
+        self.db.add_channel("yt:UC9", "youtube", "UC9", "Real name")
+        self.db.upsert_videos([self.video("aaaaaaaaaaa", channel="yt:UC9")])
+        self.db.set_watched("yt:aaaaaaaaaaa", 1.0, "mpv")
+        self.db.replace_recommended(self.rows("aaaaaaaaaaa"))
+        self.assertTrue(self.db.recommended()[0]["watched"])
+
+    def test_how_old_the_set_is(self):
+        self.assertIsNone(self.db.recommended_age_s())
+        self.db.replace_recommended(self.rows("aaaaaaaaaaa"))
+        self.assertLess(self.db.recommended_age_s(), 5)
+
+
 class AppState(DatabaseCase):
     def test_round_trip_with_a_default(self):
         self.assertEqual(self.db.get_state("missing", "fallback"), "fallback")

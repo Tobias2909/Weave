@@ -27,6 +27,7 @@ This is the first milestone. Working right now
   subscriber count and everything stored from it
 * Search across everything stored, as you type, over the local database and
   with no request at all
+* What YouTube suggests, in its own view, kept out of the feed
 * A history of what you have watched, which can be seeded once from the history
   YouTube already keeps
 * A live bar across the top showing who is streaming right now, Twitch and
@@ -122,6 +123,22 @@ a held down refresh button rather than on normal use.
 
 ```sh
 python -m weave budget
+```
+
+## Recommendations, kept where they belong
+
+What YouTube suggests lives in its own view and its own table. It is never
+written into the feed, because the feed is the channels you chose and keeping
+those two apart is most of the point of this. A suggestion from a channel you
+already track picks up that channel's name and icon. One from a stranger keeps
+the bare name and has no channel page, which is a quiet nothing rather than an
+error.
+
+A set is kept for six hours and then asked for again on the next visit, or
+straight away with **Ask again** in the bar.
+
+```sh
+python -m weave recommended
 ```
 
 ## Searching and history

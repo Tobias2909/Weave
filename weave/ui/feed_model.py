@@ -47,9 +47,16 @@ class FeedModel(QAbstractListModel):
     def reload(self, hide_watched: bool = True, group_id: int | None = None,
                channel_key: str | None = None, box_id: int | None = None,
                query: str | None = None, watched_only: bool = False) -> None:
-        rows = self._db.feed(hide_watched=hide_watched, group_id=group_id,
-                             channel_key=channel_key, box_id=box_id,
-                             query=query, watched_only=watched_only)
+        self.show(self._db.feed(hide_watched=hide_watched, group_id=group_id,
+                                channel_key=channel_key, box_id=box_id,
+                                query=query, watched_only=watched_only))
+
+    def show(self, rows) -> None:
+        """Draw these rows, whatever produced them.
+
+        Recommendations come from their own table rather than from the feed,
+        and are shaped the same on purpose so one grid draws both.
+        """
         built = [self._build(row) for row in rows]
 
         # Partial progress comes from mpv's own resume files rather than being

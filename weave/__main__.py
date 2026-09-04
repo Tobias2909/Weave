@@ -16,7 +16,7 @@ from .budget import Budget
 from .sources import twitch
 from .db import Database
 from .net import Throttle
-from .sources import history, subs
+from .sources import history, recommended, subs
 from .sources.resolve import ResolveError, resolve
 
 
@@ -161,6 +161,51 @@ def _cmd_budget(_args) -> int:
         ceiling = str(limit) if limit else "no ceiling"
         note = f", {refused} refused" if refused else ""
         print(f"  {endpoint:9} {sent:5} sent of {ceiling}{note}")
+    return 0
+
+
+def _cmd_history(args) -> int:
+    """Mark what YouTube already knows you have watched.
+
+    Worth running once, so a first day does not look like several thousand
+    unwatched videos. After that mpv is the source of truth and an existing
+    mark is never overwritten.
+    """
+    cfg = config.load()
+    db = Database(paths.DB_FILE)
+    throttle = Throttle(1, cfg.min_request_interval_s)
+    Budget(db, cfg.budget_limits, cfg.budget_window_s).spend("browse")
+    try:
+        keys = history.fetch(cfg, args.limit, throttle)
+    except history.HistoryError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    marked, missing = db.mark_watched_many(keys, "youtube")
+    print(f"{len(keys)} in the history, {marked} newly marked as watched")
+    if missing:
+        print(f"{missing} were from channels not tracked here, so they were skipped")
+    return 0
+
+
+def _cmd_recommended(args) -> int:
+    """What YouTube suggests, kept in its own table away from the feed."""
+    cfg = config.load()
+    db = Database(paths.DB_FILE)
+    throttle = Throttle(1, cfg.min_request_interval_s)
+    Budget(db, cfg.budget_limits, cfg.budget_window_s).spend("browse")
+    try:
+        found = recommended.fetch(cfg, args.limit, throttle)
+    except recommended.RecommendedError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    db.replace_recommended([{
+        "ext_id": item.ext_id, "title": item.title, "channel_name": item.channel_name,
+        "channel_ext_id": item.channel_ext_id, "duration_s": item.duration_s,
+        "thumbnail_url": item.thumbnail_url,
+    } for item in found])
+    print(f"{len(found)} suggestions")
+    for row in db.recommended(limit=args.limit):
+        print(f"  {row['ext_id']}  {(row['channel_title'] or '')[:24]:<24} {row['title'][:52]}")
     return 0
 
 
@@ -561,6 +606,17 @@ def main() -> int:
     budget = subparsers.add_parser(
         "budget", help="how much each endpoint has been asked recently")
     budget.set_defaults(func=_cmd_budget)
+
+    watched = subparsers.add_parser(
+        "history", help="mark what YouTube says you have already watched")
+    watched.add_argument("--limit", type=int, default=2000,
+                         help="how far back to read, newest first")
+    watched.set_defaults(func=_cmd_history)
+
+    suggested = subparsers.add_parser(
+        "recommended", help="refresh what YouTube suggests")
+    suggested.add_argument("--limit", type=int, default=48)
+    suggested.set_defaults(func=_cmd_recommended)
 
     group = subparsers.add_parser("group", help="organise channels into groups")
     group_actions = group.add_subparsers(dest="action", required=True)
