@@ -314,6 +314,8 @@ class Bridge(QObject):
         return next((row for row in self._web_results if row["key"] == key), None)
 
     def _get_detail(self) -> dict:
+        if self._detail_key.startswith("twitch:"):
+            return self._stream_detail(self._detail_key)
         row = self._video_for_detail(self._detail_key)
         if not row:
             return {}
@@ -340,6 +342,43 @@ class Bridge(QObject):
         if self._detail_dislikes and self._detail_dislikes[0] == row["key"]:
             return self._detail_dislikes[1]
         return None
+
+    def _stream_detail(self, key: str) -> dict:
+        """A Twitch stream in the panel.
+
+        It is not a video and has no row among them, so what it shows is what a
+        stream has: who, what they are playing, how many are watching and how
+        long it has been going. There are no comments and no likes to fetch.
+        """
+        row = self._db.live_stream(key)
+        if not row:
+            return {}
+        started = row.get("started_at") or ""
+        since = None
+        if started:
+            try:
+                from datetime import datetime
+                since = int(datetime.fromisoformat(
+                    started.replace("Z", "+00:00")).timestamp())
+            except ValueError:
+                since = None
+        return {
+            "key": key,
+            "title": row.get("title") or row.get("display_name") or "",
+            "channelKey": key,
+            "channelTitle": row.get("display_name") or row.get("channel_title") or "",
+            "channelAvatar": qml_source(row.get("avatar_url")),
+            "thumbnail": qml_source(row.get("thumbnail_url")),
+            "ageText": f"live since {fmt.age_text(since)}" if since else "",
+            "durationText": "",
+            "viewsText": "",
+            "watchingText": fmt.count_text(row.get("viewers")),
+            "gameText": row.get("game") or "",
+            "likesText": "",
+            "dislikesText": "",
+            "watched": False,
+            "isLive": True,
+        }
 
     def _get_detail_open(self) -> bool:
         return bool(self._detail_key) and not self._detail_closed
@@ -1290,6 +1329,10 @@ class Bridge(QObject):
         self.detailChanged.emit()
 
     def _start_detail(self) -> None:
+        # A stream has no comments and no likes to go and get, and the two
+        # sources that would be asked are YouTube's.
+        if self._detail_key.startswith("twitch:"):
+            return
         row = self._video_for_detail(self._detail_key)
         if not row:
             return

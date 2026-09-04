@@ -172,7 +172,7 @@ back to the top.
 A suggestion carries a view count and a duration. It carries no upload date and
 no like count, measured, and asking for those would be one request per card, so
 they stay empty on the card and arrive in the panel when you open it. Playlist
-entries carry a view count too. History entries mostly do not, which is
+entries carry a view count too. History entries almost never do, which is
 YouTube's answer rather than a gap here.
 
 ```sh
@@ -239,6 +239,16 @@ something is actually broken, so it can be run from a script.
 **How things are** in the sidebar is the same list in the window, with what has
 gone wrong lately and a table of when each channel was last asked and when it
 is next due, in the order the poller will take them.
+
+## The panel
+
+It mirrors what mpv is playing, whatever that is. A video from the feed shows
+its views, likes, an estimate of its dislikes and its comments. One from a
+search, a suggestion, your history or a playlist shows what that list carried,
+which is usually the title, the picture and the views. A Twitch stream shows
+what a stream has instead, who is on, what they are playing, how many are
+watching and how long it has been going, because a stream has no comments and
+no likes to go and fetch.
 
 ## What is on screen while something is loading
 

@@ -134,7 +134,7 @@ ApplicationWindow {
                 id: searchField
                 objectName: "searchField"
                 Layout.preferredWidth: 220
-                placeholderText: "Search what is stored"
+                placeholderText: "Search yours, or YouTube with return"
                 color: Theme.colors.text
                 placeholderTextColor: Theme.colors.textMuted
                 background: Rectangle {
@@ -902,7 +902,11 @@ ApplicationWindow {
         padding: 16
         modal: true
         focus: true
-        onOpened: chooserFilter.forceActiveFocus()
+        onOpened: {
+            reload()
+            chooserFilter.text = ""
+            chooserFilter.forceActiveFocus()
+        }
         background: Rectangle {
             radius: 8
             color: Theme.colors.surfaceRaised
@@ -910,11 +914,34 @@ ApplicationWindow {
             border.color: Theme.colors.border
         }
 
+        // A snapshot taken when it opens, not a live binding. Ticking a box
+        // changes the playlists, and a model that rebuilds itself sends the
+        // list back to the top under the hand that just ticked it.
+        property var all: []
+        // Which are hidden, kept here so a tick does not have to rebuild the
+        // model to be seen.
+        property var away: ({})
+
+        function reload() {
+            all = App.allPlaylists
+            var map = {}
+            for (var i = 0; i < all.length; i++)
+                map[all[i].ext_id] = !!all[i].hidden
+            away = map
+        }
+
+        function toggle(id, hidden) {
+            var map = away
+            map[id] = hidden
+            away = map
+            App.setPlaylistHidden(id, hidden)
+        }
+
         function matching() {
             var text = chooserFilter.text.trim().toLowerCase()
             if (text === "")
-                return App.allPlaylists
-            return App.allPlaylists.filter(function (p) {
+                return all
+            return all.filter(function (p) {
                 return p.title.toLowerCase().indexOf(text) >= 0
             })
         }
@@ -968,8 +995,8 @@ ApplicationWindow {
                         id: box
                         anchors.left: parent.left
                         anchors.verticalCenter: parent.verticalCenter
-                        checked: !entry.modelData.hidden
-                        onToggled: App.setPlaylistHidden(entry.modelData.ext_id, !checked)
+                        checked: !playlistChooser.away[entry.modelData.ext_id]
+                        onToggled: playlistChooser.toggle(entry.modelData.ext_id, !checked)
                     }
 
                     Label {
@@ -998,8 +1025,9 @@ ApplicationWindow {
                     MouseArea {
                         anchors.fill: parent
                         anchors.leftMargin: box.width
-                        onClicked: App.setPlaylistHidden(entry.modelData.ext_id,
-                                                         !entry.modelData.hidden)
+                        onClicked: playlistChooser.toggle(
+                                       entry.modelData.ext_id,
+                                       !playlistChooser.away[entry.modelData.ext_id])
                     }
                 }
             }
@@ -1011,9 +1039,9 @@ ApplicationWindow {
                 FlatButton {
                     text: "Show every one"
                     onClicked: {
-                        var all = App.allPlaylists
-                        for (var i = 0; i < all.length; i++)
-                            App.setPlaylistHidden(all[i].ext_id, false)
+                        var every = playlistChooser.all
+                        for (var i = 0; i < every.length; i++)
+                            playlistChooser.toggle(every[i].ext_id, false)
                     }
                 }
                 FlatButton {

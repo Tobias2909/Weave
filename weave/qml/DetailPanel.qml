@@ -126,6 +126,8 @@ Rectangle {
 
                 Repeater {
                     model: [
+                        { label: "watching now", value: App.detail.watchingText },
+                        { label: "", value: App.detail.gameText },
                         { label: "views", value: App.detail.viewsText },
                         { label: "likes", value: App.detail.likesText },
                         { label: "dislikes, estimated", value: App.detail.dislikesText },

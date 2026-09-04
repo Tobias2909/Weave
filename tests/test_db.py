@@ -610,6 +610,37 @@ class CachedLists(DatabaseCase):
                          ("No channel named", None, ""))
 
 
+class LiveStreamDetail(DatabaseCase):
+    """A stream is not a video and has no row among them, so the panel has to
+    find it where it does live."""
+
+    def setUp(self):
+        super().setUp()
+        self.db.add_channel("twitch:alpha", "twitch", "alpha", "Alpha", "http://a/av.jpg")
+        self.db.replace_live("twitch", [{
+            "channel_key": "twitch:alpha", "login": "alpha", "display_name": "Alpha",
+            "title": "Playing something", "game": "Chess", "viewers": 42,
+            "started_at": "2026-01-01T10:00:00Z", "thumbnail_url": "http://a/t.jpg"}])
+
+    def test_a_stream_that_is_on_can_be_looked_up(self):
+        row = self.db.live_stream("twitch:alpha")
+        self.assertEqual((row["title"], row["game"], row["viewers"]),
+                         ("Playing something", "Chess", 42))
+
+    def test_it_brings_the_channel_picture_with_it(self):
+        self.assertEqual(self.db.live_stream("twitch:alpha")["avatar_url"], "http://a/av.jpg")
+
+    def test_a_channel_that_is_not_on_has_nothing_to_show(self):
+        self.assertIsNone(self.db.live_stream("twitch:nobody"))
+
+    def test_and_neither_does_one_whose_check_stopped_working(self):
+        import time as clock
+        self.db.conn.execute("UPDATE live_streams SET seen_at = ?",
+                             (int(clock.time()) - self.db.LIVE_STALE_S - 1,))
+        self.db.conn.commit()
+        self.assertIsNone(self.db.live_stream("twitch:alpha"))
+
+
 class SearchDecoration(DatabaseCase):
     """Search results are never stored, so they are joined to what is known
     here on the way to the grid."""

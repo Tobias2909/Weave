@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -300,6 +300,13 @@ class Database:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
             row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             was = int(row["value"]) if row else 0
+            if was and was < 17:
+                # Suggestions stored before there was a column for it have no
+                # view count and nothing will ever fill one in, since more is
+                # added on the end rather than revisited. They are a snapshot
+                # and are fetched again on the next visit, so they go.
+                conn.execute("DELETE FROM cached_videos WHERE kind='recommended'")
+                conn.execute("DELETE FROM meta WHERE key='state.recommended_at'")
             if was and was < 14:
                 # Recommendations moved into the shared cached_videos table.
                 # They are a snapshot and are fetched again, so the old rows
@@ -1167,6 +1174,16 @@ class Database:
         rows.sort(key=lambda row: (-int(row.get("viewers") or 0),
                                    (row.get("display_name") or "").lower()))
         return rows
+
+    def live_stream(self, channel_key: str) -> dict | None:
+        """One stream that is on now, for the panel. A stream is not a video
+        and has no row in videos, so it is looked up where it does live."""
+        fresh = int(time.time()) - self.LIVE_STALE_S
+        row = self.conn.execute(
+            "SELECT l.*, c.title AS channel_title, c.avatar_url "
+            "FROM live_streams l LEFT JOIN channels c ON c.key = l.channel_key "
+            "WHERE l.channel_key = ? AND l.seen_at >= ?", (channel_key, fresh)).fetchone()
+        return dict(row) if row else None
 
     def live_keys(self) -> set[str]:
         return {row["channel_key"] for row in
