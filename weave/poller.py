@@ -350,6 +350,7 @@ class ChannelDetailsFetcher(QThread):
                  parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._db = db
+        self._cfg = cfg
         self._key = channel_key
         self._ext_id = ext_id
         self._throttle = Throttle(1, cfg.min_request_interval_s)
