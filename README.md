@@ -278,12 +278,21 @@ track leaves the last one behind in the list rather than dropping it, so the
 queue is the queue and you can go back to something you have already heard.
 The one playing says so, and any row can be jumped to.
 
-A stream address is signed and gets dropped part way through a track now and
-then, which over a long listen is ordinary rather than exceptional. It is
-recovered from, quietly, by fetching a fresh address and carrying on from the
-same place. A connection that goes away without saying so leaves the player
-stalled instead of raising anything, so a stall that outlasts ordinary
-buffering and has not moved is treated the same way. A few goes per track, never in a tight loop, and a track that has
+A track is read in pieces rather than over one long connection, which is what
+every comparable application does without appearing to. The web player fetches
+segments, FreeTube plays through shaka, and none of them holds a single
+connection open for a whole track, because Google's media servers reset those
+as a matter of course.
+
+So the player is handed a device rather than an address. The device asks for a
+range at a time and simply asks again when one fails, and it fetches a fresh
+address when the signed one stops being accepted after a few hours. The player
+is never told, because as far as it is concerned nothing went wrong. Measured
+on a real track, four resets in a row underneath it were invisible, with
+playback carrying on and the player reporting no error at all.
+
+A live stream is different, being a list of segments the player fetches for
+itself, so that is still handed over as an address. A few goes per track, never in a tight loop, and a track that has
 been playing happily for a while starts over with a full set, so an evening of
 occasional drops cannot run out of them.
 

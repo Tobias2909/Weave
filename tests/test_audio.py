@@ -269,6 +269,10 @@ class PickingUpWhereItStopped(unittest.TestCase):
         self.player._player.setPosition = self.seeks.append
         self.player._player.play = lambda: self.played.append(True)
         self.player._player.setSource = lambda _url: None
+        self.player._player.setSourceDevice = lambda _device: None
+        # Nothing here reaches for the network. What the device does is the
+        # stream module's business and is tested there.
+        self.player._open_source = lambda _address, _entry: None
 
     def resolve(self, resume_at):
         self.player._resume_at = resume_at

@@ -23,6 +23,7 @@ from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from .config import Config
 from .cookies import args as cookie_args
 from .process import Cancelled, Timeout, run as run_process
+from .stream import RangedSource
 
 # A live stream is only offered as picture and sound together, and the sound
 # gets better as the picture does. This variant is the sensible middle.
@@ -50,6 +51,28 @@ STALL_GRACE_MS = 8000
 REPEAT_OFF, REPEAT_ALL, REPEAT_ONE = 0, 1, 2
 
 
+def resolve_address(cfg: Config, url: str, live: bool,
+                    cancel: threading.Event | None = None) -> str:
+    """One entry to one playable address, blocking.
+
+    A plain function rather than only a thread, because the reader needs a
+    fresh address from whatever thread notices the old one has expired.
+    """
+    command = ["yt-dlp", "--no-warnings", *cookie_args(cfg),
+               "-f", LIVE_FORMAT if live else MUSIC_FORMAT,
+               "--get-url", url]
+    result = run_process(command, cancel=cancel, timeout=180)
+    for line in result.stdout.splitlines():
+        if line.startswith("http"):
+            return line
+    tail = (result.stderr or "").strip().splitlines()
+    raise _NoAddress((tail[-1] if tail else "no stream came back")[:200])
+
+
+class _NoAddress(RuntimeError):
+    pass
+
+
 class _Resolver(QThread):
     """Turns one entry into a playable address."""
 
@@ -69,20 +92,12 @@ class _Resolver(QThread):
         self._cancel.set()
 
     def run(self) -> None:
-        command = ["yt-dlp", "--no-warnings", *cookie_args(self._cfg),
-                   "-f", LIVE_FORMAT if self._live else MUSIC_FORMAT,
-                   "--get-url", self._url]
         try:
-            result = run_process(command, cancel=self._cancel, timeout=180)
+            address = resolve_address(self._cfg, self._url, self._live, self._cancel)
         except Cancelled:
             return
-        except (FileNotFoundError, Timeout) as exc:
+        except (FileNotFoundError, Timeout, _NoAddress) as exc:
             self.failed.emit(self._key, str(exc) or "could not resolve the track")
-            return
-        address = next((line for line in result.stdout.splitlines() if line.startswith("http")), "")
-        if not address:
-            tail = (result.stderr or "").strip().splitlines()
-            self.failed.emit(self._key, (tail[-1] if tail else "no stream came back")[:200])
             return
         self.resolved.emit(self._key, address)
 
@@ -122,6 +137,9 @@ class AudioPlayer(QObject):
         self._recover_count = 0
         self._stall_timer = QTimer(self)
         self._stall_timer.setSingleShot(True)
+        # The device the player is reading from, kept alive for as long as it
+        # is being read.
+        self._source = None
         self._stall_timer.timeout.connect(self._on_stalled_too_long)
         self._stall_at = -1
 
@@ -281,7 +299,18 @@ class AudioPlayer(QObject):
         if self._current().get("key") != key:
             return                       # a later choice overtook this one
         self._loading = False
-        self._player.setSource(QUrl(address))
+        entry = self._current()
+        # A recorded track is read in pieces, so a reset connection costs one
+        # retried request rather than the track. A live stream is a playlist of
+        # segments the player fetches for itself, so it is handed over as it
+        # always was.
+        self._source = None
+        device = None if entry.get("live") else self._open_source(address, entry)
+        if device is not None:
+            self._source = device              # kept, or it is collected mid track
+            self._player.setSourceDevice(device)
+        else:
+            self._player.setSource(QUrl(address))
         # The restart is done. Whether it holds is the counter's business.
         self._recovering = False
         if self._resume_at > 0:
@@ -384,6 +413,24 @@ class AudioPlayer(QObject):
         self._resume_at = self._player.position()
         self._start_current()
         return True
+
+    def _open_source(self, address: str, entry: dict):
+        """The device to read this track through, or nothing to play the
+        address directly. Its own method so a test can put something else
+        there rather than reaching for the network."""
+        device = RangedSource(address, lambda: self._renew(entry))
+        return device if device.start() else None
+
+    def _renew(self, entry: dict) -> str:
+        """A fresh address for the same track, for the reader to carry on with.
+
+        Called from whichever thread found the old one refused, which is why it
+        goes through the plain resolve rather than the worker.
+        """
+        try:
+            return resolve_address(self._cfg, entry.get("url", ""), bool(entry.get("live")))
+        except Exception:                                           # noqa: BLE001
+            return ""
 
     def _forget_recovery(self) -> None:
         """A different track is a clean slate."""
