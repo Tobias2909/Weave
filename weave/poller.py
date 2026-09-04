@@ -47,6 +47,7 @@ from . import tokens
 from .sources import comments as comment_source
 from .sources import livecheck
 from .sources import dislikes as dislike_source
+from .sources import history as history_source
 from .sources import rss, subs, sweep, twitch
 
 
@@ -337,6 +338,45 @@ class SubsImporter(QThread):
                 added += 1
         self._db.close()
         self.imported.emit(len(channels), added)
+
+
+class HistoryImporter(QThread):
+    """Marks what YouTube already knows you have watched.
+
+    Meant to be run once, to stop a first day looking like several thousand
+    unwatched videos. After that mpv is the source of truth, so an existing
+    mark is never overwritten.
+    """
+
+    imported = Signal(int, int)          # newly marked, seen but not stored
+    failed = Signal(str)
+
+    def __init__(self, db: Database, cfg: Config, limit: int = 2000,
+                 parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._db = db
+        self._cfg = cfg
+        self._limit = limit
+        self._throttle = Throttle(1, cfg.min_request_interval_s)
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def run(self) -> None:
+        _spend(self._db, self._cfg, BROWSE)
+        try:
+            keys = history_source.fetch(self._cfg, self._limit, self._throttle,
+                                        cancel=self._cancel)
+        except ProcessCancelled:
+            return
+        except history_source.HistoryError as exc:
+            _spend(self._db, self._cfg, BROWSE, count=0, refused=1)
+            self.failed.emit(str(exc))
+            return
+        marked, missing = self._db.mark_watched_many(keys, "youtube")
+        self._db.close()
+        self.imported.emit(marked, missing)
 
 
 class ChannelDetailsFetcher(QThread):

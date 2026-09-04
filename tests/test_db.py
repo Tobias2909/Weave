@@ -442,6 +442,72 @@ class ChannelPage(DatabaseCase):
         self.assertEqual(self.db.channel("yt:UC1")["video_count"], 1)
 
 
+class SearchAndHistory(DatabaseCase):
+    def setUp(self):
+        super().setUp()
+        self.db.add_channel("yt:UC1", "youtube", "UC1", "Kurzgesagt")
+        self.db.add_channel("yt:UC2", "youtube", "UC2", "Somebody else")
+        self.db.upsert_videos([
+            self.video("aaaaaaaaaaa", title="A hundred % of nothing", published_at=300),
+            self.video("bbbbbbbbbbb", channel="yt:UC2", title="under_score", published_at=200),
+            self.video("ccccccccccc", channel="yt:UC2", title="Plain", published_at=100),
+        ])
+
+    def found(self, text, hide_watched=False):
+        # Searching is asking for one particular video, so the view that runs
+        # a search turns the hide watched toggle off. Storage still honours it
+        # when asked to, which is what the pair of tests below pin down.
+        return sorted(row["ext_id"] for row in
+                      self.db.feed(query=text, hide_watched=hide_watched))
+
+    def test_a_search_matches_the_title(self):
+        self.assertEqual(self.found("hundred"), ["aaaaaaaaaaa"])
+
+    def test_a_search_matches_the_channel_name(self):
+        self.assertEqual(self.found("kurz"), ["aaaaaaaaaaa"])
+
+    def test_a_wildcard_in_the_words_is_a_wildcard_no_longer(self):
+        # A title really can contain one, and treating it as a pattern would
+        # make searching for it match everything instead.
+        self.assertEqual(self.found("%"), ["aaaaaaaaaaa"])
+        self.assertEqual(self.found("under_"), ["bbbbbbbbbbb"])
+
+    def test_a_search_finds_watched_videos_too(self):
+        # How the search view asks, since hiding the watched ones would hide
+        # the answer.
+        self.db.set_watched("yt:aaaaaaaaaaa", 1.0, "mpv")
+        self.assertEqual(self.found("hundred"), ["aaaaaaaaaaa"])
+
+    def test_but_storage_still_hides_them_when_asked_to(self):
+        self.db.set_watched("yt:aaaaaaaaaaa", 1.0, "mpv")
+        self.assertEqual(self.found("hundred", hide_watched=True), [])
+
+    def test_a_short_never_turns_up_in_a_search(self):
+        self.db.upsert_videos([self.video("ddddddddddd", title="hundred", is_short=True)])
+        self.assertEqual(self.found("hundred"), ["aaaaaaaaaaa"])
+
+    def test_history_is_what_was_watched_most_recently_first(self):
+        self.db.set_watched("yt:ccccccccccc", 1.0, "mpv")
+        self.db.set_watched("yt:aaaaaaaaaaa", 1.0, "mpv")
+        rows = self.db.feed(watched_only=True, hide_watched=False)
+        self.assertEqual([r["ext_id"] for r in rows], ["aaaaaaaaaaa", "ccccccccccc"])
+
+    def test_importing_a_history_marks_what_is_stored(self):
+        marked, missing = self.db.mark_watched_many(
+            ["yt:aaaaaaaaaaa", "yt:zzzzzzzzzzz"], "youtube")
+        self.assertEqual((marked, missing), (1, 1))
+
+    def test_an_import_never_overwrites_what_mpv_saw(self):
+        self.db.set_watched("yt:aaaaaaaaaaa", 0.9, "mpv")
+        self.db.mark_watched_many(["yt:aaaaaaaaaaa"], "youtube")
+        row = self.db.conn.execute(
+            "SELECT source, progress FROM watched WHERE video_key='yt:aaaaaaaaaaa'").fetchone()
+        self.assertEqual((row["source"], row["progress"]), ("mpv", 0.9))
+
+    def test_importing_nothing_is_not_an_error(self):
+        self.assertEqual(self.db.mark_watched_many([], "youtube"), (0, 0))
+
+
 class AppState(DatabaseCase):
     def test_round_trip_with_a_default(self):
         self.assertEqual(self.db.get_state("missing", "fallback"), "fallback")

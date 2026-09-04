@@ -23,8 +23,8 @@ from ..db import Database
 from ..imagecache import qml_source
 from ..player.mpv import Player
 from ..poller import (ChannelAdder, ChannelDetailsFetcher, DetailFetcher, FeedPoller,
-                      LiveWatcher, MusicHome, MusicSearch, SourceDetails,
-                      TrackList, SubsImporter, TwitchLogin)
+                      HistoryImporter, LiveWatcher, MusicHome, MusicSearch,
+                      SourceDetails, TrackList, SubsImporter, TwitchLogin)
 from .feed_model import FeedModel
 
 ALL = "all"
@@ -32,6 +32,8 @@ MUSIC = "music"
 GROUP = "group"
 BOX = "box"
 CHANNEL = "channel"
+SEARCH = "search"
+HISTORY = "history"
 
 # How long the shelves are trusted before being gathered again. They are a
 # recommendation, not a fact, and they cost several seconds to fetch.
@@ -63,6 +65,7 @@ class Bridge(QObject):
         self._poller: FeedPoller | None = None
         self._adder: ChannelAdder | None = None
         self._importer: SubsImporter | None = None
+        self._history: HistoryImporter | None = None
         self._details: ChannelDetailsFetcher | None = None
         self._live: LiveWatcher | None = None
         self._twitch: TwitchLogin | None = None
@@ -93,6 +96,9 @@ class Bridge(QObject):
         self._view_kind = ALL
         self._view_id = -1
         self._view_channel = ""
+        self._search_text = ""
+        # Where a search started, so emptying the box goes back there.
+        self._before_search: tuple[str, int, str] = (ALL, -1, "")
 
         self._hide_watched = self._db.get_state("hide_watched", "1") == "1"
         self._live_collapsed = self._db.get_state("live_collapsed", "0") == "1"
@@ -157,6 +163,11 @@ class Bridge(QObject):
     def _get_empty_hint(self) -> str:
         """What to say when the grid is empty. There are several different
         reasons for that and they need different answers."""
+        if self._view_kind == SEARCH:
+            return f"Nothing stored matches {self._search_text}."
+        if self._view_kind == HISTORY:
+            return ("Nothing has been watched yet.\n"
+                    "Play something, or import your YouTube history.")
         if self._view_kind == BOX:
             return ("This box is empty.\nRight click any video and put it in here.")
         if self._view_kind == CHANNEL:
@@ -351,12 +362,17 @@ class Bridge(QObject):
             self.groupsChanged.emit()
             self.boxesChanged.emit()
             return
+        # A search and the history both ignore the hide watched toggle. A
+        # search is asking for one particular thing, and hiding the watched
+        # half of the history would leave nothing at all.
         honour_toggle = self._view_kind in (ALL, GROUP)
         self._model.reload(
             hide_watched=self._hide_watched and honour_toggle,
             group_id=self._view_id if self._view_kind == GROUP else None,
             box_id=self._view_id if self._view_kind == BOX else None,
             channel_key=self._view_channel if self._view_kind == CHANNEL else None,
+            query=self._search_text if self._view_kind == SEARCH else None,
+            watched_only=self._view_kind == HISTORY,
         )
         self.emptyHintChanged.emit()
         self.groupsChanged.emit()
@@ -382,6 +398,7 @@ class Bridge(QObject):
         not reachable from the sidebar."""
         entries: list[tuple[str, int]] = [(ALL, -1)]
         entries.extend((GROUP, int(row["id"])) for row in self._db.groups())
+        entries.append((HISTORY, -1))
         entries.append((MUSIC, -1))
         entries.extend((BOX, int(row["id"])) for row in self._db.boxes())
         return entries
@@ -403,6 +420,37 @@ class Bridge(QObject):
             index = max(0, min(len(entries) - 1, index + (1 if delta > 0 else -1)))
         kind, view_id = entries[index]
         self._set_view(kind, view_id)
+
+    @Slot(str)
+    def search(self, text: str) -> None:
+        """Search everything stored, rather than inside whatever is showing.
+
+        Searching is asking for one particular video, and having to remember
+        which group it was in first would defeat that. Emptying the box goes
+        back to where the search started, so it behaves like a detour and not
+        like a place.
+        """
+        text = (text or "").strip()
+        if not text:
+            if self._view_kind == SEARCH:
+                kind, view_id, channel = self._before_search
+                self._search_text = ""
+                self._set_view(kind, view_id, channel)
+            return
+        first = self._view_kind != SEARCH
+        if first:
+            self._before_search = (self._view_kind, self._view_id, self._view_channel)
+        self._search_text = text
+        if first:
+            self._set_view(SEARCH, -1)
+        else:
+            # Same view, new words, so the guard in _set_view would drop it.
+            self.reload()
+            self.viewChanged.emit()
+
+    @Slot()
+    def showHistory(self) -> None:
+        self._set_view(HISTORY, -1)
 
     @Slot(int)
     def selectGroup(self, group_id: int) -> None:
@@ -973,6 +1021,26 @@ class Bridge(QObject):
         self._importer.failed.connect(self._on_import_failed)
         self._importer.start()
 
+    @Slot()
+    def importHistory(self) -> None:
+        if self._history is not None and self._history.isRunning():
+            return
+        self._set_status("reading your YouTube history")
+        self._history = HistoryImporter(self._db, self._cfg, parent=self)
+        self._history.imported.connect(self._on_history)
+        self._history.failed.connect(
+            lambda message: self._set_status(f"history, {message}"))
+        self._history.start()
+
+    def _on_history(self, marked: int, missing: int) -> None:
+        note = f"{marked} marked as watched"
+        if missing:
+            # Not an error worth a banner. A history row carries no channel, so
+            # a video from a channel that is not tracked cannot be placed.
+            note += f", {missing} were from channels not tracked here"
+        self._set_status(note)
+        self.reload()
+
     @Slot(str, result=bool)
     def addChannel(self, text: str) -> bool:
         """Accepts a channel id, an @handle, a legacy channel URL or a Twitch
@@ -1002,8 +1070,8 @@ class Bridge(QObject):
         parallel rather than one after another. This runs after the window is
         already gone, so any short wait here is invisible.
         """
-        threads = [self._poller, self._adder, self._importer, self._details,
-                   self._live, self._twitch, self._detail, self._search,
+        threads = [self._poller, self._adder, self._importer, self._history,
+                   self._details, self._live, self._twitch, self._detail, self._search,
                    self._home, self._tracks, *self._source_details]
         live = [thread for thread in threads if thread is not None and thread.isRunning()]
         for thread in live:

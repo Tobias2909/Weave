@@ -16,7 +16,7 @@ from .budget import Budget
 from .sources import twitch
 from .db import Database
 from .net import Throttle
-from .sources import subs
+from .sources import history, subs
 from .sources.resolve import ResolveError, resolve
 
 

@@ -856,12 +856,19 @@ class Database:
 
     def feed(self, limit: int = 300, hide_watched: bool = True,
              group_id: int | None = None, channel_key: str | None = None,
-             box_id: int | None = None) -> list[sqlite3.Row]:
+             box_id: int | None = None, query: str | None = None,
+             watched_only: bool = False) -> list[sqlite3.Row]:
         """The video list for whichever view is showing.
 
         A box orders by the order things were put in it rather than by publish
-        date, since that is the point of hand picking. Everything else is
-        newest first.
+        date, since that is the point of hand picking. History orders by when
+        it was watched. Everything else is newest first.
+
+        A search matches the video title or the channel name. LIKE is case
+        insensitive for ASCII only in SQLite, so a search for an accented or
+        umlauted word matches the case it was typed in and not the other. That
+        is a known limit rather than an oversight, and fixing it means shipping
+        a collation.
         """
         # An unclassified video still shows. It is hidden only once a channel
         # listing or the redirect test has proven it is a Short.
@@ -882,6 +889,15 @@ class Database:
             join = "JOIN box_items bi ON bi.video_key = v.key AND bi.box_id = ?"
             args.insert(0, box_id)
             order = "bi.position"
+        if query:
+            # The wildcards are escaped rather than stripped, so searching for
+            # a title that really contains one finds it.
+            pattern = "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            where.append("(v.title LIKE ? ESCAPE '\\' OR c.title LIKE ? ESCAPE '\\')")
+            args.extend([pattern, pattern])
+        if watched_only:
+            where.append("w.video_key IS NOT NULL")
+            order = "w.watched_at DESC"
 
         args.append(limit)
         return list(self.conn.execute(
@@ -900,6 +916,40 @@ class Database:
         ))
 
     # ---- watched ---------------------------------------------------------
+
+    def mark_watched_many(self, keys: list[str], source: str) -> tuple[int, int]:
+        """Mark stored videos as watched, returning how many were newly marked
+        and how many were not stored at all.
+
+        A video the database has never seen is skipped rather than invented,
+        because a history row carries no channel, measured, and a video here
+        has to belong to one. An existing mark is left alone so an import
+        cannot overwrite what mpv observed.
+        """
+        if not keys:
+            return 0, 0
+        stored = self._stored_of(keys)
+        now = int(time.time())
+        with self.conn as conn:
+            before = conn.total_changes
+            conn.executemany(
+                "INSERT INTO watched(video_key, watched_at, progress, source) "
+                "VALUES(?,?,NULL,?) ON CONFLICT(video_key) DO NOTHING",
+                [(key, now, source) for key in keys if key in stored],
+            )
+            marked = conn.total_changes - before
+        return marked, len(keys) - len(stored)
+
+    def _stored_of(self, keys: list[str]) -> set[str]:
+        """Which of these video keys the database actually holds. Chunked,
+        since SQLite caps how many parameters one statement may bind."""
+        found: set[str] = set()
+        for start in range(0, len(keys), 500):
+            chunk = keys[start:start + 500]
+            marks = ",".join("?" * len(chunk))
+            found.update(row[0] for row in self.conn.execute(
+                f"SELECT key FROM videos WHERE key IN ({marks})", chunk))
+        return found
 
     def set_watched(self, video_key: str, progress: float | None, source: str) -> None:
         with self.conn as conn:

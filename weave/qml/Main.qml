@@ -112,6 +112,35 @@ ApplicationWindow {
                 }
             }
 
+            TextField {
+                id: searchField
+                objectName: "searchField"
+                Layout.preferredWidth: 220
+                placeholderText: "Search what is stored"
+                color: Theme.colors.text
+                placeholderTextColor: Theme.colors.textMuted
+                background: Rectangle {
+                    radius: 6
+                    color: Theme.colors.background
+                    border.width: 1
+                    border.color: searchField.activeFocus ? Theme.colors.accent
+                                                          : Theme.colors.border
+                }
+                // Live, because the whole search is one query over the local
+                // database and costs nothing. Emptying it goes back to
+                // wherever the search started.
+                onTextChanged: App.search(text)
+                Keys.onEscapePressed: text = ""
+            }
+
+            FlatButton {
+                // The history is only worth importing once, so it lives with
+                // the view it fills rather than in the bar all the time.
+                visible: App.viewKind === "history"
+                text: "Import from YouTube"
+                onClicked: App.importHistory()
+            }
+
             FlatButton {
                 text: "Import subscriptions"
                 onClicked: App.importSubscriptions()
@@ -282,7 +311,16 @@ ApplicationWindow {
 
                 Item { width: 1; height: 10 }
 
-                SidebarHeading { text: "Listen" }
+                SidebarHeading { text: "Yours" }
+
+                SidebarRow {
+                    width: sidebarColumn.width
+                    label: "History"
+                    count: 0
+                    selected: App.viewKind === "history"
+                    onActivated: App.showHistory()
+                    onRevealRequested: root.revealRow(this)
+                }
 
                 SidebarRow {
                     width: sidebarColumn.width
@@ -290,6 +328,7 @@ ApplicationWindow {
                     count: 0
                     selected: App.viewKind === "music"
                     onActivated: App.showMusic()
+                    onRevealRequested: root.revealRow(this)
                 }
 
                 Item { width: 1; height: 10 }

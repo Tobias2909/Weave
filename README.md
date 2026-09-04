@@ -25,6 +25,10 @@ This is the first milestone. Working right now
   whenever you like
 * A channel page, reached by clicking a channel name, showing its banner, its
   subscriber count and everything stored from it
+* Search across everything stored, as you type, over the local database and
+  with no request at all
+* A history of what you have watched, which can be seeded once from the history
+  YouTube already keeps
 * A live bar across the top showing who is streaming right now, Twitch and
   YouTube together in one row ordered by how many are watching, on its own
   faster timer
@@ -119,6 +123,30 @@ a held down refresh button rather than on normal use.
 ```sh
 python -m weave budget
 ```
+
+## Searching and history
+
+The search box in the bar filters everything stored, by video title and by
+channel name, as you type. It is one query over the local database, so it costs
+nothing and needs no login. It searches everything rather than only whatever is
+on screen, because searching is asking for one particular video and having to
+remember which group it was in first would defeat that. Watched videos are
+included, for the same reason. Emptying the box goes back to wherever the
+search started.
+
+History is what you have watched. Weave fills it by watching mpv, so it only
+knows what it saw, and the first day would otherwise look like several thousand
+unwatched videos. **Import from YouTube** on the history view, or the command
+below, marks what YouTube already knows about.
+
+```sh
+python -m weave history
+```
+
+That only marks videos already stored, because a history row carries an id and
+a duration and no channel at all, so a video from a channel you do not track
+cannot be placed. It is reported rather than hidden. An existing mark is never
+overwritten, so importing cannot undo what mpv observed.
 
 ## Connecting Twitch
 
