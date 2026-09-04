@@ -25,7 +25,7 @@ from ..player.mpv import Player
 from ..poller import (ChannelAdder, ChannelDetailsFetcher, DetailFetcher, FeedPoller,
                       HistoryImporter, LiveWatcher, MusicHome, MusicSearch,
                       PlaylistItemsFetcher, PlaylistsFetcher, RecommendationsFetcher,
-                      SourceDetails, TrackList, SubsImporter, TwitchLogin)
+                      SearchFetcher, SourceDetails, TrackList, SubsImporter, TwitchLogin)
 from .feed_model import FeedModel
 
 ALL = "all"
@@ -42,6 +42,13 @@ PLAYLIST = "playlist"
 # and how long a playlist's contents are trusted before reading them again.
 RECOMMENDED_TRUST_S = 6 * 3600
 PLAYLIST_TRUST_S = 6 * 3600
+# Shorter, because a history changes every time something is played.
+HISTORY_TRUST_S = 30 * 60
+
+# How many results one page of a YouTube search or one more helping of
+# recommendations asks for. Small enough to arrive quickly, since scrolling to
+# the bottom is what asks for it.
+PAGE = 24
 
 # How long the shelves are trusted before being gathered again. They are a
 # recommendation, not a fact, and they cost several seconds to fetch.
@@ -113,6 +120,14 @@ class Bridge(QObject):
         self._view_id = -1
         self._view_channel = ""
         self._search_text = ""
+        # Stored is the local query, youtube is the one that costs a request.
+        self._search_scope = "stored"
+        # Named apart from the music search results, which live on the same
+        # object under a name that used to be _results as well.
+        self._web_results: list[dict] = []
+        self._searcher: SearchFetcher | None = None
+        self._loading_more = False
+        self._exhausted = False
         # Where a search started, so emptying the box goes back there.
         self._before_search: tuple[str, int, str] = (ALL, -1, "")
 
@@ -158,6 +173,11 @@ class Bridge(QObject):
     def _get_playlists(self) -> list:
         return self._db.playlists()
 
+    def _get_all_playlists(self) -> list:
+        """Every playlist including the hidden ones, for the chooser. Hiding
+        is not forgetting, so the chooser has to show what is hidden too."""
+        return self._db.playlists(include_hidden=True)
+
     def _get_view_kind(self) -> str:
         return self._view_kind
 
@@ -186,11 +206,13 @@ class Bridge(QObject):
             return "This playlist is empty."
         if self._view_kind == RECOMMENDED:
             return "Nothing suggested yet.\nPress Ask again in the bar."
+        if self._view_kind == SEARCH and self._search_scope == "youtube":
+            return f"YouTube found nothing for {self._search_text}."
         if self._view_kind == SEARCH:
-            return f"Nothing stored matches {self._search_text}."
+            return (f"Nothing stored matches {self._search_text}.\n"
+                    "Press Enter to search YouTube itself.")
         if self._view_kind == HISTORY:
-            return ("Nothing has been watched yet.\n"
-                    "Play something, or import your YouTube history.")
+            return "Nothing in your YouTube history yet."
         if self._view_kind == BOX:
             return ("This box is empty.\nRight click any video and put it in here.")
         if self._view_kind == CHANNEL:
@@ -217,9 +239,11 @@ class Bridge(QObject):
     groups = Property("QVariantList", _get_groups, notify=groupsChanged)
     boxes = Property("QVariantList", _get_boxes, notify=boxesChanged)
     playlists = Property("QVariantList", _get_playlists, notify=playlistsChanged)
+    allPlaylists = Property("QVariantList", _get_all_playlists, notify=playlistsChanged)
     viewKind = Property(str, _get_view_kind, notify=viewChanged)
     viewId = Property(int, _get_view_id, notify=viewChanged)
     viewPlaylist = Property(str, lambda self: self._view_playlist, notify=viewChanged)
+    searchScope = Property(str, lambda self: self._search_scope, notify=viewChanged)
     channelInfo = Property("QVariantMap", _get_channel_info, notify=viewChanged)
 
     def _get_live(self) -> list:
@@ -387,16 +411,24 @@ class Bridge(QObject):
             self.groupsChanged.emit()
             self.boxesChanged.emit()
             return
+        if self._view_kind == SEARCH and self._search_scope == "youtube":
+            # Results from YouTube are not stored anywhere. They are joined to
+            # what is known here so a channel already followed keeps its icon.
+            self._model.show(self._web_results)
+            self.emptyHintChanged.emit()
+            return
         if self._view_kind == PLAYLIST:
             # A playlist keeps the order somebody put it in, which is why it
             # is not sorted by date like the feed.
             self._model.show(self._db.playlist_items(self._view_playlist))
             self.emptyHintChanged.emit()
             return
-        if self._view_kind == RECOMMENDED:
-            # Its own table, not the feed. Shaped the same so one grid draws
-            # both, but nothing here is a video you follow.
-            self._model.show(self._db.recommended())
+        if self._view_kind in (RECOMMENDED, HISTORY):
+            # Both come from YouTube rather than from the feed, and are shaped
+            # the same so one grid draws them. Nothing here is a video you
+            # follow.
+            kind = self._db.RECOMMENDED if self._view_kind == RECOMMENDED else self._db.HISTORY
+            self._model.show(self._db.cached(kind))
             self.emptyHintChanged.emit()
             return
         # A search and the history both ignore the hide watched toggle. A
@@ -409,7 +441,6 @@ class Bridge(QObject):
             box_id=self._view_id if self._view_kind == BOX else None,
             channel_key=self._view_channel if self._view_kind == CHANNEL else None,
             query=self._search_text if self._view_kind == SEARCH else None,
-            watched_only=self._view_kind == HISTORY,
         )
         self.emptyHintChanged.emit()
         self.groupsChanged.emit()
@@ -432,7 +463,11 @@ class Bridge(QObject):
         if kind == MUSIC and not self._shelves:
             self.loadHome()
         if kind == RECOMMENDED:
+            self._exhausted = False
             self._fetch_recommended()
+        if kind == HISTORY:
+            self._exhausted = False
+            self._fetch_history()
         if kind == PLAYLIST:
             self._fetch_playlist_items(playlist_id)
 
@@ -499,12 +534,81 @@ class Bridge(QObject):
         if first:
             self._before_search = (self._view_kind, self._view_id, self._view_channel)
         self._search_text = text
+        # Typing is always the local search. Asking YouTube is a separate
+        # thing you press for, since it costs a request.
+        self._search_scope = "stored"
+        self._web_results = []
         if first:
             self._set_view(SEARCH, -1)
         else:
             # Same view, new words, so the guard in _set_view would drop it.
             self.reload()
             self.viewChanged.emit()
+
+    @Slot()
+    def searchYouTube(self) -> None:
+        """Search YouTube itself, for something that was never in the feed."""
+        if not self._search_text:
+            return
+        self._search_scope = "youtube"
+        self._web_results = []
+        self._exhausted = False
+        if self._view_kind != SEARCH:
+            self._set_view(SEARCH, -1)
+        self.viewChanged.emit()
+        self._fetch_results(start=1)
+
+    @Slot()
+    def loadMore(self) -> None:
+        """Another helping, asked for by reaching the bottom of the grid.
+
+        Both feeds page properly, verified against the endpoint, so this asks
+        for a later slice rather than the same one again.
+        """
+        if self._loading_more or self._exhausted:
+            return
+        if self._view_kind == SEARCH and self._search_scope == "youtube":
+            self._fetch_results(start=len(self._web_results) + 1)
+        elif self._view_kind == RECOMMENDED:
+            self._fetch_recommended(force=True, start=self._db.recommended_count() + 1,
+                                    append=True)
+        elif self._view_kind == HISTORY:
+            self._fetch_history(force=True,
+                                start=self._db.cached_count(self._db.HISTORY) + 1,
+                                append=True)
+
+    def _fetch_results(self, start: int) -> None:
+        if self._searcher is not None and self._searcher.isRunning():
+            return
+        self._loading_more = True
+        self._set_status(f"searching YouTube for {self._search_text}")
+        self._searcher = SearchFetcher(self._db, self._cfg, self._search_text, start, PAGE, self)
+        self._searcher.results.connect(self._on_web_results)
+        self._searcher.failed.connect(self._on_web_search_failed)
+        self._launch(self._searcher)
+
+    def _on_web_results(self, query: str, start: int, rows: list) -> None:
+        """Named apart from the music search handler, which this class already
+        had under the shorter name. Two methods with one name silently leaves
+        whichever came last, and the loss is invisible until it runs."""
+        self._loading_more = False
+        if query != self._search_text:
+            return                          # the words moved on while it ran
+        found = self._db.decorate([dict(row) for row in rows])
+        if start <= 1:
+            self._web_results = found
+        else:
+            known = {row["key"] for row in self._web_results}
+            self._web_results.extend(row for row in found if row["key"] not in known)
+        # A page that brought nothing new is the end of the results.
+        self._exhausted = not found
+        self._set_status(f"{len(self._web_results)} results from YouTube")
+        if self._view_kind == SEARCH:
+            self.reload()
+
+    def _on_web_search_failed(self, message: str) -> None:
+        self._loading_more = False
+        self._set_status(f"search, {message}")
 
     @Slot()
     def showHistory(self) -> None:
@@ -514,6 +618,13 @@ class Bridge(QObject):
     def selectPlaylist(self, playlist_id: str) -> None:
         if playlist_id:
             self._set_view(PLAYLIST, -1, "", playlist_id)
+
+    @Slot(str, bool)
+    def setPlaylistHidden(self, playlist_id: str, hidden: bool) -> None:
+        self._db.set_playlist_hidden(playlist_id, hidden)
+        if hidden and self._view_kind == PLAYLIST and self._view_playlist == playlist_id:
+            self._set_view(ALL, -1)
+        self.playlistsChanged.emit()
 
     @Slot()
     def refreshPlaylists(self) -> None:
@@ -567,21 +678,31 @@ class Bridge(QObject):
     def refreshRecommended(self) -> None:
         self._fetch_recommended(force=True)
 
-    def _fetch_recommended(self, force: bool = False) -> None:
+    def _fetch_recommended(self, force: bool = False, start: int = 1,
+                           append: bool = False) -> None:
         if self._recommended is not None and self._recommended.isRunning():
             return
+        # An empty list is worth asking for whatever its age. Otherwise a run
+        # that came back with nothing wedges the view until the age runs out.
         age = self._db.recommended_age_s()
-        if not force and age is not None and age < RECOMMENDED_TRUST_S:
+        if (not force and age is not None and age < RECOMMENDED_TRUST_S
+                and self._db.recommended_count()):
             return
-        self._set_status("asking YouTube what it suggests")
-        self._recommended = RecommendationsFetcher(self._db, self._cfg, parent=self)
+        self._loading_more = append
+        self._set_status("asking YouTube for more" if append
+                         else "asking YouTube what it suggests")
+        self._recommended = RecommendationsFetcher(self._db, self._cfg, PAGE * 2, start,
+                                                   append, parent=self)
         self._recommended.ready.connect(self._on_recommended)
         self._recommended.failed.connect(
             lambda message: self._set_status(f"recommendations, {message}"))
         self._launch(self._recommended)
 
     def _on_recommended(self, count: int) -> None:
-        self._set_status(f"{count} suggestions")
+        self._loading_more = False
+        # Nothing new means the feed has been walked to its end for now.
+        self._exhausted = count == 0 and self._db.recommended_count() > 0
+        self._set_status(f"{self._db.recommended_count()} suggestions")
         if self._view_kind == RECOMMENDED:
             self.reload()
 
@@ -1156,23 +1277,35 @@ class Bridge(QObject):
 
     @Slot()
     def importHistory(self) -> None:
+        self._fetch_history(force=True)
+
+    def _fetch_history(self, force: bool = False, start: int = 1,
+                       append: bool = False) -> None:
         if self._history is not None and self._history.isRunning():
             return
+        age = self._db.cached_age_s(self._db.HISTORY)
+        if (not force and age is not None and age < HISTORY_TRUST_S
+                and self._db.cached_count(self._db.HISTORY)):
+            return
+        self._loading_more = append
         self._set_status("reading your YouTube history")
-        self._history = HistoryImporter(self._db, self._cfg, parent=self)
+        self._history = HistoryImporter(self._db, self._cfg, PAGE * 2, start, append,
+                                        parent=self)
         self._history.imported.connect(self._on_history)
         self._history.failed.connect(
             lambda message: self._set_status(f"history, {message}"))
         self._launch(self._history)
 
-    def _on_history(self, marked: int, missing: int) -> None:
-        note = f"{marked} marked as watched"
-        if missing:
-            # Not an error worth a banner. A history row carries no channel, so
-            # a video from a channel that is not tracked cannot be placed.
-            note += f", {missing} were from channels not tracked here"
+    def _on_history(self, added: int, marked: int) -> None:
+        self._loading_more = False
+        total = self._db.cached_count(self._db.HISTORY)
+        self._exhausted = added == 0 and total > 0
+        note = f"{total} in your history"
+        if marked:
+            note += f", {marked} of them stored here and now marked watched"
         self._set_status(note)
-        self.reload()
+        if self._view_kind == HISTORY:
+            self.reload()
 
     @Slot(str, result=bool)
     def addChannel(self, text: str) -> bool:
@@ -1219,6 +1352,7 @@ class Bridge(QObject):
         self._stopping = True
         threads = [self._poller, self._adder, self._importer, self._history,
                    self._recommended, self._playlists, self._playlist_items,
+                   self._searcher,
                    self._details, self._live, self._twitch, self._detail, self._search,
                    self._home, self._tracks, *self._source_details]
         # Every thread, not only the ones already running. A thread that has

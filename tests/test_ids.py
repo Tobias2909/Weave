@@ -42,7 +42,7 @@ class YoutubeVideoId(unittest.TestCase):
 
     def test_rejects_radio_playlist_id(self):
         # The recommendation feed returns these. They are playlist ids, not videos.
-        self.assertIsNone(ids.youtube_video_id("RDor6VC0FkOOw"))
+        self.assertIsNone(ids.youtube_video_id("RDabcdefghijk"))
 
     def test_rejects_channel_url(self):
         self.assertIsNone(ids.youtube_video_id("https://www.youtube.com/@examplechannel"))

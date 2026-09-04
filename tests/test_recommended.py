@@ -10,7 +10,7 @@ import unittest
 from weave.sources import recommended
 
 REAL = "aaaaaaaaaaa\tA real video\tSome channel\tUCabcdefghijklmnopqrstuv\t5646\thttps://i/x.jpg"
-RADIO = "RDor6VC0FkOOw\tNA\tNA\tNA\tNA\tNA"
+RADIO = "RDabcdefghijk\tNA\tNA\tNA\tNA\tNA"
 
 
 class ParseLines(unittest.TestCase):

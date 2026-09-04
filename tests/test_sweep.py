@@ -23,7 +23,7 @@ class ParseLines(unittest.TestCase):
 
     def test_radio_playlist_rows_are_dropped(self):
         # The feed mixes these in with every field empty.
-        text = "RDor6VC0FkOOw|NA|NA\naaaaaaaaaaa|100|NA\n"
+        text = "RDabcdefghijk|NA|NA\naaaaaaaaaaa|100|NA\n"
         self.assertEqual([v.ext_id for v in sweep.parse_lines(text)], ["aaaaaaaaaaa"])
 
     def test_short_lines_are_ignored(self):

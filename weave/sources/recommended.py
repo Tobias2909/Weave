@@ -16,81 +16,36 @@ written into the videos table where it would look like something you follow.
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass
 
 from ..config import Config
 from ..cookies import args as cookie_args
-from ..ids import CHANNEL_ID, is_video_id
 from ..net import Throttle
 from ..process import Timeout, run as run_process
+from .flatlist import FIELDS, FlatVideo, parse
 
 RECOMMENDED = ":ytrec"
 
-# Tab separated, because a title can contain very nearly anything else.
-FIELDS = "%(id)s\t%(title)s\t%(channel)s\t%(channel_id)s\t%(duration)s\t%(thumbnails.-1.url)s"
+# The same thing a playlist entry and a search result are, so it is read by the
+# same parser. Kept under this name because that is what the rest calls it.
+Recommendation = FlatVideo
+parse_lines = parse
 
 
 class RecommendedError(RuntimeError):
     pass
 
 
-@dataclass(frozen=True)
-class Recommendation:
-    ext_id: str
-    title: str
-    channel_name: str | None
-    channel_ext_id: str | None
-    duration_s: int | None
-    thumbnail_url: str | None
-
-
-def _optional(text: str) -> str | None:
-    text = (text or "").strip()
-    return None if not text or text == "NA" else text
-
-
-def _seconds(text: str) -> int | None:
-    value = _optional(text)
-    try:
-        return int(float(value)) if value else None
-    except ValueError:
-        return None
-
-
-def parse_lines(text: str) -> list[Recommendation]:
-    out: list[Recommendation] = []
-    seen: set[str] = set()
-    for line in text.splitlines():
-        parts = line.split("\t")
-        if len(parts) < 2:
-            continue
-        ext_id = parts[0].strip()
-        # A radio row is thirteen characters and carries nothing else.
-        if not is_video_id(ext_id) or ext_id in seen:
-            continue
-        title = (parts[1] or "").strip()
-        if not title or title == "NA":
-            continue
-        seen.add(ext_id)
-        channel_id = _optional(parts[3]) if len(parts) > 3 else None
-        out.append(Recommendation(
-            ext_id=ext_id,
-            title=title,
-            channel_name=_optional(parts[2]) if len(parts) > 2 else None,
-            channel_ext_id=channel_id if channel_id and CHANNEL_ID.match(channel_id) else None,
-            duration_s=_seconds(parts[4]) if len(parts) > 4 else None,
-            thumbnail_url=_optional(parts[5]) if len(parts) > 5 else None,
-        ))
-    return out
-
-
 def fetch(cfg: Config, limit: int = 48, throttle: Throttle | None = None,
-          timeout: float = 180.0,
-          cancel: threading.Event | None = None) -> list[Recommendation]:
+          timeout: float = 180.0, cancel: threading.Event | None = None,
+          start: int = 1) -> list[Recommendation]:
+    first = max(1, start)
+    last = max(first, first + max(1, limit) - 1)
     command = [
         "yt-dlp", "--no-warnings", "--flat-playlist",
         *cookie_args(cfg),
-        "--playlist-end", str(max(1, limit)),
+        # The feed pages, verified: items 25 to 36 share nothing with items 1
+        # to 12. So asking for a later slice is how more of it is reached.
+        "--playlist-items", f"{first}-{last}",
         "--print", FIELDS,
         RECOMMENDED,
     ]
@@ -105,7 +60,7 @@ def fetch(cfg: Config, limit: int = 48, throttle: Throttle | None = None,
     except Timeout as exc:
         raise RecommendedError("the recommendations timed out") from exc
 
-    found = parse_lines(result.stdout)
+    found = parse(result.stdout)
     if found:
         return found
     tail = (result.stderr or "").strip().splitlines()

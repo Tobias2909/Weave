@@ -26,12 +26,12 @@ This is the first milestone. Working right now
 * A channel page, reached by clicking a channel name, showing its banner, its
   subscriber count and everything stored from it
 * Search across everything stored, as you type, over the local database and
-  with no request at all
+  with no request at all, and a search of YouTube itself on the same box
 * What YouTube suggests, in its own view, kept out of the feed
 * Your real YouTube playlists, read on request, each one opening as its own
   page in the order somebody put it in
-* A history of what you have watched, which can be seeded once from the history
-  YouTube already keeps
+* The history YouTube keeps, which is the whole of it, since mpv tells YouTube
+  what it plays
 * A live bar across the top showing who is streaming right now, Twitch and
   YouTube together in one row ordered by how many are watching, on its own
   faster timer
@@ -132,11 +132,17 @@ python -m weave budget
 These are YouTube's own, as opposed to boxes, which are this application's. The
 two were deliberately never given the same name.
 
-Nothing is read at launch. The arrow beside **Playlists** in the sidebar reads
+Nothing is read at launch. The menu beside **Playlists** in the sidebar reads
 the list, which is one cheap call and carries no contents, and opening one then
 reads that playlist. Most playlists are never opened, so paying for them all
 up front would be paying for nothing. Contents are kept for six hours, and
 **Read it again** in the bar asks straight away.
+
+A long list of playlists would bury everything under it, so the section sits at
+the bottom of the sidebar and each playlist can be hidden on its own. Right
+click one to put it away, or open **Choose which to show** from the section
+menu for a filterable list of all of them. Hiding is not forgetting. A hidden
+playlist keeps its contents and comes back the moment it is shown again.
 
 A playlist keeps the order it was given rather than being sorted by date, since
 that order is the point of somebody having made it. As with recommendations,
@@ -158,13 +164,14 @@ the bare name and has no channel page, which is a quiet nothing rather than an
 error.
 
 A set is kept for six hours and then asked for again on the next visit, or
-straight away with **Ask again** in the bar.
+straight away with **Ask again** in the bar. Scrolling to the bottom asks for
+more, and gets genuinely different ones, since the feed pages.
 
 ```sh
 python -m weave recommended
 ```
 
-## Searching and history
+## Searching, twice over
 
 The search box in the bar filters everything stored, by video title and by
 channel name, as you type. It is one query over the local database, so it costs
@@ -174,19 +181,34 @@ remember which group it was in first would defeat that. Watched videos are
 included, for the same reason. Emptying the box goes back to wherever the
 search started.
 
-History is what you have watched. Weave fills it by watching mpv, so it only
-knows what it saw, and the first day would otherwise look like several thousand
-unwatched videos. **Import from YouTube** on the history view, or the command
-below, marks what YouTube already knows about.
+Pressing return searches YouTube itself, for something that was never in your
+feed. That costs a request, which is why it happens on a key rather than while
+typing. Results are not stored anywhere. One from a channel you already follow
+picks up its name and icon, and scrolling to the bottom loads the next page.
+
+```sh
+python -m weave search some words
+```
+
+## History
+
+This is the history YouTube keeps, which is the whole of it. mpv already tells
+YouTube what it plays, so there is nothing to be gained from Weave keeping a
+second and poorer list of what it happened to see.
+
+Videos in it that are also stored here are marked watched, since that is what
+the hide watched toggle reads, and an existing mark is never overwritten, so
+reading the history cannot undo what mpv observed.
+
+One measured limitation. A history entry carries an id, a title, a duration and
+a thumbnail, and says nothing at all about the channel. So an entry from a
+channel you track picks up its name by being joined to it, and one from
+anywhere else simply has no channel name. Asking per video would cost a request
+each, which is not worth it for a name.
 
 ```sh
 python -m weave history
 ```
-
-That only marks videos already stored, because a history row carries an id and
-a duration and no channel at all, so a video from a channel you do not track
-cannot be placed. It is reported rather than hidden. An existing mark is never
-overwritten, so importing cannot undo what mpv observed.
 
 ## Connecting Twitch
 

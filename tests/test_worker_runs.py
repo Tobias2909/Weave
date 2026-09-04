@@ -129,8 +129,13 @@ class WorkerRuns(unittest.TestCase):
 
     def test_history_importer(self):
         self.patch(poller.history_source, "fetch",
-                   lambda *a, **k: ["yt:aaaaaaaaaaa", "yt:zzzzzzzzzzz"])
+                   lambda *a, **k: [poller.flatlist.FlatVideo("aaaaaaaaaaa", "Watched"),
+                                    poller.flatlist.FlatVideo("zzzzzzzzzzz", "Also watched")])
         self.run_worker(poller.HistoryImporter(self.db, self.cfg))
+        # The whole history is kept, and the ones that are stored here are
+        # marked watched as well, since that is what hide watched reads.
+        self.assertEqual([r["title"] for r in self.db.cached(self.db.HISTORY)],
+                         ["Watched", "Also watched"])
         self.assertTrue(self.db.is_watched("yt:aaaaaaaaaaa"))
 
     def test_recommendations_fetcher(self):
@@ -154,6 +159,17 @@ class WorkerRuns(unittest.TestCase):
         self.run_worker(poller.PlaylistItemsFetcher(self.db, self.cfg, "PL1"))
         self.assertEqual([i["title"] for i in self.db.playlist_items("PL1")],
                          ["In a playlist"])
+
+    def test_search_fetcher(self):
+        got = []
+        self.patch(poller.search_source, "fetch",
+                   lambda *a, **k: [poller.flatlist.FlatVideo(
+                       "aaaaaaaaaaa", "A result", "Someone", "UC9", 60, "t", 10)])
+        worker = poller.SearchFetcher(self.db, self.cfg, "anything")
+        worker.results.connect(lambda q, start, rows: got.append((q, start, rows)))
+        self.run_worker(worker)
+        self.assertEqual(got[0][0], "anything")
+        self.assertEqual(got[0][2][0]["title"], "A result")
 
     def test_live_watcher(self):
         self.patch(poller.tokens, "load", lambda: object())
@@ -209,8 +225,8 @@ class WorkerRuns(unittest.TestCase):
         bridge._stopping = False
         bridge._poller = idle
         for name in ("_adder", "_importer", "_history", "_recommended", "_playlists",
-                     "_playlist_items", "_details", "_live", "_twitch", "_detail",
-                     "_search", "_home", "_tracks"):
+                     "_playlist_items", "_searcher", "_details", "_live", "_twitch",
+                     "_detail", "_search", "_home", "_tracks"):
             setattr(bridge, name, None)
         bridge._source_details = []
         bridge._audio = None
@@ -244,6 +260,27 @@ class WorkerRuns(unittest.TestCase):
         self.assertFalse(Bridge._launch(bridge, second))
         self.assertFalse(second.started)
 
+    def test_no_class_defines_the_same_method_twice(self):
+        """Two methods with one name leaves whichever came last, silently.
+
+        It has happened twice on the bridge, which carries well over a hundred
+        methods and a lot of underscore prefixed workers. Both times the loss
+        was invisible until the thing ran, and once it meant a signal quietly
+        went nowhere.
+        """
+        import ast
+        import collections
+
+        for path in sorted(Path("weave").rglob("*.py")):
+            tree = ast.parse(path.read_text())
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.ClassDef):
+                    continue
+                names = [child.name for child in node.body
+                         if isinstance(child, ast.FunctionDef)]
+                repeated = [n for n, count in collections.Counter(names).items() if count > 1]
+                self.assertEqual(repeated, [], f"{path}, class {node.name}")
+
     def test_every_worker_that_counts_requests_is_run_here(self):
         """A worker that counts requests has to be run by a test, or the next
         missing attribute reaches the app the way the last one did."""
@@ -251,7 +288,8 @@ class WorkerRuns(unittest.TestCase):
 
         run_here = {"FeedPoller", "SubsImporter", "ChannelDetailsFetcher",
                     "HistoryImporter", "RecommendationsFetcher", "PlaylistsFetcher",
-                    "PlaylistItemsFetcher", "LiveWatcher", "DetailFetcher"}
+                    "PlaylistItemsFetcher", "SearchFetcher", "LiveWatcher",
+                    "DetailFetcher"}
         source = Path("weave/poller.py").read_text()
         spenders = {match.group(1)
                     for match in re.finditer(r"class (\w+)\(QThread\):(.*?)(?=\nclass |\Z)",

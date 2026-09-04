@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 14
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -42,19 +42,23 @@ CREATE TABLE IF NOT EXISTS request_budget (
     PRIMARY KEY (endpoint, minute)
 );
 
--- What YouTube suggests. Kept apart from videos on purpose: these are mostly
--- from channels that are not tracked, and writing them in there would make
--- them look like something followed. Replaced wholesale on each refresh,
--- because yesterday's suggestion is not worth keeping.
-CREATE TABLE IF NOT EXISTS recommended (
-    ext_id         TEXT PRIMARY KEY,
+-- Lists that come from YouTube rather than from the channels you track: what
+-- it suggests, and what you have watched. Kept apart from videos on purpose,
+-- since these are mostly from channels that are not tracked and writing them
+-- in there would make them look like something followed. One table with a
+-- kind rather than one table each, because they are the same shape and the
+-- same operations.
+CREATE TABLE IF NOT EXISTS cached_videos (
+    kind           TEXT NOT NULL,          -- recommended or history
+    ext_id         TEXT NOT NULL,
     title          TEXT NOT NULL,
     channel_name   TEXT,
     channel_ext_id TEXT,
     duration_s     INTEGER,
     thumbnail_url  TEXT,
     position       INTEGER NOT NULL,
-    seen_at        INTEGER NOT NULL
+    seen_at        INTEGER NOT NULL,
+    PRIMARY KEY (kind, ext_id)
 );
 
 -- YouTube's own playlists, as opposed to boxes, which are this application's.
@@ -65,6 +69,7 @@ CREATE TABLE IF NOT EXISTS playlists (
     title      TEXT NOT NULL,
     position   INTEGER NOT NULL DEFAULT 0,
     items_at   INTEGER,                    -- when its contents were last read
+    hidden     INTEGER NOT NULL DEFAULT 0, -- kept, but out of the sidebar
     seen_at    INTEGER NOT NULL
 );
 
@@ -242,6 +247,9 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # is the default; a channel with no long form tab falls back to the mixed
     # channel feed and is remembered so the discovery is not repeated.
     ("channels", "feed_variant", "TEXT"),
+    # A long playlist list buries everything under it, so each one can be put
+    # out of the way without being forgotten.
+    ("playlists", "hidden", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 
@@ -285,6 +293,11 @@ class Database:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
             row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             was = int(row["value"]) if row else 0
+            if was and was < 14:
+                # Recommendations moved into the shared cached_videos table.
+                # They are a snapshot and are fetched again, so the old rows
+                # are not worth carrying across.
+                conn.execute("DROP TABLE IF EXISTS recommended")
             if was and was < 10:
                 # Banners stored before this were the uncropped artwork, which
                 # is the wrong shape for the band it goes in and looks like a
@@ -803,32 +816,66 @@ class Database:
         return [int(row["box_id"]) for row in self.conn.execute(
             "SELECT box_id FROM box_items WHERE video_key=?", (video_key,))]
 
-    # ---- recommendations -------------------------------------------------
+    # ---- lists that come from YouTube ------------------------------------
 
-    def replace_recommended(self, rows: list[dict]) -> int:
+    RECOMMENDED = "recommended"
+    HISTORY = "history"
+
+    def replace_cached(self, kind: str, rows: list[dict]) -> int:
         """Swap in a fresh set. Replacing rather than merging, since these are
         a snapshot of a moment and an old one has no value."""
         now = int(time.time())
         with self.conn as conn:
-            conn.execute("DELETE FROM recommended")
+            conn.execute("DELETE FROM cached_videos WHERE kind=?", (kind,))
             conn.executemany(
-                "INSERT INTO recommended(ext_id, title, channel_name, channel_ext_id, "
-                "  duration_s, thumbnail_url, position, seen_at) VALUES(?,?,?,?,?,?,?,?) "
-                "ON CONFLICT(ext_id) DO NOTHING",
-                [(row["ext_id"], row["title"], row.get("channel_name"),
+                "INSERT INTO cached_videos(kind, ext_id, title, channel_name, "
+                "  channel_ext_id, duration_s, thumbnail_url, position, seen_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                [(kind, row["ext_id"], row["title"], row.get("channel_name"),
                   row.get("channel_ext_id"), row.get("duration_s"),
                   row.get("thumbnail_url"), index, now)
                  for index, row in enumerate(rows)],
             )
-        self.set_state("recommended_at", str(now))
+        self.set_state(f"{kind}_at", str(now))
         return len(rows)
 
-    def recommended(self, limit: int = 100) -> list[sqlite3.Row]:
+    def append_cached(self, kind: str, rows: list[dict]) -> int:
+        """Add more onto the end, keeping what is already shown.
+
+        Scrolling to the bottom asks for a later slice, so the new ones go
+        after the old rather than replacing them. Returns how many were
+        actually new, which is what says whether there is more to come.
+        """
+        if not rows:
+            return 0
+        now = int(time.time())
+        with self.conn as conn:
+            start = conn.execute(
+                "SELECT COALESCE(MAX(position), -1) + 1 FROM cached_videos WHERE kind=?",
+                (kind,)).fetchone()[0]
+            before = conn.total_changes
+            conn.executemany(
+                "INSERT INTO cached_videos(kind, ext_id, title, channel_name, "
+                "  channel_ext_id, duration_s, thumbnail_url, position, seen_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                [(kind, row["ext_id"], row["title"], row.get("channel_name"),
+                  row.get("channel_ext_id"), row.get("duration_s"),
+                  row.get("thumbnail_url"), start + index, now)
+                 for index, row in enumerate(rows)],
+            )
+            return conn.total_changes - before
+
+    def cached_count(self, kind: str) -> int:
+        return int(self.conn.execute(
+            "SELECT COUNT(*) FROM cached_videos WHERE kind=?", (kind,)).fetchone()[0])
+
+    def cached(self, kind: str, limit: int = 400) -> list[sqlite3.Row]:
         """Shaped like a feed row so the same grid can draw it.
 
         The channel is joined in when it happens to be one that is tracked,
-        which is how a recommendation from a channel already followed gets its
-        icon, and left as the bare name otherwise.
+        which is how one of these from a channel already followed gets its
+        icon, and left as whatever the source said otherwise. The history says
+        nothing at all about the channel, measured, so those come out blank.
         """
         return list(self.conn.execute(
             """
@@ -846,18 +893,76 @@ class Database:
                    COALESCE(c.title, r.channel_name) AS channel_title,
                    c.avatar_url                AS avatar_url,
                    w.video_key IS NOT NULL     AS watched
-            FROM recommended r
+            FROM cached_videos r
             LEFT JOIN channels c ON c.ext_id = r.channel_ext_id AND c.platform = 'youtube'
             LEFT JOIN watched w ON w.video_key = 'yt:' || r.ext_id
+            WHERE r.kind = ?
             ORDER BY r.position
             LIMIT ?
             """,
-            (limit,),
+            (kind, limit),
         ))
 
-    def recommended_age_s(self) -> int | None:
-        stamp = self.get_state("recommended_at")
+    def cached_age_s(self, kind: str) -> int | None:
+        stamp = self.get_state(f"{kind}_at")
         return None if not stamp else int(time.time()) - int(stamp)
+
+    # The recommendations under their own names, since that is what the rest
+    # of the application calls them.
+    def replace_recommended(self, rows: list[dict]) -> int:
+        return self.replace_cached(self.RECOMMENDED, rows)
+
+    def append_recommended(self, rows: list[dict]) -> int:
+        return self.append_cached(self.RECOMMENDED, rows)
+
+    def recommended(self, limit: int = 100) -> list[sqlite3.Row]:
+        return self.cached(self.RECOMMENDED, limit)
+
+    def recommended_count(self) -> int:
+        return self.cached_count(self.RECOMMENDED)
+
+    def recommended_age_s(self) -> int | None:
+        return self.cached_age_s(self.RECOMMENDED)
+
+    def decorate(self, rows: list[dict]) -> list[dict]:
+        """Turn flat rows from a source into the shape the grid draws.
+
+        Search results are not stored anywhere, so they are joined to what is
+        known in memory instead: the channel, when it happens to be one that is
+        tracked, and whether the video has been watched. Two queries whatever
+        the number of rows.
+        """
+        if not rows:
+            return []
+        keys = [f"yt:{row['ext_id']}" for row in rows]
+        channel_ids = [row.get("channel_ext_id") for row in rows if row.get("channel_ext_id")]
+        known: dict[str, sqlite3.Row] = {}
+        if channel_ids:
+            marks = ",".join("?" * len(channel_ids))
+            known = {row["ext_id"]: row for row in self.conn.execute(
+                f"SELECT ext_id, key, title, avatar_url FROM channels "
+                f"WHERE platform='youtube' AND ext_id IN ({marks})", channel_ids)}
+        marks = ",".join("?" * len(keys))
+        watched = {row[0] for row in self.conn.execute(
+            f"SELECT video_key FROM watched WHERE video_key IN ({marks})", keys)}
+
+        out = []
+        for row in rows:
+            channel = known.get(row.get("channel_ext_id") or "")
+            key = f"yt:{row['ext_id']}"
+            out.append({
+                "key": key, "platform": "youtube", "ext_id": row["ext_id"],
+                "channel_key": channel["key"] if channel else "",
+                "title": row["title"], "published_at": None,
+                "thumbnail_url": row.get("thumbnail_url"),
+                "duration_s": row.get("duration_s"),
+                "views": row.get("views"), "likes": None, "live_status": None,
+                "channel_title": (channel["title"] if channel else None)
+                                 or row.get("channel_name") or "",
+                "avatar_url": channel["avatar_url"] if channel else None,
+                "watched": key in watched,
+            })
+        return out
 
     # ---- playlists -------------------------------------------------------
 
@@ -879,12 +984,24 @@ class Database:
         self.set_state("playlists_at", str(now))
         return len(rows)
 
-    def playlists(self) -> list[dict]:
+    def playlists(self, include_hidden: bool = False) -> list[dict]:
+        """The playlists, hidden ones left out unless asked for.
+
+        Hiding is not forgetting. A hidden playlist keeps its contents and
+        comes back the moment it is shown again, which is the difference
+        between this and removing it.
+        """
+        where = "" if include_hidden else "WHERE p.hidden = 0"
         return [dict(row) for row in self.conn.execute(
-            "SELECT p.ext_id, p.title, p.position, p.items_at, "
+            "SELECT p.ext_id, p.title, p.position, p.items_at, p.hidden, "
             "       (SELECT COUNT(*) FROM playlist_items i WHERE i.playlist_id = p.ext_id) "
             "         AS items "
-            "FROM playlists p ORDER BY p.position, p.title")]
+            f"FROM playlists p {where} ORDER BY p.position, p.title")]
+
+    def set_playlist_hidden(self, playlist_id: str, hidden: bool) -> None:
+        with self.conn as conn:
+            conn.execute("UPDATE playlists SET hidden=? WHERE ext_id=?",
+                         (1 if hidden else 0, playlist_id))
 
     def playlist(self, playlist_id: str) -> dict | None:
         row = self.conn.execute(

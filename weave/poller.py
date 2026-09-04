@@ -47,9 +47,11 @@ from . import tokens
 from .sources import comments as comment_source
 from .sources import livecheck
 from .sources import dislikes as dislike_source
+from .sources import flatlist
 from .sources import history as history_source
 from .sources import playlists as playlist_source
 from .sources import recommended as recommended_source
+from .sources import search as search_source
 from .sources import rss, subs, sweep, twitch
 
 
@@ -343,22 +345,26 @@ class SubsImporter(QThread):
 
 
 class HistoryImporter(QThread):
-    """Marks what YouTube already knows you have watched.
+    """Reads the history YouTube keeps, which is the whole of it.
 
-    Meant to be run once, to stop a first day looking like several thousand
-    unwatched videos. After that mpv is the source of truth, so an existing
-    mark is never overwritten.
+    mpv already tells YouTube when it plays something, so YouTube's copy is
+    the complete one. It is kept as its own list, and the stored videos in it
+    are marked watched as well, since that is what the feed's hide watched
+    toggle reads.
     """
 
-    imported = Signal(int, int)          # newly marked, seen but not stored
+    imported = Signal(int, int)          # entries read, newly marked as watched
     failed = Signal(str)
 
-    def __init__(self, db: Database, cfg: Config, limit: int = 2000,
+    def __init__(self, db: Database, cfg: Config, limit: int = 200,
+                 start: int = 1, append: bool = False,
                  parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._db = db
         self._cfg = cfg
         self._limit = limit
+        self._start = start
+        self._append = append
         self._throttle = Throttle(1, cfg.min_request_interval_s)
         self._cancel = threading.Event()
 
@@ -368,17 +374,21 @@ class HistoryImporter(QThread):
     def run(self) -> None:
         _spend(self._db, self._cfg, BROWSE)
         try:
-            keys = history_source.fetch(self._cfg, self._limit, self._throttle,
-                                        cancel=self._cancel)
+            found = history_source.fetch(self._cfg, self._limit, self._throttle,
+                                         cancel=self._cancel, start=self._start)
         except ProcessCancelled:
             return
         except history_source.HistoryError as exc:
             _spend(self._db, self._cfg, BROWSE, count=0, refused=1)
             self.failed.emit(str(exc))
             return
-        marked, missing = self._db.mark_watched_many(keys, "youtube")
+        rows = [flatlist.as_row(item) for item in found]
+        kind = self._db.HISTORY
+        added = (self._db.append_cached(kind, rows) if self._append
+                 else self._db.replace_cached(kind, rows))
+        marked, _ = self._db.mark_watched_many(history_source.keys_of(found), "youtube")
         self._db.close()
-        self.imported.emit(marked, missing)
+        self.imported.emit(added, marked)
 
 
 class RecommendationsFetcher(QThread):
@@ -392,11 +402,14 @@ class RecommendationsFetcher(QThread):
     failed = Signal(str)
 
     def __init__(self, db: Database, cfg: Config, limit: int = 48,
+                 start: int = 1, append: bool = False,
                  parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._db = db
         self._cfg = cfg
         self._limit = limit
+        self._start = start
+        self._append = append
         self._throttle = Throttle(1, cfg.min_request_interval_s)
         self._cancel = threading.Event()
 
@@ -407,18 +420,16 @@ class RecommendationsFetcher(QThread):
         _spend(self._db, self._cfg, BROWSE)
         try:
             found = recommended_source.fetch(self._cfg, self._limit, self._throttle,
-                                             cancel=self._cancel)
+                                             cancel=self._cancel, start=self._start)
         except ProcessCancelled:
             return
         except recommended_source.RecommendedError as exc:
             _spend(self._db, self._cfg, BROWSE, count=0, refused=1)
             self.failed.emit(str(exc))
             return
-        count = self._db.replace_recommended([{
-            "ext_id": item.ext_id, "title": item.title,
-            "channel_name": item.channel_name, "channel_ext_id": item.channel_ext_id,
-            "duration_s": item.duration_s, "thumbnail_url": item.thumbnail_url,
-        } for item in found])
+        rows = [flatlist.as_row(item) for item in found]
+        count = (self._db.append_recommended(rows) if self._append
+                 else self._db.replace_recommended(rows))
         self._db.close()
         self.ready.emit(count)
 
@@ -497,6 +508,47 @@ class PlaylistItemsFetcher(QThread):
         } for item in items])
         self._db.close()
         self.ready.emit(self._playlist_id, count)
+
+
+class SearchFetcher(QThread):
+    """Searching YouTube itself, one page at a time.
+
+    Weave's own search is a query over the stored database and costs nothing.
+    This one costs a request, so it runs when asked for rather than while
+    typing.
+    """
+
+    results = Signal(str, int, "QVariantList")     # query, page start, results
+    failed = Signal(str)
+
+    def __init__(self, db: Database, cfg: Config, query: str, start: int = 1,
+                 count: int = 24, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._db = db
+        self._cfg = cfg
+        self._query = query
+        self._start = start
+        self._count = count
+        self._throttle = Throttle(1, cfg.min_request_interval_s)
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def run(self) -> None:
+        _spend(self._db, self._cfg, BROWSE)
+        try:
+            found = search_source.fetch(self._cfg, self._query, self._start, self._count,
+                                        self._throttle, cancel=self._cancel)
+        except ProcessCancelled:
+            return
+        except search_source.SearchError as exc:
+            _spend(self._db, self._cfg, BROWSE, count=0, refused=1)
+            self.failed.emit(str(exc))
+            return
+        self._db.close()
+        self.results.emit(self._query, self._start,
+                          [flatlist.as_row(item) | {"views": item.views} for item in found])
 
 
 class ChannelDetailsFetcher(QThread):

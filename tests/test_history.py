@@ -1,31 +1,47 @@
 """Reading the watch history.
 
-The list is thinner than it looks. Measured, a history row carries an id and a
-duration and no channel at all, so nothing here can place a video the database
-has never seen.
+The history YouTube keeps is the whole of it, since mpv tells YouTube when it
+plays something, so there is nothing to be gained from keeping a second and
+poorer list here.
+
+What a row carries is thinner than it looks. Measured against the live
+endpoint, it has an id, a title, a duration and a thumbnail, and says nothing
+at all about the channel.
 """
 
 import unittest
 
 from weave.sources import history
 
+# A real row's shape. The two empty looking fields are the channel name and the
+# channel id, which the history never fills in.
+ROW = "aaaaaaaaaaa\tA video\tNA\tNA\t186\thttps://i/x.jpg\tNA"
+
 
 class ParseLines(unittest.TestCase):
-    def test_ids_become_keys_in_the_order_watched(self):
-        self.assertEqual(history.parse_lines("aaaaaaaaaaa\nbbbbbbbbbbb\n"),
-                         ["yt:aaaaaaaaaaa", "yt:bbbbbbbbbbb"])
+    def test_an_entry_keeps_what_the_history_does_carry(self):
+        item = history.parse_lines(ROW)[0]
+        self.assertEqual((item.ext_id, item.title, item.duration_s, item.thumbnail_url),
+                         ("aaaaaaaaaaa", "A video", 186, "https://i/x.jpg"))
 
-    def test_duplicates_are_collapsed(self):
-        # Watching something twice is one entry here, not two.
-        self.assertEqual(history.parse_lines("aaaaaaaaaaa\naaaaaaaaaaa\n"),
-                         ["yt:aaaaaaaaaaa"])
+    def test_and_has_no_channel_to_carry(self):
+        item = history.parse_lines(ROW)[0]
+        self.assertEqual((item.channel_name, item.channel_ext_id), (None, None))
+
+    def test_the_order_watched_is_kept(self):
+        text = f"{ROW}\nbbbbbbbbbbb\tAnother\tNA\tNA\tNA\tNA\tNA"
+        self.assertEqual([i.ext_id for i in history.parse_lines(text)],
+                         ["aaaaaaaaaaa", "bbbbbbbbbbb"])
+
+    def test_watching_something_twice_is_one_entry(self):
+        self.assertEqual(len(history.parse_lines(f"{ROW}\n{ROW}")), 1)
 
     def test_rows_that_are_not_videos_are_dropped(self):
-        self.assertEqual(history.parse_lines("RDor6VC0FkOOw\naaaaaaaaaaa\n"),
-                         ["yt:aaaaaaaaaaa"])
+        text = "RDabcdefghijk\tNA\tNA\tNA\tNA\tNA\tNA\n" + ROW
+        self.assertEqual([i.ext_id for i in history.parse_lines(text)], ["aaaaaaaaaaa"])
 
-    def test_a_wider_row_still_yields_its_id(self):
-        self.assertEqual(history.parse_lines("aaaaaaaaaaa|4948"), ["yt:aaaaaaaaaaa"])
+    def test_keys_for_marking_what_is_stored(self):
+        self.assertEqual(history.keys_of(history.parse_lines(ROW)), ["yt:aaaaaaaaaaa"])
 
     def test_nothing_at_all(self):
         self.assertEqual(history.parse_lines(""), [])

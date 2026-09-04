@@ -445,7 +445,7 @@ class ChannelPage(DatabaseCase):
 class SearchAndHistory(DatabaseCase):
     def setUp(self):
         super().setUp()
-        self.db.add_channel("yt:UC1", "youtube", "UC1", "Kurzgesagt")
+        self.db.add_channel("yt:UC1", "youtube", "UC1", "Example Channel")
         self.db.add_channel("yt:UC2", "youtube", "UC2", "Somebody else")
         self.db.upsert_videos([
             self.video("aaaaaaaaaaa", title="A hundred % of nothing", published_at=300),
@@ -464,7 +464,7 @@ class SearchAndHistory(DatabaseCase):
         self.assertEqual(self.found("hundred"), ["aaaaaaaaaaa"])
 
     def test_a_search_matches_the_channel_name(self):
-        self.assertEqual(self.found("kurz"), ["aaaaaaaaaaa"])
+        self.assertEqual(self.found("example"), ["aaaaaaaaaaa"])
 
     def test_a_wildcard_in_the_words_is_a_wildcard_no_longer(self):
         # A title really can contain one, and treating it as a pattern would
@@ -555,6 +555,96 @@ class Recommendations(DatabaseCase):
         self.assertIsNone(self.db.recommended_age_s())
         self.db.replace_recommended(self.rows("aaaaaaaaaaa"))
         self.assertLess(self.db.recommended_age_s(), 5)
+
+
+class CachedLists(DatabaseCase):
+    """What YouTube suggests and what it says you watched. Same shape, same
+    table, kept apart from the feed."""
+
+    def rows(self, *ids):
+        return [{"ext_id": i, "title": f"Video {i}", "channel_name": "Someone",
+                 "channel_ext_id": "UC9", "duration_s": 60, "thumbnail_url": "t"}
+                for i in ids]
+
+    def test_the_two_kinds_do_not_see_each_other(self):
+        self.db.replace_cached(self.db.RECOMMENDED, self.rows("aaaaaaaaaaa"))
+        self.db.replace_cached(self.db.HISTORY, self.rows("bbbbbbbbbbb"))
+        self.assertEqual([r["ext_id"] for r in self.db.cached(self.db.RECOMMENDED)],
+                         ["aaaaaaaaaaa"])
+        self.assertEqual([r["ext_id"] for r in self.db.cached(self.db.HISTORY)],
+                         ["bbbbbbbbbbb"])
+
+    def test_more_is_added_on_the_end(self):
+        # What scrolling to the bottom does. The order has to hold, or the
+        # grid would reshuffle itself under the reader.
+        self.db.replace_cached(self.db.HISTORY, self.rows("aaaaaaaaaaa", "bbbbbbbbbbb"))
+        added = self.db.append_cached(self.db.HISTORY, self.rows("ccccccccccc"))
+        self.assertEqual(added, 1)
+        self.assertEqual([r["ext_id"] for r in self.db.cached(self.db.HISTORY)],
+                         ["aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"])
+
+    def test_a_page_that_repeats_itself_adds_nothing(self):
+        # Which is how the end of a list is recognised.
+        self.db.replace_cached(self.db.HISTORY, self.rows("aaaaaaaaaaa"))
+        self.assertEqual(self.db.append_cached(self.db.HISTORY, self.rows("aaaaaaaaaaa")), 0)
+
+    def test_counting_one_kind(self):
+        self.db.replace_cached(self.db.HISTORY, self.rows("aaaaaaaaaaa", "bbbbbbbbbbb"))
+        self.db.replace_cached(self.db.RECOMMENDED, self.rows("ccccccccccc"))
+        self.assertEqual(self.db.cached_count(self.db.HISTORY), 2)
+        self.assertEqual(self.db.cached_count(self.db.RECOMMENDED), 1)
+
+    def test_each_kind_ages_on_its_own(self):
+        self.assertIsNone(self.db.cached_age_s(self.db.HISTORY))
+        self.db.replace_cached(self.db.HISTORY, self.rows("aaaaaaaaaaa"))
+        self.assertLess(self.db.cached_age_s(self.db.HISTORY), 5)
+        self.assertIsNone(self.db.cached_age_s(self.db.RECOMMENDED))
+
+    def test_a_history_entry_with_no_channel_still_shows(self):
+        # Measured: a history row says nothing at all about the channel.
+        self.db.replace_cached(self.db.HISTORY, [
+            {"ext_id": "aaaaaaaaaaa", "title": "No channel named", "channel_name": None,
+             "channel_ext_id": None, "duration_s": 10, "thumbnail_url": "t"}])
+        row = self.db.cached(self.db.HISTORY)[0]
+        self.assertEqual((row["title"], row["channel_title"], row["channel_key"]),
+                         ("No channel named", None, ""))
+
+
+class SearchDecoration(DatabaseCase):
+    """Search results are never stored, so they are joined to what is known
+    here on the way to the grid."""
+
+    def setUp(self):
+        super().setUp()
+        self.db.add_channel("yt:UC9", "youtube", "UC9", "Tracked", "http://a/av.jpg")
+        self.db.upsert_videos([self.video("aaaaaaaaaaa", channel="yt:UC9")])
+        self.db.set_watched("yt:aaaaaaaaaaa", 1.0, "mpv")
+
+    def flat(self, ext_id, channel_ext_id):
+        return {"ext_id": ext_id, "title": "A result", "channel_name": "Whatever YouTube said",
+                "channel_ext_id": channel_ext_id, "duration_s": 10, "thumbnail_url": "t",
+                "views": 5}
+
+    def test_a_result_from_a_tracked_channel_gets_its_name_and_icon(self):
+        row = self.db.decorate([self.flat("bbbbbbbbbbb", "UC9")])[0]
+        self.assertEqual((row["channel_title"], row["channel_key"], row["avatar_url"]),
+                         ("Tracked", "yt:UC9", "http://a/av.jpg"))
+
+    def test_a_result_from_a_stranger_keeps_what_youtube_said(self):
+        row = self.db.decorate([self.flat("bbbbbbbbbbb", None)])[0]
+        self.assertEqual((row["channel_title"], row["channel_key"]),
+                         ("Whatever YouTube said", ""))
+
+    def test_a_result_already_watched_says_so(self):
+        row = self.db.decorate([self.flat("aaaaaaaaaaa", "UC9")])[0]
+        self.assertTrue(row["watched"])
+
+    def test_nothing_is_stored_by_decorating(self):
+        self.db.decorate([self.flat("bbbbbbbbbbb", "UC9")])
+        self.assertEqual(len(self.db.feed(hide_watched=False)), 1)
+
+    def test_nothing_at_all(self):
+        self.assertEqual(self.db.decorate([]), [])
 
 
 class Playlists(DatabaseCase):

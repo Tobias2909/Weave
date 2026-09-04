@@ -1,14 +1,17 @@
-"""What YouTube says you have already watched.
+"""What YouTube says you have watched.
 
-Weave decides watched for itself by observing mpv, but that only covers what
-has been played through Weave. Importing the history once gives the feed a
-sensible starting point instead of several thousand unwatched rows on the first
-day.
+This is the whole history, not a reflection of what Weave saw. mpv already
+tells YouTube when it plays something, so YouTube's copy is the complete one
+and there is nothing to be gained from keeping a second, poorer list here.
 
-The list carries an id and a duration and nothing else. There is no channel id
-on a history row, measured, so a video the database has never seen cannot be
-placed and is counted as skipped rather than invented. That is fine for what
-this is for, since the point is to mark the stored feed, not to grow it.
+One measured limitation. A history row carries an id, a title, a duration and
+a thumbnail, and says nothing whatsoever about the channel. So an entry from a
+channel that is tracked here picks up its name by being joined to it, and one
+from anywhere else simply has no channel name. Asking per video would cost a
+request each, which is not worth it for a name.
+
+It pages like the other lists, verified, so more of it is reached by asking for
+a later slice.
 """
 
 from __future__ import annotations
@@ -17,9 +20,10 @@ import threading
 
 from ..config import Config
 from ..cookies import args as cookie_args
-from ..ids import is_video_id, video_key
+from ..ids import video_key
 from ..net import Throttle
 from ..process import Timeout, run as run_process
+from .flatlist import FIELDS, FlatVideo, parse
 
 HISTORY = ":ythistory"
 
@@ -28,27 +32,25 @@ class HistoryError(RuntimeError):
     pass
 
 
-def parse_lines(text: str) -> list[str]:
-    """Video keys, in the order watched, newest first, without duplicates."""
-    keys: list[str] = []
-    seen: set[str] = set()
-    for line in text.splitlines():
-        ext_id = line.strip().split("|")[0].strip()
-        if not is_video_id(ext_id) or ext_id in seen:
-            continue
-        seen.add(ext_id)
-        keys.append(video_key(ext_id))
-    return keys
+def parse_lines(text: str) -> list[FlatVideo]:
+    return parse(text)
 
 
-def fetch(cfg: Config, limit: int = 2000, throttle: Throttle | None = None,
-          timeout: float = 600.0,
-          cancel: threading.Event | None = None) -> list[str]:
+def keys_of(items: list[FlatVideo]) -> list[str]:
+    """The video keys, for marking the stored ones as watched."""
+    return [video_key(item.ext_id) for item in items]
+
+
+def fetch(cfg: Config, limit: int = 200, throttle: Throttle | None = None,
+          timeout: float = 600.0, cancel: threading.Event | None = None,
+          start: int = 1) -> list[FlatVideo]:
+    first = max(1, start)
+    last = max(first, first + max(1, limit) - 1)
     command = [
         "yt-dlp", "--no-warnings", "--flat-playlist",
         *cookie_args(cfg),
-        "--playlist-end", str(max(1, limit)),
-        "--print", "%(id)s",
+        "--playlist-items", f"{first}-{last}",
+        "--print", FIELDS,
         HISTORY,
     ]
     try:
@@ -62,11 +64,13 @@ def fetch(cfg: Config, limit: int = 2000, throttle: Throttle | None = None,
     except Timeout as exc:
         raise HistoryError("reading the history timed out") from exc
 
-    keys = parse_lines(result.stdout)
-    if keys:
-        return keys
+    found = parse(result.stdout)
+    if found:
+        return found
     tail = (result.stderr or "").strip().splitlines()
-    detail = tail[-1] if tail else "the history came back empty"
+    if not tail:
+        return []           # the end of the history is not a failure
+    detail = tail[-1]
     if "cookies" in detail.lower() or "sign in" in detail.lower():
         raise HistoryError("could not read the login cookies, check browser_profile in the config")
     raise HistoryError(detail[:200])

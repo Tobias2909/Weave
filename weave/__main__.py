@@ -16,7 +16,8 @@ from .budget import Budget
 from .sources import twitch
 from .db import Database
 from .net import Throttle
-from .sources import history, playlists as playlist_source, recommended, subs
+from .sources import flatlist, history, playlists as playlist_source
+from .sources import recommended, search, subs
 from .sources.resolve import ResolveError, resolve
 
 
@@ -165,25 +166,46 @@ def _cmd_budget(_args) -> int:
 
 
 def _cmd_history(args) -> int:
-    """Mark what YouTube already knows you have watched.
+    """Read the history YouTube keeps, which is the whole of it.
 
-    Worth running once, so a first day does not look like several thousand
-    unwatched videos. After that mpv is the source of truth and an existing
-    mark is never overwritten.
+    mpv tells YouTube when it plays something, so YouTube's copy is complete
+    and there is nothing to be gained from a second one here. The stored
+    videos in it are marked watched as well, which is what the feed's hide
+    watched toggle reads, and an existing mark is never overwritten.
     """
     cfg = config.load()
     db = Database(paths.DB_FILE)
     throttle = Throttle(1, cfg.min_request_interval_s)
     Budget(db, cfg.budget_limits, cfg.budget_window_s).spend("browse")
     try:
-        keys = history.fetch(cfg, args.limit, throttle)
+        found = history.fetch(cfg, args.limit, throttle)
     except history.HistoryError as exc:
         print(exc, file=sys.stderr)
         return 1
-    marked, missing = db.mark_watched_many(keys, "youtube")
-    print(f"{len(keys)} in the history, {marked} newly marked as watched")
-    if missing:
-        print(f"{missing} were from channels not tracked here, so they were skipped")
+    db.replace_cached(db.HISTORY, [flatlist.as_row(item) for item in found])
+    marked, _ = db.mark_watched_many(history.keys_of(found), "youtube")
+    print(f"{len(found)} in the history, {marked} of them stored here and marked watched")
+    for row in db.cached(db.HISTORY, limit=args.limit)[:20]:
+        print(f"  {row['ext_id']}  {(row['channel_title'] or ''):<20} {row['title'][:48]}")
+    return 0
+
+
+def _cmd_search(args) -> int:
+    """Search YouTube itself, as opposed to what is stored here."""
+    cfg = config.load()
+    db = Database(paths.DB_FILE)
+    throttle = Throttle(1, cfg.min_request_interval_s)
+    Budget(db, cfg.budget_limits, cfg.budget_window_s).spend("browse")
+    try:
+        found = search.fetch(cfg, " ".join(args.words), 1, args.limit, throttle)
+    except search.SearchError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    if not found:
+        print("nothing found")
+        return 0
+    for item in found:
+        print(f"  {item.ext_id}  {(item.channel_name or '')[:22]:<22} {item.title[:48]}")
     return 0
 
 
@@ -658,7 +680,7 @@ def main() -> int:
 
     watched = subparsers.add_parser(
         "history", help="mark what YouTube says you have already watched")
-    watched.add_argument("--limit", type=int, default=2000,
+    watched.add_argument("--limit", type=int, default=200,
                          help="how far back to read, newest first")
     watched.set_defaults(func=_cmd_history)
 
@@ -667,6 +689,11 @@ def main() -> int:
     lists.add_argument("name", nargs="?", help="a playlist name or id, to read its videos")
     lists.add_argument("--limit", type=int, default=300)
     lists.set_defaults(func=_cmd_playlists)
+
+    finder = subparsers.add_parser("search", help="search YouTube itself")
+    finder.add_argument("words", nargs="+")
+    finder.add_argument("--limit", type=int, default=12)
+    finder.set_defaults(func=_cmd_search)
 
     suggested = subparsers.add_parser(
         "recommended", help="refresh what YouTube suggests")

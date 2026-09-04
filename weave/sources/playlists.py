@@ -22,9 +22,9 @@ from dataclasses import dataclass
 
 from ..config import Config
 from ..cookies import args as cookie_args
-from ..ids import CHANNEL_ID, is_video_id
 from ..net import Throttle
 from ..process import Timeout, run as run_process
+from .flatlist import FIELDS, FlatVideo, parse
 
 FEED_PLAYLISTS = "https://www.youtube.com/feed/playlists"
 PLAYLIST_URL = "https://www.youtube.com/playlist?list={playlist_id}"
@@ -34,7 +34,12 @@ PLAYLIST_URL = "https://www.youtube.com/playlist?list={playlist_id}"
 # playlist and is kept.
 PLAYLIST_ID = re.compile(r"^(?:PL|LL|FL|UU|OL|RD)[A-Za-z0-9_-]{0,40}$")
 
-ITEM_FIELDS = "%(id)s\t%(title)s\t%(channel)s\t%(channel_id)s\t%(duration)s\t%(thumbnails.-1.url)s"
+ITEM_FIELDS = FIELDS
+
+# A playlist entry is the same thing a recommendation and a search result are,
+# so it is read by the same parser.
+PlaylistItem = FlatVideo
+parse_items = parse
 
 
 class PlaylistError(RuntimeError):
@@ -47,30 +52,9 @@ class Playlist:
     title: str
 
 
-@dataclass(frozen=True)
-class PlaylistItem:
-    ext_id: str
-    title: str
-    channel_name: str | None
-    channel_ext_id: str | None
-    duration_s: int | None
-    thumbnail_url: str | None
-
-
-def _optional(text: str) -> str | None:
-    text = (text or "").strip()
-    return None if not text or text == "NA" else text
-
-
-def _seconds(text: str) -> int | None:
-    value = _optional(text)
-    try:
-        return int(float(value)) if value else None
-    except ValueError:
-        return None
-
-
 def parse_list(text: str) -> list[Playlist]:
+    """The playlists themselves, which are not videos and so are read here
+    rather than by the shared parser."""
     out: list[Playlist] = []
     seen: set[str] = set()
     for line in text.splitlines():
@@ -83,30 +67,6 @@ def parse_list(text: str) -> list[Playlist]:
             continue
         seen.add(ext_id)
         out.append(Playlist(ext_id, title))
-    return out
-
-
-def parse_items(text: str) -> list[PlaylistItem]:
-    out: list[PlaylistItem] = []
-    seen: set[str] = set()
-    for line in text.splitlines():
-        parts = line.split("\t")
-        if len(parts) < 2:
-            continue
-        ext_id = parts[0].strip()
-        title = (parts[1] or "").strip()
-        if not is_video_id(ext_id) or ext_id in seen or not title or title == "NA":
-            continue
-        seen.add(ext_id)
-        channel_id = _optional(parts[3]) if len(parts) > 3 else None
-        out.append(PlaylistItem(
-            ext_id=ext_id,
-            title=title,
-            channel_name=_optional(parts[2]) if len(parts) > 2 else None,
-            channel_ext_id=channel_id if channel_id and CHANNEL_ID.match(channel_id) else None,
-            duration_s=_seconds(parts[4]) if len(parts) > 4 else None,
-            thumbnail_url=_optional(parts[5]) if len(parts) > 5 else None,
-        ))
     return out
 
 

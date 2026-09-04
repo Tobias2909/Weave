@@ -18,6 +18,24 @@ ApplicationWindow {
         z: -1
     }
 
+    // What the open view can do, if anything, shown as one button beside
+    // Refresh.
+    readonly property string viewActionText: {
+        if (App.viewKind === "history") return "Read it again"
+        if (App.viewKind === "recommended") return "Ask again"
+        if (App.viewKind === "playlist") return "Read it again"
+        if (App.viewKind === "search") return App.searchScope === "youtube"
+                                              ? "Search again" : "Search YouTube"
+        return ""
+    }
+
+    function doViewAction() {
+        if (App.viewKind === "history") App.importHistory()
+        else if (App.viewKind === "recommended") App.refreshRecommended()
+        else if (App.viewKind === "playlist") App.refreshPlaylist()
+        else if (App.viewKind === "search") App.searchYouTube()
+    }
+
     // Which video the context menu is acting on.
     property string menuKey: ""
     property string menuChannelKey: ""
@@ -130,27 +148,10 @@ ApplicationWindow {
                 // database and costs nothing. Emptying it goes back to
                 // wherever the search started.
                 onTextChanged: App.search(text)
+                // Typing searches what is stored, which costs nothing.
+                // Pressing return asks YouTube itself, which costs a request.
+                onAccepted: App.searchYouTube()
                 Keys.onEscapePressed: text = ""
-            }
-
-            FlatButton {
-                // The history is only worth importing once, so it lives with
-                // the view it fills rather than in the bar all the time.
-                visible: App.viewKind === "history"
-                text: "Import from YouTube"
-                onClicked: App.importHistory()
-            }
-
-            FlatButton {
-                visible: App.viewKind === "recommended"
-                text: "Ask again"
-                onClicked: App.refreshRecommended()
-            }
-
-            FlatButton {
-                visible: App.viewKind === "playlist"
-                text: "Read it again"
-                onClicked: App.refreshPlaylist()
             }
 
             FlatButton {
@@ -184,6 +185,16 @@ ApplicationWindow {
                     leftPadding: parent.indicator.width + 6
                     verticalAlignment: Text.AlignVCenter
                 }
+            }
+
+            // One button for whatever the open view can do, kept beside
+            // Refresh so it is always in the same place rather than buried in
+            // the middle of the bar.
+            FlatButton {
+                objectName: "viewAction"
+                visible: root.viewActionText !== ""
+                text: root.viewActionText
+                onClicked: root.doViewAction()
             }
 
             FlatButton {
@@ -354,37 +365,6 @@ ApplicationWindow {
 
                 Item { width: 1; height: 10 }
 
-                SidebarHeading {
-                    text: "Playlists"
-                    // Read on request rather than at launch. These are
-                    // YouTube's own lists and asking for them is a request,
-                    // so it happens when you want it to.
-                    actionText: "\u21bb"
-                    onAction: App.refreshPlaylists()
-                }
-
-                Repeater {
-                    model: App.playlists
-                    SidebarRow {
-                        width: sidebarColumn.width
-                        label: modelData.title
-                        count: modelData.items
-                        selected: App.viewKind === "playlist" && App.viewPlaylist === modelData.ext_id
-                        onActivated: App.selectPlaylist(modelData.ext_id)
-                        onRevealRequested: root.revealRow(this)
-                    }
-                }
-
-                Label {
-                    visible: App.playlists.length === 0
-                    width: sidebarColumn.width - 28
-                    x: 14
-                    text: "Your YouTube playlists appear here. Press the arrow above to read them."
-                    color: Theme.colors.textMuted
-                    font.pixelSize: 11
-                    wrapMode: Text.Wrap
-                }
-
                 Item { width: 1; height: 10 }
 
                 SidebarHeading {
@@ -419,6 +399,47 @@ ApplicationWindow {
                     font.pixelSize: 11
                     wrapMode: Text.Wrap
                 }
+
+                Item { width: 1; height: 10 }
+
+                SidebarHeading {
+                    text: "Playlists"
+                    // Read on request rather than at launch. These are
+                    // YouTube's own lists and asking for them is a request,
+                    // so it happens when you want it to.
+                    // One action, two things to do with a list this long,
+                    // so it opens a menu rather than doing one of them.
+                    actionText: "\u22ef"
+                    onAction: playlistMenu.popup()
+                }
+
+                Repeater {
+                    model: App.playlists
+                    SidebarRow {
+                        width: sidebarColumn.width
+                        label: modelData.title
+                        count: modelData.items
+                        selected: App.viewKind === "playlist" && App.viewPlaylist === modelData.ext_id
+                        onActivated: App.selectPlaylist(modelData.ext_id)
+                        onRevealRequested: root.revealRow(this)
+                        onContextRequested: {
+                            playlistRowMenu.playlistId = modelData.ext_id
+                            playlistRowMenu.playlistName = modelData.title
+                            playlistRowMenu.popup()
+                        }
+                    }
+                }
+
+                Label {
+                    visible: App.playlists.length === 0
+                    width: sidebarColumn.width - 28
+                    x: 14
+                    text: "Your YouTube playlists appear here. Read them from the menu above."
+                    color: Theme.colors.textMuted
+                    font.pixelSize: 11
+                    wrapMode: Text.Wrap
+                }
+
             }
         }
     }
@@ -485,6 +506,10 @@ ApplicationWindow {
         cellHeight: cellWidth * 9 / 16 + 108
         model: feedModel
         cacheBuffer: 800
+
+        // Reaching the bottom asks for more. Which views can answer that is
+        // the bridge's business, so this does not have to know.
+        onAtYEndChanged: if (atYEnd && count > 0) App.loadMore()
 
         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
@@ -683,6 +708,46 @@ ApplicationWindow {
     }
 
     Menu {
+        id: playlistMenu
+        objectName: "playlistMenu"
+
+        MenuItem {
+            text: "Read the list again"
+            onTriggered: { App.refreshPlaylists(); playlistMenu.dismiss() }
+        }
+        MenuItem {
+            text: "Choose which to show"
+            onTriggered: { playlistMenu.dismiss(); playlistChooser.open() }
+        }
+    }
+
+    Menu {
+        id: playlistRowMenu
+        objectName: "playlistRowMenu"
+        property string playlistId: ""
+        property string playlistName: ""
+
+        MenuItem {
+            text: "Read it again"
+            onTriggered: {
+                var id = playlistRowMenu.playlistId
+                playlistRowMenu.dismiss()
+                App.selectPlaylist(id)
+                App.refreshPlaylist()
+            }
+        }
+        MenuItem {
+            // Hiding is not forgetting. It keeps its contents and comes back
+            // from the chooser.
+            text: "Hide it"
+            onTriggered: {
+                App.setPlaylistHidden(playlistRowMenu.playlistId, true)
+                playlistRowMenu.dismiss()
+            }
+        }
+    }
+
+    Menu {
         id: groupMenu
         objectName: "groupMenu"
         property int groupId: -1
@@ -728,6 +793,107 @@ ApplicationWindow {
         MenuItem {
             text: "Delete the box"
             onTriggered: { App.deleteBox(boxMenu.boxId); boxMenu.dismiss() }
+        }
+    }
+
+    // A checklist rather than a menu, because a menu of a hundred playlists is
+    // not something anyone can find anything in.
+    Popup {
+        id: playlistChooser
+        objectName: "playlistChooser"
+        anchors.centerIn: parent
+        width: 420
+        height: Math.min(520, root.height - 80)
+        padding: 16
+        modal: true
+        focus: true
+        onOpened: chooserFilter.forceActiveFocus()
+        background: Rectangle {
+            radius: 8
+            color: Theme.colors.surfaceRaised
+            border.width: 1
+            border.color: Theme.colors.border
+        }
+
+        function matching() {
+            var text = chooserFilter.text.trim().toLowerCase()
+            if (text === "")
+                return App.allPlaylists
+            return App.allPlaylists.filter(function (p) {
+                return p.title.toLowerCase().indexOf(text) >= 0
+            })
+        }
+
+        Column {
+            anchors.fill: parent
+            spacing: 10
+
+            Label {
+                text: "Which playlists to show"
+                color: Theme.colors.text
+                font.pixelSize: 14
+                font.weight: Font.DemiBold
+            }
+
+            TextField {
+                id: chooserFilter
+                objectName: "chooserFilter"
+                width: parent.width
+                placeholderText: "Filter by name"
+                color: Theme.colors.text
+                placeholderTextColor: Theme.colors.textMuted
+                background: Rectangle {
+                    radius: 6
+                    color: Theme.colors.background
+                    border.width: 1
+                    border.color: chooserFilter.activeFocus ? Theme.colors.accent
+                                                            : Theme.colors.border
+                }
+            }
+
+            ListView {
+                id: chooserList
+                objectName: "chooserList"
+                width: parent.width
+                height: parent.height - y - closeRow.height - 20
+                clip: true
+                model: playlistChooser.matching()
+                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                delegate: CheckBox {
+                    required property var modelData
+                    width: chooserList.width - 12
+                    checked: !modelData.hidden
+                    onToggled: App.setPlaylistHidden(modelData.ext_id, !checked)
+                    contentItem: Label {
+                        text: modelData.title + (modelData.items
+                                                 ? "   " + modelData.items + " videos" : "")
+                        color: Theme.colors.text
+                        font.pixelSize: 12
+                        elide: Text.ElideRight
+                        leftPadding: parent.indicator.width + 8
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+            }
+
+            Row {
+                id: closeRow
+                spacing: 8
+                anchors.right: parent.right
+                FlatButton {
+                    text: "Show every one"
+                    onClicked: {
+                        var all = App.allPlaylists
+                        for (var i = 0; i < all.length; i++)
+                            App.setPlaylistHidden(all[i].ext_id, false)
+                    }
+                }
+                FlatButton {
+                    text: "Done"
+                    accent: true
+                    onClicked: playlistChooser.close()
+                }
+            }
         }
     }
 
