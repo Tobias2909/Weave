@@ -170,10 +170,11 @@ the end rather than replacing what is there, so loading it does not send you
 back to the top.
 
 A suggestion carries a view count and a duration. It carries no upload date and
-no like count, measured, and asking for those would be one request per card, so
-they stay empty on the card and arrive in the panel when you open it. Playlist
-entries carry a view count too. History entries almost never do, which is
-YouTube's answer rather than a gap here.
+no like count at all, measured, and asking for those would be one request per
+card. So the card shows what came free, and the like count and the age arrive
+in the panel when you open it, out of the metadata the comments call already
+writes. Playlist entries carry a view count too. History entries almost never
+do, which is YouTube's answer rather than a gap here.
 
 ```sh
 python -m weave recommended
@@ -245,7 +246,9 @@ is next due, in the order the poller will take them.
 It mirrors what mpv is playing, whatever that is. A video from the feed shows
 its views, likes, an estimate of its dislikes and its comments. One from a
 search, a suggestion, your history or a playlist shows what that list carried,
-which is usually the title, the picture and the views. A Twitch stream shows
+usually the title, the picture and the views, and then fills in its like count
+and its age when the comments arrive, since the call that fetches them writes a
+metadata file that has both. A Twitch stream shows
 what a stream has instead, who is on, what they are playing, how many are
 watching and how long it has been going, because a stream has no comments and
 no likes to go and fetch.

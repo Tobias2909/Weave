@@ -104,6 +104,10 @@ class Bridge(QObject):
         # Dislikes for a video that is not in the videos table. Storing them
         # has nowhere to go there, and they are worth showing anyway.
         self._detail_dislikes: tuple[str, int] | None = None
+        # Likes, the publish date and an exact view count for a video that is
+        # not in the feed. They arrive with the comments, from the metadata
+        # file that call already writes.
+        self._detail_extra: tuple[str, dict] | None = None
         self._detail_comments: list = []
         self._detail_threads = 5
         self._detail_loading = False
@@ -326,15 +330,26 @@ class Bridge(QObject):
             "channelTitle": row["channel_title"] or "",
             "channelAvatar": qml_source(row["avatar_url"]),
             "thumbnail": qml_source(row["thumbnail_url"]),
-            "ageText": fmt.age_text(row["published_at"]),
-            "durationText": fmt.duration_text(row["duration_s"]),
-            "viewsText": fmt.count_text(row["views"]),
-            "likesText": fmt.count_text(row["likes"]),
+            "ageText": fmt.age_text(self._extra(row, "published_at")),
+            "durationText": fmt.duration_text(self._extra(row, "duration_s")),
+            "viewsText": fmt.count_text(self._extra(row, "views")),
+            "likesText": fmt.count_text(self._extra(row, "likes")),
             # An estimate rather than a count, and said so in the panel.
             "dislikesText": fmt.count_text(self._dislikes_for(row)),
             "watched": bool(row["watched"]),
             "isLive": row["live_status"] == "is_live",
         }
+
+    def _extra(self, row, name: str):
+        """What is stored, or what the comments call brought back for a video
+        that is not stored. Never the other way round, since a stored row is
+        the more exact of the two."""
+        stored = row.get(name)
+        if stored is not None:
+            return stored
+        if self._detail_extra and self._detail_extra[0] == row["key"]:
+            return self._detail_extra[1].get(name)
+        return None
 
     def _dislikes_for(self, row) -> int | None:
         if row.get("dislikes") is not None:
@@ -1354,7 +1369,9 @@ class Bridge(QObject):
         if key == self._detail_key:
             self.detailChanged.emit()
 
-    def _on_comments(self, key: str, threads: list) -> None:
+    def _on_comments(self, key: str, threads: list, details: dict | None = None) -> None:
+        if details:
+            self._detail_extra = (key, dict(details))
         self._detail_loading = False
         if key == self._detail_key:
             self._detail_comments = threads

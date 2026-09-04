@@ -61,6 +61,48 @@ def _one(raw: dict) -> Comment:
     )
 
 
+@dataclass(frozen=True)
+class Details:
+    """What the metadata file says about the video itself.
+
+    It is written by the same call that fetches the comments, so this costs
+    nothing on top. It is the only place the like count and the publish date
+    are available for a video that is not in the feed, since the cheap listing
+    modes carry neither, measured.
+    """
+
+    views: int | None = None
+    likes: int | None = None
+    published_at: int | None = None
+    duration_s: int | None = None
+
+
+def _whole(value) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_details(info: dict) -> Details:
+    published = _whole(info.get("timestamp")) or _whole(info.get("release_timestamp"))
+    if published is None and info.get("upload_date"):
+        # A date with no time is better than nothing, and it is what the
+        # metadata carries when the exact moment is missing.
+        try:
+            from datetime import datetime, timezone
+            published = int(datetime.strptime(str(info["upload_date"]), "%Y%m%d")
+                            .replace(tzinfo=timezone.utc).timestamp())
+        except ValueError:
+            published = None
+    return Details(
+        views=_whole(info.get("view_count")),
+        likes=_whole(info.get("like_count")),
+        published_at=published,
+        duration_s=_whole(info.get("duration")),
+    )
+
+
 def parse(info: dict) -> list[Comment]:
     """Group the flat list into threads, keeping the order it arrived in, which
     is the order the sort asked for."""
@@ -88,7 +130,7 @@ def parse(info: dict) -> list[Comment]:
 def fetch(cfg: Config, url: str, threads: int = 5,
           throttle: Throttle | None = None,
           cancel: threading.Event | None = None,
-          timeout: float = 180.0) -> list[Comment]:
+          timeout: float = 180.0) -> tuple[list[Comment], Details]:
     total = threads * (REPLIES_PER_THREAD + 1) + threads
     spec = f"{total},{threads},{threads * REPLIES_PER_THREAD},{REPLIES_PER_THREAD}"
     workspace = Path(tempfile.mkdtemp(prefix="weave-comments-"))
@@ -111,7 +153,8 @@ def fetch(cfg: Config, url: str, threads: int = 5,
         if not found:
             tail = (result.stderr or "").strip().splitlines()
             raise CommentsError((tail[-1] if tail else "no comments came back")[:200])
-        return parse(json.loads(found[0].read_text()))
+        info = json.loads(found[0].read_text())
+        return parse(info), parse_details(info)
     except Cancelled:
         raise
     except FileNotFoundError as exc:

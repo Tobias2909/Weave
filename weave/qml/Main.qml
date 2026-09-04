@@ -930,11 +930,28 @@ ApplicationWindow {
             away = map
         }
 
+        // A fresh object every time. Putting the same one back changes
+        // nothing as far as QML is concerned, so the boxes went on showing
+        // what they showed before. It was invisible for a single tick, where
+        // the box had already flipped itself under the pointer, and obvious
+        // for Show every one, where nothing was clicked at all.
         function toggle(id, hidden) {
-            var map = away
+            var map = {}
+            for (var key in away)
+                map[key] = away[key]
             map[id] = hidden
             away = map
             App.setPlaylistHidden(id, hidden)
+        }
+
+        function showEveryOne() {
+            var map = {}
+            for (var i = 0; i < all.length; i++) {
+                map[all[i].ext_id] = false
+                if (away[all[i].ext_id])
+                    App.setPlaylistHidden(all[i].ext_id, false)
+            }
+            away = map
         }
 
         function matching() {
@@ -1038,11 +1055,7 @@ ApplicationWindow {
                 anchors.right: parent.right
                 FlatButton {
                     text: "Show every one"
-                    onClicked: {
-                        var every = playlistChooser.all
-                        for (var i = 0; i < every.length; i++)
-                            playlistChooser.toggle(every[i].ext_id, false)
-                    }
+                    onClicked: playlistChooser.showEveryOne()
                 }
                 FlatButton {
                     text: "Done"

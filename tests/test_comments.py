@@ -73,5 +73,36 @@ class Votes(unittest.TestCase):
         self.assertIsNone(got.dislikes)
 
 
+class VideoDetails(unittest.TestCase):
+    """The metadata the same call writes.
+
+    The cheap listing modes carry no like count and no publish date at all,
+    measured, so this file is the only place they come from for a video that is
+    not in the feed, and it costs no extra request.
+    """
+
+    def test_the_numbers_come_across(self):
+        found = comments.parse_details({"view_count": 7600516, "like_count": 1234,
+                                        "timestamp": 1600000000, "duration": 662})
+        self.assertEqual((found.views, found.likes, found.published_at, found.duration_s),
+                         (7600516, 1234, 1600000000, 662))
+
+    def test_a_date_with_no_time_is_better_than_nothing(self):
+        # What the metadata carries when the exact moment is missing.
+        found = comments.parse_details({"upload_date": "20200102"})
+        self.assertIsNotNone(found.published_at)
+
+    def test_a_release_time_stands_in_for_a_publish_time(self):
+        found = comments.parse_details({"release_timestamp": 1600000000})
+        self.assertEqual(found.published_at, 1600000000)
+
+    def test_nothing_at_all_is_not_an_error(self):
+        found = comments.parse_details({})
+        self.assertEqual((found.views, found.likes, found.published_at), (None, None, None))
+
+    def test_a_number_that_is_not_one_is_dropped(self):
+        self.assertIsNone(comments.parse_details({"like_count": "lots"}).likes)
+
+
 if __name__ == "__main__":
     unittest.main()

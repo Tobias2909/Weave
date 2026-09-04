@@ -798,7 +798,7 @@ class DetailFetcher(QThread):
     """
 
     votes = Signal(str, int)              # video key, dislikes
-    comments = Signal(str, "QVariantList")
+    comments = Signal(str, "QVariantList", "QVariantMap")
     failed = Signal(str, str)
 
     def __init__(self, db: Database, cfg: Config, video_key: str, ext_id: str,
@@ -842,15 +842,21 @@ class DetailFetcher(QThread):
     def _fetch_comments(self) -> None:
         _spend(self._db, self._cfg, PLAYER)
         try:
-            threads = comment_source.fetch(self._cfg, self._url, self._threads,
-                                           self._throttle, self._cancel)
+            threads, details = comment_source.fetch(self._cfg, self._url, self._threads,
+                                                    self._throttle, self._cancel)
         except ProcessCancelled:
             return
         except comment_source.CommentsError as exc:
             _spend(self._db, self._cfg, PLAYER, count=0, refused=1)
             self.failed.emit("comments", str(exc))
             return
-        self.comments.emit(self._key, [self._as_map(thread) for thread in threads])
+        # The metadata file the same call writes carries the like count and
+        # the publish date, which no cheap listing does. So they come along
+        # rather than costing a second request.
+        self.comments.emit(self._key, [self._as_map(thread) for thread in threads], {
+            "views": details.views, "likes": details.likes,
+            "published_at": details.published_at, "duration_s": details.duration_s,
+        })
 
     @staticmethod
     def _as_map(comment) -> dict:

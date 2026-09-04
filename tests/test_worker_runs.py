@@ -190,7 +190,8 @@ class WorkerRuns(unittest.TestCase):
     def test_detail_fetcher(self):
         self.patch(poller.dislike_source, "fetch",
                    lambda *a, **k: type("V", (), {"dislikes": 3})())
-        self.patch(poller.comment_source, "fetch", lambda *a, **k: [])
+        self.patch(poller.comment_source, "fetch",
+                   lambda *a, **k: ([], poller.comment_source.Details(views=1, likes=2)))
         self.run_worker(poller.DetailFetcher(
             self.db, self.cfg, "yt:aaaaaaaaaaa", "aaaaaaaaaaa",
             "https://www.youtube.com/watch?v=aaaaaaaaaaa"))
