@@ -4,7 +4,8 @@ import unittest
 
 from PySide6.QtCore import QCoreApplication
 
-from weave.audio import AudioPlayer
+from weave.audio import (RECOVER_COOLDOWN_S, RECOVER_LIMIT, RECOVER_WINDOW_S,
+                         AudioPlayer)
 from weave.config import Config
 
 _app = QCoreApplication.instance() or QCoreApplication([])
@@ -139,7 +140,7 @@ class Jumping(unittest.TestCase):
 
 
 class Recovery(unittest.TestCase):
-    """A stream address is signed and can be dropped part way through."""
+    """What reaches the person listening, as opposed to what is handled."""
 
     def setUp(self):
         self.player = AudioPlayer(Config(raw={}))
@@ -149,19 +150,30 @@ class Recovery(unittest.TestCase):
         self.started = []
         self.player._start_current = lambda: self.started.append(True)
 
-    def test_the_first_failure_is_retried_quietly(self):
+    def test_a_dropped_address_is_retried_quietly(self):
         reported = []
         self.player.failed.connect(reported.append)
         self.player._on_error(None, "Demuxing failed")
         self.assertEqual(len(self.started), 1)
         self.assertEqual(reported, [])
 
-    def test_a_second_failure_is_reported_rather_than_looping(self):
+    def test_the_same_complaint_again_is_not_a_second_problem(self):
+        # The demuxer reports a dead connection over and over. One recovery
+        # answers all of it, and none of it is worth telling anybody about.
         reported = []
         self.player.failed.connect(reported.append)
-        self.player._on_error(None, "Demuxing failed")
-        self.player._on_error(None, "Demuxing failed")
+        for _ in range(5):
+            self.player._on_error(None, "Demuxing failed")
         self.assertEqual(len(self.started), 1)
+        self.assertEqual(reported, [])
+
+    def test_something_that_cannot_be_recovered_from_is_reported(self):
+        reported = []
+        self.player.failed.connect(reported.append)
+        for _ in range(RECOVER_LIMIT):
+            self.player._recover()
+            self.player._recover_at -= RECOVER_COOLDOWN_S + 1
+        self.player._on_error(None, "Demuxing failed")
         self.assertEqual(len(reported), 1)
 
     def test_nothing_playing_is_not_recovered(self):
@@ -169,64 +181,72 @@ class Recovery(unittest.TestCase):
         self.assertFalse(self.player._recover())
 
 
-class Repeat(unittest.TestCase):
-    """Three states, because repeating a queue and repeating a track are
-    different wants and one switch cannot say which."""
+class Recovering(unittest.TestCase):
+    """A signed address is dropped part way through a track now and then, which
+    over a long listen is ordinary rather than exceptional.
+
+    The bug this pins down: the flag that says a restart is under way was also
+    what limited the retries, and it was only cleared when a track reached its
+    end. So the first recovery of a session used it up, and the next dropped
+    address stopped the music instead of being recovered from.
+    """
 
     def setUp(self):
         self.player = AudioPlayer(Config(raw={}))
-        self.player.setRepeat(0)
         self.player._queue = [track(name) for name in ("aaa", "bbb")]
         self.player._rebuild_order()
         self.player._at = 0
+        self.started = []
+        self.player._start_current = lambda: self.started.append(self.player._at)
 
-    def test_it_cycles(self):
-        self.assertEqual(self.player.repeat, 0)
-        self.player.cycleRepeat()
-        self.assertEqual(self.player.repeat, 1)
-        self.player.cycleRepeat()
-        self.assertEqual(self.player.repeat, 2)
-        self.player.cycleRepeat()
-        self.assertEqual(self.player.repeat, 0)
+    def test_a_dropped_address_is_recovered_from(self):
+        self.assertTrue(self.player._recover())
+        self.assertEqual(self.started, [0])
 
-    def test_each_state_is_named(self):
-        names = []
-        for _ in range(3):
-            names.append(self.player.repeatLabel)
-            self.player.cycleRepeat()
-        self.assertEqual(names, ["Repeat", "Repeat all", "Repeat one"])
+    def test_a_burst_of_the_same_complaint_starts_one_recovery(self):
+        # The demuxer reports it over and over while the connection is down.
+        self.assertTrue(self.player._recover())
+        self.assertTrue(self.player._recover())
+        self.assertTrue(self.player._recover())
+        self.assertEqual(len(self.started), 1)
 
-    def test_out_of_range_is_clamped(self):
-        self.player.setRepeat(9)
-        self.assertEqual(self.player.repeat, 2)
-        self.player.setRepeat(-4)
-        self.assertEqual(self.player.repeat, 0)
+    def test_a_later_drop_is_recovered_from_too(self):
+        # The one that was broken. A second failure, minutes later, has to be
+        # handled rather than reported.
+        self.player._recover()
+        self.player._recover_at -= RECOVER_COOLDOWN_S + 1
+        self.assertTrue(self.player._recover())
+        self.assertEqual(len(self.started), 2)
 
-    def test_repeating_one_does_not_advance_at_the_end(self):
-        from PySide6.QtMultimedia import QMediaPlayer
+    def test_it_gives_up_rather_than_looping_for_ever(self):
+        for _ in range(RECOVER_LIMIT):
+            self.player._recover()
+            self.player._recover_at -= RECOVER_COOLDOWN_S + 1
+        self.assertFalse(self.player._recover())
 
-        moved = []
-        self.player.next = lambda: moved.append(True)
-        self.player.setRepeat(2)
-        self.player._on_status(QMediaPlayer.MediaStatus.EndOfMedia)
-        self.assertEqual(moved, [])
-        self.assertEqual(self.player._at, 0)
+    def test_a_track_playing_happily_for_a_while_gets_its_goes_back(self):
+        for _ in range(RECOVER_LIMIT):
+            self.player._recover()
+            self.player._recover_at -= RECOVER_COOLDOWN_S + 1
+        self.player._recover_at -= RECOVER_WINDOW_S
+        self.assertTrue(self.player._recover())
 
-    def test_repeating_the_queue_does_advance(self):
-        from PySide6.QtMultimedia import QMediaPlayer
+    def test_a_different_track_is_a_clean_slate(self):
+        for _ in range(RECOVER_LIMIT):
+            self.player._recover()
+            self.player._recover_at -= RECOVER_COOLDOWN_S + 1
+        self.player.next()
+        self.assertTrue(self.player._recover())
 
-        moved = []
-        self.player.next = lambda: moved.append(True)
-        self.player.setRepeat(1)
-        self.player._on_status(QMediaPlayer.MediaStatus.EndOfMedia)
-        self.assertEqual(moved, [True])
+    def test_the_position_is_kept_so_it_picks_up_where_it_stopped(self):
+        self.player._player.position = lambda: 65000
+        self.player._recover()
+        self.assertEqual(self.player._resume_at, 65000)
 
-    def test_only_the_whole_queue_setting_wraps_what_is_coming(self):
-        self.player._at = 1
-        self.player.setRepeat(2)
-        self.assertEqual(self.player.stillToCome, 0)
-        self.player.setRepeat(1)
-        self.assertEqual(self.player.stillToCome, 1)
+    def test_with_nothing_playing_there_is_nothing_to_recover(self):
+        self.player._queue = []
+        self.player._at = -1
+        self.assertFalse(self.player._recover())
 
 
 class Fading(unittest.TestCase):

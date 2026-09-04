@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import random
 import threading
+import time
 
 from PySide6.QtCore import (Property, QEasingCurve, QObject, QPropertyAnimation, QThread,
                             QUrl, Signal, Slot)
@@ -31,6 +32,15 @@ MUSIC_FORMAT = "bestaudio"
 # Long enough to hear as a fade rather than a cut, short enough not to be a
 # wait before the video starts.
 FADE_MS = 1400
+
+# A signed address can be dropped part way through a track, which is ordinary
+# rather than exceptional over a long listen, so it is recovered from rather
+# than reported. These bound that: a few goes at one track, not in a tight
+# loop, and the count starts over once a track has been playing happily for a
+# while, so an evening of occasional drops never runs out of goes.
+RECOVER_LIMIT = 3
+RECOVER_COOLDOWN_S = 2.0
+RECOVER_WINDOW_S = 120.0
 
 REPEAT_OFF, REPEAT_ALL, REPEAT_ONE = 0, 1, 2
 
@@ -103,6 +113,8 @@ class AudioPlayer(QObject):
         # track resolves a fresh address and picks up where it left off.
         self._recovering = False
         self._resume_at = 0
+        self._recover_at = 0.0
+        self._recover_count = 0
 
         self._shuffle = (db.get_state("music_shuffle", "0") == "1") if db else False
         # Off, the whole queue, or the one track. A queue that repeats and a
@@ -264,6 +276,8 @@ class AudioPlayer(QObject):
             # Set once the source has enough to seek in.
             self._player.setPosition(self._resume_at)
             self._resume_at = 0
+        # The restart is done. Whether it holds is the counter's business.
+        self._recovering = False
         self._start_playing()
         self.stateChanged.emit()
 
@@ -274,7 +288,7 @@ class AudioPlayer(QObject):
 
     def _on_status(self, status) -> None:
         if status == QMediaPlayer.MediaStatus.EndOfMedia:
-            self._recovering = False
+            self._forget_recovery()
             if self._repeat_mode == REPEAT_ONE:
                 self._player.setPosition(0)
                 self._start_playing()
@@ -291,15 +305,39 @@ class AudioPlayer(QObject):
     def _recover(self) -> bool:
         """Fetch a fresh address and carry on from the same place.
 
-        Returns whether it is being handled, so a first failure is quiet and a
-        second one is reported rather than looping.
+        Returns whether it is being handled, so a failure that is being dealt
+        with stays quiet and one that cannot be is reported.
+
+        The flag that says a restart is in progress is not what limits this. It
+        used to be, and it was only ever cleared when a track reached its end,
+        so the first recovery of a session used it up and the next dropped
+        address stopped the music instead of being recovered from.
         """
-        if self._recovering or not self._current():
+        if not self._current():
             return False
+        now = time.monotonic()
+        # A dropped connection arrives as a burst of the same complaint. The
+        # first one starts a recovery and the rest are already answered.
+        if now - self._recover_at < RECOVER_COOLDOWN_S:
+            return True
+        # A track that has been playing happily for a while starts over with a
+        # full set of goes, so a long listen cannot run out.
+        if now - self._recover_at > RECOVER_WINDOW_S:
+            self._recover_count = 0
+        if self._recover_count >= RECOVER_LIMIT:
+            return False
+        self._recover_at = now
+        self._recover_count += 1
         self._recovering = True
         self._resume_at = self._player.position()
         self._start_current()
         return True
+
+    def _forget_recovery(self) -> None:
+        """A different track is a clean slate."""
+        self._recovering = False
+        self._recover_count = 0
+        self._recover_at = 0.0
 
     @Slot()
     def toggle(self) -> None:
@@ -322,7 +360,7 @@ class AudioPlayer(QObject):
     def jumpTo(self, index: int) -> None:
         """Skip straight to something further down the queue."""
         if 0 <= index < len(self._queue) and index != self._at:
-            self._recovering = False
+            self._forget_recovery()
             self._at = index
             self._start_current()
 
@@ -330,6 +368,8 @@ class AudioPlayer(QObject):
     def next(self) -> None:
         if not self._queue:
             return
+        # A different track is a clean slate, however it was chosen.
+        self._forget_recovery()
         place = self._order.index(self._at) if self._at in self._order else -1
         if place + 1 < len(self._order):
             self._at = self._order[place + 1]
@@ -350,6 +390,7 @@ class AudioPlayer(QObject):
         if self._player.position() > 4000:
             self._player.setPosition(0)
             return
+        self._forget_recovery()
         place = self._order.index(self._at) if self._at in self._order else 0
         self._at = self._order[max(0, place - 1)]
         self._start_current()

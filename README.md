@@ -278,6 +278,13 @@ track leaves the last one behind in the list rather than dropping it, so the
 queue is the queue and you can go back to something you have already heard.
 The one playing says so, and any row can be jumped to.
 
+A stream address is signed and gets dropped part way through a track now and
+then, which over a long listen is ordinary rather than exceptional. It is
+recovered from, quietly, by fetching a fresh address and carrying on from the
+same place. A few goes per track, never in a tight loop, and a track that has
+been playing happily for a while starts over with a full set, so an evening of
+occasional drops cannot run out of them.
+
 Pausing fades out over about a second rather than cutting. The volume stays
 down while it is paused and is raised again by whatever starts it playing,
 because asking a player to pause does not stop it instantly and putting the
