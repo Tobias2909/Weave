@@ -58,7 +58,25 @@ class RangeReader:
         return self._size
 
     def read(self, offset: int, length: int) -> bytes:
-        """One range, however many goes it takes.
+        """Exactly this many bytes, unless the file ends first.
+
+        A server is free to answer a range with less than was asked for, and it
+        does. Handing that back short would be quietly wrong rather than
+        obviously wrong, because every piece after it is addressed by
+        multiplying its number by the piece size, so one short piece puts every
+        later read at the wrong offset and the player is fed nonsense. So this
+        keeps asking until it has what it was asked for.
+        """
+        out = bytearray()
+        while len(out) < length:
+            piece = self._one_range(offset + len(out), length - len(out))
+            if not piece:
+                break                        # the file ends here
+            out += piece
+        return bytes(out)
+
+    def _one_range(self, offset: int, length: int) -> bytes:
+        """One attempt at one range, with the retrying.
 
         A reset is retried on the same address first, since that is usually all
         it is. Only when the address itself has stopped being accepted is a new
