@@ -369,6 +369,15 @@ ApplicationWindow {
                     onRevealRequested: root.revealRow(this)
                 }
 
+                SidebarRow {
+                    width: sidebarColumn.width
+                    label: "How things are"
+                    count: 0
+                    selected: App.viewKind === "debug"
+                    onActivated: App.showDebug()
+                    onRevealRequested: root.revealRow(this)
+                }
+
                 Item { width: 1; height: 10 }
 
                 Item { width: 1; height: 10 }
@@ -494,10 +503,21 @@ ApplicationWindow {
         anchors.bottom: miniPlayer.top
     }
 
+    DebugView {
+        id: debugView
+        objectName: "debugView"
+        visible: App.viewKind === "debug"
+        anchors.left: sidebar.right
+        anchors.right: parent.right
+        anchors.top: liveBar.visible ? liveBar.bottom : parent.top
+        anchors.topMargin: liveBar.visible ? 0 : banner.height
+        anchors.bottom: miniPlayer.top
+    }
+
     GridView {
         id: grid
         objectName: "grid"
-        visible: App.viewKind !== "music"
+        visible: App.viewKind !== "music" && App.viewKind !== "debug"
         anchors.left: sidebar.right
         anchors.right: detailPanel.visible ? detailPanel.left : parent.right
         anchors.top: channelHeader.visible ? channelHeader.bottom

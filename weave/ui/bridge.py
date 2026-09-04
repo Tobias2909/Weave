@@ -24,8 +24,9 @@ from ..imagecache import qml_source
 from ..player.mpv import Player
 from ..poller import (ChannelAdder, ChannelDetailsFetcher, DetailFetcher, FeedPoller,
                       HistoryImporter, LiveWatcher, MusicHome, MusicSearch,
-                      PlaylistItemsFetcher, PlaylistsFetcher, RecommendationsFetcher,
-                      SearchFetcher, SourceDetails, TrackList, SubsImporter, TwitchLogin)
+                      Checkup, PlaylistItemsFetcher, PlaylistsFetcher,
+                      RecommendationsFetcher, SearchFetcher, SourceDetails, TrackList,
+                      SubsImporter, TwitchLogin)
 from .feed_model import FeedModel
 
 ALL = "all"
@@ -37,6 +38,7 @@ SEARCH = "search"
 HISTORY = "history"
 RECOMMENDED = "recommended"
 PLAYLIST = "playlist"
+DEBUG = "debug"
 
 # How long a set of recommendations is worth showing before asking for another,
 # and how long a playlist's contents are trusted before reading them again.
@@ -65,6 +67,7 @@ class Bridge(QObject):
     playlistsChanged = Signal()
     noticeChanged = Signal()
     searchEnded = Signal()
+    checksChanged = Signal()
     boxesChanged = Signal()
     viewChanged = Signal()
     liveChanged = Signal()
@@ -138,6 +141,8 @@ class Bridge(QObject):
         # object under a name that used to be _results as well.
         self._web_results: list[dict] = []
         self._searcher: SearchFetcher | None = None
+        self._checkup: Checkup | None = None
+        self._checks: list = []
         self._loading_more = False
         self._exhausted = False
         # Where a search started, so emptying the box goes back there.
@@ -251,6 +256,9 @@ class Bridge(QObject):
     groups = Property("QVariantList", _get_groups, notify=groupsChanged)
     boxes = Property("QVariantList", _get_boxes, notify=boxesChanged)
     notice = Property(str, lambda self: self._notice, notify=noticeChanged)
+    checks = Property("QVariantList", lambda self: list(self._checks), notify=checksChanged)
+    schedule = Property("QVariantList", lambda self: self._get_schedule(),
+                        notify=checksChanged)
     playlists = Property("QVariantList", _get_playlists, notify=playlistsChanged)
     allPlaylists = Property("QVariantList", _get_all_playlists, notify=playlistsChanged)
     viewKind = Property(str, _get_view_kind, notify=viewChanged)
@@ -520,6 +528,8 @@ class Bridge(QObject):
         # then landed on an empty page.
         if kind == MUSIC and not self._shelves:
             self.loadHome()
+        if kind == DEBUG and not self._checks:
+            self.runChecks(True)
         if kind == RECOMMENDED:
             self._exhausted = False
             self._fetch_recommended()
@@ -543,6 +553,7 @@ class Bridge(QObject):
         entries.append((RECOMMENDED, -1))
         entries.append((HISTORY, -1))
         entries.append((MUSIC, -1))
+        entries.append((DEBUG, -1))
         entries.extend((BOX, int(row["id"])) for row in self._db.boxes())
         entries.extend((PLAYLIST, index) for index, _ in enumerate(self._db.playlists()))
         return entries
@@ -740,6 +751,35 @@ class Bridge(QObject):
         self.playlistsChanged.emit()
         if self._view_kind == PLAYLIST and self._view_playlist == playlist_id:
             self.reload()
+
+    def _get_schedule(self) -> list:
+        from .. import doctor
+
+        rows = doctor.schedule(self._db, self._cfg, limit=60)
+        for row in rows:
+            row["lastText"] = ("never" if not row["last_polled_at"]
+                               else fmt.age_text(row["last_polled_at"]) or "just now")
+            row["dueText"] = ("now" if not row["due_in_s"]
+                              else fmt.duration_text(row["due_in_s"]))
+        return rows
+
+    @Slot()
+    def showDebug(self) -> None:
+        self._set_view(DEBUG, -1)
+
+    @Slot(bool)
+    def runChecks(self, network: bool = True) -> None:
+        if self._checkup is not None and self._checkup.isRunning():
+            return
+        self._set_notice("Checking", clear_after_s=60)
+        self._checkup = Checkup(self._db, self._cfg, network, self)
+        self._checkup.ready.connect(self._on_checks)
+        self._launch(self._checkup)
+
+    def _on_checks(self, checks: list) -> None:
+        self._set_notice("")
+        self._checks = [dict(check) for check in checks]
+        self.checksChanged.emit()
 
     @Slot()
     def showRecommended(self) -> None:
@@ -1435,16 +1475,12 @@ class Bridge(QObject):
         already gone, so any short wait here is invisible.
         """
         self._stopping = True
-        threads = [self._poller, self._adder, self._importer, self._history,
-                   self._recommended, self._playlists, self._playlist_items,
-                   self._searcher,
-                   self._details, self._live, self._twitch, self._detail, self._search,
-                   self._home, self._tracks, *self._source_details]
-        # Every thread, not only the ones already running. A thread that has
-        # been started but has not begun yet is not running, so filtering on
-        # that left it uncancelled and still alive when Qt tore the process
-        # down, which is fatal. Cancelling an idle thread costs nothing and
-        # waiting on one returns at once.
+        # Found rather than listed. A list written out by hand goes stale the
+        # first time a worker is added and forgotten, and forgetting one means
+        # Qt aborts the process on the way out.
+        threads = [value for value in vars(self).values()
+                   if hasattr(value, "cancel") and hasattr(value, "wait")]
+        threads.extend(self._source_details)
         alive = [thread for thread in threads if thread is not None]
         for thread in alive:
             thread.cancel()

@@ -171,6 +171,15 @@ class WorkerRuns(unittest.TestCase):
         self.assertEqual(got[0][0], "anything")
         self.assertEqual(got[0][2][0]["title"], "A result")
 
+    def test_checkup(self):
+        got = []
+        worker = poller.Checkup(self.db, self.cfg, network=False)
+        worker.ready.connect(got.append)
+        self.run_worker(worker)
+        # Every check answers something, and none of them raises.
+        self.assertTrue(got and len(got[0]) > 5)
+        self.assertTrue(all(c["state"] in ("ok", "warn", "fail") for c in got[0]))
+
     def test_live_watcher(self):
         self.patch(poller.tokens, "load", lambda: object())
         self.patch(poller.twitch, "Client", _TwitchClient)
@@ -224,16 +233,40 @@ class WorkerRuns(unittest.TestCase):
         bridge = Bridge.__new__(Bridge)          # no Qt object needed for this
         bridge._stopping = False
         bridge._poller = idle
-        for name in ("_adder", "_importer", "_history", "_recommended", "_playlists",
-                     "_playlist_items", "_searcher", "_details", "_live", "_twitch",
-                     "_detail", "_search", "_home", "_tracks"):
-            setattr(bridge, name, None)
         bridge._source_details = []
         bridge._audio = None
         bridge._player = None
         Bridge.shutdown(bridge, timeout_ms=10)
         self.assertTrue(idle.cancelled)
         self.assertTrue(idle.waited)
+
+    def test_shutdown_finds_a_worker_nobody_remembered_to_list(self):
+        """The list used to be written out by hand, and adding a worker without
+        adding it there is exactly how one gets left running."""
+        from weave.ui.bridge import Bridge
+
+        class Idle:
+            def __init__(self):
+                self.cancelled = False
+
+            def isRunning(self):
+                return False
+
+            def cancel(self):
+                self.cancelled = True
+
+            def wait(self, _ms):
+                pass
+
+        newcomer = Idle()
+        bridge = Bridge.__new__(Bridge)
+        bridge._stopping = False
+        bridge._something_added_later = newcomer
+        bridge._source_details = []
+        bridge._audio = None
+        bridge._player = None
+        Bridge.shutdown(bridge, timeout_ms=10)
+        self.assertTrue(newcomer.cancelled)
 
     def test_nothing_new_starts_once_shutdown_has_begun(self):
         """The other half of the same crash, and the half that actually caused
@@ -290,6 +323,8 @@ class WorkerRuns(unittest.TestCase):
                     "HistoryImporter", "RecommendationsFetcher", "PlaylistsFetcher",
                     "PlaylistItemsFetcher", "SearchFetcher", "LiveWatcher",
                     "DetailFetcher"}
+        # The checkup runs the doctor, which counts its own requests.
+        run_here.add("Checkup")
         source = Path("weave/poller.py").read_text()
         spenders = {match.group(1)
                     for match in re.finditer(r"class (\w+)\(QThread\):(.*?)(?=\nclass |\Z)",

@@ -218,6 +218,28 @@ each, which is not worth it for a name.
 python -m weave history
 ```
 
+## When nothing is arriving
+
+Every way this can fail looks the same from the outside. A scraper that has
+stopped working exits cleanly, returns nothing, and says nothing, so there is
+one place that asks each part whether it is working and prints the answer.
+
+```sh
+python -m weave doctor
+python -m weave doctor --offline
+python -m weave schedule
+```
+
+It checks the tools it needs, the browser profile and whether it still holds a
+YouTube login, the database, the polling schedule, what each endpoint has been
+asked lately, the image cache, Twitch, and the feed endpoint itself. Only the
+last two make a request and `--offline` leaves them out. It exits nonzero when
+something is actually broken, so it can be run from a script.
+
+**How things are** in the sidebar is the same list in the window, with what has
+gone wrong lately and a table of when each channel was last asked and when it
+is next due, in the order the poller will take them.
+
 ## What is on screen while something is loading
 
 Handing a video to mpv takes a few seconds, and so does a search or another

@@ -962,7 +962,9 @@ class Database:
     def append_recommended(self, rows: list[dict]) -> int:
         return self.append_cached(self.RECOMMENDED, rows)
 
-    def recommended(self, limit: int = 100) -> list[sqlite3.Row]:
+    def recommended(self, limit: int = 400) -> list[sqlite3.Row]:
+        # The same ceiling the view uses, so the two cannot disagree about how
+        # many there are.
         return self.cached(self.RECOMMENDED, limit)
 
     def recommended_count(self) -> int:

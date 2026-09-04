@@ -11,7 +11,7 @@ import argparse
 import sys
 import time
 
-from . import config, ids, imagecache, paths, themes, tokens
+from . import config, format as fmt, ids, imagecache, paths, themes, tokens
 from .budget import Budget
 from .sources import twitch
 from .db import Database
@@ -272,6 +272,51 @@ def _cmd_playlists(args) -> int:
     for row in db.playlists():
         seen = f"{row['items']} videos read" if row["items_at"] else "not read yet"
         print(f"  {row['ext_id']:<36} {row['title'][:34]:<34} {seen}")
+    return 0
+
+
+_MARKS = {"ok": "  ok  ", "warn": " warn ", "fail": " FAIL "}
+
+
+def _cmd_doctor(args) -> int:
+    """Ask every part whether it is working.
+
+    Worth its length because a scraper that fails looks exactly like one with
+    nothing to say. Exits nonzero when something is actually broken, so it can
+    be run from a script.
+    """
+    from . import doctor
+
+    cfg = config.load()
+    db = Database(paths.DB_FILE)
+    report = doctor.run(cfg, db, network=not args.offline)
+    for check in report.checks:
+        print(f"[{_MARKS[check.state]}] {check.name:<22} {check.detail}")
+        if check.fix and check.state != doctor.OK:
+            print(f"{'':>10}{'':<22} {check.fix}")
+    counts = report.counts()
+    print(f"\n{counts['ok']} fine, {counts['warn']} worth a look, {counts['fail']} broken")
+    return 1 if counts["fail"] else 0
+
+
+def _cmd_schedule(args) -> int:
+    """When each channel was last asked and when it is next due, in the order
+    the poller will take them."""
+    from . import doctor
+
+    cfg = config.load()
+    db = Database(paths.DB_FILE)
+    rows = doctor.schedule(db, cfg, limit=args.limit)
+    if not rows:
+        print("no channels tracked")
+        return 0
+    print(f"{'channel':<34} {'asked how often':<16} {'last asked':<14} {'next':<10} error")
+    for row in rows:
+        last = ("never" if not row["last_polled_at"]
+                else fmt.age_text(row["last_polled_at"]) or "just now")
+        due = "now" if not row["due_in_s"] else fmt.duration_text(row["due_in_s"])
+        print(f"{row['title'][:33]:<34} {row['tier']:<16} {last:<14} {due:<10} "
+              f"{row['error'][:40]}")
     return 0
 
 
@@ -668,6 +713,17 @@ def main() -> int:
     cache.add_argument("--problems", action="store_true",
                        help="show pictures that failed to load")
     cache.set_defaults(func=_cmd_cache)
+
+    checkup = subparsers.add_parser(
+        "doctor", help="ask every part whether it is working")
+    checkup.add_argument("--offline", action="store_true",
+                         help="skip the two checks that make a request")
+    checkup.set_defaults(func=_cmd_doctor)
+
+    when = subparsers.add_parser(
+        "schedule", help="when each channel was last asked and when it is next due")
+    when.add_argument("--limit", type=int, default=40)
+    when.set_defaults(func=_cmd_schedule)
 
     budget = subparsers.add_parser(
         "budget", help="how much each endpoint has been asked recently")

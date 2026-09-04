@@ -548,6 +548,36 @@ class SearchFetcher(QThread):
                           [flatlist.as_row(item) | {"views": item.views} for item in found])
 
 
+class Checkup(QThread):
+    """The doctor's checks, off the interface thread.
+
+    Two of them make a request, and all of them touch the disk, so this does
+    not belong on the thread that draws.
+    """
+
+    ready = Signal("QVariantList")
+
+    def __init__(self, db: Database, cfg: Config, network: bool = True,
+                 parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._db = db
+        self._cfg = cfg
+        self._network = network
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def run(self) -> None:
+        from . import doctor
+
+        report = doctor.run(self._cfg, self._db, network=self._network)
+        self._db.close()
+        self.ready.emit([{"name": check.name, "state": check.state,
+                          "detail": check.detail, "fix": check.fix}
+                         for check in report.checks])
+
+
 class ChannelDetailsFetcher(QThread):
     """Fills in a channel's banner and subscriber count the first time its page
     is opened."""
