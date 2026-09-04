@@ -104,7 +104,13 @@ Rectangle {
                 color: listenHover.hovered ? Theme.colors.accent : Theme.colors.badgeBackground
 
                 HoverHandler { id: listenHover }
-                TapHandler { onTapped: card.listenRequested() }
+                // A MouseArea rather than a TapHandler. Handlers do not consume
+                // the press, so the card underneath started the video in mpv as
+                // well, which is the opposite of what this button is for.
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: card.listenRequested()
+                }
 
                 Text {
                     anchors.centerIn: parent

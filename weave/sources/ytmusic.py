@@ -168,3 +168,38 @@ def radio(profile_path: str, video_id: str, limit: int = 40) -> list[Track]:
     except Exception as exc:                                        # noqa: BLE001
         raise MusicError(f"{type(exc).__name__}: {exc}") from exc
     return to_tracks((found or {}).get("tracks") or [])
+
+
+def home(profile_path: str, limit: int = 6) -> list[dict]:
+    """The shelves YouTube Music opens on.
+
+    Most of them are playlists rather than songs, so an entry says which it is
+    and the caller expands a playlist only when it is chosen.
+    """
+    try:
+        shelves = client(profile_path).get_home(limit=limit)
+    except MusicError:
+        raise
+    except Exception as exc:                                        # noqa: BLE001
+        raise MusicError(f"{type(exc).__name__}: {exc}") from exc
+
+    out = []
+    for shelf in shelves or []:
+        items = []
+        for item in shelf.get("contents") or []:
+            if not isinstance(item, dict):
+                continue
+            video_id = item.get("videoId")
+            playlist_id = item.get("playlistId")
+            if not video_id and not playlist_id:
+                continue
+            items.append({
+                "title": str(item.get("title") or ""),
+                "subtitle": _artist(item) or str(item.get("description") or ""),
+                "videoId": str(video_id or ""),
+                "playlistId": str(playlist_id or ""),
+                "thumbnail": _thumb(item),
+            })
+        if items:
+            out.append({"title": str(shelf.get("title") or ""), "items": items})
+    return out

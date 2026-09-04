@@ -2,8 +2,8 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Listening, rather than watching. Search first, because a library that is
-// empty is not a place to start from.
+// Listening rather than watching. It opens on what YouTube Music opens on,
+// because a library that is empty is not a place to start from.
 Item {
     id: view
 
@@ -14,7 +14,7 @@ Item {
 
         RowLayout {
             Layout.fillWidth: true
-            spacing: 10
+            spacing: 8
 
             TextField {
                 id: query
@@ -32,140 +32,151 @@ Item {
             }
 
             FlatButton {
-                text: App.musicSearching ? "Searching" : "Search"
+                text: App.musicSearching ? "Working" : "Search"
                 accent: true
                 enabled: !App.musicSearching
                 onClicked: App.musicSearch(query.text)
             }
-        }
 
-        // Things returned to rather than searched for, a round the clock
-        // stream being the obvious one.
-        ColumnLayout {
-            Layout.fillWidth: true
-            spacing: 6
-            visible: App.audioSources.length > 0 || addRow.visible
-
-            Label {
-                text: "Saved"
-                color: Theme.colors.textMuted
-                font.pixelSize: 10
-                font.letterSpacing: 1.1
-                font.weight: Font.DemiBold
+            FlatButton {
+                // These are YouTube likes rather than YouTube Music likes. The
+                // two lists are separate and this is the one with anything in.
+                text: "Liked"
+                enabled: !App.musicSearching
+                onClicked: App.playLiked()
             }
 
-            Flow {
-                Layout.fillWidth: true
-                spacing: 8
+            FlatButton {
+                visible: App.musicResults.length > 0
+                text: "Back to recommended"
+                onClicked: { query.text = ""; App.clearResults() }
+            }
+        }
 
-                Repeater {
-                    model: App.audioSources
-                    Rectangle {
-                        required property var modelData
-                        width: label.implicitWidth + 46
-                        height: 30
-                        radius: 15
-                        color: pinHover.hovered ? Theme.colors.surfaceRaised : Theme.colors.surface
-                        border.width: 1
-                        border.color: modelData.live ? Theme.colors.live : Theme.colors.border
+        // ---- what is showing --------------------------------------------
 
-                        HoverHandler { id: pinHover }
-                        TapHandler { onTapped: App.playSource(modelData.id) }
+        Flickable {
+            id: shelfArea
+            visible: App.musicResults.length === 0
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            contentHeight: shelfColumn.height
+            clip: true
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-                        Label {
-                            id: label
-                            anchors.left: parent.left
-                            anchors.leftMargin: 14
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: modelData.label
-                            color: Theme.colors.text
-                            font.pixelSize: 12
-                        }
+            ColumnLayout {
+                id: shelfColumn
+                width: shelfArea.width
+                spacing: 16
 
-                        Label {
-                            anchors.right: parent.right
-                            anchors.rightMargin: 10
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: "✕"
-                            color: Theme.colors.textMuted
-                            font.pixelSize: 11
-                            TapHandler { onTapped: App.removeSource(modelData.id) }
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    visible: App.audioSources.length > 0
+
+                    Label {
+                        text: "SAVED"
+                        color: Theme.colors.textMuted
+                        font.pixelSize: 10
+                        font.letterSpacing: 1.2
+                        font.weight: Font.DemiBold
+                    }
+
+                    Flow {
+                        Layout.fillWidth: true
+                        spacing: 10
+                        Repeater {
+                            model: App.audioSources
+                            MusicTile {
+                                required property var modelData
+                                title: modelData.label
+                                subtitle: modelData.live ? "live" : ""
+                                picture: modelData.thumbnail ? modelData.thumbnail : ""
+                                removable: true
+                                onChosen: App.playSource(modelData.id)
+                                onRemoveRequested: App.removeSource(modelData.id)
+                            }
                         }
                     }
                 }
+
+                Repeater {
+                    model: App.musicShelves
+                    ColumnLayout {
+                        required property var modelData
+                        required property int index
+                        // Named, so a tile inside can say which shelf it is in
+                        // without colliding with its own index.
+                        readonly property int shelfIndex: index
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        Label {
+                            text: modelData.title.toUpperCase()
+                            color: Theme.colors.textMuted
+                            font.pixelSize: 10
+                            font.letterSpacing: 1.2
+                            font.weight: Font.DemiBold
+                        }
+
+                        Flow {
+                            Layout.fillWidth: true
+                            spacing: 10
+                            Repeater {
+                                model: modelData.items
+                                MusicTile {
+                                    required property var modelData
+                                    required property int index
+                                    title: modelData.title
+                                    subtitle: modelData.subtitle
+                                    picture: modelData.thumbnail
+                                    onChosen: App.playShelfItem(shelfIndex, index)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    visible: App.musicShelves.length === 0
+                    text: App.musicSearching ? "Loading"
+                                             : "Nothing to show yet. Search, or press Liked."
+                    color: Theme.colors.textMuted
+                    font.pixelSize: 13
+                }
+
+                Item { Layout.preferredHeight: 4 }
             }
         }
 
         RowLayout {
-            id: addRow
+            visible: App.musicResults.length > 0
             Layout.fillWidth: true
-            spacing: 8
-
-            TextField {
-                id: sourceLabel
-                Layout.preferredWidth: 160
-                placeholderText: "Name"
-                color: Theme.colors.text
-                placeholderTextColor: Theme.colors.textMuted
-                background: Rectangle {
-                    radius: 6; color: Theme.colors.background
-                    border.width: 1; border.color: Theme.colors.border
-                }
+            Label {
+                text: App.musicLabel.toUpperCase()
+                color: Theme.colors.textMuted
+                font.pixelSize: 10
+                font.letterSpacing: 1.2
+                font.weight: Font.DemiBold
             }
-            TextField {
-                id: sourceUrl
-                Layout.fillWidth: true
-                placeholderText: "Any YouTube address to keep, a stream for example"
-                color: Theme.colors.text
-                placeholderTextColor: Theme.colors.textMuted
-                background: Rectangle {
-                    radius: 6; color: Theme.colors.background
-                    border.width: 1; border.color: Theme.colors.border
-                }
-                onAccepted: addButton.save()
-            }
-            CheckBox {
-                id: isLive
-                text: "live"
-                contentItem: Label {
-                    text: parent.text
-                    color: Theme.colors.textMuted
-                    font.pixelSize: 11
-                    leftPadding: parent.indicator.width + 4
-                    verticalAlignment: Text.AlignVCenter
-                }
-            }
-            FlatButton {
-                id: addButton
-                text: "Save"
-                function save() {
-                    App.addSource(sourceLabel.text, sourceUrl.text, isLive.checked)
-                    sourceLabel.text = ""
-                    sourceUrl.text = ""
-                }
-                onClicked: save()
+            Item { Layout.fillWidth: true }
+            Label {
+                text: App.musicResults.length + " tracks"
+                color: Theme.colors.textMuted
+                font.pixelSize: 11
             }
         }
 
-        Rectangle { Layout.fillWidth: true; height: 1; color: Theme.colors.border }
-
         ListView {
             id: results
+            visible: App.musicResults.length > 0
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
             spacing: 2
             model: App.musicResults
             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-
-            Label {
-                anchors.centerIn: parent
-                visible: results.count === 0 && !App.musicSearching
-                horizontalAlignment: Text.AlignHCenter
-                color: Theme.colors.textMuted
-                font.pixelSize: 13
-                text: "Search for something, or save an address above.\nThe headphone on any video card plays it here too."
-            }
 
             delegate: Rectangle {
                 required property var modelData
@@ -183,12 +194,7 @@ Item {
                     anchors.margins: 6
                     spacing: 10
 
-                    RoundedImage {
-                        width: 40
-                        height: 40
-                        radius: 5
-                        source: modelData.thumbnail
-                    }
+                    RoundedImage { width: 40; height: 40; radius: 5; source: modelData.thumbnail }
 
                     Column {
                         anchors.verticalCenter: parent.verticalCenter
@@ -221,7 +227,60 @@ Item {
                 }
             }
         }
+
+        // ---- keeping an address ------------------------------------------
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 8
+
+            TextField {
+                id: sourceLabel
+                Layout.preferredWidth: 150
+                placeholderText: "Name, optional"
+                color: Theme.colors.text
+                placeholderTextColor: Theme.colors.textMuted
+                background: Rectangle {
+                    radius: 6; color: Theme.colors.background
+                    border.width: 1; border.color: Theme.colors.border
+                }
+            }
+            TextField {
+                id: sourceUrl
+                Layout.fillWidth: true
+                placeholderText: "Keep an address, a round the clock stream for example"
+                color: Theme.colors.text
+                placeholderTextColor: Theme.colors.textMuted
+                background: Rectangle {
+                    radius: 6; color: Theme.colors.background
+                    border.width: 1; border.color: Theme.colors.border
+                }
+                onAccepted: addButton.save()
+            }
+            CheckBox {
+                id: isLive
+                text: "live"
+                contentItem: Label {
+                    text: parent.text
+                    color: Theme.colors.textMuted
+                    font.pixelSize: 11
+                    leftPadding: parent.indicator.width + 4
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+            FlatButton {
+                id: addButton
+                text: "Save"
+                function save() {
+                    App.addSource(sourceLabel.text, sourceUrl.text, isLive.checked)
+                    sourceLabel.text = ""
+                    sourceUrl.text = ""
+                }
+                onClicked: save()
+            }
+        }
     }
 
+    SmoothScroll { flickable: shelfArea }
     SmoothScroll { flickable: results }
 }

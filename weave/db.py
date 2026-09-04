@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -159,6 +159,7 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("videos", "dislikes", "INTEGER"),
     ("videos", "dislikes_at", "INTEGER"),
     ("videos", "live_viewers", "INTEGER"),
+    ("audio_sources", "thumbnail", "TEXT"),
 )
 
 
@@ -686,13 +687,20 @@ class Database:
                 "VALUES(?,?,?,?,?) ON CONFLICT(url) DO UPDATE SET label=excluded.label",
                 (label.strip() or url, url, 1 if live else 0, position, now))
 
+    def set_source_details(self, url: str, label: str | None, thumbnail: str | None) -> None:
+        with self.conn as conn:
+            conn.execute(
+                "UPDATE audio_sources SET label=COALESCE(?, label), "
+                "thumbnail=COALESCE(?, thumbnail) WHERE url=?", (label, thumbnail, url))
+
     def remove_source(self, source_id: int) -> None:
         with self.conn as conn:
             conn.execute("DELETE FROM audio_sources WHERE id=?", (source_id,))
 
     def sources(self) -> list[dict]:
         return [dict(row) for row in self.conn.execute(
-            "SELECT id, label, url, live FROM audio_sources ORDER BY position, id")]
+            "SELECT id, label, url, live, thumbnail FROM audio_sources "
+            "ORDER BY position, id")]
 
     def unwatched_total(self) -> int:
         return int(self.conn.execute(

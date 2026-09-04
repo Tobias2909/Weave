@@ -28,29 +28,58 @@ Rectangle {
 
     // A live stream has no length, so it gets a bar that means nothing and is
     // better left out.
-    Rectangle {
-        id: progressTrack
+    // Thicker under the pointer, so it can actually be hit and dragged rather
+    // than needing a three pixel target.
+    Item {
+        id: scrubber
         visible: Audio.length > 0
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        height: 3
-        color: Theme.colors.border
+        height: 14
+
+        HoverHandler { id: scrubHover }
 
         Rectangle {
-            width: parent.width * Audio.position
-            height: parent.height
-            color: Theme.colors.accent
+            id: progressTrack
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            height: scrubHover.hovered || scrubDrag.active ? 8 : 3
+            color: Theme.colors.border
+            Behavior on height { NumberAnimation { duration: 90 } }
+
+            Rectangle {
+                width: parent.width * Audio.position
+                height: parent.height
+                color: Theme.colors.accent
+            }
+
+            Rectangle {
+                visible: progressTrack.height > 3
+                x: Math.max(0, parent.width * Audio.position - height / 2)
+                anchors.verticalCenter: parent.verticalCenter
+                width: 12
+                height: 12
+                radius: 6
+                color: Theme.colors.accent
+            }
         }
 
         TapHandler {
-            onTapped: function (point) { Audio.seek(point.position.x / progressTrack.width) }
+            onTapped: function (point) { Audio.seek(point.position.x / scrubber.width) }
+        }
+        DragHandler {
+            id: scrubDrag
+            target: null
+            yAxis.enabled: false
+            onCentroidChanged: if (active) Audio.seek(centroid.position.x / scrubber.width)
         }
     }
 
     RowLayout {
         anchors.fill: parent
-        anchors.topMargin: 6
+        anchors.topMargin: 14
         anchors.leftMargin: 12
         anchors.rightMargin: 12
         spacing: 12
@@ -86,13 +115,24 @@ Rectangle {
             }
         }
 
-        FlatButton { text: "◀◀"; onClicked: Audio.previous() }
         FlatButton {
+            text: "◀◀"
+            Layout.preferredWidth: 42
+            onClicked: Audio.previous()
+        }
+        FlatButton {
+            // Fixed, because the pause and play marks are different widths and
+            // everything to the right of it used to shuffle sideways.
             text: Audio.playing ? "❚❚" : "▶"
             accent: true
+            Layout.preferredWidth: 46
             onClicked: Audio.toggle()
         }
-        FlatButton { text: "▶▶"; onClicked: Audio.next() }
+        FlatButton {
+            text: "▶▶"
+            Layout.preferredWidth: 42
+            onClicked: Audio.next()
+        }
 
         Label {
             visible: Audio.length > 0
@@ -128,7 +168,8 @@ Rectangle {
         }
 
         Slider {
-            Layout.preferredWidth: 90
+            // Long enough that a small change is a small movement.
+            Layout.preferredWidth: 170
             from: 0
             to: 100
             value: Audio.volume

@@ -119,9 +119,15 @@ audio only form at all, so one of its combined variants is played with the
 picture discarded, which is how a round the clock radio stream works here.
 
 Signing in costs nothing extra. The library uses the same browser cookies
-everything else does. Search, playlists and station radio all work, and the
-headphone on any video card plays that video as sound with no window. Addresses
-worth returning to can be saved, which is what a round the clock stream wants.
+everything else does. It opens on the shelves YouTube Music itself opens on,
+laid out as pictures to pick from, and search, station radio and playlists all
+work. The headphone on any video card plays that video as sound with no window.
+Addresses worth returning to can be saved, which is what a round the clock
+stream wants, and they keep their own picture.
+
+Liked music comes from your YouTube likes rather than from YouTube Music. The
+two lists are separate, and on this account the YouTube Music one is empty while
+the YouTube one is not.
 
 Starting a video in `mpv` pauses the music, since two things playing at once is
 never wanted. There is a switch in the player bar if you disagree.

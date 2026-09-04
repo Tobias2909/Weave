@@ -28,6 +28,7 @@ from .db import Database
 from .net import Cancelled as FetchCancelled
 from .net import Fetcher, Throttle
 from .process import Cancelled as ProcessCancelled
+from .process import run as run_process
 from .sources import channel as channel_source
 from . import tokens
 from .sources import comments as comment_source
@@ -558,3 +559,145 @@ class MusicSearch(QThread):
             "artist": track.artist, "album": track.album, "duration": track.duration,
             "thumbnail": qml_source(track.thumbnail_url),
         } for track in tracks])
+
+
+class MusicHome(QThread):
+    """The shelves YouTube Music opens on, which is what fills the music view
+    before anything has been searched for."""
+
+    shelves = Signal("QVariantList")
+    failed = Signal(str)
+
+    def __init__(self, cfg: Config, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._cfg = cfg
+
+    def cancel(self) -> None:
+        pass
+
+    def run(self) -> None:
+        from .sources import ytmusic
+
+        try:
+            found = ytmusic.home(self._cfg.browser_profile_path)
+        except ytmusic.MusicError as exc:
+            self.failed.emit(str(exc))
+            return
+        for shelf in found:
+            for item in shelf["items"]:
+                item["thumbnail"] = qml_source(item["thumbnail"])
+        self.shelves.emit(found)
+
+
+class TrackList(QThread):
+    """Tracks for one thing that was chosen. A playlist from YouTube Music, or
+    the liked videos from YouTube, which are a different list entirely."""
+
+    tracks = Signal("QVariantList", str)
+    failed = Signal(str)
+
+    LIKED = "liked"
+
+    def __init__(self, cfg: Config, what: str, playlist_id: str = "",
+                 label: str = "", parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._cfg = cfg
+        self._what = what
+        self._playlist_id = playlist_id
+        self._label = label
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def run(self) -> None:
+        if self._what == self.LIKED:
+            self._liked()
+        else:
+            self._playlist()
+
+    def _playlist(self) -> None:
+        from .sources import ytmusic
+
+        try:
+            found = ytmusic.playlist_tracks(self._cfg.browser_profile_path, self._playlist_id)
+        except ytmusic.MusicError as exc:
+            self.failed.emit(str(exc))
+            return
+        self.tracks.emit([{
+            "key": t.key, "videoId": t.video_id, "title": t.title, "artist": t.artist,
+            "album": t.album, "duration": t.duration, "thumbnail": qml_source(t.thumbnail_url),
+        } for t in found], self._label)
+
+    def _liked(self) -> None:
+        """Liked videos come from YouTube rather than YouTube Music. The two
+        lists are separate, and this is the one that has anything in it."""
+        from .cookies import args as cookie_args
+
+        command = ["yt-dlp", "--no-warnings", "--flat-playlist",
+                   *cookie_args(self._cfg), "--playlist-end", "100",
+                   "--print", "%(id)s\t%(title)s\t%(channel)s\t%(duration)s", ":ytfav"]
+        try:
+            result = run_process(command, cancel=self._cancel, timeout=180)
+        except ProcessCancelled:
+            return
+        except Exception as exc:                                    # noqa: BLE001
+            self.failed.emit(f"{type(exc).__name__}: {exc}")
+            return
+
+        rows = []
+        for line in result.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) < 2 or len(parts[0]) != 11:
+                continue
+            seconds = parts[3] if len(parts) > 3 else ""
+            try:
+                total = int(float(seconds))
+                length = f"{total // 60}:{total % 60:02d}"
+            except ValueError:
+                length = ""
+            rows.append({
+                "key": f"yt:{parts[0]}", "videoId": parts[0], "title": parts[1],
+                "artist": parts[2] if len(parts) > 2 else "", "album": "",
+                "duration": length,
+                "thumbnail": qml_source(f"https://i.ytimg.com/vi/{parts[0]}/hqdefault.jpg"),
+            })
+        if not rows:
+            self.failed.emit("no liked videos came back")
+            return
+        self.tracks.emit(rows, self._label)
+
+
+class SourceDetails(QThread):
+    """A picture and a name for a saved address, so the row is worth looking
+    at rather than being a bare string."""
+
+    done = Signal()
+
+    def __init__(self, db: Database, cfg: Config, url: str,
+                 parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._db = db
+        self._cfg = cfg
+        self._url = url
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def run(self) -> None:
+        from .cookies import args as cookie_args
+
+        command = ["yt-dlp", "--no-warnings", "--simulate", *cookie_args(self._cfg),
+                   "--print", "%(title)s\t%(thumbnail)s", self._url]
+        try:
+            result = run_process(command, cancel=self._cancel, timeout=120)
+        except Exception:                                           # noqa: BLE001
+            return
+        line = next((l for l in result.stdout.splitlines() if l.strip()), "")
+        parts = line.split("\t")
+        title = parts[0].strip() if parts and parts[0] != "NA" else None
+        picture = parts[1].strip() if len(parts) > 1 and parts[1] != "NA" else None
+        self._db.set_source_details(self._url, title, picture)
+        self._db.close()
+        self.done.emit()

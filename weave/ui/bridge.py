@@ -20,7 +20,8 @@ from ..db import Database
 from ..imagecache import qml_source
 from ..player.mpv import Player
 from ..poller import (ChannelAdder, ChannelDetailsFetcher, DetailFetcher, FeedPoller,
-                      LiveWatcher, MusicSearch, SubsImporter, TwitchLogin)
+                      LiveWatcher, MusicHome, MusicSearch, SourceDetails,
+                      TrackList, SubsImporter, TwitchLogin)
 from .feed_model import FeedModel
 
 ALL = "all"
@@ -70,6 +71,11 @@ class Bridge(QObject):
         self._search: MusicSearch | None = None
         self._results: list = []
         self._searching = False
+        self._home: MusicHome | None = None
+        self._shelves: list = []
+        self._tracks: TrackList | None = None
+        self._details: list = []
+        self._results_label = ""
 
         self._busy = False
         self._problems: list[str] = []
@@ -251,6 +257,14 @@ class Bridge(QObject):
     def _get_sources(self) -> list:
         return self._db.sources()
 
+    def _get_shelves(self) -> list:
+        return list(self._shelves)
+
+    def _get_results_label(self) -> str:
+        return self._results_label
+
+    musicShelves = Property("QVariantList", _get_shelves, notify=musicChanged)
+    musicLabel = Property(str, _get_results_label, notify=musicChanged)
     musicResults = Property("QVariantList", _get_results, notify=musicChanged)
     musicSearching = Property(bool, _get_searching, notify=musicChanged)
     audioSources = Property("QVariantList", _get_sources, notify=musicChanged)
@@ -477,6 +491,71 @@ class Bridge(QObject):
     @Slot()
     def showMusic(self) -> None:
         self._set_view(MUSIC, -1)
+        if not self._shelves:
+            self.loadHome()
+
+    @Slot()
+    def loadHome(self) -> None:
+        """What YouTube Music opens on, which is what fills this view before
+        anything has been searched for."""
+        if self._home is not None and self._home.isRunning():
+            return
+        self._home = MusicHome(self._cfg, self)
+        self._home.shelves.connect(self._on_shelves)
+        self._home.failed.connect(
+            lambda message: self._set_status(f"could not load the shelves, {message}"))
+        self._home.start()
+
+    @Slot()
+    def clearResults(self) -> None:
+        self._results = []
+        self._results_label = ""
+        self.musicChanged.emit()
+
+    @Slot()
+    def playLiked(self) -> None:
+        """Liked videos come from YouTube rather than YouTube Music. The two
+        lists are separate and this is the one with anything in it."""
+        self._start_tracks(TrackList(self._cfg, TrackList.LIKED, label="Liked", parent=self))
+
+    @Slot(int, int)
+    def playShelfItem(self, shelf_index: int, item_index: int) -> None:
+        try:
+            item = self._shelves[shelf_index]["items"][item_index]
+        except (IndexError, KeyError, TypeError):
+            return
+        if item.get("playlistId"):
+            self._start_tracks(TrackList(self._cfg, "playlist", item["playlistId"],
+                                         item.get("title", ""), self))
+            return
+        if item.get("videoId") and self._audio:
+            self._audio.play_items([{
+                "key": f"yt:{item['videoId']}", "title": item.get("title", ""),
+                "artist": item.get("subtitle", ""), "thumbnail": item.get("thumbnail", ""),
+                "live": False, "url": ids.watch_url("youtube", item["videoId"]),
+            }])
+
+    def _start_tracks(self, worker: TrackList) -> None:
+        if self._tracks is not None and self._tracks.isRunning():
+            return
+        self._searching = True
+        self.musicChanged.emit()
+        self._tracks = worker
+        self._tracks.tracks.connect(self._on_tracks)
+        self._tracks.failed.connect(self._on_search_failed)
+        self._tracks.start()
+
+    def _on_shelves(self, shelves: list) -> None:
+        self._shelves = shelves
+        self.musicChanged.emit()
+
+    def _on_tracks(self, rows: list, label: str) -> None:
+        self._searching = False
+        self._results = rows
+        self._results_label = label
+        self.musicChanged.emit()
+        if rows:
+            self.playResult(0)
 
     @Slot(str)
     def musicSearch(self, query: str) -> None:
@@ -532,6 +611,11 @@ class Bridge(QObject):
             return
         self._db.add_source(label, url.strip(), live)
         self.musicChanged.emit()
+        # A name and a picture, so the row is worth looking at.
+        worker = SourceDetails(self._db, self._cfg, url.strip(), self)
+        worker.done.connect(self.musicChanged)
+        self._details.append(worker)
+        worker.start()
 
     @Slot(int)
     def removeSource(self, source_id: int) -> None:
@@ -541,6 +625,7 @@ class Bridge(QObject):
     def _on_results(self, rows: list) -> None:
         self._searching = False
         self._results = rows
+        self._results_label = "Search results"
         self.musicChanged.emit()
 
     def _on_search_failed(self, message: str) -> None:
@@ -724,7 +809,8 @@ class Bridge(QObject):
         already gone, so any short wait here is invisible.
         """
         threads = [self._poller, self._adder, self._importer, self._details,
-                   self._live, self._twitch, self._detail, self._search]
+                   self._live, self._twitch, self._detail, self._search,
+                   self._home, self._tracks, *self._details]
         live = [thread for thread in threads if thread is not None and thread.isRunning()]
         for thread in live:
             thread.cancel()

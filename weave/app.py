@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QTimer, QUrl
+from PySide6.QtCore import QLoggingCategory, QTimer, QUrl
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickWindow
@@ -71,6 +71,10 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
 
     # Pinned on purpose. A system wide desktop style would need QtWidgets and
     # would fight the theme role map.
+    # One category chatters on every audio device change, which is constant on
+    # a desktop and says nothing useful.
+    QLoggingCategory.setFilterRules("qt.multimedia.pipewire.*=false")
+
     QQuickStyle.setStyle("Basic")
     app = QGuiApplication(argv)
     app.setApplicationName("Weave")
