@@ -586,7 +586,38 @@ class MusicHome(QThread):
         for shelf in found:
             for item in shelf["items"]:
                 item["thumbnail"] = qml_source(item["thumbnail"])
-        self.shelves.emit(found)
+        found.insert(0, self._from_youtube())
+        self.shelves.emit([shelf for shelf in found if shelf["items"]])
+
+    def _from_youtube(self) -> dict:
+        """A shelf of what YouTube itself suggests.
+
+        The music side of the account has never been used, so its own shelves
+        are what a new listener sees. This one is built from the account that
+        does have a history behind it.
+        """
+        from .cookies import args as cookie_args
+
+        command = ["yt-dlp", "--no-warnings", "--flat-playlist", "--playlist-end", "24",
+                   *cookie_args(self._cfg),
+                   "--print", "%(id)s\t%(title)s\t%(channel)s", ":ytrec"]
+        try:
+            result = run_process(command, timeout=120)
+        except Exception:                                           # noqa: BLE001
+            return {"title": "From your YouTube", "items": []}
+
+        items = []
+        for line in result.stdout.splitlines():
+            parts = line.split("\t")
+            # The feed mixes in radio playlist rows, which are not videos.
+            if len(parts) < 2 or len(parts[0]) != 11:
+                continue
+            items.append({
+                "title": parts[1], "subtitle": parts[2] if len(parts) > 2 else "",
+                "videoId": parts[0], "playlistId": "",
+                "thumbnail": qml_source(f"https://i.ytimg.com/vi/{parts[0]}/hqdefault.jpg"),
+            })
+        return {"title": "From your YouTube", "items": items}
 
 
 class TrackList(QThread):

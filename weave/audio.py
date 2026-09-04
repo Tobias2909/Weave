@@ -141,6 +141,21 @@ class AudioPlayer(QObject):
     def _get_queue_length(self) -> int:
         return len(self._queue)
 
+    def _get_upcoming(self) -> list:
+        """What follows, in the order it will actually be played, which is not
+        the order of the queue once shuffle is on."""
+        if not self._queue or self._at not in self._order:
+            return []
+        place = self._order.index(self._at)
+        following = self._order[place + 1:]
+        if self._repeat and not following:
+            following = self._order[:place]
+        return [{
+            "title": self._queue[i].get("title", ""),
+            "artist": self._queue[i].get("artist", ""),
+            "thumbnail": self._queue[i].get("thumbnail", ""),
+        } for i in following[:40]]
+
     track = Property("QVariantMap", _get_track, notify=trackChanged)
     playing = Property(bool, _get_playing, notify=stateChanged)
     loading = Property(bool, _get_loading, notify=stateChanged)
@@ -153,6 +168,7 @@ class AudioPlayer(QObject):
     repeat = Property(bool, _get_repeat, notify=stateChanged)
     autoPause = Property(bool, _get_auto_pause, notify=stateChanged)
     queueLength = Property(int, _get_queue_length, notify=trackChanged)
+    upcoming = Property("QVariantList", _get_upcoming, notify=trackChanged)
 
     # ---- playing ---------------------------------------------------------
 
@@ -251,6 +267,12 @@ class AudioPlayer(QObject):
         span = self._player.duration()
         if span > 0:
             self._player.setPosition(int(max(0.0, min(1.0, fraction)) * span))
+
+    @Slot(int)
+    def nudgeVolume(self, steps: int) -> None:
+        """One wheel notch is five, which is small enough to tune with and big
+        enough to be worth a notch."""
+        self.setVolume(self._get_volume() + steps * 5)
 
     @Slot(int)
     def setVolume(self, value: int) -> None:

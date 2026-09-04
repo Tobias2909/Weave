@@ -74,7 +74,7 @@ class Bridge(QObject):
         self._home: MusicHome | None = None
         self._shelves: list = []
         self._tracks: TrackList | None = None
-        self._details: list = []
+        self._source_details: list = []
         self._results_label = ""
 
         self._busy = False
@@ -614,7 +614,7 @@ class Bridge(QObject):
         # A name and a picture, so the row is worth looking at.
         worker = SourceDetails(self._db, self._cfg, url.strip(), self)
         worker.done.connect(self.musicChanged)
-        self._details.append(worker)
+        self._source_details.append(worker)
         worker.start()
 
     @Slot(int)
@@ -810,7 +810,7 @@ class Bridge(QObject):
         """
         threads = [self._poller, self._adder, self._importer, self._details,
                    self._live, self._twitch, self._detail, self._search,
-                   self._home, self._tracks, *self._details]
+                   self._home, self._tracks, *self._source_details]
         live = [thread for thread in threads if thread is not None and thread.isRunning()]
         for thread in live:
             thread.cancel()

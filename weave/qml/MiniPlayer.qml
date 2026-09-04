@@ -77,6 +77,82 @@ Rectangle {
         }
     }
 
+    Popup {
+        id: upNext
+        y: -height - 8
+        x: parent.width - width - 12
+        width: 340
+        height: Math.min(360, 46 + queued.count * 46)
+        padding: 8
+        modal: false
+        background: Rectangle {
+            radius: 8
+            color: Theme.colors.surfaceRaised
+            border.width: 1
+            border.color: Theme.colors.border
+        }
+
+        Column {
+            anchors.fill: parent
+            spacing: 6
+
+            Label {
+                text: "UP NEXT  ·  " + Audio.upcoming.length
+                color: Theme.colors.textMuted
+                font.pixelSize: 10
+                font.letterSpacing: 1.2
+                font.weight: Font.DemiBold
+            }
+
+            ListView {
+                id: queued
+                width: parent.width
+                height: parent.height - 22
+                clip: true
+                spacing: 2
+                model: Audio.upcoming
+                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                delegate: Row {
+                    required property var modelData
+                    width: queued.width
+                    height: 44
+                    spacing: 8
+
+                    RoundedImage {
+                        width: 34
+                        height: 34
+                        radius: 4
+                        anchors.verticalCenter: parent.verticalCenter
+                        visible: (modelData.thumbnail || "") !== ""
+                        source: modelData.thumbnail ? modelData.thumbnail : ""
+                    }
+
+                    Column {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: parent.width - 46
+                        spacing: 1
+                        Label {
+                            width: parent.width
+                            text: modelData.title
+                            color: Theme.colors.text
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                        }
+                        Label {
+                            width: parent.width
+                            visible: (modelData.artist || "") !== ""
+                            text: modelData.artist
+                            color: Theme.colors.textMuted
+                            font.pixelSize: 10
+                            elide: Text.ElideRight
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     RowLayout {
         anchors.fill: parent
         anchors.topMargin: 14
@@ -168,12 +244,30 @@ Rectangle {
         }
 
         Slider {
+            id: volume
             // Long enough that a small change is a small movement.
             Layout.preferredWidth: 170
             from: 0
             to: 100
             value: Audio.volume
             onMoved: Audio.setVolume(value)
+
+            // A notch is five, so it can be tuned without aiming.
+            WheelHandler {
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                property real carried: 0
+                onWheel: function (event) {
+                    carried += event.angleDelta.y
+                    while (carried >= 120) { carried -= 120; Audio.nudgeVolume(1) }
+                    while (carried <= -120) { carried += 120; Audio.nudgeVolume(-1) }
+                }
+            }
+        }
+
+        FlatButton {
+            text: "Up next"
+            enabled: Audio.upcoming.length > 0
+            onClicked: upNext.open()
         }
 
         FlatButton { text: "✕"; onClicked: Audio.stop() }
