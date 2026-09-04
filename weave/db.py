@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -27,6 +27,19 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+
+-- One row per endpoint per minute, counting the requests sent to it. The
+-- feed endpoint answers a burst with a refusal rather than with a busy
+-- signal, so the only way to stay under its patience is to know how much has
+-- been asked recently. Buckets rather than one row per request keeps this to
+-- sixty rows an hour per endpoint, and a rolling window is one SUM.
+CREATE TABLE IF NOT EXISTS request_budget (
+    endpoint TEXT    NOT NULL,
+    minute   INTEGER NOT NULL,          -- unix time divided by sixty
+    count    INTEGER NOT NULL DEFAULT 0,
+    refused  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (endpoint, minute)
 );
 
 CREATE TABLE IF NOT EXISTS channels (
@@ -128,6 +141,30 @@ CREATE TABLE IF NOT EXISTS watched (
 
 
 @dataclass(frozen=True)
+class FeedTiers:
+    """How often a channel is asked, decided by how recently it posted.
+
+    Polling every channel at the same rate spends most of the budget on
+    channels that have not posted in years, which is what made a full lap take
+    over an hour. A channel that posts weekly is worth asking every quarter of
+    an hour; one that has been silent for three months is not.
+
+    The intervals are in seconds and the boundaries in days. The shortest one
+    is a quarter of an hour because that is what the feed itself declares in
+    its Cache-Control header, so asking again sooner returns the same cached
+    body.
+    """
+
+    hot_days: int = 7
+    warm_days: int = 30
+    cold_days: int = 90
+    hot_s: int = 900
+    warm_s: int = 3600
+    cold_s: int = 21600
+    frozen_s: int = 86400
+
+
+@dataclass(frozen=True)
 class VideoRow:
     """One video as a source produced it. Fields a source cannot know are None
     and get filled in by a later pass."""
@@ -142,6 +179,9 @@ class VideoRow:
     views: int | None = None
     likes: int | None = None
     live_status: str | None = None
+    # Known at insert time now that each tab has its own feed. None means the
+    # source could not say, which only happens on the mixed channel feed.
+    is_short: bool | None = None
 
     @property
     def key(self) -> str:
@@ -160,6 +200,10 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("videos", "dislikes_at", "INTEGER"),
     ("videos", "live_viewers", "INTEGER"),
     ("audio_sources", "thumbnail", "TEXT"),
+    # Which feed address answers for this channel. The per tab playlist feed
+    # is the default; a channel with no long form tab falls back to the mixed
+    # channel feed and is remembered so the discovery is not repeated.
+    ("channels", "feed_variant", "TEXT"),
 )
 
 
@@ -249,24 +293,87 @@ class Database:
             "SELECT ext_id FROM channels WHERE platform=? AND "
             "(avatar_url IS NULL OR avatar_url = '')", (platform,))]
 
-    def channels_due(self, interval_s: int, platform: str = "youtube",
-                     limit: int | None = None) -> list[sqlite3.Row]:
-        """Channels whose last poll is older than the interval.
+    def channels_due(self, tiers: FeedTiers, platform: str = "youtube",
+                     limit: int | None = None, force: bool = False) -> list[sqlite3.Row]:
+        """Channels that are past their own interval, most overdue first.
 
-        With several hundred channels a full sweep every cycle is a thundering
-        herd, so the timer only takes what is actually due and the manual
-        refresh button takes everything.
+        Each channel carries its own interval, derived from when it last
+        published rather than stored, so it can never go stale against the
+        videos table. A channel that has never been polled has no timestamp,
+        counts as infinitely overdue and therefore goes first.
+
+        `force` ignores the intervals but not the limit. The point of the
+        limit is that a round is small enough not to look like a burst, and a
+        deliberate refresh has the same endpoint on the other end.
         """
-        cutoff = int(time.time()) - max(0, interval_s)
+        now = int(time.time())
+        params = {
+            "platform": platform,
+            "now": now,
+            "hot_cut": now - tiers.hot_days * 86400,
+            "warm_cut": now - tiers.warm_days * 86400,
+            "cold_cut": now - tiers.cold_days * 86400,
+            "hot_s": tiers.hot_s,
+            "warm_s": tiers.warm_s,
+            "cold_s": tiers.cold_s,
+            "frozen_s": tiers.frozen_s,
+            "force": 1 if force else 0,
+            "limit": limit if limit is not None else -1,
+        }
         return list(self.conn.execute(
-            # At or before the cutoff, so an interval of zero means every
-            # channel is due rather than none of them.
-            "SELECT * FROM channels WHERE platform=? "
-            "AND (last_polled_at IS NULL OR last_polled_at <= ?) "
-            "ORDER BY last_polled_at IS NOT NULL, last_polled_at "
-            "LIMIT ?",
-            (platform, cutoff, limit if limit is not None else -1),
+            """
+            SELECT * FROM (
+                SELECT c.*,
+                       CASE
+                           WHEN l.published IS NULL       THEN :frozen_s
+                           WHEN l.published >= :hot_cut   THEN :hot_s
+                           WHEN l.published >= :warm_cut  THEN :warm_s
+                           WHEN l.published >= :cold_cut  THEN :cold_s
+                           ELSE :frozen_s
+                       END AS interval_s
+                FROM channels c
+                LEFT JOIN (SELECT channel_key, MAX(published_at) AS published
+                             FROM videos GROUP BY channel_key) l
+                       ON l.channel_key = c.key
+                WHERE c.platform = :platform
+            )
+            WHERE :force = 1
+               OR COALESCE(last_polled_at, 0) <= :now - interval_s
+            ORDER BY (:now - COALESCE(last_polled_at, 0)) - interval_s DESC
+            LIMIT :limit
+            """,
+            params,
         ))
+
+    def promote_channels(self, keys: Iterable[str]) -> int:
+        """Make these channels the next ones asked.
+
+        Used when a cheap global check has already established that a channel
+        has something new. Clearing the timestamp rather than setting a flag
+        keeps one notion of due in the scheduler.
+        """
+        keys = list(keys)
+        if not keys:
+            return 0
+        with self.conn as conn:
+            before = conn.total_changes
+            conn.executemany(
+                "UPDATE channels SET last_polled_at=0 WHERE key=? AND last_polled_at IS NOT 0",
+                [(key,) for key in keys],
+            )
+            return conn.total_changes - before
+
+    def set_feed_variant(self, key: str, variant: str) -> None:
+        with self.conn as conn:
+            conn.execute("UPDATE channels SET feed_variant=? WHERE key=?", (variant, key))
+
+    def channels_that_stream(self, platform: str = "youtube") -> set[str]:
+        """Channels known to broadcast, so the live feed is only asked of the
+        ones it can answer for. Most channels have never streamed and asking
+        them would double the request count for nothing."""
+        return {row[0] for row in self.conn.execute(
+            "SELECT DISTINCT channel_key FROM videos "
+            "WHERE platform=? AND live_status IS NOT NULL", (platform,))}
 
     def remove_channel(self, key: str) -> None:
         with self.conn as conn:
@@ -317,54 +424,6 @@ class Database:
         stamp = row["details_fetched_at"]
         return stamp is None or stamp <= int(time.time()) - max(0, interval_s)
 
-    def channels_needing_classification(self, interval_s: int, limit: int = 40) -> list[sqlite3.Row]:
-        """Channels that still hold videos of unknown kind.
-
-        A channel whose videos are all decided needs no request at all, so in
-        the steady state this is only the channels that just gained a video.
-        """
-        cutoff = int(time.time()) - max(0, interval_s)
-        return list(self.conn.execute(
-            """
-            SELECT c.* FROM channels c
-            WHERE c.platform = 'youtube'
-              AND (c.last_classified_at IS NULL OR c.last_classified_at <= ?)
-              AND EXISTS (SELECT 1 FROM videos v
-                           WHERE v.channel_key = c.key AND v.is_short IS NULL)
-            ORDER BY c.last_classified_at IS NOT NULL, c.last_classified_at
-            LIMIT ?
-            """,
-            (cutoff, limit),
-        ))
-
-    def mark_classified(self, key: str) -> None:
-        with self.conn as conn:
-            conn.execute("UPDATE channels SET last_classified_at=? WHERE key=?",
-                         (int(time.time()), key))
-
-    def set_kind(self, channel_key: str, ext_ids: set[str], is_short: bool) -> int:
-        """Record which of a channel's stored videos are Shorts and which are
-        not. Only touches rows that are still undecided, so a decision already
-        made is never overwritten."""
-        if not ext_ids:
-            return 0
-        with self.conn as conn:
-            before = conn.total_changes
-            conn.executemany(
-                "UPDATE videos SET is_short=? WHERE channel_key=? AND ext_id=? "
-                "AND is_short IS NULL",
-                [(1 if is_short else 0, channel_key, ext_id) for ext_id in ext_ids],
-            )
-            return conn.total_changes - before
-
-    def unclassified_count(self, channel_key: str | None = None) -> int:
-        if channel_key is None:
-            return int(self.conn.execute(
-                "SELECT COUNT(*) FROM videos WHERE is_short IS NULL").fetchone()[0])
-        return int(self.conn.execute(
-            "SELECT COUNT(*) FROM videos WHERE is_short IS NULL AND channel_key=?",
-            (channel_key,)).fetchone()[0])
-
     def mark_polled(self, key: str, error: str | None = None) -> None:
         with self.conn as conn:
             conn.execute(
@@ -385,7 +444,8 @@ class Database:
         payload = [
             (
                 r.key, r.platform, r.ext_id, r.channel_key, r.title, r.published_at,
-                r.thumbnail_url, r.duration_s, r.views, r.likes, r.live_status, now,
+                r.thumbnail_url, r.duration_s, r.views, r.likes, r.live_status,
+                None if r.is_short is None else int(r.is_short), now,
             )
             for r in rows
         ]
@@ -397,8 +457,8 @@ class Database:
                 """
                 INSERT INTO videos(key, platform, ext_id, channel_key, title, published_at,
                                    thumbnail_url, duration_s, views, likes, live_status,
-                                   first_seen_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                                   is_short, first_seen_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(key) DO UPDATE SET
                     title         = excluded.title,
                     published_at  = COALESCE(excluded.published_at, videos.published_at),
@@ -406,7 +466,8 @@ class Database:
                     duration_s    = COALESCE(excluded.duration_s, videos.duration_s),
                     views         = COALESCE(excluded.views, videos.views),
                     likes         = COALESCE(excluded.likes, videos.likes),
-                    live_status   = COALESCE(excluded.live_status, videos.live_status)
+                    live_status   = COALESCE(excluded.live_status, videos.live_status),
+                    is_short      = COALESCE(videos.is_short, excluded.is_short)
                 """,
                 payload,
             )
@@ -465,30 +526,81 @@ class Database:
             "SELECT key, ext_id FROM videos WHERE live_status='is_live' "
             "ORDER BY live_viewers IS NULL DESC, published_at DESC LIMIT ?", (limit,)))
 
-    def set_short(self, video_key: str, value: bool) -> None:
-        with self.conn as conn:
-            conn.execute("UPDATE videos SET is_short=? WHERE key=?", (1 if value else 0, video_key))
+    def unknown_video_keys(self, keys: Iterable[str]) -> set[str]:
+        """Which of these videos are not stored yet.
 
-    def videos_needing_short_check(self, limit: int = 40) -> list[sqlite3.Row]:
-        """Stragglers for the per video redirect test.
-
-        The channel tabs decide almost everything, so this is the fallback for
-        a video that appeared in neither of them, which happens for a premiere
-        or a stream that has not settled into a tab yet.
-
-        Restricting this to videos of known short duration was a mistake worth
-        remembering. Most stored videos never get a duration, because the
-        subscriptions sweep only reaches the newest entries, so that rule left
-        the vast majority permanently unclassified and hid nothing at all.
-        Newest first, since those are the ones being looked at.
+        Asked of the subscriptions sweep's output, which is how one call over
+        every subscription turns into a list of the channels worth asking.
         """
+        keys = list(keys)
+        if not keys:
+            return set()
+        known: set[str] = set()
+        # Chunked because SQLite caps the number of bound parameters, and a
+        # sweep can easily carry a thousand ids.
+        for start in range(0, len(keys), 500):
+            chunk = keys[start:start + 500]
+            marks = ",".join("?" * len(chunk))
+            known.update(row[0] for row in self.conn.execute(
+                f"SELECT key FROM videos WHERE key IN ({marks})", chunk))
+        return {key for key in keys if key not in known}
+
+    # ---- request budget --------------------------------------------------
+
+    def record_requests(self, endpoint: str, count: int = 1, refused: int = 0) -> None:
+        """Add to this minute's bucket for an endpoint.
+
+        Called for every outbound request, including the ones yt-dlp makes on
+        our behalf, because the endpoint counts those the same way.
+        """
+        minute = int(time.time()) // 60
+        with self.conn as conn:
+            conn.execute(
+                "INSERT INTO request_budget(endpoint, minute, count, refused) VALUES(?,?,?,?) "
+                "ON CONFLICT(endpoint, minute) DO UPDATE SET "
+                "  count = count + excluded.count, refused = refused + excluded.refused",
+                (endpoint, minute, count, refused),
+            )
+
+    def requests_in_window(self, endpoint: str, window_s: int) -> tuple[int, int]:
+        """How much has been asked of an endpoint recently, as sent and
+        refused. The window is rounded out to whole minutes, which errs
+        towards counting one bucket too many rather than one too few."""
+        first = (int(time.time()) - max(0, window_s)) // 60
+        row = self.conn.execute(
+            "SELECT COALESCE(SUM(count), 0), COALESCE(SUM(refused), 0) "
+            "FROM request_budget WHERE endpoint=? AND minute >= ?",
+            (endpoint, first),
+        ).fetchone()
+        return int(row[0]), int(row[1])
+
+    def budget_frees_at(self, endpoint: str, window_s: int) -> int:
+        """When the oldest bucket still inside the window leaves it, as a unix
+        time. That is the soonest a full budget can have room again, and it is
+        what the interface reports instead of simply doing nothing."""
+        first = (int(time.time()) - max(0, window_s)) // 60
+        row = self.conn.execute(
+            "SELECT MIN(minute) FROM request_budget WHERE endpoint=? AND minute >= ?",
+            (endpoint, first),
+        ).fetchone()
+        if row is None or row[0] is None:
+            return int(time.time())
+        return int(row[0]) * 60 + max(0, window_s) + 60
+
+    def request_totals(self, window_s: int) -> list[sqlite3.Row]:
+        first = (int(time.time()) - max(0, window_s)) // 60
         return list(self.conn.execute(
-            "SELECT key, ext_id FROM videos "
-            "WHERE platform='youtube' AND is_short IS NULL "
-            "  AND (duration_s IS NULL OR duration_s <= ?) "
-            "ORDER BY published_at DESC NULLS LAST LIMIT ?",
-            (SHORTS_CEILING_S, limit),
+            "SELECT endpoint, SUM(count) AS count, SUM(refused) AS refused "
+            "FROM request_budget WHERE minute >= ? GROUP BY endpoint ORDER BY count DESC",
+            (first,),
         ))
+
+    def prune_request_budget(self, older_than_s: int = 86400) -> int:
+        cutoff = (int(time.time()) - max(0, older_than_s)) // 60
+        with self.conn as conn:
+            before = conn.total_changes
+            conn.execute("DELETE FROM request_budget WHERE minute < ?", (cutoff,))
+            return conn.total_changes - before
 
     # ---- groups ----------------------------------------------------------
 

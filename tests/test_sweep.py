@@ -35,6 +35,17 @@ class ParseLines(unittest.TestCase):
     def test_key(self):
         self.assertEqual(sweep.parse_lines("aaaaaaaaaaa|1|NA")[0].key, "yt:aaaaaaaaaaa")
 
+    def test_the_owning_channel_comes_along(self):
+        # This is what makes one call over every subscription a detector as
+        # well as a filler. Without it a new video says that something is new
+        # but not whose feed to ask.
+        got = sweep.parse_lines("aaaaaaaaaaa|100|NA|UCabcdefghijklmnopqrstuv")
+        self.assertEqual(got[0].channel_id, "UCabcdefghijklmnopqrstuv")
+
+    def test_a_row_without_a_channel_still_carries_its_duration(self):
+        self.assertEqual(sweep.parse_lines("aaaaaaaaaaa|100|NA")[0].channel_id, None)
+        self.assertEqual(sweep.parse_lines("aaaaaaaaaaa|100|NA|NA")[0].channel_id, None)
+
 
 if __name__ == "__main__":
     unittest.main()

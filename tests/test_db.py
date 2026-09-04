@@ -2,7 +2,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from weave.db import SHORTS_CEILING_S, Database, VideoRow
+import time
+
+from weave.db import SHORTS_CEILING_S, Database, FeedTiers, VideoRow
+
+# The shipped defaults, so a test failure means the behaviour changed and
+# not that a test invented its own numbers.
+TIERS = FeedTiers()
 
 
 class DatabaseCase(unittest.TestCase):
@@ -29,27 +35,85 @@ class Channels(DatabaseCase):
         row = self.db.channels()[0]
         self.assertEqual((row["title"], row["avatar_url"]), ("One", "https://a/av.jpg"))
 
-    def test_only_channels_past_the_interval_are_due(self):
+    def test_only_channels_past_their_interval_are_due(self):
         self.db.add_channel("yt:UC1", "youtube", "UC1")
-        self.assertEqual(len(self.db.channels_due(900)), 1)   # never polled
+        self.assertEqual(len(self.db.channels_due(TIERS)), 1)          # never polled
         self.db.mark_polled("yt:UC1")
-        self.assertEqual(len(self.db.channels_due(900)), 0)   # just polled
-        self.assertEqual(len(self.db.channels_due(0)), 1)     # everything is due
+        self.assertEqual(len(self.db.channels_due(TIERS)), 0)          # just polled
+        self.assertEqual(len(self.db.channels_due(TIERS, force=True)), 1)
 
     def test_only_a_slice_is_taken_at_a_time(self):
         # Asking about several hundred feeds at once is what provokes the
-        # endpoint into refusing, so a round takes the stalest few.
+        # endpoint into refusing, so a round takes the most overdue few. The
+        # limit holds even when the round was asked for by hand, because the
+        # same endpoint is on the other end either way.
         for n in range(10):
             self.db.add_channel(f"yt:UC{n}", "youtube", f"UC{n}")
-        self.assertEqual(len(self.db.channels_due(0, limit=4)), 4)
-        self.assertEqual(len(self.db.channels_due(0)), 10)
+        self.assertEqual(len(self.db.channels_due(TIERS, limit=4)), 4)
+        self.assertEqual(len(self.db.channels_due(TIERS, force=True, limit=4)), 4)
+        self.assertEqual(len(self.db.channels_due(TIERS)), 10)
 
-    def test_the_stalest_are_taken_first(self):
+    def test_the_most_overdue_is_taken_first(self):
         self.db.add_channel("yt:UCa", "youtube", "UCa")
         self.db.add_channel("yt:UCb", "youtube", "UCb")
         self.db.mark_polled("yt:UCa")
-        first = self.db.channels_due(0, limit=1)[0]["key"]
+        first = self.db.channels_due(TIERS, limit=1)[0]["key"]
         self.assertEqual(first, "yt:UCb")
+
+    def test_a_channel_is_asked_as_often_as_it_posts(self):
+        # The whole point of the tiers. Polling a channel that has not posted
+        # in years as often as one that posts daily is what made a full lap
+        # over several hundred channels take well over an hour.
+        now = int(time.time())
+        for name, published in (("hot", now - 2 * 86400),
+                                ("warm", now - 20 * 86400),
+                                ("cold", now - 60 * 86400),
+                                ("frozen", now - 400 * 86400)):
+            key = f"yt:UC{name}"
+            self.db.add_channel(key, "youtube", f"UC{name}")
+            self.db.upsert_videos([self.video(name.ljust(11, "z"), channel=key,
+                                              published_at=published)])
+        self.db.conn.execute("UPDATE channels SET last_polled_at=?", (now - 1800,))
+        self.db.conn.commit()
+        # Half an hour after the last poll, only the channel that posts often
+        # is due again.
+        self.assertEqual([r["key"] for r in self.db.channels_due(TIERS)], ["yt:UChot"])
+
+    def test_a_channel_with_nothing_stored_is_treated_as_dormant(self):
+        now = int(time.time())
+        self.db.add_channel("yt:UC1", "youtube", "UC1")
+        self.db.conn.execute("UPDATE channels SET last_polled_at=?", (now - 3600,))
+        self.db.conn.commit()
+        self.assertEqual(self.db.channels_due(TIERS), [])
+
+    def test_a_promoted_channel_goes_to_the_front(self):
+        # A single cheap call over every subscription can establish that a
+        # channel has something new. Promoting it is how that turns into its
+        # feed being asked in the same round rather than in an hour.
+        now = int(time.time())
+        for key in ("yt:UCa", "yt:UCb"):
+            self.db.add_channel(key, "youtube", key.split(":")[1])
+        self.db.conn.execute("UPDATE channels SET last_polled_at=?", (now - 60,))
+        self.db.conn.commit()
+        self.assertEqual(self.db.channels_due(TIERS), [])
+        self.assertEqual(self.db.promote_channels(["yt:UCb"]), 1)
+        self.assertEqual([r["key"] for r in self.db.channels_due(TIERS)], ["yt:UCb"])
+        # Promoting twice is not a second promotion.
+        self.assertEqual(self.db.promote_channels(["yt:UCb"]), 0)
+
+    def test_only_channels_that_have_streamed_are_asked_for_live(self):
+        self.db.add_channel("yt:UC1", "youtube", "UC1")
+        self.db.add_channel("yt:UC2", "youtube", "UC2")
+        self.db.upsert_videos([self.video("aaaaaaaaaaa", channel="yt:UC1"),
+                               self.video("bbbbbbbbbbb", channel="yt:UC2",
+                                          live_status="was_live")])
+        self.assertEqual(self.db.channels_that_stream(), {"yt:UC2"})
+
+    def test_the_feed_variant_is_remembered(self):
+        self.db.add_channel("yt:UC1", "youtube", "UC1")
+        self.assertIsNone(self.db.channels()[0]["feed_variant"])
+        self.db.set_feed_variant("yt:UC1", "channel")
+        self.assertEqual(self.db.channels()[0]["feed_variant"], "channel")
 
     def test_knows_whether_a_channel_ever_produced_a_video(self):
         # This is what separates a broken feed from a channel that is simply
@@ -132,82 +196,45 @@ class Accumulation(DatabaseCase):
         self.assertEqual(self.db.boxes()[0]["items"], 1)
 
 
-class ShortsClassification(DatabaseCase):
+class VideoKind(DatabaseCase):
+    """Each tab has its own feed, so the kind arrives with the video instead of
+    being worked out afterwards by asking more questions about it."""
+
     def setUp(self):
         super().setUp()
         self.db.add_channel("yt:UC1", "youtube", "UC1", "One")
-        self.db.upsert_videos([self.video("aaaaaaaaaaa"),      # long, once known
-                               self.video("bbbbbbbbbbb"),      # short enough to test
-                               self.video("ccccccccccc")])     # duration still unknown
 
-    def test_unknown_duration_is_still_a_candidate(self):
-        # It has to be. Most stored videos never get a duration, because the
-        # subscriptions sweep only reaches the newest entries, so excluding
-        # them left the whole feed unclassified and hid nothing.
-        self.assertIn("ccccccccccc",
-                      [r["ext_id"] for r in self.db.videos_needing_short_check()])
+    def test_a_video_from_the_shorts_feed_never_shows(self):
+        self.db.upsert_videos([self.video("aaaaaaaaaaa", is_short=True),
+                               self.video("bbbbbbbbbbb", is_short=False)])
+        self.assertEqual([r["ext_id"] for r in self.db.feed()], ["bbbbbbbbbbb"])
+
+    def test_a_video_of_unknown_kind_still_shows(self):
+        # Only the mixed channel feed produces these, and it is the fallback
+        # for a channel with no videos tab. Hiding them would hide it.
+        self.db.upsert_videos([self.video("ccccccccccc")])
+        self.assertIn("ccccccccccc", [r["ext_id"] for r in self.db.feed()])
 
     def test_a_long_duration_settles_it_with_no_request(self):
+        self.db.upsert_videos([self.video("aaaaaaaaaaa")])
         self.db.fill_details([("yt:aaaaaaaaaaa", SHORTS_CEILING_S + 1, None)])
         row = next(r for r in self.db.feed() if r["ext_id"] == "aaaaaaaaaaa")
         self.assertEqual(row["is_short"], 0)
 
-    def test_a_settled_long_video_stops_being_a_candidate(self):
-        self.db.fill_details([("yt:aaaaaaaaaaa", 3600, None), ("yt:bbbbbbbbbbb", 45, None)])
-        self.assertNotIn("aaaaaaaaaaa",
-                         [r["ext_id"] for r in self.db.videos_needing_short_check()])
+    def test_a_stored_decision_is_never_overwritten(self):
+        # A Short that later turns up in the mixed feed, which says nothing
+        # about kind, must not become undecided again.
+        self.db.upsert_videos([self.video("aaaaaaaaaaa", is_short=True)])
+        self.db.upsert_videos([self.video("aaaaaaaaaaa", is_short=None)])
+        row = self.db.conn.execute(
+            "SELECT is_short FROM videos WHERE ext_id='aaaaaaaaaaa'").fetchone()
+        self.assertEqual(row["is_short"], 1)
 
-    def test_a_confirmed_short_leaves_the_feed(self):
-        self.db.set_short("yt:bbbbbbbbbbb", True)
-        self.assertNotIn("bbbbbbbbbbb", [r["ext_id"] for r in self.db.feed()])
-
-    def test_an_unclassified_video_still_shows(self):
-        self.assertIn("ccccccccccc", [r["ext_id"] for r in self.db.feed()])
-
-
-class TabClassification(DatabaseCase):
-    def setUp(self):
-        super().setUp()
-        self.db.add_channel("yt:UC1", "youtube", "UC1", "One")
-        self.db.upsert_videos([self.video("aaaaaaaaaaa"), self.video("bbbbbbbbbbb"),
-                               self.video("ccccccccccc")])
-
-    def test_marking_from_the_tabs(self):
-        self.assertEqual(self.db.set_kind("yt:UC1", {"aaaaaaaaaaa"}, is_short=True), 1)
-        self.assertEqual(self.db.set_kind("yt:UC1", {"bbbbbbbbbbb"}, is_short=False), 1)
-        kinds = {r["ext_id"]: r["is_short"] for r in
-                 self.db.conn.execute("SELECT ext_id, is_short FROM videos")}
-        self.assertEqual(kinds, {"aaaaaaaaaaa": 1, "bbbbbbbbbbb": 0, "ccccccccccc": None})
-
-    def test_a_video_in_neither_tab_stays_undecided_and_keeps_showing(self):
-        self.db.set_kind("yt:UC1", {"aaaaaaaaaaa"}, is_short=True)
-        self.db.set_kind("yt:UC1", {"bbbbbbbbbbb"}, is_short=False)
-        self.assertIn("ccccccccccc", [r["ext_id"] for r in self.db.feed()])
-
-    def test_a_decision_is_never_overwritten(self):
-        self.db.set_kind("yt:UC1", {"aaaaaaaaaaa"}, is_short=True)
-        self.assertEqual(self.db.set_kind("yt:UC1", {"aaaaaaaaaaa"}, is_short=False), 0)
-
-    def test_ids_from_another_channel_are_ignored(self):
-        self.db.add_channel("yt:UC2", "youtube", "UC2", "Two")
-        self.assertEqual(self.db.set_kind("yt:UC2", {"aaaaaaaaaaa"}, is_short=True), 0)
-
-    def test_only_channels_with_undecided_videos_need_a_request(self):
-        self.assertEqual([c["key"] for c in self.db.channels_needing_classification(0)],
-                         ["yt:UC1"])
-        self.db.set_kind("yt:UC1", {"aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"},
-                         is_short=False)
-        self.assertEqual(self.db.channels_needing_classification(0), [])
-
-    def test_a_recent_check_is_not_repeated(self):
-        self.db.mark_classified("yt:UC1")
-        self.assertEqual(self.db.channels_needing_classification(21600), [])
-        self.assertEqual(len(self.db.channels_needing_classification(0)), 1)
-
-    def test_unclassified_counts(self):
-        self.assertEqual(self.db.unclassified_count(), 3)
-        self.db.set_kind("yt:UC1", {"aaaaaaaaaaa"}, is_short=True)
-        self.assertEqual(self.db.unclassified_count("yt:UC1"), 2)
+    def test_unknown_ids_are_what_the_sweep_reports(self):
+        self.db.upsert_videos([self.video("aaaaaaaaaaa")])
+        self.assertEqual(self.db.unknown_video_keys(["yt:aaaaaaaaaaa", "yt:zzzzzzzzzzz"]),
+                         {"yt:zzzzzzzzzzz"})
+        self.assertEqual(self.db.unknown_video_keys([]), set())
 
 
 class Groups(DatabaseCase):
@@ -241,9 +268,9 @@ class Groups(DatabaseCase):
 
     def test_unwatched_counts_exclude_watched_and_shorts(self):
         self.db.add_to_group(self.group, "yt:UC1")
-        self.db.upsert_videos([self.video("bbbbbbbbbbb"), self.video("ccccccccccc")])
+        self.db.upsert_videos([self.video("bbbbbbbbbbb"),
+                               self.video("ccccccccccc", is_short=True)])
         self.db.set_watched("yt:bbbbbbbbbbb", 1.0, "mpv")
-        self.db.set_short("yt:ccccccccccc", True)
         self.assertEqual(self.db.groups()[0]["unwatched"], 1)
         self.assertEqual(self.db.unwatched_total(), 1)
 
@@ -313,7 +340,7 @@ class Boxes(DatabaseCase):
 
     def test_a_short_never_appears_even_in_a_box(self):
         self.db.add_to_box(self.box, "yt:aaaaaaaaaaa")
-        self.db.set_short("yt:aaaaaaaaaaa", True)
+        self.db.upsert_videos([self.video("aaaaaaaaaaa", is_short=True)])
         self.assertEqual(self.db.feed(box_id=self.box, hide_watched=False), [])
 
     def test_deleting_a_box_keeps_the_videos(self):
@@ -373,8 +400,7 @@ class ChannelPage(DatabaseCase):
                          ["aaaaaaaaaaa"])
 
     def test_the_video_count_excludes_shorts(self):
-        self.db.upsert_videos([self.video("ccccccccccc")])
-        self.db.set_short("yt:ccccccccccc", True)
+        self.db.upsert_videos([self.video("ccccccccccc", is_short=True)])
         self.assertEqual(self.db.channel("yt:UC1")["video_count"], 1)
 
 

@@ -25,16 +25,51 @@ command = "auto"
 ipc_socket = "auto"
 
 [poll]
+# A small round, often, rather than a large round rarely. The feed endpoint
+# objects to a burst, not to a day's worth of requests, so the same volume
+# spread evenly is both safer and quicker to come round.
+tick_interval_s = 60
+channels_per_tick = 15
+# How often a channel is asked, decided by how recently it published. The
+# shortest is a quarter of an hour because the feed itself answers with
+# Cache-Control max-age=900, so asking sooner returns the same cached body.
+# Most of a large subscription list has not posted in months, and asking those
+# as often as the rest is what makes a full lap take hours.
 feed_interval_s = 900
+warm_interval_s = 3600
+cold_interval_s = 21600
+frozen_interval_s = 86400
+active_days = 7
+warm_days = 30
+cold_days = 90
 live_interval_s = 90
 # One global throttle sits in front of every outbound request, so no feature
 # can burst even by accident.
 max_concurrency = 4
 min_request_interval_ms = 220
-# The feed endpoint answers a large burst with a refusal rather than a wait
-# request, so a round asks about the stalest few hundred feeds and the rest
-# wait for the next round. Raising this brings the refusals back.
-channels_per_cycle = 80
+# The subscriptions sweep is one paginated call covering every subscription.
+# It fills in durations and live flags, and it names the channels that have
+# something new, which is what lets the per channel feeds be asked only when
+# there is a reason to.
+sweep_limit = 1000
+sweep_interval_s = 900
+# Ask a channel's live feed as well as its videos feed. Streams live in their
+# own tab, so without this one only appears once it has ended. Only channels
+# seen streaming are asked.
+poll_live_feeds = true
+
+# Ceilings on how much each endpoint may be asked inside one window, counted in
+# the database so a restart cannot forget them. They sit well above what idle
+# use spends, so they bite on a restart loop or a held down refresh button
+# rather than on ordinary polling. Zero means no ceiling and no counting.
+# See what has been spent with: weave budget
+[budget]
+window_s = 900
+feeds = 300
+browse = 40
+player = 60
+dislikes = 60
+twitch = 120
 
 [watched]
 # Fraction of the duration that counts as watched. Reaching the end always

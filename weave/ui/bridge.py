@@ -480,7 +480,14 @@ class Bridge(QObject):
 
     @Slot()
     def refresh(self) -> None:
-        """The button. Takes every channel and resets the timer."""
+        """The button. Sweeps every subscription at once and asks the most
+        overdue feeds, ignoring their intervals.
+
+        The sweep is one call and it covers everything you are subscribed to,
+        so pressing this does find whatever is new. What it does not do is ask
+        several hundred feeds at once, because the endpoint on the other end
+        is the same one either way.
+        """
         self._start_poll(force_all=True)
 
     @Slot()

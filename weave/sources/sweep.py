@@ -36,6 +36,10 @@ class SweptVideo:
     ext_id: str
     duration_s: int | None
     live_status: str | None
+    # Which channel posted it. This is what makes the sweep a detector as well
+    # as a filler: one call names every channel that has something new, so the
+    # feeds of the rest do not have to be asked to find out.
+    channel_id: str | None = None
 
     @property
     def key(self) -> str:
@@ -70,7 +74,11 @@ def parse_lines(text: str) -> list[SweptVideo]:
         if not is_video_id(ext_id) or ext_id in seen:
             continue
         seen.add(ext_id)
-        out.append(SweptVideo(ext_id, _optional_int(parts[1]), _optional_text(parts[2])))
+        # Older output had three fields. Tolerated so a partial line is still
+        # worth its duration rather than being dropped.
+        channel = _optional_text(parts[3]) if len(parts) > 3 else None
+        out.append(SweptVideo(ext_id, _optional_int(parts[1]), _optional_text(parts[2]),
+                              channel))
     return out
 
 
@@ -81,7 +89,7 @@ def fetch(cfg: Config, limit: int = 400, throttle: Throttle | None = None,
         "yt-dlp", "--no-warnings", "--flat-playlist",
         *cookie_args(cfg),
         "--playlist-end", str(max(1, limit)),
-        "--print", "%(id)s|%(duration)s|%(live_status)s",
+        "--print", "%(id)s|%(duration)s|%(live_status)s|%(channel_id)s",
         SUBSCRIPTIONS,
     ]
     try:

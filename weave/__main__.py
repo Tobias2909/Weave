@@ -10,14 +10,13 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from . import config, ids, imagecache, paths, themes, tokens
+from .budget import Budget
 from .sources import twitch
 from .db import Database
-from .net import Fetcher, Throttle
-from .classify import classify_channel
-from .sources import rss, subs, tabs
+from .net import Throttle
+from .sources import subs
 from .sources.resolve import ResolveError, resolve
 
 
@@ -80,8 +79,14 @@ def _cmd_channels(_args) -> int:
 
 
 def _cmd_poll(_args) -> int:
-    """Drives the same three phase poller the window uses, so there is one
-    implementation rather than a second simplified one that can drift."""
+    """Drives the same poller the window uses, so there is one implementation
+    rather than a second simplified one that can drift.
+
+    The window takes a small round a minute; here the rounds run back to back
+    until either nothing is due or the endpoint budget says that is enough.
+    The budget is the thing doing the protecting either way, so running this
+    is never worse for the endpoint than leaving the window open.
+    """
     from PySide6.QtCore import QCoreApplication
 
     from .poller import FeedPoller
@@ -107,6 +112,24 @@ def _cmd_poll(_args) -> int:
     poller.failure.connect(lambda source, message: failures.append(f"{source}, {message}"))
     poller.run()                                    # deliberately not start()
 
+    budget = Budget(db, cfg.budget_limits, cfg.budget_window_s)
+    rounds = 1
+    while True:
+        due = db.channels_due(cfg.feed_tiers, limit=1)
+        if not due:
+            break
+        if budget.allowance("feeds", 1).empty:
+            still = len(db.channels_due(cfg.feed_tiers, limit=100000))
+            wait = max(0, budget.allowance("feeds", 1).frees_at - int(time.time()))
+            print(f"  stopping, the feed budget is spent. {still} channels still due, "
+                  f"room again in about {wait // 60 + 1} min")
+            break
+        poller = FeedPoller(db, cfg, force_all=False)
+        poller.progress.connect(on_progress)
+        poller.failure.connect(lambda source, message: failures.append(f"{source}, {message}"))
+        poller.run()
+        rounds += 1
+
     print(" " * 40, end="\r")
     for line in failures[:10]:
         print(f"  problem {line}", file=sys.stderr)
@@ -118,42 +141,26 @@ def _cmd_poll(_args) -> int:
     return 1 if failures else 0
 
 
-def _cmd_classify(args) -> int:
-    """Backfill in one go, rather than waiting for the poller to work through
-    a few channels per cycle."""
+def _cmd_budget(_args) -> int:
+    """What has been asked of each endpoint inside the current window.
+
+    Every scraper failure here looks the same from the outside, exit zero with
+    no items, so being able to see that an endpoint was refused rather than
+    empty is most of the diagnosis.
+    """
     cfg = config.load()
     db = Database(paths.DB_FILE)
-    throttle = Throttle(cfg.max_concurrency, cfg.min_request_interval_s)
-
-    pending = db.channels_needing_classification(0, limit=999999)
-    total = len(pending)
-    if not total:
-        print(f"nothing to do, {db.unclassified_count()} videos are undecided and "
-              f"every channel has been asked recently")
+    budget = Budget(db, cfg.budget_limits, cfg.budget_window_s)
+    rows = budget.report()
+    minutes = budget.window_s // 60
+    if not rows:
+        print(f"nothing asked in the last {minutes} min")
         return 0
-    print(f"{total} channels to ask, {db.unclassified_count()} videos undecided")
-
-    marked_short = marked_long = failed = 0
-    with ThreadPoolExecutor(max_workers=cfg.max_concurrency) as pool:
-        futures = {pool.submit(classify_channel, db, row["key"], row["ext_id"], throttle):
-                   row["key"] for row in pending}
-        for index, future in enumerate(as_completed(futures), start=1):
-            try:
-                got_short, got_long = future.result()
-            except tabs.TabError as exc:
-                failed += 1
-                if args.verbose:
-                    print(f"  {futures[future]} failed, {exc}", file=sys.stderr)
-            else:
-                marked_short += got_short
-                marked_long += got_long
-            if sys.stdout.isatty():
-                print(f"  {index} of {total} channels", end="\r", flush=True)
-    if sys.stdout.isatty():
-        print(" " * 40, end="\r")
-    print(f"done, {marked_short} Shorts hidden, {marked_long} settled as long form, "
-          f"{failed} channels failed")
-    print(f"{db.unclassified_count()} videos are still undecided")
+    print(f"over the last {minutes} min")
+    for endpoint, sent, refused, limit in rows:
+        ceiling = str(limit) if limit else "no ceiling"
+        note = f", {refused} refused" if refused else ""
+        print(f"  {endpoint:9} {sent:5} sent of {ceiling}{note}")
     return 0
 
 
@@ -512,7 +519,9 @@ def main() -> int:
     remove.set_defaults(func=_cmd_remove)
 
     subparsers.add_parser("channels", help="list tracked channels").set_defaults(func=_cmd_channels)
-    subparsers.add_parser("poll", help="refresh every feed without a window").set_defaults(func=_cmd_poll)
+    subparsers.add_parser(
+        "poll", help="refresh due feeds without a window, until the budget stops it"
+    ).set_defaults(func=_cmd_poll)
     subparsers.add_parser("import", help="track every channel you subscribe to").set_defaults(func=_cmd_import)
 
     twitch_parser = subparsers.add_parser("twitch", help="connect this Twitch account")
@@ -544,10 +553,9 @@ def main() -> int:
                        help="show pictures that failed to load")
     cache.set_defaults(func=_cmd_cache)
 
-    classify = subparsers.add_parser(
-        "classify", help="ask every channel which of its videos are Shorts")
-    classify.add_argument("-v", "--verbose", action="store_true", help="name each failure")
-    classify.set_defaults(func=_cmd_classify)
+    budget = subparsers.add_parser(
+        "budget", help="how much each endpoint has been asked recently")
+    budget.set_defaults(func=_cmd_budget)
 
     group = subparsers.add_parser("group", help="organise channels into groups")
     group_actions = group.add_subparsers(dest="action", required=True)

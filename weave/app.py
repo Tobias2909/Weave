@@ -132,8 +132,11 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
     live_timer.timeout.connect(bridge.refreshLive)
     live_timer.start()
 
+    # A short tick taking whatever is due, rather than a long one taking
+    # everything at once. Same volume, spread out, and a channel that just
+    # became due waits a minute instead of a quarter of an hour.
     feed_timer = QTimer()
-    feed_timer.setInterval(cfg.feed_interval_s * 1000)
+    feed_timer.setInterval(cfg.tick_interval_s * 1000)
     feed_timer.timeout.connect(bridge.poll)
     feed_timer.start()
 

@@ -13,8 +13,13 @@ FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns:yt="http://www.youtube.com/xml/schemas/2015"
       xmlns:media="http://search.yahoo.com/mrss/"
       xmlns="http://www.w3.org/2005/Atom">
+  <yt:playlistId>UULFabcdefghijklmnopqrstuv</yt:playlistId>
   <yt:channelId>UCabcdefghijklmnopqrstuv</yt:channelId>
-  <title>Example Channel</title>
+  <title>Videos</title>
+  <author>
+    <name>Example Channel</name>
+    <uri>https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv</uri>
+  </author>
   <published>2019-12-31T00:00:00+00:00</published>
   <entry>
     <id>yt:video:aaaaaaaaaaa</id>
@@ -52,6 +57,78 @@ FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
   </entry>
 </feed>
 """
+
+
+# The mixed channel feed, which publishes its own channel id with the UC
+# prefix stripped off and has no playlist id. Measured against the live
+# endpoint, and the reason identity is read from the author block instead.
+CHANNEL_FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015"
+      xmlns:media="http://search.yahoo.com/mrss/"
+      xmlns="http://www.w3.org/2005/Atom">
+  <yt:channelId>abcdefghijklmnopqrstuv</yt:channelId>
+  <title>Example Channel</title>
+  <author>
+    <name>Example Channel</name>
+    <uri>https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv</uri>
+  </author>
+  <entry>
+    <yt:videoId>aaaaaaaaaaa</yt:videoId>
+    <yt:channelId>UCabcdefghijklmnopqrstuv</yt:channelId>
+    <title>Mixed feed entry</title>
+    <published>2020-01-02T03:04:05+00:00</published>
+  </entry>
+</feed>
+"""
+
+
+class Addresses(unittest.TestCase):
+    """A channel has one feed per tab, reached by rewriting the UC prefix of
+    its id into the playlist behind that tab."""
+
+    def test_one_playlist_per_tab(self):
+        channel = "UCabcdefghijklmnopqrstuv"
+        self.assertEqual(rss.playlist_id(channel, rss.VIDEOS), "UULFabcdefghijklmnopqrstuv")
+        self.assertEqual(rss.playlist_id(channel, rss.SHORTS), "UUSHabcdefghijklmnopqrstuv")
+        self.assertEqual(rss.playlist_id(channel, rss.LIVE), "UULVabcdefghijklmnopqrstuv")
+
+    def test_the_videos_tab_is_the_default_address(self):
+        self.assertEqual(
+            rss.feed_url("UCabcdefghijklmnopqrstuv"),
+            "https://www.youtube.com/feeds/videos.xml?playlist_id=UULFabcdefghijklmnopqrstuv")
+
+    def test_the_mixed_feed_is_addressed_by_channel(self):
+        self.assertEqual(
+            rss.feed_url("UCabcdefghijklmnopqrstuv", rss.CHANNEL),
+            "https://www.youtube.com/feeds/videos.xml?channel_id=UCabcdefghijklmnopqrstuv")
+
+
+class Kinds(unittest.TestCase):
+    """Which tab a feed came from is what a video's kind is, so nothing has to
+    be classified after the fact."""
+
+    def test_the_videos_feed_yields_long_form(self):
+        self.assertEqual(rss.parse(FEED, rss.VIDEOS).videos[0].is_short, False)
+
+    def test_the_shorts_feed_yields_shorts(self):
+        self.assertEqual(rss.parse(FEED, rss.SHORTS).videos[0].is_short, True)
+
+    def test_the_mixed_feed_says_nothing(self):
+        self.assertIsNone(rss.parse(CHANNEL_FEED, rss.CHANNEL).videos[0].is_short)
+
+
+class Identity(unittest.TestCase):
+    def test_the_playlist_feed_titles_the_tab_not_the_channel(self):
+        # <title> here is "Videos". Taking it would rename every channel.
+        result = rss.parse(FEED, rss.VIDEOS)
+        self.assertEqual(result.channel_title, "Example Channel")
+
+    def test_the_mixed_feed_publishes_a_truncated_channel_id(self):
+        # Its root yt:channelId has no UC prefix. Using it would key every
+        # video to a channel that does not exist.
+        result = rss.parse(CHANNEL_FEED, rss.CHANNEL)
+        self.assertEqual(result.channel_id, "UCabcdefghijklmnopqrstuv")
+        self.assertEqual(result.videos[0].channel_key, "yt:UCabcdefghijklmnopqrstuv")
 
 
 class Parse(unittest.TestCase):

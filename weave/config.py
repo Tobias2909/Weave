@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from . import paths
+from .db import FeedTiers
 
 DEFAULTS: dict[str, dict[str, Any]] = {
     "youtube": {
@@ -25,35 +26,56 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     },
     "player": {"command": "auto", "ipc_socket": "auto", "watch_later_dir": "auto"},
     "poll": {
-        "feed_interval_s": 900,
+        # A small round, often, rather than a large round rarely. What the
+        # feed endpoint objects to is a burst, not a day's worth of requests,
+        # so the same hourly volume spread evenly is far safer and reaches
+        # every channel sooner.
+        "tick_interval_s": 60,
+        "channels_per_tick": 15,
+        # How often a channel is asked, by how recently it published. The
+        # shortest is a quarter of an hour because the feed itself answers
+        # with Cache-Control max-age=900, so asking sooner returns the same
+        # cached body. Over half of a large subscription list has not posted
+        # in three months, and polling those at the same rate as the rest is
+        # what made a full lap take over an hour.
+        "feed_interval_s": 900,          # posted within active_days
+        "warm_interval_s": 3600,         # within warm_days
+        "cold_interval_s": 21600,        # within cold_days
+        "frozen_interval_s": 86400,      # longer ago than that, or never
+        "active_days": 7,
+        "warm_days": 30,
+        "cold_days": 90,
         "live_interval_s": 90,
-        # The gap is global, so a full sweep costs channels times the gap
-        # whatever the concurrency is. At 100 ms, several hundred channels take
-        # under a minute, which is fine off the interface thread. Raising the
-        # gap makes a large subscription list crawl.
-        # Gentler than it was. The feed endpoint pushes back on a burst by
-        # answering 404 or 500 rather than saying it is busy, which looks like
-        # a few hundred channels having vanished.
+        # The gap is global, so a round costs channels times the gap whatever
+        # the concurrency is. Gentler than it was: the feed endpoint pushes
+        # back on a burst by answering 404 or 500 rather than saying it is
+        # busy, which looks like a few hundred channels having vanished.
         "max_concurrency": 4,
         "min_request_interval_ms": 220,
-        # How many channels one round asks about. Several hundred at once is
-        # what provokes the pushback, and the stalest go first, so everything
-        # comes round within a few rounds anyway.
-        "channels_per_cycle": 80,
-        # How deep the subscriptions sweep goes when filling in durations.
-        # It paginates at roughly 77 ids a second, so a thousand costs about
-        # thirteen seconds and covers far more than what is on screen.
+        # How deep the subscriptions sweep goes, and how often it runs. It
+        # paginates at roughly 77 ids a second, so a thousand costs about
+        # thirteen seconds. One sweep names every subscribed channel with
+        # something new, which is what lets the per channel feeds be asked
+        # only when there is a reason to.
         "sweep_limit": 1000,
-        # How many undecided videos get the Shorts redirect test per cycle.
-        # That test is only the fallback for a video in neither channel
-        # listing, so it stays small.
-        "shorts_per_cycle": 20,
-        # How many channels get their listings read per cycle, and how long a
-        # channel's answer is trusted before asking again. A channel whose
-        # videos are all decided is never asked, so in the steady state this is
-        # only the channels that just gained a video.
-        "classify_per_cycle": 40,
-        "classify_interval_s": 21600,
+        "sweep_interval_s": 900,
+        # Ask a channel's live feed as well as its videos feed. Only channels
+        # that have been seen streaming are asked, so this is a handful of
+        # extra requests rather than a second one per channel.
+        "poll_live_feeds": True,
+    },
+    # Ceilings on how much each endpoint may be asked inside one window,
+    # counted in the database so a restart cannot forget them. These are well
+    # above what idle use spends, so they bite on a restart loop or a held
+    # down refresh button rather than on ordinary polling. Zero means no
+    # ceiling and no counting.
+    "budget": {
+        "window_s": 900,
+        "feeds": 300,
+        "browse": 40,
+        "player": 60,
+        "dislikes": 60,
+        "twitch": 120,
     },
     "watched": {"threshold": 0.85},
     "twitch": {
@@ -158,24 +180,46 @@ class Config:
         return str(self.get("player", "watch_later_dir"))
 
     @property
-    def channels_per_cycle(self) -> int:
-        return max(1, int(self.get("poll", "channels_per_cycle")))
+    def channels_per_tick(self) -> int:
+        return max(1, int(self.get("poll", "channels_per_tick")))
+
+    @property
+    def tick_interval_s(self) -> int:
+        return max(5, int(self.get("poll", "tick_interval_s")))
+
+    @property
+    def sweep_interval_s(self) -> int:
+        return max(0, int(self.get("poll", "sweep_interval_s")))
+
+    @property
+    def poll_live_feeds(self) -> bool:
+        return bool(self.get("poll", "poll_live_feeds"))
+
+    @property
+    def feed_tiers(self) -> FeedTiers:
+        return FeedTiers(
+            hot_days=max(1, int(self.get("poll", "active_days"))),
+            warm_days=max(1, int(self.get("poll", "warm_days"))),
+            cold_days=max(1, int(self.get("poll", "cold_days"))),
+            hot_s=max(60, int(self.get("poll", "feed_interval_s"))),
+            warm_s=max(60, int(self.get("poll", "warm_interval_s"))),
+            cold_s=max(60, int(self.get("poll", "cold_interval_s"))),
+            frozen_s=max(60, int(self.get("poll", "frozen_interval_s"))),
+        )
+
+    @property
+    def budget_window_s(self) -> int:
+        return max(60, int(self.get("budget", "window_s")))
+
+    @property
+    def budget_limits(self) -> dict[str, int]:
+        keys = ("feeds", "browse", "player", "dislikes", "twitch")
+        return {key: max(0, int(self.get("budget", key))) for key in keys}
 
     @property
     def sweep_limit(self) -> int:
         return max(0, int(self.get("poll", "sweep_limit")))
 
-    @property
-    def shorts_per_cycle(self) -> int:
-        return max(0, int(self.get("poll", "shorts_per_cycle")))
-
-    @property
-    def classify_per_cycle(self) -> int:
-        return max(0, int(self.get("poll", "classify_per_cycle")))
-
-    @property
-    def classify_interval_s(self) -> int:
-        return max(0, int(self.get("poll", "classify_interval_s")))
 
 
 def load(path: Path | None = None) -> Config:

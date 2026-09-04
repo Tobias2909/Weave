@@ -1,32 +1,45 @@
 """Background work.
 
-A refresh runs in three phases, and each one is allowed to fail on its own.
-RSS is the only phase the feed truly needs, so a broken login or a missing
-yt-dlp costs the duration badges and the Shorts filter while the feed itself
-keeps working.
+A refresh runs in two phases, and each one is allowed to fail on its own. RSS
+is the only phase the feed truly needs, so a broken login or a missing yt-dlp
+costs the duration badges while the feed itself keeps working.
 
-  1  channel RSS, which brings new videos with their publish times
-  2  the subscriptions sweep, which joins in durations and live flags
-  3  the Shorts redirect test on whatever is still undecided
+  1  the subscriptions sweep, one paginated call that names every subscribed
+     channel with something new and joins in durations and live flags
+  2  channel RSS, which brings those videos in with their exact publish times
 
-Concurrency is bounded twice over, by the executor and by the global throttle,
-so a few hundred channels cannot become a few hundred simultaneous requests.
+That order is the point. The sweep is one call covering every subscription, so
+the feeds only have to be asked where there is a reason to, and a new video
+reaches the grid within one sweep interval instead of within a full lap of
+several hundred channels.
+
+Rounds are small and frequent rather than large and rare. What the feed
+endpoint objects to is a burst; the same hourly volume spread evenly is both
+safer and quicker to come round. Each channel carries its own interval, from
+how recently it published, so a channel that has not posted in years does not
+cost the same as one that posts daily.
+
+Concurrency is bounded three times over, by the executor, by the global
+throttle, and by a persistent per endpoint budget that a restart cannot
+forget.
 """
 
 from __future__ import annotations
 
+import random
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-from .classify import classify_channel
+from .budget import BROWSE, DISLIKES, FEEDS, PLAYER, TWITCH, Budget
+from .ids import channel_key
 from .imagecache import qml_source
 from .config import Config
 from .db import Database
 from .net import Cancelled as FetchCancelled
-from .net import Fetcher, Throttle
+from .net import Fetcher, HttpError, Throttle
 from .process import Cancelled as ProcessCancelled
 from .process import run as run_process
 from .sources import channel as channel_source
@@ -34,7 +47,17 @@ from . import tokens
 from .sources import comments as comment_source
 from .sources import livecheck
 from .sources import dislikes as dislike_source
-from .sources import rss, shorts, subs, sweep, tabs, twitch
+from .sources import rss, subs, sweep, twitch
+
+
+def _spend(db: Database, cfg: Config, endpoint: str, count: int = 1, refused: int = 0) -> None:
+    """Count what a one shot worker asked for.
+
+    These paths cannot burst, since each is one deliberate click, so they are
+    counted but never refused. Counting them anyway is what makes the report
+    the whole truth rather than only the polling half of it.
+    """
+    Budget(db, cfg.budget_limits, cfg.budget_window_s).spend(endpoint, count, refused)
 
 
 class FeedPoller(QThread):
@@ -58,15 +81,15 @@ class FeedPoller(QThread):
 
     def run(self) -> None:
         fetcher = Fetcher(self._throttle, cancel=self._cancel)
+        budget = Budget(self._db, self._cfg.budget_limits, self._cfg.budget_window_s)
         polled = touched = failures = 0
         try:
-            polled, touched, failures = self._phase_rss(fetcher)
+            # The sweep first, because what it finds decides which feeds are
+            # worth asking in the same tick.
+            touched += self._phase_sweep(budget)
             if not self._cancel.is_set():
-                touched += self._phase_sweep()
-            if not self._cancel.is_set():
-                self._phase_classify()
-            if not self._cancel.is_set():
-                self._phase_shorts(fetcher)
+                polled, rss_touched, failures = self._phase_rss(fetcher, budget)
+                touched += rss_touched
         except (FetchCancelled, ProcessCancelled):
             pass
         finally:
@@ -74,24 +97,129 @@ class FeedPoller(QThread):
             self._db.close()
         self.finished_poll.emit(polled, touched, failures)
 
+    def _budget_notice(self, endpoint: str, allowance) -> None:
+        """Say when a ceiling is what stopped work, but not on every tick.
+
+        A silent no-op is the worst possible behaviour here, because it is
+        indistinguishable from the app being broken. Repeating it once a
+        minute would be almost as bad.
+        """
+        stamp = int(self._db.get_state(f"budget_notice.{endpoint}") or 0)
+        now = int(time.time())
+        if now - stamp < 300:
+            return
+        self._db.set_state(f"budget_notice.{endpoint}", str(now))
+        wait = max(0, allowance.frees_at - now)
+        self.failure.emit(
+            endpoint,
+            f"asked as much as it should for now, {wait // 60 + 1} min until there is room")
+
     # ---- phase 1 ---------------------------------------------------------
 
-    def _phase_rss(self, fetcher: Fetcher) -> tuple[int, int, int]:
-        # Even a deliberate refresh takes a slice rather than everything. The
-        # stalest go first, so the whole list comes round within a few rounds,
-        # and nothing asks for several hundred feeds at once.
-        per_round = self._cfg.channels_per_cycle
-        channels = self._db.channels_due(0 if self._force_all else self._cfg.feed_interval_s,
-                                         limit=per_round)
-        total = len(channels)
-        if not total:
+    def _phase_sweep(self, budget: Budget) -> int:
+        """One call over every subscription. Fills in durations and live
+        flags, and names the channels that have something new."""
+        if not self._cfg.sweep_limit:
+            return 0
+        interval = self._cfg.sweep_interval_s
+        last = int(self._db.get_state("sweep_at") or 0)
+        if not self._force_all and interval and time.time() - last < interval:
+            return 0
+        allowance = budget.allowance(BROWSE, 1)
+        if allowance.empty:
+            self._budget_notice(BROWSE, allowance)
+            return 0
+
+        self.progress.emit("durations", 0, 1)
+        budget.spend(BROWSE, 1)
+        try:
+            videos = sweep.fetch(self._cfg, self._cfg.sweep_limit, self._throttle,
+                                 cancel=self._cancel)
+        except ProcessCancelled:
+            return 0
+        except sweep.SweepError as exc:
+            budget.spend(BROWSE, 0, refused=1)
+            self.failure.emit("durations", str(exc))
+            return 0
+
+        # Stamped only on an answer, so a failure is retried on the next tick
+        # rather than waiting out the interval.
+        self._db.set_state("sweep_at", str(int(time.time())))
+        filled = self._db.fill_details([(v.key, v.duration_s, v.live_status) for v in videos])
+
+        unknown = self._db.unknown_video_keys([v.key for v in videos])
+        if unknown:
+            owners = {channel_key(v.channel_id) for v in videos
+                      if v.key in unknown and v.channel_id}
+            promoted = self._db.promote_channels(owners)
+            if promoted:
+                self.progress.emit("new", promoted, promoted)
+        self.progress.emit("durations", 1, 1)
+        return filled
+
+    # ---- phase 2 ---------------------------------------------------------
+
+    def _feed_jobs(self, rows: list) -> list[tuple[str, str, str]]:
+        """One job per feed to fetch, as key, channel id and which tab.
+
+        A channel gets its videos feed, and its live feed as well if it has
+        ever been seen streaming. Streams live in their own tab, so without
+        that second feed a stream would only appear once it had ended, and
+        most channels have never streamed so asking them all would double the
+        request count for nothing.
+        """
+        jobs = [(row["key"], row["ext_id"], row["feed_variant"] or rss.VIDEOS)
+                for row in rows]
+        if self._cfg.poll_live_feeds:
+            streamers = self._db.channels_that_stream()
+            jobs += [(row["key"], row["ext_id"], rss.LIVE) for row in rows
+                     if row["key"] in streamers and (row["feed_variant"] or "") != rss.CHANNEL]
+        return jobs
+
+    def _fetch_one(self, fetcher: Fetcher, ext_id: str, kind: str) -> tuple[object, int, str | None]:
+        """Fetch one feed, returning the result, how many requests it cost and
+        a variant to remember.
+
+        A 404 on a tab feed is ambiguous. It means the channel has no such tab,
+        and it also means the endpoint is refusing us, which it does with a 404
+        rather than with a busy signal. The mixed channel feed is the
+        discriminator: it answers in the first case and refuses in the second,
+        so a fallback only sticks when that call succeeds.
+        """
+        try:
+            return rss.fetch(fetcher, ext_id, kind), 1, None
+        except HttpError as exc:
+            if exc.status != 404 or kind in (rss.CHANNEL, rss.LIVE):
+                raise
+            result = rss.fetch(fetcher, ext_id, rss.CHANNEL)
+            return result, 2, rss.CHANNEL
+
+    def _phase_rss(self, fetcher: Fetcher, budget: Budget) -> tuple[int, int, int]:
+        rows = self._db.channels_due(self._cfg.feed_tiers,
+                                     limit=self._cfg.channels_per_tick,
+                                     force=self._force_all)
+        if not rows:
             return 0, 0, 0
+        jobs = self._feed_jobs(rows)
+
+        allowance = budget.allowance(FEEDS, len(jobs))
+        if allowance.empty:
+            self._budget_notice(FEEDS, allowance)
+            return 0, 0, 0
+        jobs = jobs[:allowance.granted]
+        # Shuffled so the same order is not sent every time. NewPipe does the
+        # same thing and says why: a fixed order over a large subscription list
+        # is itself identifying.
+        random.shuffle(jobs)
 
         touched = failures = done = 0
+        spent = 0
         refused: list[str] = []
+        polled: set[str] = set()
+        total = len(jobs)
         with ThreadPoolExecutor(max_workers=self._cfg.max_concurrency) as pool:
-            futures = {pool.submit(rss.fetch, fetcher, row["ext_id"]): row["key"]
-                       for row in channels}
+            futures = {pool.submit(self._fetch_one, fetcher, ext_id, kind): (key, kind)
+                       for key, ext_id, kind in jobs}
             for future in as_completed(futures):
                 if self._cancel.is_set():
                     # Drops what has not started. Anything already in flight
@@ -99,13 +227,14 @@ class FeedPoller(QThread):
                     # timeout is kept short.
                     pool.shutdown(wait=False, cancel_futures=True)
                     break
-                key = futures[future]
+                key, kind = futures[future]
                 try:
-                    result = future.result()
+                    result, cost, variant = future.result()
                 except (FetchCancelled, ProcessCancelled):
                     break
                 except Exception as exc:                            # noqa: BLE001
                     failures += 1
+                    spent += 1
                     message = f"{type(exc).__name__}: {exc}"
                     self._db.mark_polled(key, message)
                     # Not one report per channel. The endpoint answers a burst
@@ -113,12 +242,17 @@ class FeedPoller(QThread):
                     # say one thing, not a few hundred things.
                     refused.append(key)
                 else:
+                    spent += cost
+                    if variant:
+                        self._db.set_feed_variant(key, variant)
                     touched += self._db.upsert_videos(result.videos)
                     if result.channel_title:
                         self._db.add_channel(key, "youtube", key.split(":", 1)[1],
                                              result.channel_title)
                     self._db.mark_polled(key, None)
-                    if not result.videos and self._db.channel_has_videos(key):
+                    polled.add(key)
+                    if (kind != rss.LIVE and not result.videos
+                            and self._db.channel_has_videos(key)):
                         # Zero entries with no error is what a broken source
                         # looks like. But a channel that has never produced a
                         # video is simply empty, and there are plenty of those
@@ -128,89 +262,14 @@ class FeedPoller(QThread):
                 done += 1
                 self.progress.emit("feeds", done, total)
 
+        budget.spend(FEEDS, spent, refused=len(refused))
         if refused:
             self.failure.emit(
                 "feeds",
-                f"{len(refused)} of {total} channels did not answer. The feed endpoint "
+                f"{len(refused)} of {total} feeds did not answer. The feed endpoint "
                 f"replies to a burst with a refusal rather than saying it is busy, so "
                 f"this usually clears on its own")
-        return total, touched, failures
-
-    # ---- phase 2 ---------------------------------------------------------
-
-    def _phase_sweep(self) -> int:
-        if not self._cfg.sweep_limit:
-            return 0
-        self.progress.emit("durations", 0, 1)
-        try:
-            videos = sweep.fetch(self._cfg, self._cfg.sweep_limit, self._throttle,
-                                 cancel=self._cancel)
-        except ProcessCancelled:
-            return 0
-        except sweep.SweepError as exc:
-            self.failure.emit("durations", str(exc))
-            return 0
-        filled = self._db.fill_details([(v.key, v.duration_s, v.live_status) for v in videos])
-        self.progress.emit("durations", 1, 1)
-        return filled
-
-    # ---- phase 3 ---------------------------------------------------------
-
-    def _phase_classify(self) -> None:
-        limit = self._cfg.classify_per_cycle
-        if not limit:
-            return
-        channels = self._db.channels_needing_classification(
-            self._cfg.classify_interval_s, limit)
-        total = len(channels)
-        if not total:
-            return
-
-        done = 0
-        with ThreadPoolExecutor(max_workers=self._cfg.max_concurrency) as pool:
-            futures = {
-                pool.submit(classify_channel, self._db, row["key"], row["ext_id"],
-                            self._throttle, self._cancel): row["key"]
-                for row in channels
-            }
-            for future in as_completed(futures):
-                if self._cancel.is_set():
-                    pool.shutdown(wait=False, cancel_futures=True)
-                    return
-                try:
-                    future.result()
-                except ProcessCancelled:
-                    return
-                except tabs.TabError as exc:
-                    self.failure.emit(futures[future], f"listing, {exc}")
-                except Exception as exc:                            # noqa: BLE001
-                    self.failure.emit(futures[future], f"{type(exc).__name__}: {exc}")
-                done += 1
-                self.progress.emit("kinds", done, total)
-
-    # ---- phase 4 ---------------------------------------------------------
-
-    def _phase_shorts(self, fetcher: Fetcher) -> None:
-        limit = self._cfg.shorts_per_cycle
-        if not limit:
-            return
-        candidates = self._db.videos_needing_short_check(limit)
-        total = len(candidates)
-        for index, row in enumerate(candidates, start=1):
-            if self._cancel.is_set():
-                return
-            try:
-                self._db.set_short(row["key"], shorts.classify(fetcher, row["ext_id"]))
-            except FetchCancelled:
-                return
-            except shorts.UndecidedError:
-                # Left unclassified on purpose, so it is retried later rather
-                # than filed wrongly.
-                pass
-            except Exception as exc:                                # noqa: BLE001
-                self.failure.emit("shorts", f"{type(exc).__name__}: {exc}")
-                return
-            self.progress.emit("shorts", index, total)
+        return len(polled), touched, failures
 
 
 class ChannelAdder(QThread):
@@ -262,11 +321,13 @@ class SubsImporter(QThread):
         self._cancel.set()
 
     def run(self) -> None:
+        _spend(self._db, self._cfg, BROWSE)
         try:
             channels = subs.fetch(self._cfg, self._throttle, cancel=self._cancel)
         except ProcessCancelled:
             return
         except subs.ImportError_ as exc:
+            _spend(self._db, self._cfg, BROWSE, count=0, refused=1)
             self.failed.emit(str(exc))
             return
         added = 0
@@ -298,11 +359,13 @@ class ChannelDetailsFetcher(QThread):
         self._cancel.set()
 
     def run(self) -> None:
+        _spend(self._db, self._cfg, BROWSE)
         try:
             details = channel_source.fetch(self._ext_id, self._throttle, self._cancel)
         except ProcessCancelled:
             return
         except channel_source.DetailsError as exc:
+            _spend(self._db, self._cfg, BROWSE, count=0, refused=1)
             self.failed.emit(self._key, str(exc))
             return
         self._db.set_channel_details(self._key, details.title, details.avatar_url,
@@ -402,6 +465,10 @@ class LiveWatcher(QThread):
             return
         try:
             client = twitch.Client(client_id, stored, on_tokens=tokens.save)
+            # Two calls, the identity and the follow list. Twitch publishes a
+            # generous points per minute limit and answers with a real 429, so
+            # this is counted for the report rather than to hold anything back.
+            _spend(self._db, self._cfg, TWITCH, 2)
             streams = client.followed_streams(client.account_id())
 
             # Channels added by hand are not necessarily followed, so they are
@@ -410,6 +477,7 @@ class LiveWatcher(QThread):
                        for row in self._db.channels(platform="twitch")}
             missing = sorted(tracked - {stream.login for stream in streams})
             if missing and not self._cancel.is_set():
+                _spend(self._db, self._cfg, TWITCH)
                 streams.extend(client.streams_for(missing))
         except twitch.NeedsLogin:
             self.needsLogin.emit()
@@ -451,14 +519,23 @@ class LiveWatcher(QThread):
         """Give the YouTube streams a viewer count so they order against the
         Twitch ones, and drop the ones that have finished."""
         found = 0
-        for row in self._db.live_youtube():
+        rows = self._db.live_youtube()
+        # One call per stream, every ninety seconds, is the busiest thing here
+        # after the feeds, so it is held to a ceiling like they are. Trimmed
+        # rather than skipped: the ones left out keep their old count for one
+        # more cycle instead of the whole bar going stale.
+        budget = Budget(self._db, self._cfg.budget_limits, self._cfg.budget_window_s)
+        rows = rows[:budget.allowance(PLAYER, len(rows)).granted]
+        for row in rows:
             if self._cancel.is_set():
                 break
+            budget.spend(PLAYER)
             try:
                 state = livecheck.check(self._cfg, row["ext_id"], self._throttle, self._cancel)
             except ProcessCancelled:
                 break
             except livecheck.LiveCheckError:
+                budget.spend(PLAYER, count=0, refused=1)
                 continue
             self._db.set_live_state(row["key"], state.viewers, state.still_live)
             found += 1 if state.still_live else 0
@@ -511,9 +588,11 @@ class DetailFetcher(QThread):
             self._db.close()
 
     def _fetch_votes(self, fetcher: Fetcher) -> None:
+        _spend(self._db, self._cfg, DISLIKES)
         try:
             found = dislike_source.fetch(fetcher, self._ext_id)
         except Exception as exc:                                    # noqa: BLE001
+            _spend(self._db, self._cfg, DISLIKES, count=0, refused=1)
             self.failed.emit("dislikes", f"{type(exc).__name__}: {exc}")
             return
         if found.dislikes is not None:
@@ -521,12 +600,14 @@ class DetailFetcher(QThread):
             self.votes.emit(self._key, found.dislikes)
 
     def _fetch_comments(self) -> None:
+        _spend(self._db, self._cfg, PLAYER)
         try:
             threads = comment_source.fetch(self._cfg, self._url, self._threads,
                                            self._throttle, self._cancel)
         except ProcessCancelled:
             return
         except comment_source.CommentsError as exc:
+            _spend(self._db, self._cfg, PLAYER, count=0, refused=1)
             self.failed.emit("comments", str(exc))
             return
         self.comments.emit(self._key, [self._as_map(thread) for thread in threads])

@@ -76,11 +76,49 @@ feed joins the missing columns in by video id.
 
 That split is deliberate. RSS is the part that has to keep working, so when the
 login rots or the private endpoints change shape, what you lose is duration
-badges and the Shorts filter rather than the feed itself.
+badges rather than the feed itself.
 
-Shorts are found without a request wherever possible. A known duration past
-three minutes settles it for free, and only videos short enough to actually be
-one get a lookup.
+A channel has one feed per tab rather than only the one address, reached by
+rewriting the `UC` prefix of its id into the playlist behind that tab. `UULF`
+is long form video, `UUSH` is Shorts and `UULV` is streams, and they are
+disjoint. Weave asks for the videos feed, so **Shorts never enter the database
+at all** and nothing has to classify anything afterwards. It asks for the live
+feed as well, but only of channels it has seen streaming, since a stream lives
+in its own tab and would otherwise appear only once it had ended.
+
+## How often it asks
+
+Weave takes a small round every minute rather than a large one every quarter of
+an hour. What the feed endpoint objects to is a burst, not a day of requests,
+and it says so by refusing rather than by asking you to wait, so the same
+volume spread evenly is both safer and quicker to come round.
+
+Each channel carries its own interval, worked out from how recently it
+published. A channel that posted this week is asked every quarter of an hour, a
+channel silent for three months every six hours, and one silent for a year once
+a day. Over half of a large subscription list is in that last group, and asking
+those as often as the rest is what makes a full lap take hours.
+
+A quarter of an hour is the floor because the feed itself answers with
+`Cache-Control: max-age=900`. Asking again sooner returns the same cached body.
+
+None of that would catch a dormant channel posting again quickly, so the
+subscriptions sweep does. It is one paginated call covering every subscription,
+it runs once a quarter of an hour, and any video in it that Weave has never
+seen puts its channel at the front of the queue. So a new video reaches the
+grid within one sweep whoever posted it.
+
+Underneath all of it sits a ceiling per endpoint, counted in the database so
+that restarting cannot forget it. Freshness alone cannot prevent a flood. With
+more channels than one round covers, the ones a round did not reach are still
+legitimately due a second later, so six launches in five minutes send six full
+rounds and every request in them passes its own freshness check. The ceilings
+sit well above what ordinary polling spends, so they bite on a restart loop or
+a held down refresh button rather than on normal use.
+
+```sh
+python -m weave budget
+```
 
 ## Connecting Twitch
 
@@ -367,7 +405,8 @@ python -m unittest discover -s tests -t .
 
 They cover the parts where a silent mistake would be expensive. Video and
 channel identity, the RSS parser, the watched rule, display formatting, the
-storage rules, the Shorts decision, resume position lookup, and cancellation.
+storage rules, the polling schedule, the endpoint budget, resume position
+lookup, and cancellation.
 There are no interface tests, because they cost more than they find.
 
 ## A note on how this talks to YouTube
