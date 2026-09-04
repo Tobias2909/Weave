@@ -48,6 +48,38 @@ USER_AGENT = f"Weave/{__version__} (+https://github.com/Tobias2909/Weave)"
 MAX_PARALLEL = 6
 REQUEST_TIMEOUT_S = 20.0
 
+# A picture that will not load is a picture that does not appear, which the eye
+# already reports. Saying so once per picture as well turns a bad minute on the
+# network into hundreds of console lines saying the same thing, so failures are
+# counted and written down instead, and read back with the cache subcommand.
+FAILURE_LOG = "failures.log"
+MAX_LOGGED = 200
+RETRY_AFTER_S = 1.5
+
+
+def _record(directory: Path, url: str, reason: str) -> None:
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / FAILURE_LOG
+        lines = path.read_text().splitlines() if path.exists() else []
+        lines.append(f"{int(time.time())}\t{reason}\t{url}")
+        path.write_text("\n".join(lines[-MAX_LOGGED:]) + "\n")
+    except OSError:
+        pass
+
+
+def failures(directory: Path) -> list[tuple[int, str, str]]:
+    path = directory / FAILURE_LOG
+    try:
+        rows = []
+        for line in path.read_text().splitlines():
+            parts = line.split("\t")
+            if len(parts) == 3 and parts[0].isdigit():
+                rows.append((int(parts[0]), parts[1], parts[2]))
+        return rows
+    except OSError:
+        return []
+
 
 def qml_source(url: str | None) -> str:
     """Wrap a picture URL so QML fetches it through the cache.
@@ -87,12 +119,11 @@ class _Response(QQuickImageResponse, QRunnable):
 
     def run(self) -> None:
         try:
-            if self._load_from_disk() or self._download():
-                pass
-            else:
-                self._error = f"could not load {self._url}"
+            self._load_from_disk() or self._download()
         except Exception as exc:                                    # noqa: BLE001
-            self._error = f"{type(exc).__name__}: {exc}"
+            _record(self._path.parent.parent, self._url, type(exc).__name__)
+        # No error string on purpose. Qt logs one line per failed picture, and
+        # a view full of them during a bad minute buries everything else.
         self.finished.emit()
 
     def _fresh(self) -> bool:
@@ -107,17 +138,34 @@ class _Response(QQuickImageResponse, QRunnable):
         return self._image.load(str(self._path))
 
     def _download(self) -> bool:
-        response = requests.get(self._url, timeout=REQUEST_TIMEOUT_S,
-                                headers={"User-Agent": USER_AGENT})
-        if response.status_code != 200:
-            self._error = f"HTTP {response.status_code} for {self._url}"
-            return False
-        payload = response.content
-        if not self._image.loadFromData(payload):
-            self._error = f"unreadable image at {self._url}"
-            return False
-        self._store(payload)
-        return True
+        """One retry, because a picture that failed on a bad connection will
+        usually load a moment later, and giving up leaves a hole until the view
+        is visited again."""
+        reason = ""
+        for attempt in (0, 1):
+            if attempt:
+                time.sleep(RETRY_AFTER_S)
+            try:
+                response = requests.get(self._url, timeout=REQUEST_TIMEOUT_S,
+                                        headers={"User-Agent": USER_AGENT})
+            except requests.RequestException as exc:
+                reason = type(exc).__name__
+                continue
+            if response.status_code != 200:
+                reason = f"HTTP {response.status_code}"
+                # Only a server that is struggling is worth asking twice.
+                if response.status_code not in (429, 500, 502, 503, 504):
+                    break
+                continue
+            payload = response.content
+            if not self._image.loadFromData(payload):
+                reason = "unreadable"
+                break
+            self._store(payload)
+            return True
+
+        _record(self._path.parent.parent, self._url, reason or "failed")
+        return False
 
     def _store(self, payload: bytes) -> None:
         """Write through a temporary file in the same directory, so a picture

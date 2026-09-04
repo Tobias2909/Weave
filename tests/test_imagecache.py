@@ -108,3 +108,40 @@ class Housekeeping(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FailureRecord(unittest.TestCase):
+    """A picture that will not load is already visible as a gap. Saying so once
+    per picture as well turns a bad minute on the network into hundreds of
+    console lines, so they are written down instead."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name) / "images"
+        self.dir.mkdir(parents=True)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_nothing_recorded_at_first(self):
+        self.assertEqual(imagecache.failures(self.dir), [])
+
+    def test_a_failure_is_kept_with_its_reason(self):
+        imagecache._record(self.dir, "https://x/a.jpg", "HTTP 404")
+        rows = imagecache.failures(self.dir)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0][1], rows[0][2]), ("HTTP 404", "https://x/a.jpg"))
+
+    def test_the_record_is_bounded(self):
+        # A long outage must not grow a file without end.
+        for n in range(imagecache.MAX_LOGGED + 40):
+            imagecache._record(self.dir, f"https://x/{n}.jpg", "ConnectionError")
+        self.assertEqual(len(imagecache.failures(self.dir)), imagecache.MAX_LOGGED)
+
+    def test_a_damaged_record_is_not_a_crash(self):
+        (self.dir / imagecache.FAILURE_LOG).write_text("nonsense\nalso nonsense\n")
+        self.assertEqual(imagecache.failures(self.dir), [])
+
+    def test_recording_into_a_missing_directory_is_harmless(self):
+        imagecache._record(self.dir / "gone", "https://x/a.jpg", "HTTP 404")
+        self.assertEqual(len(imagecache.failures(self.dir / "gone")), 1)

@@ -301,6 +301,24 @@ def _cmd_cache(args) -> int:
               f"over the ceiling, {(freed + more) / 1024 / 1024:.1f} MB")
         return 0
 
+    if args.problems:
+        rows = imagecache.failures(directory)
+        if not rows:
+            print("no pictures have failed to load")
+            return 0
+        import collections
+        import datetime
+
+        kinds = collections.Counter(reason for _when, reason, _url in rows)
+        newest = datetime.datetime.fromtimestamp(rows[-1][0]).strftime("%Y %m %d %H:%M")
+        print(f"{len(rows)} recorded failures, most recent {newest}")
+        for reason, count in kinds.most_common():
+            print(f"  {count:>5}  {reason}")
+        print("\nthe last few")
+        for when, reason, url in rows[-5:]:
+            print(f"  {reason:<24} {url[:70]}")
+        return 0
+
     total = imagecache.size_bytes(directory)
     files = sum(1 for path in directory.rglob("*") if path.is_file()) if directory.exists() else 0
     print(f"image cache at {directory}")
@@ -522,6 +540,8 @@ def main() -> int:
     cache = subparsers.add_parser("cache", help="report or clean the image cache")
     cache.add_argument("--prune", action="store_true", help="drop what is past the retention window")
     cache.add_argument("--clear", action="store_true", help="drop everything")
+    cache.add_argument("--problems", action="store_true",
+                       help="show pictures that failed to load")
     cache.set_defaults(func=_cmd_cache)
 
     classify = subparsers.add_parser(
