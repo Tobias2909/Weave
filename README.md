@@ -171,7 +171,9 @@ back to the top.
 
 A suggestion carries a view count and a duration. It carries no upload date and
 no like count, measured, and asking for those would be one request per card, so
-they stay empty on the card and arrive in the panel when you open it.
+they stay empty on the card and arrive in the panel when you open it. Playlist
+entries carry a view count too. History entries mostly do not, which is
+YouTube's answer rather than a gap here.
 
 ```sh
 python -m weave recommended

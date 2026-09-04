@@ -64,6 +64,7 @@ class Bridge(QObject):
     groupsChanged = Signal()
     playlistsChanged = Signal()
     noticeChanged = Signal()
+    searchEnded = Signal()
     boxesChanged = Signal()
     viewChanged = Signal()
     liveChanged = Signal()
@@ -290,8 +291,22 @@ class Bridge(QObject):
 
     liveCollapsed = Property(bool, _get_live_collapsed, notify=liveChanged)
 
+    def _video_for_detail(self, key: str):
+        """The video the panel is showing, from wherever it is known.
+
+        Search results are held here and stored nowhere, on purpose, so they
+        have to be looked up in memory or the panel comes up empty for exactly
+        the videos that are hardest to find again.
+        """
+        if not key:
+            return None
+        found = self._db.video(key)
+        if found:
+            return found
+        return next((row for row in self._web_results if row["key"] == key), None)
+
     def _get_detail(self) -> dict:
-        row = self._db.video(self._detail_key) if self._detail_key else None
+        row = self._video_for_detail(self._detail_key)
         if not row:
             return {}
         return {
@@ -484,10 +499,20 @@ class Bridge(QObject):
         if (kind, view_id, channel_key, playlist_id) == (
                 self._view_kind, self._view_id, self._view_channel, self._view_playlist):
             return
+        left_search = self._view_kind == SEARCH and kind != SEARCH
         self._view_kind = kind
         self._view_id = view_id
         self._view_channel = channel_key
         self._view_playlist = playlist_id
+        if left_search:
+            # Going anywhere else ends the search, so the words go with it
+            # rather than sitting in the box describing a view you left.
+            self._search_text = ""
+            self._search_scope = "stored"
+            # The results themselves are kept. The panel follows what mpv is
+            # playing, and that can well be a result you found and then walked
+            # away from.
+            self.searchEnded.emit()
         self.viewChanged.emit()
         self.reload()
         # Work a view needs on entry happens here, so every way of reaching it
@@ -1225,7 +1250,7 @@ class Bridge(QObject):
         self.detailChanged.emit()
 
     def _start_detail(self) -> None:
-        row = self._db.video(self._detail_key)
+        row = self._video_for_detail(self._detail_key)
         if not row:
             return
         if self._detail is not None and self._detail.isRunning():

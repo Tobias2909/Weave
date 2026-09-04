@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS playlist_items (
     channel_ext_id TEXT,
     duration_s     INTEGER,
     thumbnail_url  TEXT,
+    views          INTEGER,
     position       INTEGER NOT NULL,
     PRIMARY KEY (playlist_id, ext_id)
 );
@@ -254,6 +255,8 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # The suggestions carry a view count. The history and a playlist do not,
     # measured, so it stays empty for those rather than being invented.
     ("cached_videos", "views", "INTEGER"),
+    # A playlist entry carries a view count as well, measured.
+    ("playlist_items", "views", "INTEGER"),
 )
 
 
@@ -603,7 +606,7 @@ class Database:
             UNION ALL
             SELECT 'yt:' || i.ext_id, 'youtube', i.ext_id,
                    COALESCE(c.key, ''), i.title,
-                   NULL, i.thumbnail_url, i.duration_s, NULL,
+                   NULL, i.thumbnail_url, i.duration_s, i.views,
                    NULL, NULL, NULL, NULL,
                    COALESCE(c.title, i.channel_name), c.avatar_url,
                    w.video_key IS NOT NULL
@@ -1058,11 +1061,11 @@ class Database:
             conn.execute("DELETE FROM playlist_items WHERE playlist_id=?", (playlist_id,))
             conn.executemany(
                 "INSERT INTO playlist_items(playlist_id, ext_id, title, channel_name, "
-                "  channel_ext_id, duration_s, thumbnail_url, position) "
-                "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                "  channel_ext_id, duration_s, thumbnail_url, views, position) "
+                "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
                 [(playlist_id, row["ext_id"], row["title"], row.get("channel_name"),
                   row.get("channel_ext_id"), row.get("duration_s"),
-                  row.get("thumbnail_url"), index)
+                  row.get("thumbnail_url"), row.get("views"), index)
                  for index, row in enumerate(rows)],
             )
             conn.execute("UPDATE playlists SET items_at=? WHERE ext_id=?",
@@ -1083,7 +1086,7 @@ class Database:
                    NULL                        AS published_at,
                    i.thumbnail_url             AS thumbnail_url,
                    i.duration_s                AS duration_s,
-                   NULL                        AS views,
+                   i.views                     AS views,
                    NULL                        AS likes,
                    NULL                        AS live_status,
                    COALESCE(c.title, i.channel_name) AS channel_title,

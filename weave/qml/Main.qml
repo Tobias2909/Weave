@@ -148,6 +148,12 @@ ApplicationWindow {
                 // database and costs nothing. Emptying it goes back to
                 // wherever the search started.
                 onTextChanged: App.search(text)
+                // Emptied from the outside when the search view is left, so
+                // the box never describes somewhere you are no longer.
+                Connections {
+                    target: App
+                    function onSearchEnded() { searchField.text = "" }
+                }
                 // Typing searches what is stored, which costs nothing.
                 // Pressing return asks YouTube itself, which costs a request.
                 onAccepted: App.searchYouTube()
