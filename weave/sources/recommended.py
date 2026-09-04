@@ -21,7 +21,7 @@ from ..config import Config
 from ..cookies import args as cookie_args
 from ..net import Throttle
 from ..process import Timeout, run as run_process
-from .flatlist import FIELDS, FlatVideo, parse
+from .flatlist import APPROXIMATE_DATES, FIELDS, FlatVideo, parse
 
 RECOMMENDED = ":ytrec"
 
@@ -42,7 +42,7 @@ def fetch(cfg: Config, limit: int = 48, throttle: Throttle | None = None,
     last = max(first, first + max(1, limit) - 1)
     command = [
         "yt-dlp", "--no-warnings", "--flat-playlist",
-        *cookie_args(cfg),
+        *cookie_args(cfg), *APPROXIMATE_DATES,
         # The feed pages, verified: items 25 to 36 share nothing with items 1
         # to 12. So asking for a later slice is how more of it is reached.
         "--playlist-items", f"{first}-{last}",

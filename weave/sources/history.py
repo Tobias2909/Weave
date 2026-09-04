@@ -23,7 +23,7 @@ from ..cookies import args as cookie_args
 from ..ids import video_key
 from ..net import Throttle
 from ..process import Timeout, run as run_process
-from .flatlist import FIELDS, FlatVideo, parse
+from .flatlist import APPROXIMATE_DATES, FIELDS, FlatVideo, parse
 
 HISTORY = ":ythistory"
 
@@ -48,7 +48,7 @@ def fetch(cfg: Config, limit: int = 200, throttle: Throttle | None = None,
     last = max(first, first + max(1, limit) - 1)
     command = [
         "yt-dlp", "--no-warnings", "--flat-playlist",
-        *cookie_args(cfg),
+        *cookie_args(cfg), *APPROXIMATE_DATES,
         "--playlist-items", f"{first}-{last}",
         "--print", FIELDS,
         HISTORY,

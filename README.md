@@ -141,7 +141,8 @@ up front would be paying for nothing. Contents are kept for six hours, and
 A long list of playlists would bury everything under it, so the section sits at
 the bottom of the sidebar and each playlist can be hidden on its own. Right
 click one to put it away, or open **Choose which to show** from the section
-menu for a filterable list of all of them. Hiding is not forgetting. A hidden
+menu for a filterable list of all of them, with a button to show or hide the
+lot. Hiding is not forgetting. A hidden
 playlist keeps its contents and comes back the moment it is shown again.
 
 A playlist keeps the order it was given rather than being sorted by date, since
@@ -169,12 +170,16 @@ more, and gets genuinely different ones, since the feed pages. More is added to
 the end rather than replacing what is there, so loading it does not send you
 back to the top.
 
-A suggestion carries a view count and a duration. It carries no upload date and
-no like count at all, measured, and asking for those would be one request per
-card. So the card shows what came free, and the like count and the age arrive
-in the panel when you open it, out of the metadata the comments call already
-writes. Playlist entries carry a view count too. History entries almost never
-do, which is YouTube's answer rather than a gap here.
+A suggestion carries a view count, a duration and an age. The age is
+approximate, because a listing gives it as a phrase rather than a date, and
+`yt-dlp` only turns that phrase into a time when it is asked to. Playlist entries
+and search results carry the same three. History entries carry almost none of
+it, which is YouTube's answer rather than a gap here.
+
+No listing carries a like count anywhere, checked field by field, and no other
+client shows one on a card either. It arrives in the panel when you open a
+video, out of the metadata the comments call already writes, so it costs no
+request of its own.
 
 ```sh
 python -m weave recommended

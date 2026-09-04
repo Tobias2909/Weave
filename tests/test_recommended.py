@@ -9,7 +9,8 @@ import unittest
 
 from weave.sources import recommended
 
-REAL = "aaaaaaaaaaa\tA real video\tSome channel\tUCabcdefghijklmnopqrstuv\t5646\thttps://i/x.jpg"
+REAL = ("aaaaaaaaaaa\tA real video\tSome channel\tUCabcdefghijklmnopqrstuv\t5646"
+        "\thttps://i/x.jpg\t7600516\t1600000000")
 RADIO = "RDabcdefghijk\tNA\tNA\tNA\tNA\tNA"
 
 
@@ -21,6 +22,17 @@ class ParseLines(unittest.TestCase):
              item.duration_s, item.thumbnail_url),
             ("aaaaaaaaaaa", "A real video", "Some channel", "UCabcdefghijklmnopqrstuv",
              5646, "https://i/x.jpg"))
+
+    def test_the_counts_and_the_date_come_along(self):
+        # The date is approximate. A listing gives the age of a video as a
+        # phrase, so this is that phrase turned into a time, which is the same
+        # thing other clients show.
+        item = recommended.parse_lines(REAL)[0]
+        self.assertEqual((item.views, item.published_at), (7600516, 1600000000))
+
+    def test_a_row_without_them_is_still_a_row(self):
+        item = recommended.parse_lines("aaaaaaaaaaa\tTitle\tName\tNA\tNA\tNA\tNA\tNA")[0]
+        self.assertEqual((item.views, item.published_at), (None, None))
 
     def test_radio_rows_are_dropped(self):
         self.assertEqual([i.ext_id for i in recommended.parse_lines(f"{RADIO}\n{REAL}")],

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS cached_videos (
     duration_s     INTEGER,
     thumbnail_url  TEXT,
     views          INTEGER,
+    published_at   INTEGER,                 -- approximate, from "3 weeks ago"
     position       INTEGER NOT NULL,
     seen_at        INTEGER NOT NULL,
     PRIMARY KEY (kind, ext_id)
@@ -83,6 +84,7 @@ CREATE TABLE IF NOT EXISTS playlist_items (
     duration_s     INTEGER,
     thumbnail_url  TEXT,
     views          INTEGER,
+    published_at   INTEGER,                 -- approximate, from "3 weeks ago"
     position       INTEGER NOT NULL,
     PRIMARY KEY (playlist_id, ext_id)
 );
@@ -257,6 +259,10 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("cached_videos", "views", "INTEGER"),
     # A playlist entry carries a view count as well, measured.
     ("playlist_items", "views", "INTEGER"),
+    # Approximate, since a listing gives the age of a video as a phrase rather
+    # than a date. It is what every other client shows for these.
+    ("cached_videos", "published_at", "INTEGER"),
+    ("playlist_items", "published_at", "INTEGER"),
 )
 
 
@@ -300,6 +306,11 @@ class Database:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
             row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             was = int(row["value"]) if row else 0
+            if was and was < 18:
+                # Stored before there was anywhere to put a publish date, and
+                # nothing revisits a row, so they are fetched again.
+                conn.execute("DELETE FROM cached_videos")
+                conn.execute("DELETE FROM meta WHERE key LIKE 'state.%_at'")
             if was and was < 17:
                 # Suggestions stored before there was a column for it have no
                 # view count and nothing will ever fill one in, since more is
@@ -599,7 +610,7 @@ class Database:
             """
             SELECT 'yt:' || r.ext_id AS key, 'youtube' AS platform, r.ext_id AS ext_id,
                    COALESCE(c.key, '') AS channel_key, r.title AS title,
-                   NULL AS published_at, r.thumbnail_url AS thumbnail_url,
+                   r.published_at AS published_at, r.thumbnail_url AS thumbnail_url,
                    r.duration_s AS duration_s, r.views AS views,
                    NULL AS likes, NULL AS dislikes, NULL AS live_status,
                    NULL AS is_short,
@@ -613,7 +624,7 @@ class Database:
             UNION ALL
             SELECT 'yt:' || i.ext_id, 'youtube', i.ext_id,
                    COALESCE(c.key, ''), i.title,
-                   NULL, i.thumbnail_url, i.duration_s, i.views,
+                   i.published_at, i.thumbnail_url, i.duration_s, i.views,
                    NULL, NULL, NULL, NULL,
                    COALESCE(c.title, i.channel_name), c.avatar_url,
                    w.video_key IS NOT NULL
@@ -883,11 +894,13 @@ class Database:
             conn.execute("DELETE FROM cached_videos WHERE kind=?", (kind,))
             conn.executemany(
                 "INSERT INTO cached_videos(kind, ext_id, title, channel_name, "
-                "  channel_ext_id, duration_s, thumbnail_url, views, position, seen_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                "  channel_ext_id, duration_s, thumbnail_url, views, published_at, "
+                "  position, seen_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
                 [(kind, row["ext_id"], row["title"], row.get("channel_name"),
                   row.get("channel_ext_id"), row.get("duration_s"),
-                  row.get("thumbnail_url"), row.get("views"), index, now)
+                  row.get("thumbnail_url"), row.get("views"),
+                  row.get("published_at"), index, now)
                  for index, row in enumerate(rows)],
             )
         self.set_state(f"{kind}_at", str(now))
@@ -910,11 +923,13 @@ class Database:
             before = conn.total_changes
             conn.executemany(
                 "INSERT INTO cached_videos(kind, ext_id, title, channel_name, "
-                "  channel_ext_id, duration_s, thumbnail_url, views, position, seen_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                "  channel_ext_id, duration_s, thumbnail_url, views, published_at, "
+                "  position, seen_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
                 [(kind, row["ext_id"], row["title"], row.get("channel_name"),
                   row.get("channel_ext_id"), row.get("duration_s"),
-                  row.get("thumbnail_url"), row.get("views"), start + index, now)
+                  row.get("thumbnail_url"), row.get("views"),
+                  row.get("published_at"), start + index, now)
                  for index, row in enumerate(rows)],
             )
             return conn.total_changes - before
@@ -938,7 +953,7 @@ class Database:
                    r.ext_id                    AS ext_id,
                    COALESCE(c.key, '')         AS channel_key,
                    r.title                     AS title,
-                   NULL                        AS published_at,
+                   r.published_at              AS published_at,
                    r.thumbnail_url             AS thumbnail_url,
                    r.duration_s                AS duration_s,
                    r.views                     AS views,
@@ -1070,11 +1085,13 @@ class Database:
             conn.execute("DELETE FROM playlist_items WHERE playlist_id=?", (playlist_id,))
             conn.executemany(
                 "INSERT INTO playlist_items(playlist_id, ext_id, title, channel_name, "
-                "  channel_ext_id, duration_s, thumbnail_url, views, position) "
-                "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                "  channel_ext_id, duration_s, thumbnail_url, views, published_at, "
+                "  position) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
                 [(playlist_id, row["ext_id"], row["title"], row.get("channel_name"),
                   row.get("channel_ext_id"), row.get("duration_s"),
-                  row.get("thumbnail_url"), row.get("views"), index)
+                  row.get("thumbnail_url"), row.get("views"), row.get("published_at"),
+                  index)
                  for index, row in enumerate(rows)],
             )
             conn.execute("UPDATE playlists SET items_at=? WHERE ext_id=?",
@@ -1092,7 +1109,7 @@ class Database:
                    i.ext_id                    AS ext_id,
                    COALESCE(c.key, '')         AS channel_key,
                    i.title                     AS title,
-                   NULL                        AS published_at,
+                   i.published_at              AS published_at,
                    i.thumbnail_url             AS thumbnail_url,
                    i.duration_s                AS duration_s,
                    i.views                     AS views,

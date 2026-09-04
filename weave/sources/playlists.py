@@ -24,7 +24,7 @@ from ..config import Config
 from ..cookies import args as cookie_args
 from ..net import Throttle
 from ..process import Timeout, run as run_process
-from .flatlist import FIELDS, FlatVideo, parse
+from .flatlist import APPROXIMATE_DATES, FIELDS, FlatVideo, parse
 
 FEED_PLAYLISTS = "https://www.youtube.com/feed/playlists"
 PLAYLIST_URL = "https://www.youtube.com/playlist?list={playlist_id}"
@@ -96,7 +96,7 @@ def fetch_list(cfg: Config, limit: int = 100, throttle: Throttle | None = None,
                cancel: threading.Event | None = None) -> list[Playlist]:
     command = [
         "yt-dlp", "--no-warnings", "--flat-playlist",
-        *cookie_args(cfg),
+        *cookie_args(cfg), *APPROXIMATE_DATES,
         "--playlist-end", str(max(1, limit)),
         "--print", "%(id)s\t%(title)s",
         FEED_PLAYLISTS,
@@ -113,7 +113,7 @@ def fetch_items(cfg: Config, playlist_id: str, limit: int = 300,
                 cancel: threading.Event | None = None) -> list[PlaylistItem]:
     command = [
         "yt-dlp", "--no-warnings", "--flat-playlist",
-        *cookie_args(cfg),
+        *cookie_args(cfg), *APPROXIMATE_DATES,
         "--playlist-end", str(max(1, limit)),
         "--print", ITEM_FIELDS,
         PLAYLIST_URL.format(playlist_id=playlist_id),

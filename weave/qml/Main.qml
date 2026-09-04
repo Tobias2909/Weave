@@ -944,12 +944,12 @@ ApplicationWindow {
             App.setPlaylistHidden(id, hidden)
         }
 
-        function showEveryOne() {
+        function setEveryOne(hidden) {
             var map = {}
             for (var i = 0; i < all.length; i++) {
-                map[all[i].ext_id] = false
-                if (away[all[i].ext_id])
-                    App.setPlaylistHidden(all[i].ext_id, false)
+                map[all[i].ext_id] = hidden
+                if (!!away[all[i].ext_id] !== hidden)
+                    App.setPlaylistHidden(all[i].ext_id, hidden)
             }
             away = map
         }
@@ -1054,8 +1054,12 @@ ApplicationWindow {
                 spacing: 8
                 anchors.right: parent.right
                 FlatButton {
+                    text: "Hide every one"
+                    onClicked: playlistChooser.setEveryOne(true)
+                }
+                FlatButton {
                     text: "Show every one"
-                    onClicked: playlistChooser.showEveryOne()
+                    onClicked: playlistChooser.setEveryOne(false)
                 }
                 FlatButton {
                     text: "Done"

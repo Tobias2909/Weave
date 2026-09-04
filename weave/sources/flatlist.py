@@ -18,7 +18,14 @@ from dataclasses import dataclass
 from ..ids import CHANNEL_ID, is_video_id
 
 FIELDS = ("%(id)s\t%(title)s\t%(channel)s\t%(channel_id)s\t%(duration)s"
-          "\t%(thumbnails.-1.url)s\t%(view_count)s")
+          "\t%(thumbnails.-1.url)s\t%(view_count)s\t%(timestamp)s")
+
+# What turns "3 weeks ago" in the listing into a date. YouTube sends the age of
+# a video in every listing as a relative phrase, and yt-dlp parses it only when
+# asked to, so without this the publish time comes back empty for everything
+# that is not the feed. It is approximate by nature, since that phrase is all
+# there is, which is the same thing other clients show.
+APPROXIMATE_DATES = ["--extractor-args", "youtubetab:approximate_date"]
 
 
 @dataclass(frozen=True)
@@ -30,6 +37,7 @@ class FlatVideo:
     duration_s: int | None = None
     thumbnail_url: str | None = None
     views: int | None = None
+    published_at: int | None = None
 
 
 def optional(text: str) -> str | None:
@@ -70,6 +78,7 @@ def parse(text: str) -> list[FlatVideo]:
             duration_s=_number(parts[4]) if len(parts) > 4 else None,
             thumbnail_url=_field(parts, 5),
             views=_number(parts[6]) if len(parts) > 6 else None,
+            published_at=_number(parts[7]) if len(parts) > 7 else None,
         ))
     return out
 
@@ -80,5 +89,5 @@ def as_row(item: FlatVideo) -> dict:
         "ext_id": item.ext_id, "title": item.title,
         "channel_name": item.channel_name, "channel_ext_id": item.channel_ext_id,
         "duration_s": item.duration_s, "thumbnail_url": item.thumbnail_url,
-        "views": item.views,
+        "views": item.views, "published_at": item.published_at,
     }
