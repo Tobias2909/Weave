@@ -329,8 +329,9 @@ class Bridge(QObject):
         self._view_channel = channel_key
         self.viewChanged.emit()
         self.reload()
-        # Reaching the music view by scrolling the sidebar has to fill it just
-        # as clicking the row does, or the wheel lands on an empty page.
+        # Work a view needs on entry happens here, so every way of reaching it
+        # behaves the same. It used to hang off the sidebar row, and the wheel
+        # then landed on an empty page.
         if kind == MUSIC and not self._shelves:
             self.loadHome()
 
@@ -503,9 +504,9 @@ class Bridge(QObject):
 
     @Slot()
     def showMusic(self) -> None:
+        # Nothing else. Whatever a view needs on entry belongs to entering it,
+        # not to one of the ways in, or the ways drift apart.
         self._set_view(MUSIC, -1)
-        if not self._shelves:
-            self.loadHome()
 
     def _remembered_shelves(self) -> list:
         """What was on the shelves last time, so the view has something the
