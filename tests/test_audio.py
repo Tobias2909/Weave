@@ -39,7 +39,14 @@ class Volume(unittest.TestCase):
         self.assertEqual(self.player.volume, 0)
 
 
-class Upcoming(unittest.TestCase):
+class TheQueue(unittest.TestCase):
+    """Starting a playlist puts the playlist in the player.
+
+    A track that has been played stays in the list with everything else rather
+    than disappearing behind you, which is how every other music player
+    behaves and is what this pins down.
+    """
+
     def setUp(self):
         self.player = AudioPlayer(Config(raw={}))
         self.player.setShuffle(False)
@@ -49,30 +56,48 @@ class Upcoming(unittest.TestCase):
         self.player._rebuild_order()
         self.player._at = 0
 
-    def test_what_follows(self):
-        self.assertEqual([t["title"] for t in self.player.upcoming], ["bbb", "ccc", "ddd"])
+    def test_the_whole_list_is_in_it(self):
+        self.assertEqual([t["title"] for t in self.player.queue],
+                         ["aaa", "bbb", "ccc", "ddd"])
 
-    def test_nothing_follows_the_last_one(self):
+    def test_moving_on_leaves_the_last_one_behind_rather_than_dropping_it(self):
+        self.player._at = 2
+        self.assertEqual([t["title"] for t in self.player.queue],
+                         ["aaa", "bbb", "ccc", "ddd"])
+
+    def test_the_one_playing_is_marked(self):
+        self.player._at = 2
+        self.assertEqual([t["title"] for t in self.player.queue if t["current"]], ["ccc"])
+
+    def test_even_at_the_very_end(self):
         self.player._at = 3
-        self.assertEqual(self.player.upcoming, [])
+        self.assertEqual(len(self.player.queue), 4)
+        self.assertEqual([t["title"] for t in self.player.queue if t["current"]], ["ddd"])
 
-    def test_repeat_wraps_round_at_the_end(self):
-        self.player._at = 3
-        self.player.setRepeat(1)
-        self.assertEqual([t["title"] for t in self.player.upcoming], ["aaa", "bbb", "ccc"])
-
-    def test_it_follows_the_play_order_not_the_queue(self):
+    def test_it_follows_the_play_order_not_the_order_it_was_given(self):
         # With shuffle on, the queue order is not what will be heard.
         self.player.setShuffle(True)
         self.player._order = [2, 0, 3, 1]
         self.player._at = 2
-        self.assertEqual([t["title"] for t in self.player.upcoming], ["aaa", "ddd", "bbb"])
+        self.assertEqual([t["title"] for t in self.player.queue],
+                         ["ccc", "aaa", "ddd", "bbb"])
 
-    def test_an_empty_queue_has_nothing_coming(self):
+    def test_an_empty_queue_is_an_empty_list(self):
         self.player._queue = []
         self.player._order = []
         self.player._at = -1
-        self.assertEqual(self.player.upcoming, [])
+        self.assertEqual(self.player.queue, [])
+
+    def test_how_many_are_still_to_come(self):
+        # What the button that opens the list is enabled by.
+        self.assertEqual(self.player.stillToCome, 3)
+        self.player._at = 3
+        self.assertEqual(self.player.stillToCome, 0)
+
+    def test_repeating_the_whole_queue_means_there_is_always_more(self):
+        self.player._at = 3
+        self.player.setRepeat(1)
+        self.assertEqual(self.player.stillToCome, 3)
 
 
 class Shuffle(unittest.TestCase):
@@ -101,10 +126,10 @@ class Jumping(unittest.TestCase):
         self.player._rebuild_order()
         self.player._at = 0
 
-    def test_upcoming_says_where_each_one_sits(self):
+    def test_the_queue_says_where_each_one_sits(self):
         # So a row in the queue view can be jumped to directly rather than by
         # pressing next until it arrives.
-        self.assertEqual([t["at"] for t in self.player.upcoming], [1, 2, 3])
+        self.assertEqual([t["at"] for t in self.player.queue], [0, 1, 2, 3])
 
     def test_jumping_out_of_range_does_nothing(self):
         self.player.jumpTo(99)
@@ -199,9 +224,9 @@ class Repeat(unittest.TestCase):
     def test_only_the_whole_queue_setting_wraps_what_is_coming(self):
         self.player._at = 1
         self.player.setRepeat(2)
-        self.assertEqual(self.player.upcoming, [])
+        self.assertEqual(self.player.stillToCome, 0)
         self.player.setRepeat(1)
-        self.assertEqual([t["title"] for t in self.player.upcoming], ["aaa"])
+        self.assertEqual(self.player.stillToCome, 1)
 
 
 class Fading(unittest.TestCase):
@@ -228,3 +253,28 @@ class Fading(unittest.TestCase):
         self.player.setVolume(30)
         self.assertFalse(self.player._pause_after_fade)
         self.assertEqual(self.player.volume, 30)
+
+    def test_the_volume_stays_down_once_the_fade_has_paused_it(self):
+        """The blip at the end of a fade.
+
+        Pausing is asynchronous, so putting the level back the moment it is
+        asked for plays whatever is still in the buffer at full volume. It is
+        raised again by whatever starts playing next instead.
+        """
+        paused = []
+        self.player._player.pause = lambda: paused.append(True)
+        self.player._pause_after_fade = True
+        self.player._output.setVolume(0.0)
+        self.player._on_fade_done()
+        self.assertEqual(paused, [True])
+        self.assertEqual(self.player._output.volume(), 0.0)
+        # And what was asked for is not forgotten, only not applied yet.
+        self.assertEqual(self.player.volume, 60)
+
+    def test_starting_again_puts_the_level_back(self):
+        played = []
+        self.player._player.play = lambda: played.append(True)
+        self.player._output.setVolume(0.0)
+        self.player._start_playing()
+        self.assertEqual(played, [True])
+        self.assertAlmostEqual(self.player._output.volume(), 0.6, places=5)

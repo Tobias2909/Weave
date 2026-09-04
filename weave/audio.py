@@ -170,22 +170,36 @@ class AudioPlayer(QObject):
     def _get_queue_length(self) -> int:
         return len(self._queue)
 
-    def _get_upcoming(self) -> list:
-        """What follows, in the order it will actually be played, which is not
-        the order of the queue once shuffle is on."""
+    def _get_queue(self) -> list:
+        """The whole queue, in the order it will actually be played, which is
+        not the order it was given once shuffle is on.
+
+        All of it, not only what is still to come. Starting a playlist puts the
+        playlist in the player, and a track that has been played stays in the
+        list with everything else rather than disappearing behind you, which is
+        how every other music player behaves. The one playing is marked so it
+        can be found again.
+        """
         if not self._queue or self._at not in self._order:
             return []
-        place = self._order.index(self._at)
-        following = self._order[place + 1:]
-        if self._repeat_mode == REPEAT_ALL and not following:
-            following = self._order[:place]
         return [{
             "title": self._queue[i].get("title", ""),
             "artist": self._queue[i].get("artist", ""),
             "thumbnail": self._queue[i].get("thumbnail", ""),
+            "current": i == self._at,
             # Where it sits in the queue, so it can be jumped to directly.
             "at": i,
-        } for i in following[:40]]
+        } for i in self._order]
+
+    def _get_still_to_come(self) -> int:
+        """How many have not been played yet, for the button that opens the
+        list. Zero means there is nothing after this one."""
+        if not self._queue or self._at not in self._order:
+            return 0
+        place = self._order.index(self._at)
+        if self._repeat_mode == REPEAT_ALL:
+            return max(0, len(self._order) - 1)
+        return len(self._order) - place - 1
 
     track = Property("QVariantMap", _get_track, notify=trackChanged)
     playing = Property(bool, _get_playing, notify=stateChanged)
@@ -200,7 +214,8 @@ class AudioPlayer(QObject):
     repeatLabel = Property(str, _get_repeat_label, notify=stateChanged)
     autoPause = Property(bool, _get_auto_pause, notify=stateChanged)
     queueLength = Property(int, _get_queue_length, notify=trackChanged)
-    upcoming = Property("QVariantList", _get_upcoming, notify=trackChanged)
+    queue = Property("QVariantList", _get_queue, notify=trackChanged)
+    stillToCome = Property(int, _get_still_to_come, notify=trackChanged)
 
     # ---- playing ---------------------------------------------------------
 
@@ -249,7 +264,7 @@ class AudioPlayer(QObject):
             # Set once the source has enough to seek in.
             self._player.setPosition(self._resume_at)
             self._resume_at = 0
-        self._player.play()
+        self._start_playing()
         self.stateChanged.emit()
 
     def _on_resolve_failed(self, key: str, message: str) -> None:
@@ -262,7 +277,7 @@ class AudioPlayer(QObject):
             self._recovering = False
             if self._repeat_mode == REPEAT_ONE:
                 self._player.setPosition(0)
-                self._player.play()
+                self._start_playing()
                 return
             self.next()
         elif status == QMediaPlayer.MediaStatus.InvalidMedia:
@@ -351,6 +366,18 @@ class AudioPlayer(QObject):
         enough to be worth a notch."""
         self.setVolume(self._get_volume() + steps * 5)
 
+    def _start_playing(self) -> None:
+        """Play at the level that was asked for.
+
+        A pause leaves the volume down on purpose, since restoring it while
+        the player is still stopping is heard as a blip, so anything that
+        starts playing has to raise it again.
+        """
+        self._fade.stop()
+        self._pause_after_fade = False
+        self._output.setVolume(self._level)
+        self._player.play()
+
     def _fade_to(self, level: float, pause_after: bool) -> None:
         self._fade.stop()
         self._pause_after_fade = pause_after
@@ -362,9 +389,10 @@ class AudioPlayer(QObject):
         if self._pause_after_fade:
             self._pause_after_fade = False
             self._player.pause()
-            # Put the level back, so the next play starts where it should
-            # rather than silent.
-            self._output.setVolume(self._level)
+            # The volume stays down. Pausing is asynchronous, so putting the
+            # level back here plays whatever is still in the buffer at full
+            # volume for a moment, which is heard as a blip right at the end
+            # of the fade. Every path that starts playing raises it instead.
             self.stateChanged.emit()
 
     @Slot(int)

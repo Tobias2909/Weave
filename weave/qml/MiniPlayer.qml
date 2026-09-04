@@ -97,7 +97,7 @@ Rectangle {
             spacing: 6
 
             Label {
-                text: "UP NEXT  ·  " + Audio.upcoming.length
+                text: "QUEUE  ·  " + Audio.queue.length
                 color: Theme.colors.textMuted
                 font.pixelSize: 10
                 font.letterSpacing: 1.2
@@ -110,7 +110,7 @@ Rectangle {
                 height: parent.height - 22
                 clip: true
                 spacing: 2
-                model: Audio.upcoming
+                model: Audio.queue
                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
                 delegate: Rectangle {
@@ -119,7 +119,12 @@ Rectangle {
                     width: queued.width
                     height: 44
                     radius: 5
-                    color: queuedHover.hovered ? Theme.colors.surface : "transparent"
+                    // The one playing stays marked, since the list holds
+                    // everything rather than only what is still to come.
+                    color: queuedRow.modelData.current ? Theme.colors.surfaceRaised
+                                                       : (queuedHover.hovered
+                                                          ? Theme.colors.surface
+                                                          : "transparent")
 
                     HoverHandler { id: queuedHover }
                     // Skip straight to it rather than pressing next repeatedly.
@@ -286,8 +291,8 @@ Rectangle {
         }
 
         FlatButton {
-            text: "Up next"
-            enabled: Audio.upcoming.length > 0
+            text: "Queue"
+            enabled: Audio.queue.length > 0
             onClicked: upNext.open()
         }
 

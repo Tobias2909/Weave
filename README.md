@@ -269,6 +269,18 @@ what a stream has instead, who is on, what they are playing, how many are
 watching and how long it has been going, because a stream has no comments and
 no likes to go and fetch.
 
+## The music player
+
+Starting a playlist puts the whole playlist in the player. Moving to the next
+track leaves the last one behind in the list rather than dropping it, so the
+queue is the queue and you can go back to something you have already heard.
+The one playing is marked, and any row can be jumped to.
+
+Pausing fades out over about a second rather than cutting. The volume stays
+down while it is paused and is raised again by whatever starts it playing,
+because asking a player to pause does not stop it instantly and putting the
+level back too early is heard as a blip at the end of the fade.
+
 ## What is on screen while something is loading
 
 Handing a video to mpv takes a few seconds, and so does a search or another
