@@ -276,9 +276,18 @@ class Bridge(QObject):
         wanted = self._shelf_order()
         if not wanted:
             return shelves
-        known = {shelf["title"]: shelf for shelf in shelves}
-        ordered = [known.pop(title) for title in wanted if title in known]
-        ordered.extend(shelf for shelf in shelves if shelf["title"] in known)
+
+        # Matched one at a time rather than through a map of title to section.
+        # Two sections can arrive with the same name, and a map would keep one
+        # of them and lose the other, which reads as a row vanishing.
+        remaining = list(shelves)
+        ordered = []
+        for title in wanted:
+            for index, shelf in enumerate(remaining):
+                if shelf["title"] == title:
+                    ordered.append(remaining.pop(index))
+                    break
+        ordered.extend(remaining)
         return ordered
 
     def _saved_shelf(self) -> dict:
@@ -590,6 +599,8 @@ class Bridge(QObject):
         if to == at:
             return
         titles.insert(to, titles.pop(at))
+        # Only what is actually on screen is kept, so an order cannot collect
+        # names of sections that have gone.
         self._db.set_state("music_shelf_order", json.dumps(titles))
         self.musicChanged.emit()
 
@@ -612,8 +623,12 @@ class Bridge(QObject):
 
     @Slot(int, int)
     def playShelfItem(self, shelf_index: int, item_index: int) -> None:
+        # The index comes from what is on screen, which is the arranged list
+        # with the saved section in it, not the raw one. Reading the raw list
+        # here meant a tile acted on some other section's entry as soon as an
+        # order was kept or an address was saved.
         try:
-            item = self._shelves[shelf_index]["items"][item_index]
+            item = self._get_shelves()[shelf_index]["items"][item_index]
         except (IndexError, KeyError, TypeError):
             return
         video = item.get("videoId")

@@ -57,6 +57,12 @@ Item {
                 text: "Refresh"
                 onClicked: App.refreshMusic()
             }
+
+            FlatButton {
+                visible: App.musicResults.length === 0
+                text: "Reset order"
+                onClicked: App.resetShelfOrder()
+            }
         }
 
         // ---- what is showing --------------------------------------------

@@ -129,3 +129,41 @@ class Discovery(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ShelfArrangement(unittest.TestCase):
+    """The rule that puts the music sections in the order they were arranged.
+
+    Kept as its own test because the map based version lost a section whenever
+    two arrived with the same name, which reads as a row vanishing.
+    """
+
+    @staticmethod
+    def arrange(shelves, wanted):
+        remaining = list(shelves)
+        ordered = []
+        for title in wanted:
+            for index, shelf in enumerate(remaining):
+                if shelf["title"] == title:
+                    ordered.append(remaining.pop(index))
+                    break
+        ordered.extend(remaining)
+        return [s["title"] for s in ordered]
+
+    def test_it_reorders(self):
+        shelves = [{"title": "A"}, {"title": "B"}, {"title": "C"}]
+        self.assertEqual(self.arrange(shelves, ["C", "A"]), ["C", "A", "B"])
+
+    def test_two_sections_with_one_name_both_survive(self):
+        shelves = [{"title": "A"}, {"title": "Recaps"}, {"title": "Recaps"}, {"title": "B"}]
+        self.assertEqual(len(self.arrange(shelves, ["B", "Recaps"])), 4)
+
+    def test_a_name_that_is_gone_is_skipped(self):
+        shelves = [{"title": "A"}, {"title": "B"}]
+        self.assertEqual(self.arrange(shelves, ["Z", "B"]), ["B", "A"])
+
+    def test_nothing_is_ever_lost(self):
+        shelves = [{"title": t} for t in ("A", "B", "B", "C")]
+        for wanted in ([], ["C"], ["B", "B"], ["Z"], ["C", "B", "A"]):
+            with self.subTest(wanted=wanted):
+                self.assertEqual(sorted(self.arrange(shelves, wanted)), ["A", "B", "B", "C"])
