@@ -36,7 +36,7 @@ FALLBACK: dict[str, str] = {
     "background": "#0f1115", "surface": "#171a21", "surfaceRaised": "#1f2430",
     "border": "#2a3040", "text": "#e7eaf0", "textMuted": "#98a0b3",
     "accent": "#7c5cff", "accentHover": "#9a80ff", "live": "#ff4d4f",
-    "progress": "#ff3b30", "watchedDim": "#5a6072", "badgeBackground": "#000000b0",
+    "progress": "#ff3b30", "watchedDim": "#5a6072", "badgeBackground": "#000000e0",
     "badgeText": "#f2f4f8", "error": "#ffb020", "twitch": "#9146ff",
     "youtube": "#ff3d3d",
 }

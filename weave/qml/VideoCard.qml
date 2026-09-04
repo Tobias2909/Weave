@@ -125,17 +125,17 @@ Rectangle {
                 anchors.bottom: parent.bottom
                 anchors.margins: 6
                 anchors.bottomMargin: card.progress > 0 ? 9 : 6
-                radius: 3
+                radius: 4
                 color: card.isLive ? Theme.colors.live : Theme.colors.badgeBackground
-                width: badge.implicitWidth + 10
-                height: badge.implicitHeight + 4
+                width: badge.implicitWidth + 12
+                height: badge.implicitHeight + 6
                 Text {
                     id: badge
                     anchors.centerIn: parent
                     text: card.isLive ? "LIVE" : card.durationText
                     color: Theme.colors.badgeText
                     font.pixelSize: 11
-                    font.bold: card.isLive
+                    font.bold: true
                 }
             }
         }

@@ -1080,6 +1080,12 @@ class Database:
             )
         return len(rows)
 
+    # A Twitch row is only as good as the last check that stored it. Rows are
+    # replaced wholesale on a successful check, so a check that keeps failing
+    # would otherwise leave yesterday's streams on screen looking current, and
+    # a bar that lies is worse than an empty one.
+    LIVE_STALE_S = 600
+
     def live_now(self) -> list[dict]:
         """Everything live, both platforms, busiest first.
 
@@ -1087,9 +1093,11 @@ class Database:
         neither the feed nor the sweep reports one, so both platforms order
         against each other in a single row.
         """
+        fresh = int(time.time()) - self.LIVE_STALE_S
         rows = [dict(row) for row in self.conn.execute(
             "SELECT l.*, c.title AS channel_title, c.avatar_url "
-            "FROM live_streams l LEFT JOIN channels c ON c.key = l.channel_key")]
+            "FROM live_streams l LEFT JOIN channels c ON c.key = l.channel_key "
+            "WHERE l.seen_at >= ?", (fresh,))]
         for row in self.conn.execute(
             "SELECT v.key AS video_key, v.ext_id, v.title, v.thumbnail_url, "
             "       v.live_viewers, v.channel_key, c.title AS channel_title, c.avatar_url "

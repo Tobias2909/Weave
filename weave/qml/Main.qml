@@ -511,7 +511,25 @@ ApplicationWindow {
         // the bridge's business, so this does not have to know.
         onAtYEndChanged: if (atYEnd && count > 0) App.loadMore()
 
-        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+        // Always on rather than only while moving. Knowing how much is above
+        // and below is most of what a scroll bar is for, and a bar that only
+        // appears once you are already moving cannot say it.
+        ScrollBar.vertical: ScrollBar {
+            id: gridBar
+            policy: ScrollBar.AlwaysOn
+            width: 10
+            contentItem: Rectangle {
+                implicitWidth: 6
+                radius: 3
+                color: gridBar.pressed ? Theme.colors.accent : Theme.colors.textMuted
+                opacity: gridBar.hovered || gridBar.pressed ? 1.0 : 0.8
+                Behavior on opacity { NumberAnimation { duration: 120 } }
+            }
+            background: Rectangle {
+                color: Theme.colors.surface
+                opacity: 0.35
+            }
+        }
 
         // Sized in card rows and set in the config, since how far a notch
         // should move is taste.
@@ -557,6 +575,57 @@ ApplicationWindow {
             color: Theme.colors.textMuted
             font.pixelSize: 14
             text: App.emptyHint
+        }
+    }
+
+    // Something is happening and there is nothing else on screen to say so.
+    // Handing a video to mpv takes several seconds, and so does a search.
+    Rectangle {
+        id: noticeBar
+        objectName: "noticeBar"
+        visible: opacity > 0
+        opacity: App.notice !== "" ? 1 : 0
+        Behavior on opacity { NumberAnimation { duration: 140 } }
+        anchors.horizontalCenter: grid.horizontalCenter
+        anchors.bottom: miniPlayer.top
+        anchors.bottomMargin: 16
+        z: 50
+        radius: 16
+        height: 32
+        width: noticeRow.implicitWidth + 28
+        color: Theme.colors.surfaceRaised
+        border.width: 1
+        border.color: Theme.colors.border
+
+        Row {
+            id: noticeRow
+            anchors.centerIn: parent
+            spacing: 8
+
+            // A plain turning mark rather than a control, so it needs no
+            // style and cannot be mistaken for something to press.
+            Rectangle {
+                anchors.verticalCenter: parent.verticalCenter
+                width: 10
+                height: 10
+                radius: 2
+                color: Theme.colors.accent
+                RotationAnimator on rotation {
+                    running: noticeBar.visible
+                    loops: Animation.Infinite
+                    from: 0
+                    to: 360
+                    duration: 1400
+                }
+            }
+
+            Label {
+                id: noticeText
+                anchors.verticalCenter: parent.verticalCenter
+                text: App.notice
+                color: Theme.colors.text
+                font.pixelSize: 12
+            }
         }
     }
 
@@ -859,19 +928,52 @@ ApplicationWindow {
                 clip: true
                 model: playlistChooser.matching()
                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-                delegate: CheckBox {
+                // Laid out here rather than left to the control. A CheckBox
+                // with its own contentItem draws the box after the text, so a
+                // long name ran straight into it.
+                delegate: Item {
+                    id: entry
+                    objectName: "chooserRow"
                     required property var modelData
                     width: chooserList.width - 12
-                    checked: !modelData.hidden
-                    onToggled: App.setPlaylistHidden(modelData.ext_id, !checked)
-                    contentItem: Label {
-                        text: modelData.title + (modelData.items
-                                                 ? "   " + modelData.items + " videos" : "")
+                    height: 30
+
+                    CheckBox {
+                        id: box
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        checked: !entry.modelData.hidden
+                        onToggled: App.setPlaylistHidden(entry.modelData.ext_id, !checked)
+                    }
+
+                    Label {
+                        anchors.left: box.right
+                        anchors.leftMargin: 4
+                        anchors.right: countLabel.left
+                        anchors.rightMargin: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: entry.modelData.title
                         color: Theme.colors.text
                         font.pixelSize: 12
                         elide: Text.ElideRight
-                        leftPadding: parent.indicator.width + 8
-                        verticalAlignment: Text.AlignVCenter
+                    }
+
+                    Label {
+                        id: countLabel
+                        anchors.right: parent.right
+                        anchors.rightMargin: 4
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: entry.modelData.items ? entry.modelData.items + " videos" : ""
+                        color: Theme.colors.textMuted
+                        font.pixelSize: 11
+                    }
+
+                    // The whole row is the target, not just the box.
+                    MouseArea {
+                        anchors.fill: parent
+                        anchors.leftMargin: box.width
+                        onClicked: App.setPlaylistHidden(entry.modelData.ext_id,
+                                                         !entry.modelData.hidden)
                     }
                 }
             }

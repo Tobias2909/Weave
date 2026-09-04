@@ -706,6 +706,29 @@ class Playlists(DatabaseCase):
         self.assertEqual(self.db.playlists()[0]["items"], 2)
 
 
+class LiveFreshness(DatabaseCase):
+    """A live bar that lies is worse than an empty one."""
+
+    def setUp(self):
+        super().setUp()
+        self.db.add_channel("twitch:alpha", "twitch", "alpha", "Alpha")
+        self.db.replace_live("twitch", [{"channel_key": "twitch:alpha", "login": "alpha",
+                                         "display_name": "Alpha", "viewers": 10}])
+
+    def test_a_fresh_check_shows(self):
+        self.assertEqual(len(self.db.live_now()), 1)
+
+    def test_rows_from_a_check_that_stopped_working_go_away(self):
+        # Rows are only replaced by a check that succeeded, so a login that
+        # has expired would otherwise leave yesterday's streams on screen
+        # looking current.
+        import time as clock
+        self.db.conn.execute("UPDATE live_streams SET seen_at = ?",
+                             (int(clock.time()) - self.db.LIVE_STALE_S - 1,))
+        self.db.conn.commit()
+        self.assertEqual(self.db.live_now(), [])
+
+
 class AppState(DatabaseCase):
     def test_round_trip_with_a_default(self):
         self.assertEqual(self.db.get_state("missing", "fallback"), "fallback")

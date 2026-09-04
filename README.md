@@ -210,6 +210,14 @@ each, which is not worth it for a name.
 python -m weave history
 ```
 
+## What is on screen while something is loading
+
+Handing a video to mpv takes a few seconds, and so does a search or another
+helping of recommendations. A short line appears over the grid saying which of
+those is happening, and goes when it is done. It also gives up on its own after
+a while, because the thing being waited for can fail to arrive at all and a
+line that never leaves is worse than no line.
+
 ## Connecting Twitch
 
 Twitch needs an application of your own, which takes a minute and is done once.

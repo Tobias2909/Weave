@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import time
 
-from PySide6.QtCore import Property, QObject, Signal, Slot
+from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
 
 from .. import format as fmt
 from .. import ids
@@ -63,6 +63,7 @@ class Bridge(QObject):
     emptyHintChanged = Signal()
     groupsChanged = Signal()
     playlistsChanged = Signal()
+    noticeChanged = Signal()
     boxesChanged = Signal()
     viewChanged = Signal()
     liveChanged = Signal()
@@ -122,6 +123,13 @@ class Bridge(QObject):
         self._search_text = ""
         # Stored is the local query, youtube is the one that costs a request.
         self._search_scope = "stored"
+        # A short line about something happening now, shown over the grid. The
+        # status text in the bar is easy to miss, and some of these take
+        # several seconds with nothing else on screen to show for them.
+        self._notice = ""
+        self._notice_timer = QTimer(self)
+        self._notice_timer.setSingleShot(True)
+        self._notice_timer.timeout.connect(lambda: self._set_notice(""))
         # Named apart from the music search results, which live on the same
         # object under a name that used to be _results as well.
         self._web_results: list[dict] = []
@@ -238,6 +246,7 @@ class Bridge(QObject):
     emptyHint = Property(str, _get_empty_hint, notify=emptyHintChanged)
     groups = Property("QVariantList", _get_groups, notify=groupsChanged)
     boxes = Property("QVariantList", _get_boxes, notify=boxesChanged)
+    notice = Property(str, lambda self: self._notice, notify=noticeChanged)
     playlists = Property("QVariantList", _get_playlists, notify=playlistsChanged)
     allPlaylists = Property("QVariantList", _get_all_playlists, notify=playlistsChanged)
     viewKind = Property(str, _get_view_kind, notify=viewChanged)
@@ -446,6 +455,20 @@ class Bridge(QObject):
         self.groupsChanged.emit()
         self.boxesChanged.emit()
 
+    def _set_notice(self, text: str, clear_after_s: float = 0) -> None:
+        """Say what is happening, and stop saying it when it stops.
+
+        A fallback timer clears it, because the thing being waited for can
+        fail to arrive at all. mpv may never report a file, and a line that
+        never goes away is worse than no line.
+        """
+        if text != self._notice:
+            self._notice = text
+            self.noticeChanged.emit()
+        self._notice_timer.stop()
+        if text and clear_after_s:
+            self._notice_timer.start(int(clear_after_s * 1000))
+
     def _set_view(self, kind: str, view_id: int = -1, channel_key: str = "",
                   playlist_id: str = "") -> None:
         if (kind, view_id, channel_key, playlist_id) == (
@@ -582,6 +605,8 @@ class Bridge(QObject):
             return
         self._loading_more = True
         self._set_status(f"searching YouTube for {self._search_text}")
+        self._set_notice("Loading more" if start > 1 else "Searching YouTube",
+                         clear_after_s=60)
         self._searcher = SearchFetcher(self._db, self._cfg, self._search_text, start, PAGE, self)
         self._searcher.results.connect(self._on_web_results)
         self._searcher.failed.connect(self._on_web_search_failed)
@@ -592,6 +617,7 @@ class Bridge(QObject):
         had under the shorter name. Two methods with one name silently leaves
         whichever came last, and the loss is invisible until it runs."""
         self._loading_more = False
+        self._set_notice("")
         if query != self._search_text:
             return                          # the words moved on while it ran
         found = self._db.decorate([dict(row) for row in rows])
@@ -608,6 +634,7 @@ class Bridge(QObject):
 
     def _on_web_search_failed(self, message: str) -> None:
         self._loading_more = False
+        self._set_notice("")
         self._set_status(f"search, {message}")
 
     @Slot()
@@ -631,6 +658,7 @@ class Bridge(QObject):
         if self._playlists is not None and self._playlists.isRunning():
             return
         self._set_status("reading your playlists")
+        self._set_notice("Reading your playlists", clear_after_s=120)
         self._playlists = PlaylistsFetcher(self._db, self._cfg, self)
         self._playlists.ready.connect(self._on_playlists)
         self._playlists.failed.connect(
@@ -638,6 +666,7 @@ class Bridge(QObject):
         self._launch(self._playlists)
 
     def _on_playlists(self, count: int) -> None:
+        self._set_notice("")
         self._set_status(f"{count} playlists")
         self.playlistsChanged.emit()
 
@@ -658,6 +687,7 @@ class Bridge(QObject):
         if not force and stamp and int(time.time()) - int(stamp) < PLAYLIST_TRUST_S:
             return
         self._set_status("reading the playlist")
+        self._set_notice("Reading the playlist", clear_after_s=120)
         self._playlist_items = PlaylistItemsFetcher(self._db, self._cfg, playlist_id, self)
         self._playlist_items.ready.connect(self._on_playlist_items)
         self._playlist_items.failed.connect(
@@ -665,6 +695,7 @@ class Bridge(QObject):
         self._launch(self._playlist_items)
 
     def _on_playlist_items(self, playlist_id: str, count: int) -> None:
+        self._set_notice("")
         self._set_status(f"{count} videos in this playlist")
         self.playlistsChanged.emit()
         if self._view_kind == PLAYLIST and self._view_playlist == playlist_id:
@@ -691,6 +722,8 @@ class Bridge(QObject):
         self._loading_more = append
         self._set_status("asking YouTube for more" if append
                          else "asking YouTube what it suggests")
+        self._set_notice("Loading more" if append else "Asking YouTube what it suggests",
+                         clear_after_s=90)
         self._recommended = RecommendationsFetcher(self._db, self._cfg, PAGE * 2, start,
                                                    append, parent=self)
         self._recommended.ready.connect(self._on_recommended)
@@ -700,6 +733,7 @@ class Bridge(QObject):
 
     def _on_recommended(self, count: int) -> None:
         self._loading_more = False
+        self._set_notice("")
         # Nothing new means the feed has been walked to its end for now.
         self._exhausted = count == 0 and self._db.recommended_count() > 0
         self._set_status(f"{self._db.recommended_count()} suggestions")
@@ -883,6 +917,9 @@ class Bridge(QObject):
         live = bool(row["isLive"]) or login is not None
         if self._player.play(row["url"], twitch_login=login, live=live):
             self._set_status(f"playing {row['title']}")
+            # Handing a URL to mpv takes a few seconds, and until it reports
+            # back there is nothing on screen to say anything happened.
+            self._set_notice("Starting in mpv", clear_after_s=30)
 
     @Slot(str)
     def markWatched(self, key: str) -> None:
@@ -1215,6 +1252,7 @@ class Bridge(QObject):
         self.detailChanged.emit()
 
     def _on_now_playing(self, key: str, _title: str) -> None:
+        self._set_notice("")
         """The panel follows mpv, so whatever starts playing is what it shows,
         including a track mpv moved to on its own."""
         self.openDetail(key)
@@ -1289,6 +1327,8 @@ class Bridge(QObject):
             return
         self._loading_more = append
         self._set_status("reading your YouTube history")
+        self._set_notice("Loading more" if append else "Reading your history",
+                         clear_after_s=120)
         self._history = HistoryImporter(self._db, self._cfg, PAGE * 2, start, append,
                                         parent=self)
         self._history.imported.connect(self._on_history)
@@ -1298,6 +1338,7 @@ class Bridge(QObject):
 
     def _on_history(self, added: int, marked: int) -> None:
         self._loading_more = False
+        self._set_notice("")
         total = self._db.cached_count(self._db.HISTORY)
         self._exhausted = added == 0 and total > 0
         note = f"{total} in your history"

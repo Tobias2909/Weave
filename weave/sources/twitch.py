@@ -217,17 +217,36 @@ class Client:
                 return response.json()
             # An expired token is the one failure worth retrying, and only once.
             if response.status_code == 401 and attempt == 0:
-                self.tokens = refresh(self.client_id, self.tokens.refresh_token, self._session)
-                if self._on_tokens:
-                    self._on_tokens(self.tokens)
+                self._refresh_now()
                 continue
             if response.status_code == 401:
                 raise NeedsLogin(_message(response, "the stored login is no longer valid"))
             raise TwitchError(_message(response, f"request failed with status {response.status_code}"))
         raise TwitchError("request failed")
 
+    def _refresh_now(self) -> None:
+        self.tokens = refresh(self.client_id, self.tokens.refresh_token, self._session)
+        if self._on_tokens:
+            self._on_tokens(self.tokens)
+
     def account_id(self) -> str:
-        return str(validate(self.tokens.access_token, self._session).get("user_id") or "")
+        """Who the token belongs to, refreshing it first if it has expired.
+
+        This has to refresh for itself. It does not go through _get, and it is
+        the first call every live check makes, so without this an expired
+        access token asked for a whole new login rather than being renewed.
+        Twitch access tokens last hours and refresh tokens last months, which
+        is the difference between logging in twice a day and twice a year.
+        """
+        for attempt in (0, 1):
+            try:
+                return str(validate(self.tokens.access_token,
+                                    self._session).get("user_id") or "")
+            except NeedsLogin:
+                if attempt or not self.tokens.refresh_token:
+                    raise
+                self._refresh_now()
+        raise TwitchError("could not identify the account")
 
     def followed_streams(self, user_id: str) -> list[Stream]:
         streams: list[Stream] = []
