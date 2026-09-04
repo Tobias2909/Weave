@@ -501,11 +501,8 @@ class PlaylistItemsFetcher(QThread):
             _spend(self._db, self._cfg, BROWSE, count=0, refused=1)
             self.failed.emit(self._playlist_id, str(exc))
             return
-        count = self._db.replace_playlist_items(self._playlist_id, [{
-            "ext_id": item.ext_id, "title": item.title,
-            "channel_name": item.channel_name, "channel_ext_id": item.channel_ext_id,
-            "duration_s": item.duration_s, "thumbnail_url": item.thumbnail_url,
-        } for item in items])
+        count = self._db.replace_playlist_items(
+            self._playlist_id, [flatlist.as_row(item) for item in items])
         self._db.close()
         self.ready.emit(self._playlist_id, count)
 

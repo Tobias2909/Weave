@@ -97,6 +97,9 @@ class Bridge(QObject):
         self._twitch_needs_login = False
         self._detail: DetailFetcher | None = None
         self._detail_key = ""
+        # Dislikes for a video that is not in the videos table. Storing them
+        # has nowhere to go there, and they are worth showing anyway.
+        self._detail_dislikes: tuple[str, int] | None = None
         self._detail_comments: list = []
         self._detail_threads = 5
         self._detail_loading = False
@@ -303,10 +306,17 @@ class Bridge(QObject):
             "viewsText": fmt.count_text(row["views"]),
             "likesText": fmt.count_text(row["likes"]),
             # An estimate rather than a count, and said so in the panel.
-            "dislikesText": fmt.count_text(row["dislikes"]),
+            "dislikesText": fmt.count_text(self._dislikes_for(row)),
             "watched": bool(row["watched"]),
             "isLive": row["live_status"] == "is_live",
         }
+
+    def _dislikes_for(self, row) -> int | None:
+        if row.get("dislikes") is not None:
+            return row["dislikes"]
+        if self._detail_dislikes and self._detail_dislikes[0] == row["key"]:
+            return self._detail_dislikes[1]
+        return None
 
     def _get_detail_open(self) -> bool:
         return bool(self._detail_key) and not self._detail_closed
@@ -495,16 +505,21 @@ class Bridge(QObject):
             self._fetch_playlist_items(playlist_id)
 
     def _selectable(self) -> list[tuple[str, int]]:
-        """Everything the sidebar offers, in the order it is drawn. All first,
-        then groups, then boxes. A channel page is not in here because it is
-        not reachable from the sidebar."""
+        """Everything the sidebar offers, in the order it is drawn.
+
+        The order has to match the sidebar exactly. When the playlists moved
+        below the boxes and this did not, the wheel walked straight past the
+        boxes and landed in the playlists, which is not where the eye was.
+        A channel page is not in here because it is not reachable from the
+        sidebar.
+        """
         entries: list[tuple[str, int]] = [(ALL, -1)]
         entries.extend((GROUP, int(row["id"])) for row in self._db.groups())
         entries.append((RECOMMENDED, -1))
         entries.append((HISTORY, -1))
         entries.append((MUSIC, -1))
-        entries.extend((PLAYLIST, index) for index, _ in enumerate(self._db.playlists()))
         entries.extend((BOX, int(row["id"])) for row in self._db.boxes())
+        entries.extend((PLAYLIST, index) for index, _ in enumerate(self._db.playlists()))
         return entries
 
     @Slot(int)
@@ -1226,7 +1241,8 @@ class Bridge(QObject):
         self._detail.failed.connect(self._on_detail_failed)
         self._launch(self._detail)
 
-    def _on_votes(self, key: str, _count: int) -> None:
+    def _on_votes(self, key: str, count: int) -> None:
+        self._detail_dislikes = (key, count)
         if key == self._detail_key:
             self.detailChanged.emit()
 
@@ -1252,7 +1268,10 @@ class Bridge(QObject):
         self.detailChanged.emit()
 
     def _on_now_playing(self, key: str, _title: str) -> None:
-        self._set_notice("")
+        # mpv reports the file before its window is up, so the line stays a
+        # moment longer rather than going as the screen is still empty.
+        if self._notice:
+            self._set_notice(self._notice, clear_after_s=3)
         """The panel follows mpv, so whatever starts playing is what it shows,
         including a track mpv moved to on its own."""
         self.openDetail(key)

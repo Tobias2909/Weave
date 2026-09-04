@@ -56,6 +56,11 @@ class FeedModel(QAbstractListModel):
 
         Recommendations come from their own table rather than from the feed,
         and are shaped the same on purpose so one grid draws both.
+
+        A list that begins with what is already shown is treated as an
+        addition rather than as a new list. Resetting a model sends the view
+        back to the top, and being thrown to the top is exactly what loading
+        more at the bottom must not do.
         """
         built = [self._build(row) for row in rows]
 
@@ -69,6 +74,14 @@ class FeedModel(QAbstractListModel):
             item["progress"] = (min(1.0, seconds / duration)
                                 if seconds and duration and duration > 0 else 0.0)
 
+        grew = (len(built) > len(self._rows) and self._rows
+                and [row["key"] for row in built[:len(self._rows)]]
+                == [row["key"] for row in self._rows])
+        if grew:
+            self.beginInsertRows(QModelIndex(), len(self._rows), len(built) - 1)
+            self._rows = built
+            self.endInsertRows()
+            return
         self.beginResetModel()
         self._rows = built
         self.endResetModel()

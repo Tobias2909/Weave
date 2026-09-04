@@ -80,4 +80,5 @@ def as_row(item: FlatVideo) -> dict:
         "ext_id": item.ext_id, "title": item.title,
         "channel_name": item.channel_name, "channel_ext_id": item.channel_ext_id,
         "duration_s": item.duration_s, "thumbnail_url": item.thumbnail_url,
+        "views": item.views,
     }

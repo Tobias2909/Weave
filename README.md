@@ -165,7 +165,13 @@ error.
 
 A set is kept for six hours and then asked for again on the next visit, or
 straight away with **Ask again** in the bar. Scrolling to the bottom asks for
-more, and gets genuinely different ones, since the feed pages.
+more, and gets genuinely different ones, since the feed pages. More is added to
+the end rather than replacing what is there, so loading it does not send you
+back to the top.
+
+A suggestion carries a view count and a duration. It carries no upload date and
+no like count, measured, and asking for those would be one request per card, so
+they stay empty on the card and arrive in the panel when you open it.
 
 ```sh
 python -m weave recommended

@@ -220,11 +220,9 @@ def _cmd_recommended(args) -> int:
     except recommended.RecommendedError as exc:
         print(exc, file=sys.stderr)
         return 1
-    db.replace_recommended([{
-        "ext_id": item.ext_id, "title": item.title, "channel_name": item.channel_name,
-        "channel_ext_id": item.channel_ext_id, "duration_s": item.duration_s,
-        "thumbnail_url": item.thumbnail_url,
-    } for item in found])
+    # Through the shared builder, so a field added there reaches here too.
+    # Writing the dict out by hand is how the view count went missing.
+    db.replace_recommended([flatlist.as_row(item) for item in found])
     print(f"{len(found)} suggestions")
     for row in db.recommended(limit=args.limit):
         print(f"  {row['ext_id']}  {(row['channel_title'] or '')[:24]:<24} {row['title'][:52]}")
@@ -256,11 +254,8 @@ def _cmd_playlists(args) -> int:
         except playlist_source.PlaylistError as exc:
             print(exc, file=sys.stderr)
             return 1
-        db.replace_playlist_items(found["ext_id"], [{
-            "ext_id": item.ext_id, "title": item.title, "channel_name": item.channel_name,
-            "channel_ext_id": item.channel_ext_id, "duration_s": item.duration_s,
-            "thumbnail_url": item.thumbnail_url,
-        } for item in items])
+        db.replace_playlist_items(found["ext_id"],
+                                  [flatlist.as_row(item) for item in items])
         print(f"{found['title']}, {len(items)} videos")
         for row in db.playlist_items(found["ext_id"]):
             print(f"  {row['ext_id']}  {(row['channel_title'] or '')[:22]:<22} {row['title'][:48]}")

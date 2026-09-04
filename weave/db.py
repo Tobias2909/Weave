@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS cached_videos (
     channel_ext_id TEXT,
     duration_s     INTEGER,
     thumbnail_url  TEXT,
+    views          INTEGER,
     position       INTEGER NOT NULL,
     seen_at        INTEGER NOT NULL,
     PRIMARY KEY (kind, ext_id)
@@ -250,6 +251,9 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # A long playlist list buries everything under it, so each one can be put
     # out of the way without being forgotten.
     ("playlists", "hidden", "INTEGER NOT NULL DEFAULT 0"),
+    # The suggestions carry a view count. The history and a playlist do not,
+    # measured, so it stays empty for those rather than being invented.
+    ("cached_videos", "views", "INTEGER"),
 )
 
 
@@ -565,12 +569,52 @@ class Database:
                          (count, int(time.time()), video_key))
 
     def video(self, key: str) -> dict | None:
-        """One video with everything the detail panel shows."""
+        """One video with everything the detail panel shows.
+
+        Falls back to the lists that came from YouTube, since a suggestion, a
+        history entry or a playlist entry is a real video you can open and is
+        not in the videos table on purpose. Those carry less, so the missing
+        columns come back empty rather than absent.
+        """
         row = self.conn.execute(
             "SELECT v.*, c.title AS channel_title, c.avatar_url, "
             "       w.video_key IS NOT NULL AS watched "
             "FROM videos v JOIN channels c ON c.key = v.channel_key "
             "LEFT JOIN watched w ON w.video_key = v.key WHERE v.key=?", (key,)).fetchone()
+        return dict(row) if row else self.unstored_video(key)
+
+    def unstored_video(self, key: str) -> dict | None:
+        """A video known only from one of the lists YouTube gave us."""
+        row = self.conn.execute(
+            """
+            SELECT 'yt:' || r.ext_id AS key, 'youtube' AS platform, r.ext_id AS ext_id,
+                   COALESCE(c.key, '') AS channel_key, r.title AS title,
+                   NULL AS published_at, r.thumbnail_url AS thumbnail_url,
+                   r.duration_s AS duration_s, r.views AS views,
+                   NULL AS likes, NULL AS dislikes, NULL AS live_status,
+                   NULL AS is_short,
+                   COALESCE(c.title, r.channel_name) AS channel_title,
+                   c.avatar_url AS avatar_url,
+                   w.video_key IS NOT NULL AS watched
+            FROM cached_videos r
+            LEFT JOIN channels c ON c.ext_id = r.channel_ext_id AND c.platform = 'youtube'
+            LEFT JOIN watched w ON w.video_key = 'yt:' || r.ext_id
+            WHERE r.ext_id = ?
+            UNION ALL
+            SELECT 'yt:' || i.ext_id, 'youtube', i.ext_id,
+                   COALESCE(c.key, ''), i.title,
+                   NULL, i.thumbnail_url, i.duration_s, NULL,
+                   NULL, NULL, NULL, NULL,
+                   COALESCE(c.title, i.channel_name), c.avatar_url,
+                   w.video_key IS NOT NULL
+            FROM playlist_items i
+            LEFT JOIN channels c ON c.ext_id = i.channel_ext_id AND c.platform = 'youtube'
+            LEFT JOIN watched w ON w.video_key = 'yt:' || i.ext_id
+            WHERE i.ext_id = ?
+            LIMIT 1
+            """,
+            (key.split(":", 1)[-1], key.split(":", 1)[-1]),
+        ).fetchone()
         return dict(row) if row else None
 
     def set_live_state(self, video_key: str, viewers: int | None, still_live: bool) -> None:
@@ -829,11 +873,11 @@ class Database:
             conn.execute("DELETE FROM cached_videos WHERE kind=?", (kind,))
             conn.executemany(
                 "INSERT INTO cached_videos(kind, ext_id, title, channel_name, "
-                "  channel_ext_id, duration_s, thumbnail_url, position, seen_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                "  channel_ext_id, duration_s, thumbnail_url, views, position, seen_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
                 [(kind, row["ext_id"], row["title"], row.get("channel_name"),
                   row.get("channel_ext_id"), row.get("duration_s"),
-                  row.get("thumbnail_url"), index, now)
+                  row.get("thumbnail_url"), row.get("views"), index, now)
                  for index, row in enumerate(rows)],
             )
         self.set_state(f"{kind}_at", str(now))
@@ -856,11 +900,11 @@ class Database:
             before = conn.total_changes
             conn.executemany(
                 "INSERT INTO cached_videos(kind, ext_id, title, channel_name, "
-                "  channel_ext_id, duration_s, thumbnail_url, position, seen_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                "  channel_ext_id, duration_s, thumbnail_url, views, position, seen_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
                 [(kind, row["ext_id"], row["title"], row.get("channel_name"),
                   row.get("channel_ext_id"), row.get("duration_s"),
-                  row.get("thumbnail_url"), start + index, now)
+                  row.get("thumbnail_url"), row.get("views"), start + index, now)
                  for index, row in enumerate(rows)],
             )
             return conn.total_changes - before
@@ -887,7 +931,7 @@ class Database:
                    NULL                        AS published_at,
                    r.thumbnail_url             AS thumbnail_url,
                    r.duration_s                AS duration_s,
-                   NULL                        AS views,
+                   r.views                     AS views,
                    NULL                        AS likes,
                    NULL                        AS live_status,
                    COALESCE(c.title, r.channel_name) AS channel_title,
