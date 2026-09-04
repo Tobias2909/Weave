@@ -1049,7 +1049,13 @@ class Bridge(QObject):
         # A Twitch entry is only ever a live channel for now, and a YouTube one
         # says so in the row. Either way mpv must not mark it watched.
         live = bool(row["isLive"]) or login is not None
-        if self._player.play(row["url"], twitch_login=login, live=live):
+        url = row["url"]
+        if self._view_kind == PLAYLIST and self._view_playlist and not login:
+            # Opened from a playlist, so the playlist is what is handed over,
+            # starting on the video that was clicked. Otherwise the window
+            # closes after one and the list is not a list.
+            url = ids.playlist_watch_url(row["key"].split(":", 1)[1], self._view_playlist)
+        if self._player.play(url, twitch_login=login, live=live):
             self._set_status(f"playing {row['title']}")
             # Handing a URL to mpv takes a few seconds, and until it reports
             # back there is nothing on screen to say anything happened.
@@ -1261,16 +1267,38 @@ class Bridge(QObject):
 
     @Slot(str)
     def playAudio(self, video_key: str) -> None:
-        """The headphone button on a video card. Same video, no window."""
+        """The headphone button on a video card.
+
+        In a playlist the whole list is queued, starting on the video that was
+        clicked, so listening to a playlist behaves like a playlist. Anywhere
+        else it is the one video, since queueing a feed of several hundred is
+        not what a headphone on one card means.
+        """
         row = self._model.row_for_key(video_key) or {}
         if not self._audio or not row:
             return
-        self._audio.play_items([{
-            "key": video_key, "title": row["title"], "artist": row["channelTitle"],
+        if self._view_kind == PLAYLIST:
+            queue = [self._as_track(self._model.row_at(index))
+                     for index in range(self._model.rowCount())]
+            queue = [track for track in queue if track]
+            start = next((i for i, track in enumerate(queue)
+                          if track["key"] == video_key), 0)
+            if queue:
+                self._audio.play_items(queue, start=start)
+                self._set_status(f"listening to this playlist from {row['title']}")
+                return
+        self._audio.play_items([self._as_track(row)])
+        self._set_status(f"listening to {row['title']}")
+
+    @staticmethod
+    def _as_track(row) -> dict | None:
+        if not row:
+            return None
+        return {
+            "key": row["key"], "title": row["title"], "artist": row["channelTitle"],
             "thumbnail": row["thumbnail"], "live": bool(row["isLive"]),
             "url": row["url"],
-        }])
-        self._set_status(f"listening to {row['title']}")
+        }
 
     @Slot(str, str, bool)
     def addSource(self, label: str, url: str, live: bool) -> None:

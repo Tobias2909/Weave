@@ -195,3 +195,20 @@ def watch_url(platform: str, ext_id: str) -> str:
     if platform == "twitch":
         return f"https://www.twitch.tv/{ext_id}"
     return f"https://www.youtube.com/watch?v={ext_id}"
+
+
+def playlist_watch_url(ext_id: str, playlist_id: str) -> str:
+    """One video, as part of its playlist.
+
+    The list has to be in the address. mpv is handed the whole playlist and
+    told which entry to start on, which is what makes the next video follow
+    rather than the window closing after one.
+
+    It does cost that video its own resume position, since mpv names the
+    resume file after the exact address, so the same video played from a
+    playlist and played alone are two identities to it. That is the trade a
+    browser makes for the same reason.
+    """
+    if not playlist_id:
+        return watch_url("youtube", ext_id)
+    return f"https://www.youtube.com/watch?v={ext_id}&list={playlist_id}"

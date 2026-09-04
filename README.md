@@ -146,7 +146,18 @@ lot. Hiding is not forgetting. A hidden
 playlist keeps its contents and comes back the moment it is shown again.
 
 A playlist keeps the order it was given rather than being sorted by date, since
-that order is the point of somebody having made it. As with recommendations,
+that order is the point of somebody having made it.
+
+Clicking a video in a playlist hands mpv **the whole playlist**, starting on the
+video you clicked, so the next one follows instead of the window closing. The
+headphone button does the same for listening, queueing the whole list from the
+track you pressed. Both cost that video its own resume position, because mpv
+names its resume file after the exact address and a video played from a
+playlist is a second address to it, which is the same trade a browser makes.
+
+One exception, and it is deliberate. If queue mode is on in the mpv wrapper,
+one video is one video, because expanding somebody's hundred entry playlist
+into a two video loop is never what that was for. As with recommendations,
 nothing here is written into the feed, because a playlist is full of channels
 you may not track at all.
 

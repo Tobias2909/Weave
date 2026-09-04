@@ -138,5 +138,24 @@ class KeyForMediaPath(unittest.TestCase):
         self.assertIsNone(ids.key_for_media_path("/home/user/video.mkv"))
 
 
+class PlaylistAddresses(unittest.TestCase):
+    """A video opened from a playlist is handed over as part of it, so mpv
+    plays the list rather than closing after one."""
+
+    def test_the_list_is_in_the_address(self):
+        self.assertEqual(ids.playlist_watch_url("aaaaaaaaaaa", "PL123"),
+                         "https://www.youtube.com/watch?v=aaaaaaaaaaa&list=PL123")
+
+    def test_without_a_list_it_is_the_plain_address(self):
+        self.assertEqual(ids.playlist_watch_url("aaaaaaaaaaa", ""),
+                         "https://www.youtube.com/watch?v=aaaaaaaaaaa")
+
+    def test_the_plain_address_still_carries_nothing_extra(self):
+        # mpv names its resume file after the exact address, so anything extra
+        # gives a video a second identity and loses its position.
+        self.assertEqual(ids.watch_url("youtube", "aaaaaaaaaaa"),
+                         "https://www.youtube.com/watch?v=aaaaaaaaaaa")
+
+
 if __name__ == "__main__":
     unittest.main()

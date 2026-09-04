@@ -105,6 +105,10 @@ class FeedModel(QAbstractListModel):
             "progress": 0.0,
         }
 
+    def row_at(self, row: int) -> dict | None:
+        """The whole row, for the places that need more than its key."""
+        return self._rows[row] if 0 <= row < len(self._rows) else None
+
     def key_at(self, row: int) -> str | None:
         return self._rows[row]["key"] if 0 <= row < len(self._rows) else None
 
