@@ -28,6 +28,8 @@ This is the first milestone. Working right now
 * Search across everything stored, as you type, over the local database and
   with no request at all
 * What YouTube suggests, in its own view, kept out of the feed
+* Your real YouTube playlists, read on request, each one opening as its own
+  page in the order somebody put it in
 * A history of what you have watched, which can be seeded once from the history
   YouTube already keeps
 * A live bar across the top showing who is streaming right now, Twitch and
@@ -123,6 +125,27 @@ a held down refresh button rather than on normal use.
 
 ```sh
 python -m weave budget
+```
+
+## Playlists
+
+These are YouTube's own, as opposed to boxes, which are this application's. The
+two were deliberately never given the same name.
+
+Nothing is read at launch. The arrow beside **Playlists** in the sidebar reads
+the list, which is one cheap call and carries no contents, and opening one then
+reads that playlist. Most playlists are never opened, so paying for them all
+up front would be paying for nothing. Contents are kept for six hours, and
+**Read it again** in the bar asks straight away.
+
+A playlist keeps the order it was given rather than being sorted by date, since
+that order is the point of somebody having made it. As with recommendations,
+nothing here is written into the feed, because a playlist is full of channels
+you may not track at all.
+
+```sh
+python -m weave playlists
+python -m weave playlists Holidays
 ```
 
 ## Recommendations, kept where they belong

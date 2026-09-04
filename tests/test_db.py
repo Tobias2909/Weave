@@ -557,6 +557,65 @@ class Recommendations(DatabaseCase):
         self.assertLess(self.db.recommended_age_s(), 5)
 
 
+class Playlists(DatabaseCase):
+    """YouTube's own lists. Their videos are kept out of the feed for the same
+    reason recommendations are."""
+
+    def items(self, *ids):
+        return [{"ext_id": i, "title": f"Video {i}", "channel_name": "Someone",
+                 "channel_ext_id": "UC9", "duration_s": 60, "thumbnail_url": "t"}
+                for i in ids]
+
+    def test_the_list_replaces_rather_than_accumulates(self):
+        self.db.replace_playlists([{"ext_id": "PL1", "title": "One"},
+                                   {"ext_id": "PL2", "title": "Two"}])
+        self.db.replace_playlists([{"ext_id": "PL1", "title": "One renamed"}])
+        self.assertEqual([(p["ext_id"], p["title"]) for p in self.db.playlists()],
+                         [("PL1", "One renamed")])
+
+    def test_a_playlist_that_is_gone_takes_its_videos_with_it(self):
+        self.db.replace_playlists([{"ext_id": "PL1", "title": "One"}])
+        self.db.replace_playlist_items("PL1", self.items("aaaaaaaaaaa"))
+        self.db.replace_playlists([])
+        self.assertEqual(self.db.playlist_items("PL1"), [])
+
+    def test_contents_survive_the_list_being_read_again(self):
+        self.db.replace_playlists([{"ext_id": "PL1", "title": "One"}])
+        self.db.replace_playlist_items("PL1", self.items("aaaaaaaaaaa"))
+        self.db.replace_playlists([{"ext_id": "PL1", "title": "One"}])
+        self.assertEqual(len(self.db.playlist_items("PL1")), 1)
+
+    def test_nothing_reaches_the_feed(self):
+        self.db.replace_playlists([{"ext_id": "PL1", "title": "One"}])
+        self.db.replace_playlist_items("PL1", self.items("aaaaaaaaaaa"))
+        self.assertEqual(self.db.feed(), [])
+        self.assertEqual(self.db.channels(), [])
+
+    def test_a_playlist_keeps_the_order_it_was_given(self):
+        self.db.replace_playlists([{"ext_id": "PL1", "title": "One"}])
+        self.db.replace_playlist_items("PL1", self.items("bbbbbbbbbbb", "aaaaaaaaaaa"))
+        self.assertEqual([r["ext_id"] for r in self.db.playlist_items("PL1")],
+                         ["bbbbbbbbbbb", "aaaaaaaaaaa"])
+
+    def test_a_video_from_a_tracked_channel_gets_its_icon(self):
+        self.db.add_channel("yt:UC9", "youtube", "UC9", "Real name", "http://a/av.jpg")
+        self.db.replace_playlists([{"ext_id": "PL1", "title": "One"}])
+        self.db.replace_playlist_items("PL1", self.items("aaaaaaaaaaa"))
+        row = self.db.playlist_items("PL1")[0]
+        self.assertEqual((row["channel_title"], row["channel_key"]), ("Real name", "yt:UC9"))
+
+    def test_reading_the_contents_is_stamped(self):
+        self.db.replace_playlists([{"ext_id": "PL1", "title": "One"}])
+        self.assertIsNone(self.db.playlist("PL1")["items_at"])
+        self.db.replace_playlist_items("PL1", self.items("aaaaaaaaaaa"))
+        self.assertIsNotNone(self.db.playlist("PL1")["items_at"])
+
+    def test_the_count_beside_the_name(self):
+        self.db.replace_playlists([{"ext_id": "PL1", "title": "One"}])
+        self.db.replace_playlist_items("PL1", self.items("aaaaaaaaaaa", "bbbbbbbbbbb"))
+        self.assertEqual(self.db.playlists()[0]["items"], 2)
+
+
 class AppState(DatabaseCase):
     def test_round_trip_with_a_default(self):
         self.assertEqual(self.db.get_state("missing", "fallback"), "fallback")

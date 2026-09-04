@@ -16,7 +16,7 @@ from .budget import Budget
 from .sources import twitch
 from .db import Database
 from .net import Throttle
-from .sources import history, recommended, subs
+from .sources import history, playlists as playlist_source, recommended, subs
 from .sources.resolve import ResolveError, resolve
 
 
@@ -206,6 +206,55 @@ def _cmd_recommended(args) -> int:
     print(f"{len(found)} suggestions")
     for row in db.recommended(limit=args.limit):
         print(f"  {row['ext_id']}  {(row['channel_title'] or '')[:24]:<24} {row['title'][:52]}")
+    return 0
+
+
+def _cmd_playlists(args) -> int:
+    """Read your playlists, and one playlist's videos when asked for.
+
+    Two calls rather than one, because the list is cheap and the contents are
+    not, and most playlists are never opened.
+    """
+    cfg = config.load()
+    db = Database(paths.DB_FILE)
+    throttle = Throttle(1, cfg.min_request_interval_s)
+    budget = Budget(db, cfg.budget_limits, cfg.budget_window_s)
+
+    if args.name:
+        found = next((p for p in db.playlists()
+                      if args.name.lower() in p["title"].lower()
+                      or args.name == p["ext_id"]), None)
+        if found is None:
+            print(f"no playlist here matching {args.name!r}, run this without a name first",
+                  file=sys.stderr)
+            return 1
+        budget.spend("browse")
+        try:
+            items = playlist_source.fetch_items(cfg, found["ext_id"], args.limit, throttle)
+        except playlist_source.PlaylistError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        db.replace_playlist_items(found["ext_id"], [{
+            "ext_id": item.ext_id, "title": item.title, "channel_name": item.channel_name,
+            "channel_ext_id": item.channel_ext_id, "duration_s": item.duration_s,
+            "thumbnail_url": item.thumbnail_url,
+        } for item in items])
+        print(f"{found['title']}, {len(items)} videos")
+        for row in db.playlist_items(found["ext_id"]):
+            print(f"  {row['ext_id']}  {(row['channel_title'] or '')[:22]:<22} {row['title'][:48]}")
+        return 0
+
+    budget.spend("browse")
+    try:
+        found = playlist_source.fetch_list(cfg, throttle=throttle)
+    except playlist_source.PlaylistError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    db.replace_playlists([{"ext_id": item.ext_id, "title": item.title} for item in found])
+    print(f"{len(found)} playlists")
+    for row in db.playlists():
+        seen = f"{row['items']} videos read" if row["items_at"] else "not read yet"
+        print(f"  {row['ext_id']:<36} {row['title'][:34]:<34} {seen}")
     return 0
 
 
@@ -612,6 +661,12 @@ def main() -> int:
     watched.add_argument("--limit", type=int, default=2000,
                          help="how far back to read, newest first")
     watched.set_defaults(func=_cmd_history)
+
+    lists = subparsers.add_parser(
+        "playlists", help="read your YouTube playlists, or one of them")
+    lists.add_argument("name", nargs="?", help="a playlist name or id, to read its videos")
+    lists.add_argument("--limit", type=int, default=300)
+    lists.set_defaults(func=_cmd_playlists)
 
     suggested = subparsers.add_parser(
         "recommended", help="refresh what YouTube suggests")

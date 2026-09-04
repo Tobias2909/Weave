@@ -140,6 +140,21 @@ class WorkerRuns(unittest.TestCase):
         self.run_worker(poller.RecommendationsFetcher(self.db, self.cfg))
         self.assertEqual([r["title"] for r in self.db.recommended()], ["A suggestion"])
 
+    def test_playlists_fetcher(self):
+        self.patch(poller.playlist_source, "fetch_list",
+                   lambda *a, **k: [poller.playlist_source.Playlist("PL1", "One")])
+        self.run_worker(poller.PlaylistsFetcher(self.db, self.cfg))
+        self.assertEqual([p["title"] for p in self.db.playlists()], ["One"])
+
+    def test_playlist_items_fetcher(self):
+        self.db.replace_playlists([{"ext_id": "PL1", "title": "One"}])
+        self.patch(poller.playlist_source, "fetch_items",
+                   lambda *a, **k: [poller.playlist_source.PlaylistItem(
+                       "aaaaaaaaaaa", "In a playlist", "Someone", "UC9", 60, "t")])
+        self.run_worker(poller.PlaylistItemsFetcher(self.db, self.cfg, "PL1"))
+        self.assertEqual([i["title"] for i in self.db.playlist_items("PL1")],
+                         ["In a playlist"])
+
     def test_live_watcher(self):
         self.patch(poller.tokens, "load", lambda: object())
         self.patch(poller.twitch, "Client", _TwitchClient)
@@ -165,14 +180,78 @@ class WorkerRuns(unittest.TestCase):
         said = self.run_worker(worker)
         self.assertTrue(any("client id" in line for line in said))
 
+    def test_shutdown_cancels_a_thread_that_has_not_begun_yet(self):
+        """The race behind a crash on exit.
+
+        A thread that has been started but whose run has not begun is not
+        running yet, so filtering the shutdown list on that left it alive, and
+        Qt aborts the process when it destroys a live QThread. Cancelling one
+        that never started costs nothing, so every thread is cancelled.
+        """
+        from weave.ui.bridge import Bridge
+
+        class Idle:
+            def __init__(self):
+                self.cancelled = False
+                self.waited = False
+
+            def isRunning(self):
+                return False        # exactly the case that used to be skipped
+
+            def cancel(self):
+                self.cancelled = True
+
+            def wait(self, _ms):
+                self.waited = True
+
+        idle = Idle()
+        bridge = Bridge.__new__(Bridge)          # no Qt object needed for this
+        bridge._stopping = False
+        bridge._poller = idle
+        for name in ("_adder", "_importer", "_history", "_recommended", "_playlists",
+                     "_playlist_items", "_details", "_live", "_twitch", "_detail",
+                     "_search", "_home", "_tracks"):
+            setattr(bridge, name, None)
+        bridge._source_details = []
+        bridge._audio = None
+        bridge._player = None
+        Bridge.shutdown(bridge, timeout_ms=10)
+        self.assertTrue(idle.cancelled)
+        self.assertTrue(idle.waited)
+
+    def test_nothing_new_starts_once_shutdown_has_begun(self):
+        """The other half of the same crash, and the half that actually caused
+        it. A timer that was already due fired after shutdown had finished,
+        started a fresh poll, and Qt aborted destroying the live thread.
+        """
+        from weave.ui.bridge import Bridge
+
+        class Started:
+            def __init__(self):
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+        bridge = Bridge.__new__(Bridge)
+        bridge._stopping = False
+        first = Started()
+        self.assertTrue(Bridge._launch(bridge, first))
+        self.assertTrue(first.started)
+
+        bridge._stopping = True
+        second = Started()
+        self.assertFalse(Bridge._launch(bridge, second))
+        self.assertFalse(second.started)
+
     def test_every_worker_that_counts_requests_is_run_here(self):
         """A worker that counts requests has to be run by a test, or the next
         missing attribute reaches the app the way the last one did."""
         import re
 
         run_here = {"FeedPoller", "SubsImporter", "ChannelDetailsFetcher",
-                    "HistoryImporter", "RecommendationsFetcher", "LiveWatcher",
-                    "DetailFetcher"}
+                    "HistoryImporter", "RecommendationsFetcher", "PlaylistsFetcher",
+                    "PlaylistItemsFetcher", "LiveWatcher", "DetailFetcher"}
         source = Path("weave/poller.py").read_text()
         spenders = {match.group(1)
                     for match in re.finditer(r"class (\w+)\(QThread\):(.*?)(?=\nclass |\Z)",

@@ -48,6 +48,7 @@ from .sources import comments as comment_source
 from .sources import livecheck
 from .sources import dislikes as dislike_source
 from .sources import history as history_source
+from .sources import playlists as playlist_source
 from .sources import recommended as recommended_source
 from .sources import rss, subs, sweep, twitch
 
@@ -420,6 +421,82 @@ class RecommendationsFetcher(QThread):
         } for item in found])
         self._db.close()
         self.ready.emit(count)
+
+
+class PlaylistsFetcher(QThread):
+    """The list of your playlists, without their contents.
+
+    Two calls rather than one, because the list is cheap and the contents are
+    not, and most playlists are never opened.
+    """
+
+    ready = Signal(int)
+    failed = Signal(str)
+
+    def __init__(self, db: Database, cfg: Config, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._db = db
+        self._cfg = cfg
+        self._throttle = Throttle(1, cfg.min_request_interval_s)
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def run(self) -> None:
+        _spend(self._db, self._cfg, BROWSE)
+        try:
+            found = playlist_source.fetch_list(self._cfg, throttle=self._throttle,
+                                               cancel=self._cancel)
+        except ProcessCancelled:
+            return
+        except playlist_source.PlaylistError as exc:
+            _spend(self._db, self._cfg, BROWSE, count=0, refused=1)
+            self.failed.emit(str(exc))
+            return
+        count = self._db.replace_playlists(
+            [{"ext_id": item.ext_id, "title": item.title} for item in found])
+        self._db.close()
+        self.ready.emit(count)
+
+
+class PlaylistItemsFetcher(QThread):
+    """One playlist's videos, read when it is first opened."""
+
+    ready = Signal(str, int)
+    failed = Signal(str, str)
+
+    def __init__(self, db: Database, cfg: Config, playlist_id: str,
+                 parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._db = db
+        self._cfg = cfg
+        self._playlist_id = playlist_id
+        self._throttle = Throttle(1, cfg.min_request_interval_s)
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def run(self) -> None:
+        _spend(self._db, self._cfg, BROWSE)
+        try:
+            items = playlist_source.fetch_items(self._cfg, self._playlist_id,
+                                                throttle=self._throttle,
+                                                cancel=self._cancel)
+        except ProcessCancelled:
+            return
+        except playlist_source.PlaylistError as exc:
+            _spend(self._db, self._cfg, BROWSE, count=0, refused=1)
+            self.failed.emit(self._playlist_id, str(exc))
+            return
+        count = self._db.replace_playlist_items(self._playlist_id, [{
+            "ext_id": item.ext_id, "title": item.title,
+            "channel_name": item.channel_name, "channel_ext_id": item.channel_ext_id,
+            "duration_s": item.duration_s, "thumbnail_url": item.thumbnail_url,
+        } for item in items])
+        self._db.close()
+        self.ready.emit(self._playlist_id, count)
 
 
 class ChannelDetailsFetcher(QThread):

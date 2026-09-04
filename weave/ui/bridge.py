@@ -24,8 +24,8 @@ from ..imagecache import qml_source
 from ..player.mpv import Player
 from ..poller import (ChannelAdder, ChannelDetailsFetcher, DetailFetcher, FeedPoller,
                       HistoryImporter, LiveWatcher, MusicHome, MusicSearch,
-                      RecommendationsFetcher, SourceDetails, TrackList, SubsImporter,
-                      TwitchLogin)
+                      PlaylistItemsFetcher, PlaylistsFetcher, RecommendationsFetcher,
+                      SourceDetails, TrackList, SubsImporter, TwitchLogin)
 from .feed_model import FeedModel
 
 ALL = "all"
@@ -36,9 +36,12 @@ CHANNEL = "channel"
 SEARCH = "search"
 HISTORY = "history"
 RECOMMENDED = "recommended"
+PLAYLIST = "playlist"
 
-# How long a set of recommendations is worth showing before asking for another.
+# How long a set of recommendations is worth showing before asking for another,
+# and how long a playlist's contents are trusted before reading them again.
 RECOMMENDED_TRUST_S = 6 * 3600
+PLAYLIST_TRUST_S = 6 * 3600
 
 # How long the shelves are trusted before being gathered again. They are a
 # recommendation, not a fact, and they cost several seconds to fetch.
@@ -52,6 +55,7 @@ class Bridge(QObject):
     problemsChanged = Signal()
     emptyHintChanged = Signal()
     groupsChanged = Signal()
+    playlistsChanged = Signal()
     boxesChanged = Signal()
     viewChanged = Signal()
     liveChanged = Signal()
@@ -72,6 +76,12 @@ class Bridge(QObject):
         self._importer: SubsImporter | None = None
         self._history: HistoryImporter | None = None
         self._recommended: RecommendationsFetcher | None = None
+        self._playlists: PlaylistsFetcher | None = None
+        self._playlist_items: PlaylistItemsFetcher | None = None
+        self._view_playlist = ""
+        # Set once the window is going away, so nothing starts a new thread
+        # after the shutdown has already waited for the old ones.
+        self._stopping = False
         self._details: ChannelDetailsFetcher | None = None
         self._live: LiveWatcher | None = None
         self._twitch: TwitchLogin | None = None
@@ -145,6 +155,9 @@ class Bridge(QObject):
     def _get_boxes(self) -> list:
         return self._db.boxes()
 
+    def _get_playlists(self) -> list:
+        return self._db.playlists()
+
     def _get_view_kind(self) -> str:
         return self._view_kind
 
@@ -169,6 +182,8 @@ class Bridge(QObject):
     def _get_empty_hint(self) -> str:
         """What to say when the grid is empty. There are several different
         reasons for that and they need different answers."""
+        if self._view_kind == PLAYLIST:
+            return "This playlist is empty."
         if self._view_kind == RECOMMENDED:
             return "Nothing suggested yet.\nPress Ask again in the bar."
         if self._view_kind == SEARCH:
@@ -201,8 +216,10 @@ class Bridge(QObject):
     emptyHint = Property(str, _get_empty_hint, notify=emptyHintChanged)
     groups = Property("QVariantList", _get_groups, notify=groupsChanged)
     boxes = Property("QVariantList", _get_boxes, notify=boxesChanged)
+    playlists = Property("QVariantList", _get_playlists, notify=playlistsChanged)
     viewKind = Property(str, _get_view_kind, notify=viewChanged)
     viewId = Property(int, _get_view_id, notify=viewChanged)
+    viewPlaylist = Property(str, lambda self: self._view_playlist, notify=viewChanged)
     channelInfo = Property("QVariantMap", _get_channel_info, notify=viewChanged)
 
     def _get_live(self) -> list:
@@ -370,6 +387,12 @@ class Bridge(QObject):
             self.groupsChanged.emit()
             self.boxesChanged.emit()
             return
+        if self._view_kind == PLAYLIST:
+            # A playlist keeps the order somebody put it in, which is why it
+            # is not sorted by date like the feed.
+            self._model.show(self._db.playlist_items(self._view_playlist))
+            self.emptyHintChanged.emit()
+            return
         if self._view_kind == RECOMMENDED:
             # Its own table, not the feed. Shaped the same so one grid draws
             # both, but nothing here is a video you follow.
@@ -392,12 +415,15 @@ class Bridge(QObject):
         self.groupsChanged.emit()
         self.boxesChanged.emit()
 
-    def _set_view(self, kind: str, view_id: int = -1, channel_key: str = "") -> None:
-        if (kind, view_id, channel_key) == (self._view_kind, self._view_id, self._view_channel):
+    def _set_view(self, kind: str, view_id: int = -1, channel_key: str = "",
+                  playlist_id: str = "") -> None:
+        if (kind, view_id, channel_key, playlist_id) == (
+                self._view_kind, self._view_id, self._view_channel, self._view_playlist):
             return
         self._view_kind = kind
         self._view_id = view_id
         self._view_channel = channel_key
+        self._view_playlist = playlist_id
         self.viewChanged.emit()
         self.reload()
         # Work a view needs on entry happens here, so every way of reaching it
@@ -407,6 +433,8 @@ class Bridge(QObject):
             self.loadHome()
         if kind == RECOMMENDED:
             self._fetch_recommended()
+        if kind == PLAYLIST:
+            self._fetch_playlist_items(playlist_id)
 
     def _selectable(self) -> list[tuple[str, int]]:
         """Everything the sidebar offers, in the order it is drawn. All first,
@@ -417,6 +445,7 @@ class Bridge(QObject):
         entries.append((RECOMMENDED, -1))
         entries.append((HISTORY, -1))
         entries.append((MUSIC, -1))
+        entries.extend((PLAYLIST, index) for index, _ in enumerate(self._db.playlists()))
         entries.extend((BOX, int(row["id"])) for row in self._db.boxes())
         return entries
 
@@ -428,7 +457,12 @@ class Bridge(QObject):
         entries = self._selectable()
         if not entries:
             return
-        current = (self._view_kind, self._view_id)
+        if self._view_kind == PLAYLIST:
+            found = [row["ext_id"] for row in self._db.playlists()]
+            position = found.index(self._view_playlist) if self._view_playlist in found else 0
+            current = (PLAYLIST, position)
+        else:
+            current = (self._view_kind, self._view_id)
         try:
             index = entries.index(current)
         except ValueError:
@@ -436,6 +470,13 @@ class Bridge(QObject):
         else:
             index = max(0, min(len(entries) - 1, index + (1 if delta > 0 else -1)))
         kind, view_id = entries[index]
+        if kind == PLAYLIST:
+            # The walk carries a position rather than an id, since the ids are
+            # long strings and the walk is about order.
+            found = self._db.playlists()
+            if 0 <= view_id < len(found):
+                self._set_view(PLAYLIST, -1, "", found[view_id]["ext_id"])
+            return
         self._set_view(kind, view_id)
 
     @Slot(str)
@@ -469,6 +510,55 @@ class Bridge(QObject):
     def showHistory(self) -> None:
         self._set_view(HISTORY, -1)
 
+    @Slot(str)
+    def selectPlaylist(self, playlist_id: str) -> None:
+        if playlist_id:
+            self._set_view(PLAYLIST, -1, "", playlist_id)
+
+    @Slot()
+    def refreshPlaylists(self) -> None:
+        if self._playlists is not None and self._playlists.isRunning():
+            return
+        self._set_status("reading your playlists")
+        self._playlists = PlaylistsFetcher(self._db, self._cfg, self)
+        self._playlists.ready.connect(self._on_playlists)
+        self._playlists.failed.connect(
+            lambda message: self._set_status(f"playlists, {message}"))
+        self._launch(self._playlists)
+
+    def _on_playlists(self, count: int) -> None:
+        self._set_status(f"{count} playlists")
+        self.playlistsChanged.emit()
+
+    @Slot()
+    def refreshPlaylist(self) -> None:
+        """Read the open playlist again. Its contents change without the list
+        of playlists changing at all."""
+        if self._view_kind == PLAYLIST:
+            self._fetch_playlist_items(self._view_playlist, force=True)
+
+    def _fetch_playlist_items(self, playlist_id: str, force: bool = False) -> None:
+        if not playlist_id:
+            return
+        if self._playlist_items is not None and self._playlist_items.isRunning():
+            return
+        found = self._db.playlist(playlist_id)
+        stamp = (found or {}).get("items_at")
+        if not force and stamp and int(time.time()) - int(stamp) < PLAYLIST_TRUST_S:
+            return
+        self._set_status("reading the playlist")
+        self._playlist_items = PlaylistItemsFetcher(self._db, self._cfg, playlist_id, self)
+        self._playlist_items.ready.connect(self._on_playlist_items)
+        self._playlist_items.failed.connect(
+            lambda _id, message: self._set_status(f"playlist, {message}"))
+        self._launch(self._playlist_items)
+
+    def _on_playlist_items(self, playlist_id: str, count: int) -> None:
+        self._set_status(f"{count} videos in this playlist")
+        self.playlistsChanged.emit()
+        if self._view_kind == PLAYLIST and self._view_playlist == playlist_id:
+            self.reload()
+
     @Slot()
     def showRecommended(self) -> None:
         self._set_view(RECOMMENDED, -1)
@@ -488,7 +578,7 @@ class Bridge(QObject):
         self._recommended.ready.connect(self._on_recommended)
         self._recommended.failed.connect(
             lambda message: self._set_status(f"recommendations, {message}"))
-        self._recommended.start()
+        self._launch(self._recommended)
 
     def _on_recommended(self, count: int) -> None:
         self._set_status(f"{count} suggestions")
@@ -520,7 +610,7 @@ class Bridge(QObject):
         self._details.fetched.connect(lambda _key: self.viewChanged.emit())
         self._details.failed.connect(
             lambda _key, message: self._set_status(f"could not load the channel, {message}"))
-        self._details.start()
+        self._launch(self._details)
 
     # ---- boxes -----------------------------------------------------------
 
@@ -659,7 +749,7 @@ class Bridge(QObject):
                 f"{phase} {done} of {total}" if total > 1 else phase))
         self._poller.failure.connect(self._on_poll_failure)
         self._poller.finished_poll.connect(self._on_poll_finished)
-        self._poller.start()
+        self._launch(self._poller)
 
     @Slot(str)
     def play(self, key: str) -> None:
@@ -742,7 +832,7 @@ class Bridge(QObject):
         self._home.shelves.connect(self._on_shelves)
         self._home.failed.connect(
             lambda message: self._set_status(f"could not load the shelves, {message}"))
-        self._home.start()
+        self._launch(self._home)
 
     @Slot(str, int)
     def moveShelf(self, title: str, direction: int) -> None:
@@ -820,7 +910,7 @@ class Bridge(QObject):
         self._tracks = worker
         self._tracks.tracks.connect(self._on_tracks)
         self._tracks.failed.connect(self._on_search_failed)
-        self._tracks.start()
+        self._launch(self._tracks)
 
     def _on_shelves(self, shelves: list) -> None:
         self._shelves = shelves
@@ -851,7 +941,7 @@ class Bridge(QObject):
         self._search = MusicSearch(self._cfg, query, self)
         self._search.results.connect(self._on_results)
         self._search.failed.connect(self._on_search_failed)
-        self._search.start()
+        self._launch(self._search)
 
     @Slot(int)
     def playResult(self, index: int) -> None:
@@ -900,7 +990,7 @@ class Bridge(QObject):
         worker = SourceDetails(self._db, self._cfg, url.strip(), self)
         worker.done.connect(self.musicChanged)
         self._source_details.append(worker)
-        worker.start()
+        self._launch(worker)
 
     @Slot(int)
     def removeSource(self, source_id: int) -> None:
@@ -976,7 +1066,7 @@ class Bridge(QObject):
         self._detail.votes.connect(self._on_votes)
         self._detail.comments.connect(self._on_comments)
         self._detail.failed.connect(self._on_detail_failed)
-        self._detail.start()
+        self._launch(self._detail)
 
     def _on_votes(self, key: str, _count: int) -> None:
         if key == self._detail_key:
@@ -1020,7 +1110,7 @@ class Bridge(QObject):
         self._twitch.codeReady.connect(self._on_twitch_code)
         self._twitch.finished_login.connect(self._on_twitch_done)
         self._twitch.failed.connect(self._on_twitch_failed)
-        self._twitch.start()
+        self._launch(self._twitch)
 
     @Slot()
     def refreshLive(self) -> None:
@@ -1031,7 +1121,7 @@ class Bridge(QObject):
         self._live.needsLogin.connect(self._on_twitch_needs_login)
         self._live.failed.connect(
             lambda message: self._set_status(f"could not check Twitch, {message}"))
-        self._live.start()
+        self._launch(self._live)
 
     @Slot(bool)
     def setLiveCollapsed(self, value: bool) -> None:
@@ -1062,7 +1152,7 @@ class Bridge(QObject):
         self._importer = SubsImporter(self._db, self._cfg, self)
         self._importer.imported.connect(self._on_imported)
         self._importer.failed.connect(self._on_import_failed)
-        self._importer.start()
+        self._launch(self._importer)
 
     @Slot()
     def importHistory(self) -> None:
@@ -1073,7 +1163,7 @@ class Bridge(QObject):
         self._history.imported.connect(self._on_history)
         self._history.failed.connect(
             lambda message: self._set_status(f"history, {message}"))
-        self._history.start()
+        self._launch(self._history)
 
     def _on_history(self, marked: int, missing: int) -> None:
         note = f"{marked} marked as watched"
@@ -1101,7 +1191,20 @@ class Bridge(QObject):
         self._adder = ChannelAdder(ref, self._cfg, self)
         self._adder.added.connect(self._on_channel_added)
         self._adder.failed.connect(self._on_channel_failed)
-        self._adder.start()
+        self._launch(self._adder)
+        return True
+
+    def _launch(self, thread) -> bool:
+        """Start a background thread, unless the application is going away.
+
+        Cancelling the running threads is not enough on its own. A timer that
+        was already due can fire after the shutdown has finished, start a
+        fresh thread, and Qt then aborts the process when it destroys a live
+        QThread. So starting is refused once shutdown has begun.
+        """
+        if self._stopping:
+            return False
+        thread.start()
         return True
 
     def shutdown(self, timeout_ms: int = 15000) -> None:
@@ -1113,14 +1216,20 @@ class Bridge(QObject):
         parallel rather than one after another. This runs after the window is
         already gone, so any short wait here is invisible.
         """
+        self._stopping = True
         threads = [self._poller, self._adder, self._importer, self._history,
-                   self._recommended,
+                   self._recommended, self._playlists, self._playlist_items,
                    self._details, self._live, self._twitch, self._detail, self._search,
                    self._home, self._tracks, *self._source_details]
-        live = [thread for thread in threads if thread is not None and thread.isRunning()]
-        for thread in live:
+        # Every thread, not only the ones already running. A thread that has
+        # been started but has not begun yet is not running, so filtering on
+        # that left it uncancelled and still alive when Qt tore the process
+        # down, which is fatal. Cancelling an idle thread costs nothing and
+        # waiting on one returns at once.
+        alive = [thread for thread in threads if thread is not None]
+        for thread in alive:
             thread.cancel()
-        for thread in live:
+        for thread in alive:
             thread.wait(timeout_ms)
         if self._audio is not None:
             self._audio.shutdown()

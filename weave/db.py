@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -55,6 +55,29 @@ CREATE TABLE IF NOT EXISTS recommended (
     thumbnail_url  TEXT,
     position       INTEGER NOT NULL,
     seen_at        INTEGER NOT NULL
+);
+
+-- YouTube's own playlists, as opposed to boxes, which are this application's.
+-- Their videos live here rather than in videos for the same reason as the
+-- recommendations: a playlist is full of channels you may not track.
+CREATE TABLE IF NOT EXISTS playlists (
+    ext_id     TEXT PRIMARY KEY,
+    title      TEXT NOT NULL,
+    position   INTEGER NOT NULL DEFAULT 0,
+    items_at   INTEGER,                    -- when its contents were last read
+    seen_at    INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS playlist_items (
+    playlist_id    TEXT NOT NULL REFERENCES playlists(ext_id) ON DELETE CASCADE,
+    ext_id         TEXT NOT NULL,
+    title          TEXT NOT NULL,
+    channel_name   TEXT,
+    channel_ext_id TEXT,
+    duration_s     INTEGER,
+    thumbnail_url  TEXT,
+    position       INTEGER NOT NULL,
+    PRIMARY KEY (playlist_id, ext_id)
 );
 
 CREATE TABLE IF NOT EXISTS channels (
@@ -834,6 +857,89 @@ class Database:
 
     def recommended_age_s(self) -> int | None:
         stamp = self.get_state("recommended_at")
+        return None if not stamp else int(time.time()) - int(stamp)
+
+    # ---- playlists -------------------------------------------------------
+
+    def replace_playlists(self, rows: list[dict]) -> int:
+        """Swap in the current list. One that is gone from YouTube is gone from
+        here, and its contents go with it through the foreign key."""
+        now = int(time.time())
+        with self.conn as conn:
+            keep = [row["ext_id"] for row in rows]
+            marks = ",".join("?" * len(keep)) or "''"
+            conn.execute(f"DELETE FROM playlists WHERE ext_id NOT IN ({marks})", keep)
+            conn.executemany(
+                "INSERT INTO playlists(ext_id, title, position, seen_at) VALUES(?,?,?,?) "
+                "ON CONFLICT(ext_id) DO UPDATE SET title=excluded.title, "
+                "  position=excluded.position, seen_at=excluded.seen_at",
+                [(row["ext_id"], row["title"], index, now)
+                 for index, row in enumerate(rows)],
+            )
+        self.set_state("playlists_at", str(now))
+        return len(rows)
+
+    def playlists(self) -> list[dict]:
+        return [dict(row) for row in self.conn.execute(
+            "SELECT p.ext_id, p.title, p.position, p.items_at, "
+            "       (SELECT COUNT(*) FROM playlist_items i WHERE i.playlist_id = p.ext_id) "
+            "         AS items "
+            "FROM playlists p ORDER BY p.position, p.title")]
+
+    def playlist(self, playlist_id: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT ext_id, title, items_at FROM playlists WHERE ext_id=?",
+            (playlist_id,)).fetchone()
+        return dict(row) if row else None
+
+    def replace_playlist_items(self, playlist_id: str, rows: list[dict]) -> int:
+        with self.conn as conn:
+            conn.execute("DELETE FROM playlist_items WHERE playlist_id=?", (playlist_id,))
+            conn.executemany(
+                "INSERT INTO playlist_items(playlist_id, ext_id, title, channel_name, "
+                "  channel_ext_id, duration_s, thumbnail_url, position) "
+                "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                [(playlist_id, row["ext_id"], row["title"], row.get("channel_name"),
+                  row.get("channel_ext_id"), row.get("duration_s"),
+                  row.get("thumbnail_url"), index)
+                 for index, row in enumerate(rows)],
+            )
+            conn.execute("UPDATE playlists SET items_at=? WHERE ext_id=?",
+                         (int(time.time()), playlist_id))
+        return len(rows)
+
+    def playlist_items(self, playlist_id: str, limit: int = 500) -> list[sqlite3.Row]:
+        """Shaped like a feed row, so the same grid draws it. A playlist keeps
+        its own order rather than being sorted by date, which is the whole
+        point of somebody having made it."""
+        return list(self.conn.execute(
+            """
+            SELECT 'yt:' || i.ext_id           AS key,
+                   'youtube'                   AS platform,
+                   i.ext_id                    AS ext_id,
+                   COALESCE(c.key, '')         AS channel_key,
+                   i.title                     AS title,
+                   NULL                        AS published_at,
+                   i.thumbnail_url             AS thumbnail_url,
+                   i.duration_s                AS duration_s,
+                   NULL                        AS views,
+                   NULL                        AS likes,
+                   NULL                        AS live_status,
+                   COALESCE(c.title, i.channel_name) AS channel_title,
+                   c.avatar_url                AS avatar_url,
+                   w.video_key IS NOT NULL     AS watched
+            FROM playlist_items i
+            LEFT JOIN channels c ON c.ext_id = i.channel_ext_id AND c.platform = 'youtube'
+            LEFT JOIN watched w ON w.video_key = 'yt:' || i.ext_id
+            WHERE i.playlist_id = ?
+            ORDER BY i.position
+            LIMIT ?
+            """,
+            (playlist_id, limit),
+        ))
+
+    def playlists_age_s(self) -> int | None:
+        stamp = self.get_state("playlists_at")
         return None if not stamp else int(time.time()) - int(stamp)
 
     # ---- who is live -----------------------------------------------------

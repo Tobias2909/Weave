@@ -148,6 +148,12 @@ ApplicationWindow {
             }
 
             FlatButton {
+                visible: App.viewKind === "playlist"
+                text: "Read it again"
+                onClicked: App.refreshPlaylist()
+            }
+
+            FlatButton {
                 text: "Import subscriptions"
                 onClicked: App.importSubscriptions()
             }
@@ -344,6 +350,39 @@ ApplicationWindow {
                     selected: App.viewKind === "music"
                     onActivated: App.showMusic()
                     onRevealRequested: root.revealRow(this)
+                }
+
+                Item { width: 1; height: 10 }
+
+                SidebarHeading {
+                    text: "Playlists"
+                    // Read on request rather than at launch. These are
+                    // YouTube's own lists and asking for them is a request,
+                    // so it happens when you want it to.
+                    actionText: "\u21bb"
+                    onAction: App.refreshPlaylists()
+                }
+
+                Repeater {
+                    model: App.playlists
+                    SidebarRow {
+                        width: sidebarColumn.width
+                        label: modelData.title
+                        count: modelData.items
+                        selected: App.viewKind === "playlist" && App.viewPlaylist === modelData.ext_id
+                        onActivated: App.selectPlaylist(modelData.ext_id)
+                        onRevealRequested: root.revealRow(this)
+                    }
+                }
+
+                Label {
+                    visible: App.playlists.length === 0
+                    width: sidebarColumn.width - 28
+                    x: 14
+                    text: "Your YouTube playlists appear here. Press the arrow above to read them."
+                    color: Theme.colors.textMuted
+                    font.pixelSize: 11
+                    wrapMode: Text.Wrap
                 }
 
                 Item { width: 1; height: 10 }
