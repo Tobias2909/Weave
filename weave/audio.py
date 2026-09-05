@@ -47,7 +47,7 @@ MUSIC_FORMAT = "bestaudio"
 
 # Long enough to hear as a fade rather than a cut, short enough not to be a
 # wait before the video starts.
-FADE_MS = 1400
+FADE_MS = 500
 
 # A signed address can stop being accepted, which is ordinary rather than
 # exceptional over a long listen, so it is recovered from rather than
