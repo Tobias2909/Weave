@@ -19,7 +19,7 @@ import threading
 from ..config import Config
 from ..cookies import args as cookie_args
 from ..net import Throttle
-from ..process import Timeout, run as run_process
+from . import ytdlp
 from .flatlist import APPROXIMATE_DATES, FIELDS, FlatVideo, parse
 
 
@@ -45,26 +45,10 @@ def fetch(cfg: Config, query: str, start: int = 1, count: int = 24,
         # reach at least as far as the slice being asked for.
         f"ytsearch{last}:{query}",
     ]
-    try:
-        if throttle is not None:
-            with throttle.slot():
-                result = run_process(command, cancel=cancel, timeout=timeout)
-        else:
-            result = run_process(command, cancel=cancel, timeout=timeout)
-    except FileNotFoundError as exc:
-        raise SearchError("yt-dlp is not installed") from exc
-    except Timeout as exc:
-        raise SearchError("the search timed out") from exc
-
+    result = ytdlp.run(command, SearchError, "the search", throttle, cancel, timeout)
     found = parse(result.stdout)
-    if found:
-        return found
     # A search that genuinely matched nothing is an answer, not a failure, so
     # only a run that also complained is treated as one.
-    tail = (result.stderr or "").strip().splitlines()
-    if not tail:
-        return []
-    detail = tail[-1]
-    if "cookies" in detail.lower() or "sign in" in detail.lower():
-        raise SearchError("could not read the login cookies, check browser_profile in the config")
-    raise SearchError(detail[:200])
+    if found or not ytdlp.complained(result):
+        return found
+    raise ytdlp.blame(result, SearchError, "the search")

@@ -14,9 +14,7 @@ from __future__ import annotations
 
 import os
 import re
-import threading
 from dataclasses import dataclass
-from functools import lru_cache
 
 ORIGIN = "https://music.youtube.com"
 USER_AGENT = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -114,7 +112,7 @@ def page_id(profile_path: str, force: bool = False) -> str | None:
         })
         found = PAGE_ID_PATTERN.search(response.text)
         _page_id = found.group(1) if found else None
-    except Exception:                                               # noqa: BLE001
+    except Exception:
         # An account with only one identity has none, and that is fine.
         _page_id = None
     return _page_id
@@ -188,7 +186,7 @@ def search(profile_path: str, query: str, limit: int = 25) -> list[Track]:
         return to_tracks(client(profile_path).search(query, filter="songs", limit=limit))
     except MusicError:
         raise
-    except Exception as exc:                                        # noqa: BLE001
+    except Exception as exc:
         raise MusicError(f"{type(exc).__name__}: {exc}") from exc
 
 
@@ -197,7 +195,7 @@ def playlists(profile_path: str, limit: int = 40) -> list[dict]:
         found = client(profile_path).get_library_playlists(limit=limit)
     except MusicError:
         raise
-    except Exception as exc:                                        # noqa: BLE001
+    except Exception as exc:
         raise MusicError(f"{type(exc).__name__}: {exc}") from exc
     return [{"id": str(p.get("playlistId") or ""), "title": str(p.get("title") or ""),
              "count": p.get("count"), "thumbnail": _thumb(p)}
@@ -220,7 +218,7 @@ def playlist_tracks(profile_path: str, playlist_id: str,
             found = client(profile_path).get_playlist(playlist_id, limit=limit)
     except MusicError:
         raise
-    except Exception as exc:                                        # noqa: BLE001
+    except Exception as exc:
         raise MusicError(f"{type(exc).__name__}: {exc}") from exc
     offered = (found or {}).get("tracks") or []
     return to_tracks(offered), len(offered)
@@ -233,7 +231,7 @@ def radio(profile_path: str, video_id: str, limit: int = 40) -> list[Track]:
         found = client(profile_path).get_watch_playlist(videoId=video_id, limit=limit)
     except MusicError:
         raise
-    except Exception as exc:                                        # noqa: BLE001
+    except Exception as exc:
         raise MusicError(f"{type(exc).__name__}: {exc}") from exc
     return to_tracks((found or {}).get("tracks") or [])
 
@@ -248,7 +246,7 @@ def home(profile_path: str, limit: int = 6) -> list[dict]:
         shelves = client(profile_path).get_home(limit=limit)
     except MusicError:
         raise
-    except Exception as exc:                                        # noqa: BLE001
+    except Exception as exc:
         raise MusicError(f"{type(exc).__name__}: {exc}") from exc
 
     out = []

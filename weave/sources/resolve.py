@@ -20,7 +20,8 @@ from dataclasses import dataclass
 
 from ..ids import CHANNEL_ID, ChannelRef, channel_key
 from ..net import Throttle
-from ..process import Cancelled, Result, Timeout, run as run_process
+from ..process import Cancelled, Result, Timeout
+from ..process import run as run_process
 
 # Asking for zero items returns the playlist level fields and downloads no
 # entries at all, which is what keeps this to about half a second.

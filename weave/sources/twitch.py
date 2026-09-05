@@ -72,7 +72,7 @@ class Tokens:
                 "obtained_at": self.obtained_at}
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Tokens | None":
+    def from_dict(cls, data: dict) -> Tokens | None:
         access = str(data.get("access_token") or "")
         refresh = str(data.get("refresh_token") or "")
         if not access or not refresh:
@@ -130,7 +130,10 @@ def poll_login(client_id: str, device_code: str,
         body = response.json()
         return Tokens(body["access_token"], body.get("refresh_token", ""))
     message = _message(response, "")
-    if "authorization_pending" in message or response.status_code == 400:
+    # Twitch answers every unfinished or failed poll with a 400, so the message
+    # is what tells waiting apart from a refusal. Treating any 400 as waiting
+    # kept a denied or expired login spinning until the deadline.
+    if "authorization_pending" in message or "slow_down" in message:
         raise AuthPending(message or "waiting for approval")
     raise TwitchError(message or f"login failed with status {response.status_code}")
 

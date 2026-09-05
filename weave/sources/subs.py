@@ -16,7 +16,7 @@ from ..config import Config
 from ..cookies import args as cookie_args
 from ..ids import CHANNEL_ID, channel_key
 from ..net import Throttle
-from ..process import Result, Timeout, run as run_process
+from . import ytdlp
 
 FEED_CHANNELS = "https://www.youtube.com/feed/channels"
 
@@ -82,23 +82,8 @@ def fetch(cfg: Config, throttle: Throttle | None = None,
         "--print", "%(id)s|%(channel)s|%(thumbnails.-1.url)s",
         FEED_CHANNELS,
     ]
-    try:
-        if throttle is not None:
-            with throttle.slot():
-                result = run_process(command, cancel=cancel, timeout=timeout)
-        else:
-            result = run_process(command, cancel=cancel, timeout=timeout)
-    except FileNotFoundError as exc:
-        raise ImportError_("yt-dlp is not installed") from exc
-    except Timeout as exc:
-        raise ImportError_("the import timed out") from exc
-
+    result = ytdlp.run(command, ImportError_, "the import", throttle, cancel, timeout)
     channels = parse_lines(result.stdout)
     if channels:
         return channels
-
-    tail = (result.stderr or "").strip().splitlines()
-    detail = tail[-1] if tail else "no channels came back"
-    if "cookies" in detail.lower() or "sign in" in detail.lower():
-        raise ImportError_("could not read the login cookies, check browser_profile in the config")
-    raise ImportError_(detail[:200])
+    raise ytdlp.blame(result, ImportError_, "the import")

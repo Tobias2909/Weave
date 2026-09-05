@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from ..config import Config
 from ..cookies import args as cookie_args
 from ..net import Throttle
-from ..process import Timeout, run as run_process
+from . import ytdlp
 from .flatlist import APPROXIMATE_DATES, FIELDS, FlatVideo, parse
 
 FEED_PLAYLISTS = "https://www.youtube.com/feed/playlists"
@@ -70,27 +70,6 @@ def parse_list(text: str) -> list[Playlist]:
     return out
 
 
-def _run(command: list[str], throttle: Throttle | None, timeout: float,
-         cancel: threading.Event | None, what: str):
-    try:
-        if throttle is not None:
-            with throttle.slot():
-                return run_process(command, cancel=cancel, timeout=timeout)
-        return run_process(command, cancel=cancel, timeout=timeout)
-    except FileNotFoundError as exc:
-        raise PlaylistError("yt-dlp is not installed") from exc
-    except Timeout as exc:
-        raise PlaylistError(f"{what} timed out") from exc
-
-
-def _blame(result, what: str) -> PlaylistError:
-    tail = (result.stderr or "").strip().splitlines()
-    detail = tail[-1] if tail else f"{what} came back empty"
-    if "cookies" in detail.lower() or "sign in" in detail.lower():
-        return PlaylistError("could not read the login cookies, check browser_profile in the config")
-    return PlaylistError(detail[:200])
-
-
 def fetch_list(cfg: Config, limit: int = 100, throttle: Throttle | None = None,
                timeout: float = 180.0,
                cancel: threading.Event | None = None) -> list[Playlist]:
@@ -101,11 +80,11 @@ def fetch_list(cfg: Config, limit: int = 100, throttle: Throttle | None = None,
         "--print", "%(id)s\t%(title)s",
         FEED_PLAYLISTS,
     ]
-    result = _run(command, throttle, timeout, cancel, "the playlist list")
+    result = ytdlp.run(command, PlaylistError, "the playlist list", throttle, cancel, timeout)
     found = parse_list(result.stdout)
     if found:
         return found
-    raise _blame(result, "the playlist list")
+    raise ytdlp.blame(result, PlaylistError, "the playlist list")
 
 
 def fetch_items(cfg: Config, playlist_id: str, limit: int = 300,
@@ -118,12 +97,10 @@ def fetch_items(cfg: Config, playlist_id: str, limit: int = 300,
         "--print", ITEM_FIELDS,
         PLAYLIST_URL.format(playlist_id=playlist_id),
     ]
-    result = _run(command, throttle, timeout, cancel, "the playlist")
+    result = ytdlp.run(command, PlaylistError, "the playlist", throttle, cancel, timeout)
     found = parse_items(result.stdout)
-    if found:
-        return found
     # An empty playlist is a real thing and not a failure, so a clean run that
     # simply had nothing in it is reported as nothing rather than as a problem.
-    if not (result.stderr or "").strip():
-        return []
-    raise _blame(result, "the playlist")
+    if found or not ytdlp.complained(result):
+        return found
+    raise ytdlp.blame(result, PlaylistError, "the playlist")

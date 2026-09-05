@@ -22,7 +22,7 @@ from ..config import Config
 from ..cookies import args as cookie_args
 from ..ids import is_video_id, video_key
 from ..net import Throttle
-from ..process import Result, Timeout, run as run_process
+from . import ytdlp
 
 SUBSCRIPTIONS = ":ytsubs"
 
@@ -92,19 +92,8 @@ def fetch(cfg: Config, limit: int = 400, throttle: Throttle | None = None,
         "--print", "%(id)s|%(duration)s|%(live_status)s|%(channel_id)s",
         SUBSCRIPTIONS,
     ]
-    try:
-        if throttle is not None:
-            with throttle.slot():
-                result = run_process(command, cancel=cancel, timeout=timeout)
-        else:
-            result = run_process(command, cancel=cancel, timeout=timeout)
-    except FileNotFoundError as exc:
-        raise SweepError("yt-dlp is not installed") from exc
-    except Timeout as exc:
-        raise SweepError("the sweep timed out") from exc
-
+    result = ytdlp.run(command, SweepError, "the sweep", throttle, cancel, timeout)
     videos = parse_lines(result.stdout)
     if videos:
         return videos
-    tail = (result.stderr or "").strip().splitlines()
-    raise SweepError((tail[-1] if tail else "the sweep returned nothing")[:200])
+    raise ytdlp.blame(result, SweepError, "the sweep")

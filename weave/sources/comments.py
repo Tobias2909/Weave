@@ -20,12 +20,13 @@ import shutil
 import tempfile
 import threading
 from dataclasses import dataclass, field
+from datetime import UTC
 from pathlib import Path
 
 from ..config import Config
 from ..cookies import args as cookie_args
 from ..net import Throttle
-from ..process import Cancelled, Timeout, run as run_process
+from . import ytdlp
 
 # total, threads, replies, replies per thread
 REPLIES_PER_THREAD = 2
@@ -45,7 +46,7 @@ class Comment:
     pinned: bool = False
     by_uploader: bool = False
     verified: bool = False
-    replies: list["Comment"] = field(default_factory=list)
+    replies: list[Comment] = field(default_factory=list)
 
 
 def _one(raw: dict) -> Comment:
@@ -90,9 +91,9 @@ def parse_details(info: dict) -> Details:
         # A date with no time is better than nothing, and it is what the
         # metadata carries when the exact moment is missing.
         try:
-            from datetime import datetime, timezone
+            from datetime import datetime
             published = int(datetime.strptime(str(info["upload_date"]), "%Y%m%d")
-                            .replace(tzinfo=timezone.utc).timestamp())
+                            .replace(tzinfo=UTC).timestamp())
         except ValueError:
             published = None
     return Details(
@@ -143,24 +144,13 @@ def fetch(cfg: Config, url: str, threads: int = 5,
         "-o", str(workspace / "%(id)s"), url,
     ]
     try:
-        if throttle is not None:
-            with throttle.slot():
-                result = run_process(command, cancel=cancel, timeout=timeout)
-        else:
-            result = run_process(command, cancel=cancel, timeout=timeout)
-
+        result = ytdlp.run(command, CommentsError, "fetching the comments", throttle, cancel,
+                           timeout)
         found = list(workspace.glob("*.info.json"))
         if not found:
-            tail = (result.stderr or "").strip().splitlines()
-            raise CommentsError((tail[-1] if tail else "no comments came back")[:200])
+            raise ytdlp.blame(result, CommentsError, "fetching the comments")
         info = json.loads(found[0].read_text())
         return parse(info), parse_details(info)
-    except Cancelled:
-        raise
-    except FileNotFoundError as exc:
-        raise CommentsError("yt-dlp is not installed") from exc
-    except Timeout as exc:
-        raise CommentsError("fetching the comments timed out") from exc
     except ValueError as exc:
         raise CommentsError("the comment file could not be read") from exc
     finally:

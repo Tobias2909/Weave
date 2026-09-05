@@ -20,7 +20,7 @@ import threading
 from ..config import Config
 from ..cookies import args as cookie_args
 from ..net import Throttle
-from ..process import Timeout, run as run_process
+from . import ytdlp
 from .flatlist import APPROXIMATE_DATES, FIELDS, FlatVideo, parse
 
 RECOMMENDED = ":ytrec"
@@ -49,22 +49,8 @@ def fetch(cfg: Config, limit: int = 48, throttle: Throttle | None = None,
         "--print", FIELDS,
         RECOMMENDED,
     ]
-    try:
-        if throttle is not None:
-            with throttle.slot():
-                result = run_process(command, cancel=cancel, timeout=timeout)
-        else:
-            result = run_process(command, cancel=cancel, timeout=timeout)
-    except FileNotFoundError as exc:
-        raise RecommendedError("yt-dlp is not installed") from exc
-    except Timeout as exc:
-        raise RecommendedError("the recommendations timed out") from exc
-
+    result = ytdlp.run(command, RecommendedError, "the recommendations", throttle, cancel, timeout)
     found = parse(result.stdout)
     if found:
         return found
-    tail = (result.stderr or "").strip().splitlines()
-    detail = tail[-1] if tail else "nothing came back"
-    if "cookies" in detail.lower() or "sign in" in detail.lower():
-        raise RecommendedError("could not read the login cookies, check browser_profile in the config")
-    raise RecommendedError(detail[:200])
+    raise ytdlp.blame(result, RecommendedError, "the recommendations")

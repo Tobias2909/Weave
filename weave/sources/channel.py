@@ -27,7 +27,7 @@ import threading
 from dataclasses import dataclass
 
 from ..net import Throttle
-from ..process import Cancelled, Timeout, run as run_process
+from . import ytdlp
 
 _COMMAND = [
     "yt-dlp", "--no-warnings", "--flat-playlist", "--playlist-items", "0",
@@ -132,20 +132,8 @@ def fetch(channel_id: str, throttle: Throttle | None = None,
           cancel: threading.Event | None = None,
           timeout: float = 120.0) -> ChannelDetails:
     url = f"https://www.youtube.com/channel/{channel_id}"
-    try:
-        if throttle is not None:
-            with throttle.slot():
-                result = run_process([*_COMMAND, url], cancel=cancel, timeout=timeout)
-        else:
-            result = run_process([*_COMMAND, url], cancel=cancel, timeout=timeout)
-    except Cancelled:
-        raise
-    except FileNotFoundError as exc:
-        raise DetailsError("yt-dlp is not installed") from exc
-    except Timeout as exc:
-        raise DetailsError("the channel lookup timed out") from exc
-
+    result = ytdlp.run([*_COMMAND, url], DetailsError, "the channel lookup", throttle, cancel,
+                       timeout)
     if result.returncode != 0 and not result.stdout.strip():
-        tail = (result.stderr or "").strip().splitlines()
-        raise DetailsError((tail[-1] if tail else "the channel lookup failed")[:200])
+        raise ytdlp.blame(result, DetailsError, "the channel lookup")
     return parse_output(result.stdout)

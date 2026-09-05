@@ -22,7 +22,7 @@ from ..config import Config
 from ..cookies import args as cookie_args
 from ..ids import video_key
 from ..net import Throttle
-from ..process import Timeout, run as run_process
+from . import ytdlp
 from .flatlist import APPROXIMATE_DATES, FIELDS, FlatVideo, parse
 
 HISTORY = ":ythistory"
@@ -53,24 +53,8 @@ def fetch(cfg: Config, limit: int = 200, throttle: Throttle | None = None,
         "--print", FIELDS,
         HISTORY,
     ]
-    try:
-        if throttle is not None:
-            with throttle.slot():
-                result = run_process(command, cancel=cancel, timeout=timeout)
-        else:
-            result = run_process(command, cancel=cancel, timeout=timeout)
-    except FileNotFoundError as exc:
-        raise HistoryError("yt-dlp is not installed") from exc
-    except Timeout as exc:
-        raise HistoryError("reading the history timed out") from exc
-
+    result = ytdlp.run(command, HistoryError, "reading the history", throttle, cancel, timeout)
     found = parse(result.stdout)
-    if found:
-        return found
-    tail = (result.stderr or "").strip().splitlines()
-    if not tail:
-        return []           # the end of the history is not a failure
-    detail = tail[-1]
-    if "cookies" in detail.lower() or "sign in" in detail.lower():
-        raise HistoryError("could not read the login cookies, check browser_profile in the config")
-    raise HistoryError(detail[:200])
+    if found or not ytdlp.complained(result):
+        return found        # the end of the history is not a failure
+    raise ytdlp.blame(result, HistoryError, "reading the history")
