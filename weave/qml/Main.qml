@@ -213,8 +213,11 @@ ApplicationWindow {
             id: titleArea
             objectName: "titleArea"
             anchors.fill: parent
-            implicitWidth: barRow.implicitWidth
-            implicitHeight: barRow.implicitHeight
+            // The window's own buttons are no longer a cell of the row, so
+            // the bar asks for room for the two of them side by side, and for
+            // the three margins between and around them.
+            implicitWidth: barRow.implicitWidth + windowControls.implicitWidth + 36
+            implicitHeight: Math.max(barRow.implicitHeight, windowControls.implicitHeight)
 
             // Behind the row, so a press reaches it only where the row is
             // empty and the search boxes and the buttons above are untouched.
@@ -245,14 +248,37 @@ ApplicationWindow {
                 }
             }
 
+            // Everything except the window's own buttons, in a strip that
+            // stops short of them and is clipped at its edge. A row that
+            // cannot fit its cells does not squeeze them: each cell keeps the
+            // width it asks for, and what does not fit hangs off the right
+            // end. Clipping is what keeps that overhang off the three buttons
+            // whatever the row is asked to hold.
             RowLayout {
                 id: barRow
-                anchors.fill: parent
+                objectName: "barRow"
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                anchors.right: windowControls.left
                 anchors.leftMargin: 14
-                anchors.rightMargin: 14
+                anchors.rightMargin: 8
+                clip: true
                 spacing: 12
 
+                // What goes as the window narrows, and in what order, is
+                // decided here rather than left to the row, because a row
+                // holds every cell at the width it asks for and simply
+                // overflows. Only the two fields and the status below are
+                // told they may be smaller than that, so everything else has
+                // to be given up outright, and each width below is where what
+                // remains stops fitting even once those three have shrunk as
+                // far as they may.
                 Label {
+                    objectName: "wordmark"
+                    // First to go. The name is decoration, and the task
+                    // switcher says it anyway.
+                    visible: root.width >= 1230
                     text: "Weave"
                     color: Theme.colors.text
                     font.pixelSize: 18
@@ -261,7 +287,19 @@ ApplicationWindow {
 
                 TextField {
                     id: addField
+                    objectName: "addField"
+                    // Sixth to go, and narrower than it asks for well before
+                    // that. Never reached by dragging: the window cannot be
+                    // made narrower than 760.
+                    visible: root.width >= 710
+                    // A cell is pinned to the width it asks for unless it is
+                    // told to fill, so this says so and then caps itself, and
+                    // the cap is what keeps it from growing into the room the
+                    // spacer holds.
+                    Layout.fillWidth: true
                     Layout.preferredWidth: 260
+                    Layout.maximumWidth: 260
+                    Layout.minimumWidth: 170
                     placeholderText: "Add a channel, a handle or a twitch.tv link"
                     color: Theme.colors.text
                     placeholderTextColor: Theme.colors.textMuted
@@ -282,7 +320,13 @@ ApplicationWindow {
                 TextField {
                     id: searchField
                     objectName: "searchField"
+                    // Last of the row to go, and long past the narrowest
+                    // window anyone can drag to.
+                    visible: root.width >= 400
+                    Layout.fillWidth: true
                     Layout.preferredWidth: 220
+                    Layout.maximumWidth: 220
+                    Layout.minimumWidth: 150
                     placeholderText: "Search yours, or YouTube with return"
                     color: Theme.colors.text
                     placeholderTextColor: Theme.colors.textMuted
@@ -310,11 +354,17 @@ ApplicationWindow {
                 }
 
                 FlatButton {
+                    objectName: "importSubscriptions"
+                    // Second to go. Read once and then rarely again.
+                    visible: root.width >= 1160
                     text: "Import subscriptions"
                     onClicked: App.importSubscriptions()
                 }
 
                 FlatButton {
+                    objectName: "themeButton"
+                    // Fourth to go.
+                    visible: root.width >= 990
                     text: Theme.current
                     onClicked: themeMenu.popup()
                 }
@@ -322,14 +372,26 @@ ApplicationWindow {
                 Item { Layout.fillWidth: true }
 
                 Label {
+                    objectName: "status"
+                    // Third to go, and the one thing here allowed to be
+                    // narrower than its text, so it elides away to nothing
+                    // before it goes at all.
+                    visible: root.width >= 1005
                     text: App.status
                     color: Theme.colors.textMuted
                     font.pixelSize: 12
                     elide: Text.ElideRight
-                    Layout.maximumWidth: 380
+                    // Free to be narrower than its text, down to nothing, and
+                    // never wider than it or than the room a bar can spare.
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    Layout.maximumWidth: Math.min(380, implicitWidth)
                 }
 
                 Switch {
+                    objectName: "hideWatched"
+                    // Fifth to go.
+                    visible: root.width >= 875
                     text: "Hide watched"
                     checked: App.hideWatched
                     onToggled: App.setHideWatched(checked)
@@ -347,30 +409,41 @@ ApplicationWindow {
                 // the middle of the bar.
                 FlatButton {
                     objectName: "viewAction"
-                    visible: root.viewActionText !== ""
+                    // Seventh to go, and only below the narrowest window
+                    // anyone can drag to.
+                    visible: root.viewActionText !== "" && root.width >= 530
                     text: root.viewActionText
                     onClicked: root.doViewAction()
                 }
 
                 FlatButton {
                     objectName: "refresh"
+                    // The one thing in the row that never goes.
                     text: App.busy ? "Refreshing" : "Refresh"
                     accent: true
                     enabled: !App.busy
                     onClicked: App.refresh()
                 }
+            }
 
-                // Last in the row and hard against the right edge, where a title
-                // bar would have put them.
-                WindowControls {
-                    objectName: "windowControls"
-                    Layout.alignment: Qt.AlignVCenter
-                    Layout.leftMargin: 6
-                    maximised: root.visibility === Window.Maximized
-                    onMinimiseRequested: root.showMinimized()
-                    onMaximiseRequested: root.toggleMaximised()
-                    onCloseRequested: root.close()
-                }
+            // Not a cell of the row but anchored to the right edge of the
+            // bar, with the row stopping short of them.
+            //
+            // As the last cell they were the first thing lost: a row given
+            // less width than its cells ask for holds them at that width all
+            // the same and lets the remainder hang off its right end, which
+            // for the last cell means off the edge of the window. Anchored
+            // here their room is not the row's to spend.
+            WindowControls {
+                id: windowControls
+                objectName: "windowControls"
+                anchors.right: parent.right
+                anchors.rightMargin: 14
+                anchors.verticalCenter: parent.verticalCenter
+                maximised: root.visibility === Window.Maximized
+                onMinimiseRequested: root.showMinimized()
+                onMaximiseRequested: root.toggleMaximised()
+                onCloseRequested: root.close()
             }
         }
     }
@@ -420,6 +493,42 @@ ApplicationWindow {
         width: 214
         color: root.panelColour(Theme.colors.surface)
 
+        // The panel moves the window as well, from the room its list does
+        // not use, so a window with no bar of its own can be taken hold of on
+        // either side of it.
+        //
+        // The surface is exactly that room: it begins where the list ends and
+        // runs to the bottom of the panel. Keeping a row, a heading and a
+        // plus out of a drag has to be done by shape like this rather than by
+        // covering the panel and asking what was under the press, because a
+        // press that lands on a row never arrives here to be asked about --
+        // the row takes it -- while the handler below is offered it all the
+        // same and would answer for it.
+        //
+        // First in the panel, so the list is drawn over it. The panel is a
+        // plain rectangle, so a child of it is offered input at all: a
+        // control would have kept its background out of reach.
+        MouseArea {
+            id: sidebarDrag
+            objectName: "sidebarDrag"
+            width: parent.width
+            y: Math.min(parent.height,
+                        sidebarFlick.y + sidebarColumn.height - sidebarFlick.contentY)
+            height: Math.max(0, parent.height - y)
+            acceptedButtons: Qt.LeftButton
+
+            // The compositor does the moving, exactly as it does from the
+            // toolbar. A move rolled by hand out of pointer deltas cannot
+            // snap to a screen edge, and under Wayland a window may not place
+            // itself at all. The handler only says when to ask, on a drag
+            // rather than on a press.
+            DragHandler {
+                objectName: "sidebarDragHandler"
+                target: null
+                onActiveChanged: if (active) root.startSystemMove()
+            }
+        }
+
         Rectangle {
             anchors.right: parent.right
             width: 1
@@ -459,6 +568,7 @@ ApplicationWindow {
 
             Column {
                 id: sidebarColumn
+                objectName: "sidebarColumn"
                 width: parent.width
                 spacing: 2
 
