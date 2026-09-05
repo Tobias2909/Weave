@@ -73,7 +73,8 @@ def _tools(report: Report) -> None:
          "Everything past the plain feed goes through it"),
         ("a JavaScript runtime", ["deno", "--version"], True,
          "yt-dlp solves YouTube's challenges with deno or node"),
-        ("mpv", ["mpv", "--version"], False, "Videos are handed to it"),
+        ("mpv", ["mpv", "--version"], False,
+         "Videos are handed to it, and music plays through a second one with no window"),
         ("streamlink", ["streamlink", "--version"], False, "Only Twitch playback needs it"),
     ):
         if shutil.which(command[0]) is None and name == "a JavaScript runtime":

@@ -1,13 +1,19 @@
-"""Music played inside Weave rather than handed to mpv.
+"""Music played inside Weave rather than in a window of its own.
 
-Video goes to mpv because that is the whole point of the application. Audio does
-not, because a separate window for a song makes no sense, so it is played here.
+Video goes to mpv because that is the whole point of the application. Audio
+goes to mpv too, but to a second one with no window that Weave starts, controls
+over its socket and closes with itself (`engine.py`). Nothing is downloaded:
+yt-dlp resolves a stream address, which reaches the same Premium quality the
+rest of the setup gets, and mpv reads it. A live stream has no audio only form
+at all, so one of its muxed variants is played with no video output and the
+picture is simply never decoded.
 
-Nothing is downloaded. yt-dlp resolves a stream address and Qt's own player
-takes it from there, which reaches the same Premium quality the rest of the
-setup gets, measured at 257 kb/s opus. A live stream has no audio only form at
-all, so one of its muxed variants is played with no video sink attached and the
-picture is simply discarded.
+This module owns what mpv does not: the queue and its order, shuffle and
+repeat, the fades, the volume that is remembered, and the addresses. The
+address for the track after this one is resolved as soon as this one starts,
+because resolving takes a few seconds and is the only wait there is. mpv is
+handed that track before it is needed, opens it while the current one is still
+playing, and moves on with no gap.
 """
 
 from __future__ import annotations
@@ -15,15 +21,15 @@ from __future__ import annotations
 import random
 import threading
 import time
+from urllib.parse import parse_qs, urlparse
 
-from PySide6.QtCore import (Property, QEasingCurve, QObject, QPropertyAnimation, QThread,
-                            QTimer, QUrl, Signal, Slot)
-from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PySide6.QtCore import (Property, QEasingCurve, QObject, QThread, QTimer,
+                            QVariantAnimation, Signal, Slot)
 
 from .config import Config
 from .cookies import args as cookie_args
+from .engine import CURRENT, NEXT, MusicEngine
 from .process import Cancelled, Timeout, run as run_process
-from .stream import RangedSource
 
 # A live stream is only offered as picture and sound together, and the sound
 # gets better as the picture does. This variant is the sensible middle.
@@ -34,30 +40,30 @@ MUSIC_FORMAT = "bestaudio"
 # wait before the video starts.
 FADE_MS = 1400
 
-# A signed address can be dropped part way through a track, which is ordinary
-# rather than exceptional over a long listen, so it is recovered from rather
-# than reported. These bound that: a few goes at one track, not in a tight
-# loop, and the count starts over once a track has been playing happily for a
+# A signed address can stop being accepted, which is ordinary rather than
+# exceptional over a long listen, so it is recovered from rather than
+# reported. These bound that: a few goes at one track, not in a tight loop,
+# and the count starts over once a track has been playing happily for a
 # while, so an evening of occasional drops never runs out of goes.
 RECOVER_LIMIT = 3
 RECOVER_COOLDOWN_S = 2.0
 RECOVER_WINDOW_S = 120.0
 
-# A connection reset does not always arrive as an error. Sometimes the player
-# simply stalls and sits there, so a stall that outlasts ordinary buffering and
-# has not moved is treated as the same dropped address.
+# mpv pauses itself when it runs out of data. Ordinary buffering comes back
+# within a moment; a connection that has quietly died does not, and is treated
+# as a dropped address.
 STALL_GRACE_MS = 8000
+
+# A signed address carries the moment it expires. One that is about to is not
+# worth handing to the player.
+ADDRESS_MARGIN_S = 600.0
 
 REPEAT_OFF, REPEAT_ALL, REPEAT_ONE = 0, 1, 2
 
 
 def resolve_address(cfg: Config, url: str, live: bool,
                     cancel: threading.Event | None = None) -> str:
-    """One entry to one playable address, blocking.
-
-    A plain function rather than only a thread, because the reader needs a
-    fresh address from whatever thread notices the old one has expired.
-    """
+    """One entry to one playable address, blocking. Takes a few seconds."""
     command = ["yt-dlp", "--no-warnings", *cookie_args(cfg),
                "-f", LIVE_FORMAT if live else MUSIC_FORMAT,
                "--get-url", url]
@@ -69,8 +75,45 @@ def resolve_address(cfg: Config, url: str, live: bool,
     raise _NoAddress((tail[-1] if tail else "no stream came back")[:200])
 
 
+def address_expiry(address: str) -> float | None:
+    """When a signed googlevideo address stops working, as a unix time, or
+    None when the address does not say."""
+    stamp = parse_qs(urlparse(address).query).get("expire", [""])[0]
+    return float(stamp) if stamp.isdigit() else None
+
+
 class _NoAddress(RuntimeError):
     pass
+
+
+class AddressCache:
+    """Resolved addresses, kept until shortly before they expire.
+
+    Going back a track, restarting one, or playing the same song twice in an
+    evening would otherwise cost the few seconds of resolving again each time.
+    An address is tied to this machine's connection, so it lives in memory and
+    dies with the process.
+    """
+
+    def __init__(self, now=time.time) -> None:
+        self._now = now
+        self._held: dict[str, tuple[str, float | None]] = {}
+
+    def get(self, key: str) -> str | None:
+        found = self._held.get(key)
+        if found is None:
+            return None
+        address, expires = found
+        if expires is not None and self._now() > expires - ADDRESS_MARGIN_S:
+            del self._held[key]
+            return None
+        return address
+
+    def put(self, key: str, address: str) -> None:
+        self._held[key] = (address, address_expiry(address))
+
+    def drop(self, key: str) -> None:
+        self._held.pop(key, None)
 
 
 class _Resolver(QThread):
@@ -83,7 +126,7 @@ class _Resolver(QThread):
                  parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._cfg = cfg
-        self._key = key
+        self.key = key
         self._url = url
         self._live = live
         self._cancel = threading.Event()
@@ -97,9 +140,9 @@ class _Resolver(QThread):
         except Cancelled:
             return
         except (FileNotFoundError, Timeout, _NoAddress) as exc:
-            self.failed.emit(self._key, str(exc) or "could not resolve the track")
+            self.failed.emit(self.key, str(exc) or "could not resolve the track")
             return
-        self.resolved.emit(self._key, address)
+        self.resolved.emit(self.key, address)
 
 
 class AudioPlayer(QObject):
@@ -108,7 +151,8 @@ class AudioPlayer(QObject):
     progressChanged = Signal()
     failed = Signal(str)
 
-    def __init__(self, cfg: Config, db=None, parent: QObject | None = None) -> None:
+    def __init__(self, cfg: Config, db=None, parent: QObject | None = None,
+                 engine: MusicEngine | None = None) -> None:
         super().__init__(parent)
         self._cfg = cfg
         self._db = db
@@ -117,31 +161,39 @@ class AudioPlayer(QObject):
         self._at = -1
         self._loading = False
         self._resolver: _Resolver | None = None
+        self._next_resolvers: list[_Resolver] = []
+        self._addresses = AddressCache()
+        # Which queue index mpv holds as its next entry, if any.
+        self._appended: int | None = None
 
-        self._output = QAudioOutput(self)
+        self._engine = engine if engine is not None else MusicEngine(self)
+        self._engine.positionChanged.connect(self._on_position)
+        self._engine.durationChanged.connect(self._on_duration)
+        self._engine.pausedChanged.connect(self._on_paused)
+        self._engine.idleChanged.connect(self._on_idle)
+        self._engine.bufferingChanged.connect(self._on_buffering)
+        self._engine.started.connect(self._on_started)
+        self._engine.ended.connect(self._on_ended)
+        self._engine.gone.connect(self._on_gone)
+        self._pos = 0.0
+        self._dur = 0.0
+        self._paused = True
+        self._idle = True
+        self._buffering = False
+
         stored = int(db.get_state("music_volume", "70") or 70) if db else 70
-        self._output.setVolume(max(0.0, min(1.0, stored / 100)))
-        self._player = QMediaPlayer(self)
-        self._player.setAudioOutput(self._output)
-        self._player.positionChanged.connect(self.progressChanged)
-        self._player.durationChanged.connect(self.progressChanged)
-        self._player.playbackStateChanged.connect(lambda _s: self.stateChanged.emit())
-        self._player.mediaStatusChanged.connect(self._on_status)
-        self._player.errorOccurred.connect(self._on_error)
-        # A stream address is signed and can be dropped part way through, which
-        # arrives as a demux failure and stops the music. One silent retry per
-        # track resolves a fresh address and picks up where it left off.
+        self._level = max(0.0, min(1.0, stored / 100))
+        self._output = self._level          # what mpv has been told, fades included
+        self._engine.set_volume(self._level * 100)
+
         self._recovering = False
-        self._resume_at = 0
+        self._resume_at = 0.0
         self._recover_at = 0.0
         self._recover_count = 0
         self._stall_timer = QTimer(self)
         self._stall_timer.setSingleShot(True)
-        # The device the player is reading from, kept alive for as long as it
-        # is being read.
-        self._source = None
         self._stall_timer.timeout.connect(self._on_stalled_too_long)
-        self._stall_at = -1
+        self._stall_at = -1.0
 
         self._shuffle = (db.get_state("music_shuffle", "0") == "1") if db else False
         # Off, the whole queue, or the one track. A queue that repeats and a
@@ -153,12 +205,12 @@ class AudioPlayer(QObject):
 
         # Volume is faded rather than cut, so a video starting does not chop
         # the music off mid note.
-        self._fade = QPropertyAnimation(self._output, b"volume", self)
+        self._fade = QVariantAnimation(self)
         self._fade.setDuration(FADE_MS)
         self._fade.setEasingCurve(QEasingCurve.Type.InOutQuad)
+        self._fade.valueChanged.connect(self._on_fade_step)
         self._fade.finished.connect(self._on_fade_done)
         self._pause_after_fade = False
-        self._level = self._output.volume()
         self._auto_pause = (db.get_state("music_autopause", "1") != "0") if db else True
 
     # ---- what QML reads --------------------------------------------------
@@ -172,7 +224,7 @@ class AudioPlayer(QObject):
         return dict(self._current())
 
     def _get_playing(self) -> bool:
-        return self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+        return not self._idle and not self._paused
 
     def _get_loading(self) -> bool:
         return self._loading
@@ -181,14 +233,13 @@ class AudioPlayer(QObject):
         return bool(self._queue)
 
     def _get_position(self) -> float:
-        span = self._player.duration()
-        return (self._player.position() / span) if span > 0 else 0.0
+        return (self._pos / self._dur) if self._dur > 0 else 0.0
 
     def _get_elapsed(self) -> int:
-        return int(self._player.position() // 1000)
+        return int(self._pos)
 
     def _get_length(self) -> int:
-        return int(self._player.duration() // 1000)
+        return int(self._dur)
 
     def _get_volume(self) -> int:
         # What was asked for, not what a fade happens to be passing through.
@@ -256,7 +307,7 @@ class AudioPlayer(QObject):
     queue = Property("QVariantList", _get_queue, notify=trackChanged)
     stillToCome = Property(int, _get_still_to_come, notify=trackChanged)
 
-    # ---- playing ---------------------------------------------------------
+    # ---- the queue -------------------------------------------------------
 
     def play_items(self, items: list[dict], start: int = 0) -> None:
         """Queue a list and begin. Each entry needs a key, a title and a url,
@@ -269,6 +320,7 @@ class AudioPlayer(QObject):
         if self._shuffle:
             # Whatever was picked stays first, the rest are shuffled behind it.
             self._order = [self._at] + [i for i in self._order if i != self._at]
+        self._forget_recovery()
         self._start_current()
 
     def _rebuild_order(self) -> None:
@@ -276,129 +328,222 @@ class AudioPlayer(QObject):
         if self._shuffle:
             random.shuffle(self._order)
 
+    def _next_index(self) -> int | None:
+        """What follows the current track, or None when nothing does. Repeat
+        one is not a next track, it is the same one again, and mpv loops it."""
+        if not self._queue or self._at not in self._order or self._repeat_mode == REPEAT_ONE:
+            return None
+        place = self._order.index(self._at)
+        if place + 1 < len(self._order):
+            return self._order[place + 1]
+        if self._repeat_mode == REPEAT_ALL:
+            return self._order[0]
+        return None
+
+    # ---- starting a track ------------------------------------------------
+
     def _start_current(self) -> None:
+        """Play the current track from the top, or from where a recovery left
+        off. Whatever mpv held as next is dropped with the load and queued
+        again once this one is under way."""
         entry = self._current()
         if not entry:
             return
-        self._player.stop()
         self._stall_timer.stop()
-        self._loading = True
+        self._appended = None
         if not self._recovering:
-            self._resume_at = 0
+            self._resume_at = 0.0
+        self._pos = 0.0
+        self._dur = 0.0
         self.trackChanged.emit()
-        self.stateChanged.emit()
+        self.progressChanged.emit()
         if self._resolver is not None and self._resolver.isRunning():
             self._resolver.cancel()
-        self._resolver = _Resolver(self._cfg, entry["key"], entry["url"],
-                                   bool(entry.get("live")), self)
+        address = None if entry.get("live") else self._addresses.get(entry["key"])
+        if address:
+            self._loading = False
+            self.stateChanged.emit()
+            self._hand_over(entry, address)
+            return
+        self._loading = True
+        self.stateChanged.emit()
+        self._resolver = self._make_resolver(entry)
         self._resolver.resolved.connect(self._on_resolved)
         self._resolver.failed.connect(self._on_resolve_failed)
         self._resolver.start()
 
     def _on_resolved(self, key: str, address: str) -> None:
-        if self._current().get("key") != key:
-            return                       # a later choice overtook this one
-        self._loading = False
         entry = self._current()
-        # A recorded track is read in pieces, so a reset connection costs one
-        # retried request rather than the track. A live stream is a playlist of
-        # segments the player fetches for itself, so it is handed over as it
-        # always was.
-        self._source = None
-        device = None if entry.get("live") else self._open_source(address, entry)
-        if device is not None:
-            self._source = device              # kept, or it is collected mid track
-            self._player.setSourceDevice(device)
-        else:
-            self._player.setSource(QUrl(address))
-        # The restart is done. Whether it holds is the counter's business.
+        if entry.get("key") != key:
+            return                       # a later choice overtook this one
+        if not entry.get("live"):
+            self._addresses.put(key, address)
+        self._loading = False
+        self._hand_over(entry, address)
+
+    def _hand_over(self, entry: dict, address: str) -> None:
+        """Give mpv the address. A position left by a recovery goes with the
+        load, so it is applied to the file it was meant for and never to one
+        that has not loaded yet."""
+        start = self._resume_at if self._resume_at > 0 else None
+        self._resume_at = 0.0
         self._recovering = False
-        if self._resume_at > 0:
-            # Not seeked here. A position set before the new source has loaded
-            # is discarded, and the track then starts from the beginning,
-            # which is what a recovery looked like from the outside. It is
-            # applied once the source says it is loaded, and playing waits for
-            # that, so the first thing heard is the right part of the track.
-            self.stateChanged.emit()
-            return
-        self._start_playing()
+        self._raise_volume()
+        self._engine.load(address, start=start)
+        self._engine.set_pause(False)
+        self._paused = False
+        self._idle = False
         self.stateChanged.emit()
+        self._prepare_next()
+
+    def _make_resolver(self, entry: dict) -> _Resolver:
+        """Its own method so a test can put something there that never
+        reaches for a subprocess."""
+        return _Resolver(self._cfg, entry["key"], entry["url"], bool(entry.get("live")), self)
 
     def _on_resolve_failed(self, key: str, message: str) -> None:
+        if self._current().get("key") != key:
+            return
         self._loading = False
         self.stateChanged.emit()
         self.failed.emit(message)
 
-    def _on_status(self, status) -> None:
-        if status == QMediaPlayer.MediaStatus.EndOfMedia:
-            self._stall_timer.stop()
-            self._forget_recovery()
-            if self._repeat_mode == REPEAT_ONE:
-                self._player.setPosition(0)
-                self._start_playing()
-                return
-            self.next()
-        elif status == QMediaPlayer.MediaStatus.InvalidMedia:
-            self._stall_timer.stop()
-            self._recover()
-        elif status == QMediaPlayer.MediaStatus.StalledMedia:
-            # Might be ordinary buffering, might be a connection that has gone
-            # away without saying so. Which one it is shows in whether it comes
-            # back, so it is given a moment before being treated as the second.
-            self._stall_at = self._player.position()
-            self._stall_timer.start(STALL_GRACE_MS)
-        elif status in (QMediaPlayer.MediaStatus.LoadedMedia,
-                        QMediaPlayer.MediaStatus.BufferedMedia,
-                        QMediaPlayer.MediaStatus.BufferingMedia):
-            self._stall_timer.stop()
-            self._resume_pending()
+    # ---- the track after this one ----------------------------------------
 
-    def _resume_pending(self) -> None:
-        """Pick up where a dropped track left off, now that it can be seeked.
+    def _prepare_next(self) -> None:
+        """Make sure mpv holds the right next entry, and nothing else.
 
-        Only a recovery leaves a position waiting, since starting a track for
-        any other reason clears it.
+        Resolving is the only wait in the whole chain, so it is done now,
+        while there are minutes to spare, rather than when the track ends.
         """
-        if self._resume_at <= 0:
+        self._engine.set_loop(self._repeat_mode == REPEAT_ONE)
+        wanted = self._next_index()
+        if wanted is None:
+            if self._appended is not None:
+                self._engine.clear_after()
+                self._appended = None
             return
-        at, self._resume_at = self._resume_at, 0
-        self._player.setPosition(at)
-        self._start_playing()
+        if wanted == self._appended:
+            return
+        if self._appended is not None:
+            self._engine.clear_after()
+            self._appended = None
+        entry = self._queue[wanted]
+        address = None if entry.get("live") else self._addresses.get(entry["key"])
+        if address:
+            self._engine.append(address)
+            self._appended = wanted
+            return
+        if any(r.key == entry["key"] and r.isRunning() for r in self._next_resolvers):
+            return
+        resolver = self._make_resolver(entry)
+        resolver.resolved.connect(self._on_next_resolved)
+        resolver.finished.connect(self._sweep_resolvers)
+        self._next_resolvers.append(resolver)
+        resolver.start()
+
+    def _on_next_resolved(self, key: str, address: str) -> None:
+        """Whatever the queue looks like by now, the address is worth keeping.
+        It is only handed to mpv if that track is still the one coming up."""
+        wanted = self._next_index()
+        entry = self._queue[wanted] if wanted is not None else {}
+        if not entry.get("live"):
+            self._addresses.put(key, address)
+        if entry.get("key") == key and self._appended is None and not self._idle:
+            self._engine.append(address)
+            self._appended = wanted
+
+    def _sweep_resolvers(self) -> None:
+        self._next_resolvers = [r for r in self._next_resolvers if r.isRunning()]
+
+    # ---- what mpv reports ------------------------------------------------
+
+    def _on_position(self, seconds: float) -> None:
+        before = int(self._pos * 10)
+        self._pos = seconds
+        if int(seconds * 10) != before:
+            self.progressChanged.emit()
+
+    def _on_duration(self, seconds: float) -> None:
+        self._dur = seconds
+        self.progressChanged.emit()
+
+    def _on_paused(self, paused: bool) -> None:
+        self._paused = paused
         self.stateChanged.emit()
 
-    def _on_stalled_too_long(self) -> None:
-        """A stall that has not moved is a dropped connection by another name.
+    def _on_idle(self, idle: bool) -> None:
+        self._idle = idle
+        if idle:
+            self._stall_timer.stop()
+            self._appended = None
+            self._pos = 0.0
+            self.progressChanged.emit()
+        self.stateChanged.emit()
 
-        A reset is reported by the layers underneath as a read error and
-        sometimes reaches the player as nothing at all, so without this the
-        music simply stops with a full console and a quiet application.
-        """
-        if not self._current() or self._player.position() != self._stall_at:
+    def _on_buffering(self, buffering: bool) -> None:
+        """mpv paused itself for want of data. Ordinary buffering comes back
+        within a moment. One that does not, with the position where it was,
+        is a connection that has died without saying so."""
+        self._buffering = buffering
+        if buffering and self._current():
+            self._stall_at = self._pos
+            self._stall_timer.start(STALL_GRACE_MS)
+        else:
+            self._stall_timer.stop()
+
+    def _on_started(self, role: str) -> None:
+        if role == NEXT and self._appended is not None:
+            # mpv moved on by itself, as planned. Weave's pointer follows.
+            self._at = self._appended
+            self._appended = None
+            self._forget_recovery()
+            self._pos = 0.0
+            self._dur = 0.0
+            self._engine.remove_before()
+            self.trackChanged.emit()
+            self.progressChanged.emit()
+            self._prepare_next()
+        elif role == CURRENT:
+            self._stall_timer.stop()
+        self.stateChanged.emit()
+
+    def _on_ended(self, reason: str) -> None:
+        self._stall_timer.stop()
+        if reason == "eof":
+            # mpv either moves on to what it was handed or goes idle, and
+            # both arrive as their own events.
+            self._forget_recovery()
+        elif reason == "error":
+            if not self._recover():
+                self.failed.emit("the track could not be played")
+
+    def _on_stalled_too_long(self) -> None:
+        if not self._current() or not self._buffering or self._pos != self._stall_at:
             return
         if not self._recover():
             self.failed.emit("the connection was lost and could not be picked up again")
 
-    def _on_error(self, _error, message: str) -> None:
-        if self._recover():
-            return
-        self.failed.emit(message or "playback failed")
+    def _on_gone(self, why: str) -> None:
+        self._idle = True
+        self._paused = True
+        self._appended = None
+        self._stall_timer.stop()
+        self.stateChanged.emit()
+        if self._queue:
+            self.failed.emit(why)
 
     def _recover(self) -> bool:
         """Fetch a fresh address and carry on from the same place.
 
         Returns whether it is being handled, so a failure that is being dealt
         with stays quiet and one that cannot be is reported.
-
-        The flag that says a restart is in progress is not what limits this. It
-        used to be, and it was only ever cleared when a track reached its end,
-        so the first recovery of a session used it up and the next dropped
-        address stopped the music instead of being recovered from.
         """
         if not self._current():
             return False
         now = time.monotonic()
-        # A dropped connection arrives as a burst of the same complaint. The
-        # first one starts a recovery and the rest are already answered.
+        # A dropped connection can arrive as a burst of the same complaint.
+        # The first one starts a recovery and the rest are already answered.
         if now - self._recover_at < RECOVER_COOLDOWN_S:
             return True
         # A track that has been playing happily for a while starts over with a
@@ -410,27 +555,11 @@ class AudioPlayer(QObject):
         self._recover_at = now
         self._recover_count += 1
         self._recovering = True
-        self._resume_at = self._player.position()
+        self._resume_at = self._pos
+        # The address is the likeliest thing to have gone bad.
+        self._addresses.drop(self._current().get("key", ""))
         self._start_current()
         return True
-
-    def _open_source(self, address: str, entry: dict):
-        """The device to read this track through, or nothing to play the
-        address directly. Its own method so a test can put something else
-        there rather than reaching for the network."""
-        device = RangedSource(address, lambda: self._renew(entry))
-        return device if device.start() else None
-
-    def _renew(self, entry: dict) -> str:
-        """A fresh address for the same track, for the reader to carry on with.
-
-        Called from whichever thread found the old one refused, which is why it
-        goes through the plain resolve rather than the worker.
-        """
-        try:
-            return resolve_address(self._cfg, entry.get("url", ""), bool(entry.get("live")))
-        except Exception:                                           # noqa: BLE001
-            return ""
 
     def _forget_recovery(self) -> None:
         """A different track is a clean slate."""
@@ -438,20 +567,23 @@ class AudioPlayer(QObject):
         self._recover_count = 0
         self._recover_at = 0.0
 
+    # ---- controls --------------------------------------------------------
+
     @Slot()
     def toggle(self) -> None:
         if self._get_playing():
             self._fade_to(0.0, pause_after=True)
             return
         if self._queue:
-            if self._player.source().isEmpty():
+            if self._idle:
                 self._start_current()
             else:
                 # Comes back up rather than arriving at full volume.
                 self._fade.stop()
                 self._pause_after_fade = False
-                self._output.setVolume(0.0)
-                self._player.play()
+                self._set_output(0.0)
+                self._engine.set_pause(False)
+                self._paused = False
                 self._fade_to(self._level, pause_after=False)
         self.stateChanged.emit()
 
@@ -467,17 +599,23 @@ class AudioPlayer(QObject):
     def next(self) -> None:
         if not self._queue:
             return
-        # A different track is a clean slate, however it was chosen.
         self._forget_recovery()
-        place = self._order.index(self._at) if self._at in self._order else -1
-        if place + 1 < len(self._order):
-            self._at = self._order[place + 1]
-        elif self._repeat_mode == REPEAT_ALL:
-            self._at = self._order[0]
+        if self._repeat_mode == REPEAT_ONE:
+            # Asking for the next one means the next one, whatever repeat says.
+            place = self._order.index(self._at) if self._at in self._order else -1
+            target = self._order[(place + 1) % len(self._order)] if self._order else None
         else:
-            self._player.stop()
+            target = self._next_index()
+        if target is None:
+            self._engine.stop()
             self.stateChanged.emit()
             return
+        if target == self._appended and not self._idle:
+            # Already open in mpv, so this is instant. The pointer moves when
+            # mpv says it has started.
+            self._engine.next()
+            return
+        self._at = target
         self._start_current()
 
     @Slot()
@@ -486,8 +624,8 @@ class AudioPlayer(QObject):
             return
         # Within the first few seconds this goes back a track, later it
         # restarts the current one, which is what every music player does.
-        if self._player.position() > 4000:
-            self._player.setPosition(0)
+        if self._pos > 4.0 and not self._idle:
+            self._engine.seek(0.0)
             return
         self._forget_recovery()
         place = self._order.index(self._at) if self._at in self._order else 0
@@ -496,9 +634,8 @@ class AudioPlayer(QObject):
 
     @Slot(float)
     def seek(self, fraction: float) -> None:
-        span = self._player.duration()
-        if span > 0:
-            self._player.setPosition(int(max(0.0, min(1.0, fraction)) * span))
+        if self._dur > 0 and not self._idle:
+            self._engine.seek(max(0.0, min(1.0, fraction)) * self._dur)
 
     @Slot(int)
     def nudgeVolume(self, steps: int) -> None:
@@ -506,7 +643,13 @@ class AudioPlayer(QObject):
         enough to be worth a notch."""
         self.setVolume(self._get_volume() + steps * 5)
 
-    def _start_playing(self) -> None:
+    # ---- volume and fades ------------------------------------------------
+
+    def _set_output(self, level: float) -> None:
+        self._output = max(0.0, min(1.0, level))
+        self._engine.set_volume(self._output * 100)
+
+    def _raise_volume(self) -> None:
         """Play at the level that was asked for.
 
         A pause leaves the volume down on purpose, since restoring it while
@@ -515,24 +658,27 @@ class AudioPlayer(QObject):
         """
         self._fade.stop()
         self._pause_after_fade = False
-        self._output.setVolume(self._level)
-        self._player.play()
+        self._set_output(self._level)
 
     def _fade_to(self, level: float, pause_after: bool) -> None:
         self._fade.stop()
         self._pause_after_fade = pause_after
-        self._fade.setStartValue(self._output.volume())
-        self._fade.setEndValue(max(0.0, min(1.0, level)))
+        self._fade.setStartValue(float(self._output))
+        self._fade.setEndValue(float(max(0.0, min(1.0, level))))
         self._fade.start()
+
+    def _on_fade_step(self, value) -> None:
+        self._set_output(float(value))
 
     def _on_fade_done(self) -> None:
         if self._pause_after_fade:
             self._pause_after_fade = False
-            self._player.pause()
-            # The volume stays down. Pausing is asynchronous, so putting the
+            self._engine.set_pause(True)
+            self._paused = True
+            # The volume stays down. Pausing takes a moment, so putting the
             # level back here plays whatever is still in the buffer at full
-            # volume for a moment, which is heard as a blip right at the end
-            # of the fade. Every path that starts playing raises it instead.
+            # volume, which is heard as a blip right at the end of the fade.
+            # Every path that starts playing raises it instead.
             self.stateChanged.emit()
 
     @Slot(int)
@@ -541,10 +687,12 @@ class AudioPlayer(QObject):
         self._fade.stop()
         self._pause_after_fade = False
         self._level = value / 100
-        self._output.setVolume(value / 100)
+        self._set_output(self._level)
         if self._db is not None:
             self._db.set_state("music_volume", str(value))
         self.stateChanged.emit()
+
+    # ---- modes -----------------------------------------------------------
 
     @Slot(bool)
     def setShuffle(self, value: bool) -> None:
@@ -555,21 +703,24 @@ class AudioPlayer(QObject):
         self._rebuild_order()
         if current in self._order and self._shuffle:
             self._order = [current] + [i for i in self._order if i != current]
+        if not self._idle:
+            self._prepare_next()
         self.stateChanged.emit()
+        self.trackChanged.emit()
 
     @Slot()
     def cycleRepeat(self) -> None:
-        self._repeat_mode = (self._repeat_mode + 1) % 3
-        if self._db is not None:
-            self._db.set_state("music_repeat", str(self._repeat_mode))
-        self.stateChanged.emit()
+        self.setRepeat((self._repeat_mode + 1) % 3)
 
     @Slot(int)
     def setRepeat(self, mode: int) -> None:
         self._repeat_mode = max(0, min(2, int(mode)))
         if self._db is not None:
             self._db.set_state("music_repeat", str(self._repeat_mode))
+        if not self._idle:
+            self._prepare_next()
         self.stateChanged.emit()
+        self.trackChanged.emit()
 
     @Slot(bool)
     def setAutoPause(self, value: bool) -> None:
@@ -580,10 +731,11 @@ class AudioPlayer(QObject):
 
     @Slot()
     def stop(self) -> None:
-        self._player.stop()
+        self._engine.stop()
         self._queue = []
         self._order = []
         self._at = -1
+        self._appended = None
         self.trackChanged.emit()
         self.stateChanged.emit()
 
@@ -594,7 +746,10 @@ class AudioPlayer(QObject):
             self._fade_to(0.0, pause_after=True)
 
     def shutdown(self) -> None:
-        if self._resolver is not None and self._resolver.isRunning():
-            self._resolver.cancel()
-            self._resolver.wait(5000)
-        self._player.stop()
+        for resolver in [self._resolver, *self._next_resolvers]:
+            if resolver is not None and resolver.isRunning():
+                resolver.cancel()
+        for resolver in [self._resolver, *self._next_resolvers]:
+            if resolver is not None and resolver.isRunning():
+                resolver.wait(5000)
+        self._engine.quit()

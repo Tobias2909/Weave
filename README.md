@@ -278,23 +278,26 @@ track leaves the last one behind in the list rather than dropping it, so the
 queue is the queue and you can go back to something you have already heard.
 The one playing says so, and any row can be jumped to.
 
-A track is read in pieces rather than over one long connection, which is what
-every comparable application does without appearing to. The web player fetches
-segments, FreeTube plays through shaka, and none of them holds a single
-connection open for a whole track, because Google's media servers reset those
-as a matter of course.
+The sound comes out of a second `mpv` with no window, which Weave starts on the
+first track, controls over its own socket and closes with itself. Nothing of
+your `mpv` configuration is loaded into it. Playing a stream well needs a lot
+of machinery underneath the player. Google's media servers drop a long
+connection as a matter of course, the last piece of a file is shorter than the
+rest, a seek lands outside what has been read, and the next track has to be
+open before the current one ends. `mpv` has all of it, and it was measured
+rather than assumed. A whole track is in memory within a few seconds of
+starting, so a dropped connection after that costs nothing, and before that it
+reconnects on its own. A seek lands in a millisecond. The changeover to the
+next track was measured at one millisecond with no buffering pause.
 
-So the player is handed a device rather than an address. The device asks for a
-range at a time and simply asks again when one fails, and it fetches a fresh
-address when the signed one stops being accepted after a few hours. The player
-is never told, because as far as it is concerned nothing went wrong. Measured
-on a real track, four resets in a row underneath it were invisible, with
-playback carrying on and the player reporting no error at all.
-
-A live stream is different, being a list of segments the player fetches for
-itself, so that is still handed over as an address. A few goes per track, never in a tight loop, and a track that has
-been playing happily for a while starts over with a full set, so an evening of
-occasional drops cannot run out of them.
+Weave keeps the queue and hands `mpv` only the track playing and the one after
+it. Resolving an address takes a few seconds and is the only wait in the whole
+chain, so the next one is resolved as soon as the current track starts, minutes
+before it is needed, and addresses are kept until shortly before they expire so
+going back a track costs nothing. A track that cannot be played is given a
+fresh address and picks up from the same position, a few goes per track, never
+in a tight loop, and a track that has been playing happily for a while starts
+over with a full set, so an evening of occasional drops cannot run out of them.
 
 Pausing fades out over about a second rather than cutting. The volume stays
 down while it is paused and is raised again by whatever starts it playing,
@@ -337,11 +340,12 @@ itself if you would rather not use the terminal.
 
 ## Music
 
-Video goes to `mpv` because that is the point of the application. Audio does not,
-because a separate window for a song makes no sense, so it plays here instead.
+Video goes to `mpv` because that is the point of the application. Audio goes to
+`mpv` too, but a separate window for a song makes no sense, so it is a second
+`mpv` with no window that Weave owns and controls from the player bar.
 
-Nothing is downloaded. `yt-dlp` resolves a stream address and Qt plays it, which
-reaches the same Premium quality the rest of the setup gets. A live stream has no
+Nothing is downloaded. `yt-dlp` resolves a stream address and `mpv` reads it,
+which reaches the same Premium quality the rest of the setup gets. A live stream has no
 audio only form at all, so one of its combined variants is played with the
 picture discarded, which is how a round the clock radio stream works here.
 
