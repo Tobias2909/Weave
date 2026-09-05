@@ -14,9 +14,10 @@ from __future__ import annotations
 import sqlite3
 import threading
 import time
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 SCHEMA_VERSION = 18
 
@@ -1394,4 +1395,5 @@ class Database:
             "       (SELECT COUNT(*) FROM videos)   AS videos,"
             "       (SELECT COUNT(*) FROM watched)  AS watched"
         ).fetchone()
-        return {k: row[k] for k in row.keys()}
+        # Iterating a Row yields its values, so the keys are asked for by name.
+        return {k: row[k] for k in row.keys()}                     # noqa: SIM118

@@ -25,7 +25,6 @@ import shutil
 import socket
 import subprocess
 import threading
-import time
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Signal
@@ -206,7 +205,7 @@ class _IpcWatcher(QThread):
         while not self._stop.is_set():
             try:
                 chunk = sock.recv(65536)
-            except socket.timeout:
+            except TimeoutError:
                 continue
             if not chunk:
                 return

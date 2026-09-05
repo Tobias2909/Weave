@@ -11,13 +11,13 @@ import argparse
 import sys
 import time
 
-from . import config, format as fmt, ids, imagecache, paths, themes, tokens
+from . import config, ids, imagecache, paths, themes, tokens
+from . import format as fmt
 from .budget import Budget
-from .sources import twitch
 from .db import Database
 from .net import Throttle
-from .sources import flatlist, history, playlists as playlist_source
-from .sources import recommended, search, subs
+from .sources import flatlist, history, recommended, search, subs, twitch
+from .sources import playlists as playlist_source
 from .sources.resolve import ResolveError, resolve
 
 
@@ -94,7 +94,7 @@ def _cmd_poll(_args) -> int:
 
     cfg = config.load()
     db = Database(paths.DB_FILE)
-    app = QCoreApplication([])                      # noqa: F841  signals need one
+    _app = QCoreApplication([])                     # signals need one alive
     poller = FeedPoller(db, cfg, force_all=True)
 
     seen: dict[str, int] = {}
@@ -483,7 +483,7 @@ def _cmd_cache(args) -> int:
         for reason, count in kinds.most_common():
             print(f"  {count:>5}  {reason}")
         print("\nthe last few")
-        for when, reason, url in rows[-5:]:
+        for _when, reason, url in rows[-5:]:
             print(f"  {reason:<24} {url[:70]}")
         return 0
 
@@ -595,7 +595,7 @@ def _cmd_live(_args) -> int:
     return 0
 
 
-def _cmd_music(args) -> int:
+def _cmd_music(_args) -> int:
     from .sources import ytmusic
 
     cfg = config.load()
@@ -607,7 +607,7 @@ def _cmd_music(args) -> int:
         who = ytmusic.client(cfg.browser_profile_path).get_account_info()
         print(f"speaking as {who.get('accountName')}")
         print(f"{len(ytmusic.playlists(cfg.browser_profile_path, limit=200))} playlists visible")
-    except Exception as exc:                                        # noqa: BLE001
+    except Exception as exc:
         print(f"could not reach YouTube Music, {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
     print("\nIf that is the wrong one, sign in to music.youtube.com as the identity you "

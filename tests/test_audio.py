@@ -9,10 +9,17 @@ import unittest
 
 from PySide6.QtCore import QCoreApplication, QObject, Signal
 
-from weave.audio import (ADDRESS_MARGIN_S, RECOVER_COOLDOWN_S, RECOVER_LIMIT,
-                         RECOVER_WINDOW_S, AddressCache, AudioPlayer, address_expiry)
+from weave.audio import (
+    ADDRESS_MARGIN_S,
+    RECOVER_COOLDOWN_S,
+    RECOVER_LIMIT,
+    RECOVER_WINDOW_S,
+    AddressCache,
+    AudioPlayer,
+    address_expiry,
+)
 from weave.config import Config
-from weave.engine import CURRENT, NEXT
+from weave.engine import NEXT
 
 _app = QCoreApplication.instance() or QCoreApplication([])
 

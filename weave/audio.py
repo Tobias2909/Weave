@@ -23,13 +23,22 @@ import threading
 import time
 from urllib.parse import parse_qs, urlparse
 
-from PySide6.QtCore import (Property, QEasingCurve, QObject, QThread, QTimer,
-                            QVariantAnimation, Signal, Slot)
+from PySide6.QtCore import (
+    Property,
+    QEasingCurve,
+    QObject,
+    QThread,
+    QTimer,
+    QVariantAnimation,
+    Signal,
+    Slot,
+)
 
 from .config import Config
 from .cookies import args as cookie_args
 from .engine import CURRENT, NEXT, MusicEngine
-from .process import Cancelled, Timeout, run as run_process
+from .process import Cancelled, Timeout
+from .process import run as run_process
 
 # A live stream is only offered as picture and sound together, and the sound
 # gets better as the picture does. This variant is the sensible middle.
@@ -243,7 +252,7 @@ class AudioPlayer(QObject):
 
     def _get_volume(self) -> int:
         # What was asked for, not what a fade happens to be passing through.
-        return int(round(self._level * 100))
+        return round(self._level * 100)
 
     def _get_shuffle(self) -> bool:
         return self._shuffle

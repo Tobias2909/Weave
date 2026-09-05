@@ -28,9 +28,11 @@ stale event about one that was just replaced.
 
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import threading
@@ -63,22 +65,31 @@ def mpv_command(volume: float, socket_path: os.PathLike | str) -> list[str]:
         # The next entry is opened while the current one still plays, and the
         # audio device is kept open across the change, so there is no gap.
         "--prefetch-playlist=yes", "--gapless-audio=yes",
-        f"--volume={max(0, min(100, int(round(volume))))}",
+        f"--volume={max(0, min(100, round(volume)))}",
         "--audio-client-name=weave",
     ]
 
 
+try:
+    _LIBC = ctypes.CDLL("libc.so.6", use_errno=True)
+except OSError:                                                     # not glibc
+    _LIBC = None
+
+PR_SET_PDEATHSIG = 1
+
+
 def _die_with_parent() -> None:
-    """Runs in the child before mpv starts. A player with no window that
+    """Runs in the child between fork and exec. A player with no window that
     outlived a crashed Weave would keep playing with nothing to stop it, so
     the kernel is asked to end it when its parent goes, however that happens.
-    Linux only, which Weave is."""
-    try:
-        import ctypes
-        import signal
-        ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
-    except Exception:                                               # noqa: BLE001
-        pass
+
+    Nothing may be imported or locked in here. The child is a fork of a
+    process with other threads running, and an import lock held by one of
+    them at that moment would never be released on this side. The library
+    handle is resolved once at import time for exactly that reason.
+    """
+    if _LIBC is not None:
+        _LIBC.prctl(PR_SET_PDEATHSIG, signal.SIGTERM)
 
 
 class MusicEngine(QObject):
@@ -126,9 +137,11 @@ class MusicEngine(QObject):
         except OSError:
             pass
         try:
+            # preexec_fn is flagged as unsafe with threads for good reason,
+            # which is why the hook above imports nothing and takes no lock.
             self._process = subprocess.Popen(
                 command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL, preexec_fn=_die_with_parent)
+                stderr=subprocess.DEVNULL, preexec_fn=_die_with_parent)  # noqa: PLW1509
         except OSError as exc:
             self.gone.emit(f"could not start mpv: {exc}")
             return False
@@ -344,7 +357,7 @@ class _Ipc(QThread):
         while not self._stop.is_set():
             try:
                 chunk = sock.recv(65536)
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 return

@@ -154,7 +154,7 @@ def load_file(path: Path) -> Loaded | None:
 
 
 def available() -> list[Loaded]:
-    """Built in themes first, then the user's. A file in the config directory
+    """Built in themes first, then the ones in the config directory. A file there
     with the same name as a built in one replaces it, so any of them can be
     copied out and altered."""
     found: dict[str, Loaded] = {}

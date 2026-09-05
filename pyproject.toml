@@ -34,3 +34,23 @@ weave = ["qml/*.qml", "themes/*.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# The linter is not a dependency, only a habit. `ruff check .` from the root
+# runs these rules. What is ignored is ignored on purpose: long lines are
+# wrapped by hand where it reads better, and the argument and branch counts
+# would only be met by splitting functions that read well whole.
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["tools"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "SIM", "PL", "RUF", "C4", "PIE", "RET", "ARG", "PTH"]
+ignore = [
+    "E501", "PLR0913", "PLR0912", "PLR0915", "PLR0917", "PLR2004", "PLR0911",
+    "PLW2901", "PLW0603", "PLW1510", "UP007", "RUF012", "SIM108", "SIM102", "SIM105",
+    "PLC0415", "B008", "B905", "ARG002", "PTH", "RET505",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ARG", "PLR", "PLW", "SIM", "B", "RUF", "E741", "E731", "C4", "PIE"]

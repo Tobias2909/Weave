@@ -15,7 +15,7 @@ import time
 import unittest
 import wave
 
-from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer
+from PySide6.QtCore import QCoreApplication, QEventLoop
 
 from weave.engine import CURRENT, NEXT, MusicEngine, mpv_command
 

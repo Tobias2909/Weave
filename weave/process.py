@@ -47,10 +47,10 @@ def run(command: list[str], cancel: threading.Event | None = None,
             waited += POLL_INTERVAL_S
             if cancel is not None and cancel.is_set():
                 _stop(process)
-                raise Cancelled("cancelled")
+                raise Cancelled("cancelled") from None
             if waited >= timeout:
                 _stop(process)
-                raise Timeout(f"timed out after {timeout:.0f} seconds")
+                raise Timeout(f"timed out after {timeout:.0f} seconds") from None
             continue
         return Result(process.returncode, stdout or "", stderr or "")
 

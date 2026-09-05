@@ -120,7 +120,7 @@ class _Response(QQuickImageResponse, QRunnable):
     def run(self) -> None:
         try:
             self._load_from_disk() or self._download()
-        except Exception as exc:                                    # noqa: BLE001
+        except Exception as exc:
             _record(self._path.parent.parent, self._url, type(exc).__name__)
         # No error string on purpose. Qt logs one line per failed picture, and
         # a view full of them during a bad minute buries everything else.
