@@ -29,6 +29,18 @@ Item {
                     border.color: query.activeFocus ? Theme.colors.accent : Theme.colors.border
                 }
                 onAccepted: App.musicSearch(text)
+
+                // Walking back to the shelves with the mouse buttons leaves
+                // no list behind, so the words that opened it should go too.
+                // Only while the box is not being typed in, since a search
+                // that has not been sent yet is still wanted.
+                Connections {
+                    target: App
+                    function onMusicChanged() {
+                        if (App.musicResults.length === 0 && !query.activeFocus)
+                            query.text = ""
+                    }
+                }
             }
 
             FlatButton {
