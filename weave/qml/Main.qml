@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Window
 
 ApplicationWindow {
     id: root
@@ -12,6 +13,12 @@ ApplicationWindow {
     title: App.viewKind === "channel" && App.channelInfo.title
            ? "Weave  ·  " + App.channelInfo.title : "Weave"
     color: Theme.colors.background
+
+    // No bar from the system. The toolbar row below is the title bar, it
+    // carries the window's own buttons, and the window is no taller for them.
+    // The border goes with the bar, so the edges are drawn back in by
+    // ResizeGrips.
+    flags: Qt.Window | Qt.FramelessWindowHint
 
     ThemeBackground {
         anchors.fill: parent
@@ -86,6 +93,104 @@ ApplicationWindow {
         return Qt.rgba(role.r, role.g, role.b, root.panelOpacity)
     }
 
+    // ---- the window itself -----------------------------------------------
+
+    // Maximised and full screen are the two states whose size is the screen's
+    // rather than the window's own. Anything else, including the moment
+    // before the window is first shown, counts as the ordinary state whose
+    // shape is worth remembering.
+    readonly property bool windowed: visibility !== Window.Maximized
+                                     && visibility !== Window.FullScreen
+                                     && visibility !== Window.Minimized
+
+    // The shape to come back to. The geometry is stored on the way out by
+    // reading the window, so a window closed while maximised would be
+    // remembered as the size of the screen and could never be got back to its
+    // own shape again. These follow the window only while it has its own
+    // shape, and are put back before the window is read.
+    property int restoredWidth: 0
+    property int restoredHeight: 0
+    property int restoredX: 0
+    property int restoredY: 0
+
+    function rememberShape() {
+        if (!root.windowed)
+            return
+        root.restoredWidth = root.width
+        root.restoredHeight = root.height
+        root.restoredX = root.x
+        root.restoredY = root.y
+    }
+
+    onWidthChanged: root.rememberShape()
+    onHeightChanged: root.rememberShape()
+    onXChanged: root.rememberShape()
+    onYChanged: root.rememberShape()
+    Component.onCompleted: root.rememberShape()
+
+    function toggleMaximised() {
+        if (root.visibility === Window.Maximized) {
+            root.showNormal()
+        } else {
+            // Taken here rather than left to the change above, because the
+            // order in which a compositor reports the new state and the new
+            // size is its own business, and a size that arrives first would
+            // be remembered as the shape to come back to.
+            root.rememberShape()
+            root.showMaximized()
+        }
+    }
+
+    // Set once the window is on its way out, so stepping out of maximised
+    // does not turn into a loop of refused closes.
+    property bool leaving: false
+
+    // Closing while maximised is refused once. The window steps back to its
+    // own shape first, the compositor is given a moment to hand that shape
+    // back, and only then does the close go through, so what is stored is the
+    // shape to come back to and not the screen.
+    onClosing: function (close) {
+        if (root.windowed || root.leaving)
+            return
+        close.accepted = false
+        root.leaving = true
+        root.showNormal()
+        leaveTimer.start()
+    }
+
+    Timer {
+        id: leaveTimer
+        objectName: "leaveTimer"
+        interval: 120
+        onTriggered: root.close()
+    }
+
+    // A quit that never went through the window at all, such as the last
+    // window closing from elsewhere, leaves no chance to wait for the
+    // compositor. The remembered shape is written straight back instead,
+    // which is right wherever a geometry change takes effect at once.
+    Connections {
+        target: Qt.application
+        function onAboutToQuit() {
+            if (root.windowed)
+                return
+            root.showNormal()
+            root.x = root.restoredX
+            root.y = root.restoredY
+            root.width = root.restoredWidth
+            root.height = root.restoredHeight
+        }
+    }
+
+    // The window's edges, over everything, so a corner is a corner whatever
+    // happens to be drawn under it.
+    ResizeGrips {
+        objectName: "resizeGrips"
+        target: root
+        parent: Overlay.overlay
+        anchors.fill: parent
+    }
+
     header: ToolBar {
         background: Rectangle {
             color: root.panelColour(Theme.colors.surface)
@@ -97,117 +202,175 @@ ApplicationWindow {
             }
         }
 
-        RowLayout {
+        // The row, and behind it the surface that moves the window.
+        //
+        // Wrapped in one item rather than sitting in the bar side by side,
+        // because a bar holding more than one thing takes its height from
+        // neither of them and would collapse to nothing. The bar's own
+        // background is no place for it either, since a control's background
+        // is never offered any input.
+        Item {
+            id: titleArea
+            objectName: "titleArea"
             anchors.fill: parent
-            anchors.leftMargin: 14
-            anchors.rightMargin: 14
-            spacing: 12
+            implicitWidth: barRow.implicitWidth
+            implicitHeight: barRow.implicitHeight
 
-            Label {
-                text: "Weave"
-                color: Theme.colors.text
-                font.pixelSize: 18
-                font.weight: Font.Bold
-            }
+            // Behind the row, so a press reaches it only where the row is
+            // empty and the search boxes and the buttons above are untouched.
+            // It takes the press itself rather than letting it fall through,
+            // because the bar accepts every button it is offered and would
+            // swallow it, which cancels both handlers below.
+            MouseArea {
+                id: titleDrag
+                objectName: "titleDrag"
+                anchors.fill: parent
+                acceptedButtons: Qt.LeftButton
 
-            TextField {
-                id: addField
-                Layout.preferredWidth: 260
-                placeholderText: "Add a channel, a handle or a twitch.tv link"
-                color: Theme.colors.text
-                placeholderTextColor: Theme.colors.textMuted
-                background: Rectangle {
-                    radius: 6
-                    color: Theme.colors.background
-                    border.width: 1
-                    border.color: addField.activeFocus ? Theme.colors.accent : Theme.colors.border
+                // The compositor does the moving. A move rolled by hand out of
+                // pointer deltas cannot snap to a screen edge, and under
+                // Wayland a window may not place itself at all. The handler
+                // only says when to ask, on a drag rather than on a press, so
+                // a double click still gets through.
+                DragHandler {
+                    objectName: "titleDragHandler"
+                    target: null
+                    onActiveChanged: if (active) root.startSystemMove()
                 }
-                onAccepted: {
-                    // Keep the text when it was not even understood, so a typo
-                    // can be corrected rather than retyped.
-                    if (App.addChannel(text))
-                        text = ""
+
+                TapHandler {
+                    objectName: "titleTapHandler"
+                    gesturePolicy: TapHandler.DragThreshold
+                    onDoubleTapped: root.toggleMaximised()
                 }
             }
 
-            TextField {
-                id: searchField
-                objectName: "searchField"
-                Layout.preferredWidth: 220
-                placeholderText: "Search yours, or YouTube with return"
-                color: Theme.colors.text
-                placeholderTextColor: Theme.colors.textMuted
-                background: Rectangle {
-                    radius: 6
-                    color: Theme.colors.background
-                    border.width: 1
-                    border.color: searchField.activeFocus ? Theme.colors.accent
-                                                          : Theme.colors.border
+            RowLayout {
+                id: barRow
+                anchors.fill: parent
+                anchors.leftMargin: 14
+                anchors.rightMargin: 14
+                spacing: 12
+
+                Label {
+                    text: "Weave"
+                    color: Theme.colors.text
+                    font.pixelSize: 18
+                    font.weight: Font.Bold
                 }
-                // Live, because the whole search is one query over the local
-                // database and costs nothing. Emptying it goes back to
-                // wherever the search started.
-                onTextChanged: App.search(text)
-                // Emptied from the outside when the search view is left, so
-                // the box never describes somewhere you are no longer.
-                Connections {
-                    target: App
-                    function onSearchEnded() { searchField.text = "" }
+
+                TextField {
+                    id: addField
+                    Layout.preferredWidth: 260
+                    placeholderText: "Add a channel, a handle or a twitch.tv link"
+                    color: Theme.colors.text
+                    placeholderTextColor: Theme.colors.textMuted
+                    background: Rectangle {
+                        radius: 6
+                        color: Theme.colors.background
+                        border.width: 1
+                        border.color: addField.activeFocus ? Theme.colors.accent : Theme.colors.border
+                    }
+                    onAccepted: {
+                        // Keep the text when it was not even understood, so a typo
+                        // can be corrected rather than retyped.
+                        if (App.addChannel(text))
+                            text = ""
+                    }
                 }
-                // Typing searches what is stored, which costs nothing.
-                // Pressing return asks YouTube itself, which costs a request.
-                onAccepted: App.searchYouTube()
-                Keys.onEscapePressed: text = ""
-            }
 
-            FlatButton {
-                text: "Import subscriptions"
-                onClicked: App.importSubscriptions()
-            }
+                TextField {
+                    id: searchField
+                    objectName: "searchField"
+                    Layout.preferredWidth: 220
+                    placeholderText: "Search yours, or YouTube with return"
+                    color: Theme.colors.text
+                    placeholderTextColor: Theme.colors.textMuted
+                    background: Rectangle {
+                        radius: 6
+                        color: Theme.colors.background
+                        border.width: 1
+                        border.color: searchField.activeFocus ? Theme.colors.accent
+                                                              : Theme.colors.border
+                    }
+                    // Live, because the whole search is one query over the local
+                    // database and costs nothing. Emptying it goes back to
+                    // wherever the search started.
+                    onTextChanged: App.search(text)
+                    // Emptied from the outside when the search view is left, so
+                    // the box never describes somewhere you are no longer.
+                    Connections {
+                        target: App
+                        function onSearchEnded() { searchField.text = "" }
+                    }
+                    // Typing searches what is stored, which costs nothing.
+                    // Pressing return asks YouTube itself, which costs a request.
+                    onAccepted: App.searchYouTube()
+                    Keys.onEscapePressed: text = ""
+                }
 
-            FlatButton {
-                text: Theme.current
-                onClicked: themeMenu.popup()
-            }
+                FlatButton {
+                    text: "Import subscriptions"
+                    onClicked: App.importSubscriptions()
+                }
 
-            Item { Layout.fillWidth: true }
+                FlatButton {
+                    text: Theme.current
+                    onClicked: themeMenu.popup()
+                }
 
-            Label {
-                text: App.status
-                color: Theme.colors.textMuted
-                font.pixelSize: 12
-                elide: Text.ElideRight
-                Layout.maximumWidth: 380
-            }
+                Item { Layout.fillWidth: true }
 
-            Switch {
-                text: "Hide watched"
-                checked: App.hideWatched
-                onToggled: App.setHideWatched(checked)
-                contentItem: Label {
-                    text: parent.text
+                Label {
+                    text: App.status
                     color: Theme.colors.textMuted
                     font.pixelSize: 12
-                    leftPadding: parent.indicator.width + 6
-                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                    Layout.maximumWidth: 380
                 }
-            }
 
-            // One button for whatever the open view can do, kept beside
-            // Refresh so it is always in the same place rather than buried in
-            // the middle of the bar.
-            FlatButton {
-                objectName: "viewAction"
-                visible: root.viewActionText !== ""
-                text: root.viewActionText
-                onClicked: root.doViewAction()
-            }
+                Switch {
+                    text: "Hide watched"
+                    checked: App.hideWatched
+                    onToggled: App.setHideWatched(checked)
+                    contentItem: Label {
+                        text: parent.text
+                        color: Theme.colors.textMuted
+                        font.pixelSize: 12
+                        leftPadding: parent.indicator.width + 6
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
 
-            FlatButton {
-                text: App.busy ? "Refreshing" : "Refresh"
-                accent: true
-                enabled: !App.busy
-                onClicked: App.refresh()
+                // One button for whatever the open view can do, kept beside
+                // Refresh so it is always in the same place rather than buried in
+                // the middle of the bar.
+                FlatButton {
+                    objectName: "viewAction"
+                    visible: root.viewActionText !== ""
+                    text: root.viewActionText
+                    onClicked: root.doViewAction()
+                }
+
+                FlatButton {
+                    objectName: "refresh"
+                    text: App.busy ? "Refreshing" : "Refresh"
+                    accent: true
+                    enabled: !App.busy
+                    onClicked: App.refresh()
+                }
+
+                // Last in the row and hard against the right edge, where a title
+                // bar would have put them.
+                WindowControls {
+                    objectName: "windowControls"
+                    Layout.alignment: Qt.AlignVCenter
+                    Layout.leftMargin: 6
+                    maximised: root.visibility === Window.Maximized
+                    onMinimiseRequested: root.showMinimized()
+                    onMaximiseRequested: root.toggleMaximised()
+                    onCloseRequested: root.close()
+                }
             }
         }
     }
