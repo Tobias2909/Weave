@@ -90,6 +90,17 @@ def _tools(report: Report) -> None:
             report.add(name, WARN, "not installed", why)
 
 
+def _config(cfg: Config, report: Report) -> None:
+    """Whether the config file was actually read. A file with a typo in it
+    yields the defaults and nothing else says so."""
+    if cfg.problem:
+        report.add("config file", FAIL, cfg.problem, "Fix the file, the defaults apply until then")
+    elif cfg.raw:
+        report.add("config file", OK, str(paths.CONFIG_FILE))
+    else:
+        report.add("config file", OK, "not written yet, the defaults apply")
+
+
 def _cookies(cfg: Config, report: Report) -> None:
     spec = browser_spec(cfg)
     report.add("cookie source", OK, spec)
@@ -121,7 +132,7 @@ def _cookies(cfg: Config, report: Report) -> None:
                 "SELECT name FROM moz_cookies WHERE host LIKE '%youtube.com'")}
         finally:
             copy.unlink(missing_ok=True)
-    except Exception as exc:                                        # noqa: BLE001
+    except Exception as exc:
         report.add("YouTube login", WARN, f"could not read the jar, {exc}")
         return
     wanted = {"SID", "__Secure-1PSID", "__Secure-3PSID"}
@@ -224,7 +235,7 @@ def _twitch(cfg: Config, report: Report, network: bool) -> None:
             report.add("Twitch", OK, "the login was renewed")
         except twitch.TwitchError as exc:
             report.add("Twitch", FAIL, str(exc), "Run weave twitch login")
-    except Exception as exc:                                        # noqa: BLE001
+    except Exception as exc:
         report.add("Twitch", WARN, f"{type(exc).__name__}: {exc}")
 
 
@@ -238,7 +249,7 @@ def _endpoints(cfg: Config, db: Database, report: Report) -> None:
             found = rss.fetch(fetcher, PROBE_CHANNEL)
             db.record_requests(FEEDS, 1)
             report.add("the feed endpoint", OK, f"answered with {len(found.videos)} entries")
-        except Exception as exc:                                    # noqa: BLE001
+        except Exception as exc:
             db.record_requests(FEEDS, 1, refused=1)
             # This endpoint answers a burst with a refusal rather than a busy
             # signal, so one refusal is not a broken installation.
@@ -251,6 +262,7 @@ def _endpoints(cfg: Config, db: Database, report: Report) -> None:
 def run(cfg: Config, db: Database, network: bool = True) -> Report:
     """Everything, in the order a person would ask it."""
     report = Report()
+    _config(cfg, report)
     _tools(report)
     _cookies(cfg, report)
     _database(db, report)

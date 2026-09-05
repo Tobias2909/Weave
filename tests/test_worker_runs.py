@@ -14,7 +14,6 @@ its work and reported nothing that names a programming mistake.
 """
 
 import tempfile
-import threading
 import unittest
 from pathlib import Path
 
@@ -26,8 +25,8 @@ from weave.db import Database, VideoRow
 from weave.ids import ChannelRef
 from weave.sources import resolve as resolve_source
 from weave.sources.channel import ChannelDetails
-from weave.sources.resolve import ResolvedChannel
 from weave.sources.livecheck import LiveState
+from weave.sources.resolve import ResolvedChannel
 
 _app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -233,25 +232,25 @@ class WorkerRuns(unittest.TestCase):
         idle = Idle()
         bridge = Bridge.__new__(Bridge)          # no Qt object needed for this
         bridge._stopping = False
-        bridge._poller = idle
-        bridge._source_details = []
+        bridge._threads = {idle}
         bridge._audio = None
-        bridge._player = None
         Bridge.shutdown(bridge, timeout_ms=10)
         self.assertTrue(idle.cancelled)
         self.assertTrue(idle.waited)
 
-    def test_shutdown_finds_a_worker_nobody_remembered_to_list(self):
-        """The list used to be written out by hand, and adding a worker without
-        adding it there is exactly how one gets left running."""
+    def test_every_launched_worker_is_waited_for(self):
+        """The shutdown list used to be found by inspecting attributes, which
+        missed a worker held anywhere else. Now a worker is on the list from
+        the moment it is launched until it is reaped, whatever holds it."""
         from weave.ui.bridge import Bridge
 
-        class Idle:
+        class Launched:
             def __init__(self):
                 self.cancelled = False
+                self.started = False
 
-            def isRunning(self):
-                return False
+            def start(self):
+                self.started = True
 
             def cancel(self):
                 self.cancelled = True
@@ -259,15 +258,49 @@ class WorkerRuns(unittest.TestCase):
             def wait(self, _ms):
                 pass
 
-        newcomer = Idle()
+            class _Finished:
+                def connect(self, *_a):
+                    pass
+
+            finished = _Finished()
+
+        worker = Launched()
         bridge = Bridge.__new__(Bridge)
         bridge._stopping = False
-        bridge._something_added_later = newcomer
-        bridge._source_details = []
+        bridge._threads = set()
         bridge._audio = None
-        bridge._player = None
+        self.assertTrue(Bridge._launch(bridge, worker))
+        self.assertIn(worker, bridge._threads)
         Bridge.shutdown(bridge, timeout_ms=10)
-        self.assertTrue(newcomer.cancelled)
+        self.assertTrue(worker.cancelled)
+
+    def test_a_finished_worker_is_let_go(self):
+        """A poll a minute and a live check every ninety seconds, each kept
+        for the life of the window, was a slow leak. A reaped worker leaves
+        the list, the attribute that held it and, through Qt, memory."""
+        from weave.ui.bridge import Bridge
+
+        class Done:
+            def __init__(self):
+                self.deleted = False
+
+            def isFinished(self):
+                return True
+
+            def deleteLater(self):
+                self.deleted = True
+
+        done = Done()
+        bridge = Bridge.__new__(Bridge)
+        bridge._threads = {done}
+        bridge._poller = done
+        bridge._source_details = [done]
+        bridge.sender = lambda: None            # swept by finished state instead
+        Bridge._reap(bridge)
+        self.assertEqual(bridge._threads, set())
+        self.assertIsNone(bridge._poller)
+        self.assertEqual(bridge._source_details, [])
+        self.assertTrue(done.deleted)
 
     def test_nothing_new_starts_once_shutdown_has_begun(self):
         """The other half of the same crash, and the half that actually caused
@@ -283,8 +316,15 @@ class WorkerRuns(unittest.TestCase):
             def start(self):
                 self.started = True
 
+            class _Finished:
+                def connect(self, *_a):
+                    pass
+
+            finished = _Finished()
+
         bridge = Bridge.__new__(Bridge)
         bridge._stopping = False
+        bridge._threads = set()
         first = Started()
         self.assertTrue(Bridge._launch(bridge, first))
         self.assertTrue(first.started)
@@ -328,10 +368,23 @@ class WorkerRuns(unittest.TestCase):
         run_here.add("Checkup")
         source = Path("weave/poller.py").read_text()
         spenders = {match.group(1)
-                    for match in re.finditer(r"class (\w+)\(QThread\):(.*?)(?=\nclass |\Z)",
+                    for match in re.finditer(r"class (\w+)\(Worker\):(.*?)(?=\nclass |\Z)",
                                              source, re.S)
                     if "_spend(" in match.group(2) or "budget.spend(" in match.group(2)}
         self.assertEqual(spenders - run_here, set())
+        self.assertTrue(spenders, "the pattern no longer matches the workers")
+
+    def test_every_worker_is_built_on_the_base(self):
+        """A worker that is not is a worker with no cancel, which Qt turns into
+        an abort on the way out."""
+        import inspect
+
+        from PySide6.QtCore import QThread
+
+        strays = [name for name, cls in inspect.getmembers(poller, inspect.isclass)
+                  if issubclass(cls, QThread) and cls not in (QThread, poller.Worker)
+                  and not issubclass(cls, poller.Worker)]
+        self.assertEqual(strays, [])
 
 
 if __name__ == "__main__":

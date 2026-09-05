@@ -1,8 +1,7 @@
 import tempfile
+import time
 import unittest
 from pathlib import Path
-
-import time
 
 from weave.db import SHORTS_CEILING_S, Database, FeedTiers, VideoRow
 
@@ -283,12 +282,6 @@ class Groups(DatabaseCase):
         self.assertEqual(sorted(self.db.groups_holding("yt:UC1")), sorted([self.group, second]))
         self.db.remove_from_group(self.group, "yt:UC1")
         self.assertEqual(self.db.groups_holding("yt:UC1"), [second])
-
-    def test_a_channel_can_be_in_several_groups(self):
-        second = self.db.create_group("Second")
-        self.db.add_to_group(self.group, "yt:UC1")
-        self.db.add_to_group(second, "yt:UC1")
-        self.assertEqual([g["members"] for g in self.db.groups()], [1, 1])
 
     def test_adding_the_same_channel_twice_changes_nothing(self):
         self.db.add_to_group(self.group, "yt:UC1")

@@ -106,6 +106,10 @@ DEFAULTS: dict[str, dict[str, Any]] = {
 @dataclass(frozen=True)
 class Config:
     raw: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Why the file could not be used, when it could not. Defaults apply then,
+    # and the doctor says so, because a file that is silently ignored looks
+    # exactly like a file that is being read.
+    problem: str | None = None
 
     def get(self, section: str, key: str) -> Any:
         try:
@@ -227,10 +231,15 @@ def load(path: Path | None = None) -> Config:
     fresh install and a broken edit both still start."""
     target = path or paths.CONFIG_FILE
     try:
-        with open(target, "rb") as handle:
-            return Config(raw=tomllib.load(handle))
+        with target.open("rb") as handle:
+            loaded = tomllib.load(handle)
     except FileNotFoundError:
         return Config(raw={})
-    except (tomllib.TOMLDecodeError, OSError):
-        # Deliberately non fatal. The Settings debug page reports it later.
-        return Config(raw={})
+    except (tomllib.TOMLDecodeError, OSError) as exc:
+        # Deliberately non fatal, and deliberately remembered. The doctor and
+        # the Debug page report it, since defaults quietly standing in for a
+        # file with a typo in it would otherwise be invisible.
+        return Config(raw={}, problem=f"{target} could not be read, {exc}")
+    if not all(isinstance(section, dict) for section in loaded.values()):
+        return Config(raw={}, problem=f"{target} has a value outside any section")
+    return Config(raw=loaded)

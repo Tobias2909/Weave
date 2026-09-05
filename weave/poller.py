@@ -33,26 +33,24 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from PySide6.QtCore import QObject, QThread, Signal
 
+from . import tokens
 from .budget import BROWSE, DISLIKES, FEEDS, PLAYER, TWITCH, Budget
-from .ids import channel_key
-from .imagecache import qml_source
 from .config import Config
 from .db import Database
+from .ids import channel_key
+from .imagecache import qml_source
 from .net import Cancelled as FetchCancelled
 from .net import Fetcher, HttpError, Throttle
 from .process import Cancelled as ProcessCancelled
 from .process import run as run_process
 from .sources import channel as channel_source
-from . import tokens
 from .sources import comments as comment_source
-from .sources import livecheck
 from .sources import dislikes as dislike_source
-from .sources import flatlist
+from .sources import flatlist, livecheck, rss, subs, sweep, twitch
 from .sources import history as history_source
 from .sources import playlists as playlist_source
 from .sources import recommended as recommended_source
 from .sources import search as search_source
-from .sources import rss, subs, sweep, twitch
 
 
 def _spend(db: Database, cfg: Config, endpoint: str, count: int = 1, refused: int = 0) -> None:
@@ -65,7 +63,37 @@ def _spend(db: Database, cfg: Config, endpoint: str, count: int = 1, refused: in
     Budget(db, cfg.budget_limits, cfg.budget_window_s).spend(endpoint, count, refused)
 
 
-class FeedPoller(QThread):
+class Worker(QThread):
+    """What every background worker here is built on.
+
+    Qt aborts the whole process if a running QThread is destroyed, so every
+    worker has to be stoppable, and the bridge cancels and waits for all of
+    them on the way out. Each worker used to declare its own cancel event and
+    its own cancel method, and twice a worker reached the person using the
+    application with an attribute its constructor had never set. What they all
+    need is here, once, so a new worker cannot forget it.
+    """
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        """Ask the work to stop. Honoured at the next check, and by every
+        subprocess and request underneath through the same event."""
+        self._cancel.set()
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancel.is_set()
+
+    @staticmethod
+    def _throttle_for(cfg: Config, slots: int = 1) -> Throttle:
+        """A throttle sized for one worker, with the configured gap."""
+        return Throttle(slots, cfg.min_request_interval_s)
+
+
+class FeedPoller(Worker):
     finished_poll = Signal(int, int, int)   # channels polled, rows touched, failures
     progress = Signal(str, int, int)        # phase, done, total
     failure = Signal(str, str)              # source label, error text
@@ -76,13 +104,7 @@ class FeedPoller(QThread):
         self._db = db
         self._cfg = cfg
         self._force_all = force_all
-        self._throttle = Throttle(cfg.max_concurrency, cfg.min_request_interval_s)
-        self._cancel = threading.Event()
-
-    def cancel(self) -> None:
-        """Ask the poll to stop. Qt aborts the whole process if a running
-        QThread is destroyed, so every thread needs this."""
-        self._cancel.set()
+        self._throttle = self._throttle_for(cfg, cfg.max_concurrency)
 
     def run(self) -> None:
         fetcher = Fetcher(self._throttle, cancel=self._cancel)
@@ -237,7 +259,7 @@ class FeedPoller(QThread):
                     result, cost, variant = future.result()
                 except (FetchCancelled, ProcessCancelled):
                     break
-                except Exception as exc:                            # noqa: BLE001
+                except Exception as exc:
                     failures += 1
                     spent += 1
                     message = f"{type(exc).__name__}: {exc}"
@@ -277,7 +299,7 @@ class FeedPoller(QThread):
         return len(polled), touched, failures
 
 
-class ChannelAdder(QThread):
+class ChannelAdder(Worker):
     """Resolves a channel reference off the interface thread.
 
     Resolving costs about half a second, short enough not to need a progress
@@ -290,11 +312,7 @@ class ChannelAdder(QThread):
     def __init__(self, ref, cfg: Config, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._ref = ref
-        self._throttle = Throttle(1, cfg.min_request_interval_s)
-        self._cancel = threading.Event()
-
-    def cancel(self) -> None:
-        self._cancel.set()
+        self._throttle = self._throttle_for(cfg)
 
     def run(self) -> None:
         from .sources.resolve import ResolveError, resolve
@@ -309,7 +327,7 @@ class ChannelAdder(QThread):
         self.added.emit(result.key, result.platform, result.ext_id, result.title or "")
 
 
-class SubsImporter(QThread):
+class SubsImporter(Worker):
     """Imports the subscription list, names and avatars included."""
 
     imported = Signal(int, int)          # total found, newly added
@@ -319,11 +337,7 @@ class SubsImporter(QThread):
         super().__init__(parent)
         self._db = db
         self._cfg = cfg
-        self._throttle = Throttle(1, cfg.min_request_interval_s)
-        self._cancel = threading.Event()
-
-    def cancel(self) -> None:
-        self._cancel.set()
+        self._throttle = self._throttle_for(cfg)
 
     def run(self) -> None:
         _spend(self._db, self._cfg, BROWSE)
@@ -344,7 +358,7 @@ class SubsImporter(QThread):
         self.imported.emit(len(channels), added)
 
 
-class HistoryImporter(QThread):
+class HistoryImporter(Worker):
     """Reads the history YouTube keeps, which is the whole of it.
 
     mpv already tells YouTube when it plays something, so YouTube's copy is
@@ -365,11 +379,7 @@ class HistoryImporter(QThread):
         self._limit = limit
         self._start = start
         self._append = append
-        self._throttle = Throttle(1, cfg.min_request_interval_s)
-        self._cancel = threading.Event()
-
-    def cancel(self) -> None:
-        self._cancel.set()
+        self._throttle = self._throttle_for(cfg)
 
     def run(self) -> None:
         _spend(self._db, self._cfg, BROWSE)
@@ -391,7 +401,7 @@ class HistoryImporter(QThread):
         self.imported.emit(added, marked)
 
 
-class RecommendationsFetcher(QThread):
+class RecommendationsFetcher(Worker):
     """What YouTube suggests, fetched on demand.
 
     Kept out of the feed and out of the videos table, so a suggestion never
@@ -410,11 +420,7 @@ class RecommendationsFetcher(QThread):
         self._limit = limit
         self._start = start
         self._append = append
-        self._throttle = Throttle(1, cfg.min_request_interval_s)
-        self._cancel = threading.Event()
-
-    def cancel(self) -> None:
-        self._cancel.set()
+        self._throttle = self._throttle_for(cfg)
 
     def run(self) -> None:
         _spend(self._db, self._cfg, BROWSE)
@@ -434,7 +440,7 @@ class RecommendationsFetcher(QThread):
         self.ready.emit(count)
 
 
-class PlaylistsFetcher(QThread):
+class PlaylistsFetcher(Worker):
     """The list of your playlists, without their contents.
 
     Two calls rather than one, because the list is cheap and the contents are
@@ -448,11 +454,7 @@ class PlaylistsFetcher(QThread):
         super().__init__(parent)
         self._db = db
         self._cfg = cfg
-        self._throttle = Throttle(1, cfg.min_request_interval_s)
-        self._cancel = threading.Event()
-
-    def cancel(self) -> None:
-        self._cancel.set()
+        self._throttle = self._throttle_for(cfg)
 
     def run(self) -> None:
         _spend(self._db, self._cfg, BROWSE)
@@ -471,7 +473,7 @@ class PlaylistsFetcher(QThread):
         self.ready.emit(count)
 
 
-class PlaylistItemsFetcher(QThread):
+class PlaylistItemsFetcher(Worker):
     """One playlist's videos, read when it is first opened."""
 
     ready = Signal(str, int)
@@ -483,11 +485,7 @@ class PlaylistItemsFetcher(QThread):
         self._db = db
         self._cfg = cfg
         self._playlist_id = playlist_id
-        self._throttle = Throttle(1, cfg.min_request_interval_s)
-        self._cancel = threading.Event()
-
-    def cancel(self) -> None:
-        self._cancel.set()
+        self._throttle = self._throttle_for(cfg)
 
     def run(self) -> None:
         _spend(self._db, self._cfg, BROWSE)
@@ -507,7 +505,7 @@ class PlaylistItemsFetcher(QThread):
         self.ready.emit(self._playlist_id, count)
 
 
-class SearchFetcher(QThread):
+class SearchFetcher(Worker):
     """Searching YouTube itself, one page at a time.
 
     Weave's own search is a query over the stored database and costs nothing.
@@ -526,11 +524,7 @@ class SearchFetcher(QThread):
         self._query = query
         self._start = start
         self._count = count
-        self._throttle = Throttle(1, cfg.min_request_interval_s)
-        self._cancel = threading.Event()
-
-    def cancel(self) -> None:
-        self._cancel.set()
+        self._throttle = self._throttle_for(cfg)
 
     def run(self) -> None:
         _spend(self._db, self._cfg, BROWSE)
@@ -548,7 +542,7 @@ class SearchFetcher(QThread):
                           [flatlist.as_row(item) | {"views": item.views} for item in found])
 
 
-class Checkup(QThread):
+class Checkup(Worker):
     """The doctor's checks, off the interface thread.
 
     Two of them make a request, and all of them touch the disk, so this does
@@ -563,10 +557,6 @@ class Checkup(QThread):
         self._db = db
         self._cfg = cfg
         self._network = network
-        self._cancel = threading.Event()
-
-    def cancel(self) -> None:
-        self._cancel.set()
 
     def run(self) -> None:
         from . import doctor
@@ -578,7 +568,7 @@ class Checkup(QThread):
                          for check in report.checks])
 
 
-class ChannelDetailsFetcher(QThread):
+class ChannelDetailsFetcher(Worker):
     """Fills in a channel's banner and subscriber count the first time its page
     is opened."""
 
@@ -592,11 +582,7 @@ class ChannelDetailsFetcher(QThread):
         self._cfg = cfg
         self._key = channel_key
         self._ext_id = ext_id
-        self._throttle = Throttle(1, cfg.min_request_interval_s)
-        self._cancel = threading.Event()
-
-    def cancel(self) -> None:
-        self._cancel.set()
+        self._throttle = self._throttle_for(cfg)
 
     def run(self) -> None:
         _spend(self._db, self._cfg, BROWSE)
@@ -614,7 +600,7 @@ class ChannelDetailsFetcher(QThread):
         self.fetched.emit(self._key)
 
 
-class TwitchLogin(QThread):
+class TwitchLogin(Worker):
     """The device code login, and the follow list that comes with it.
 
     Twitch hands back an address that already contains the code, so the browser
@@ -629,10 +615,6 @@ class TwitchLogin(QThread):
         super().__init__(parent)
         self._db = db
         self._cfg = cfg
-        self._cancel = threading.Event()
-
-    def cancel(self) -> None:
-        self._cancel.set()
 
     def run(self) -> None:
         client_id = self._cfg.twitch_client_id
@@ -679,7 +661,7 @@ class TwitchLogin(QThread):
         return added
 
 
-class LiveWatcher(QThread):
+class LiveWatcher(Worker):
     """Who is live right now. Runs on its own timer, far more often than the
     feed, because a live bar that is fifteen minutes stale is wrong."""
 
@@ -691,11 +673,7 @@ class LiveWatcher(QThread):
         super().__init__(parent)
         self._db = db
         self._cfg = cfg
-        self._cancel = threading.Event()
-        self._throttle = Throttle(2, cfg.min_request_interval_s)
-
-    def cancel(self) -> None:
-        self._cancel.set()
+        self._throttle = self._throttle_for(cfg, 2)
 
     def run(self) -> None:
         client_id = self._cfg.twitch_client_id
@@ -725,7 +703,7 @@ class LiveWatcher(QThread):
         except twitch.TwitchError as exc:
             self.failed.emit(str(exc))
             return
-        except Exception as exc:                                    # noqa: BLE001
+        except Exception as exc:
             self.failed.emit(f"{type(exc).__name__}: {exc}")
             return
 
@@ -746,7 +724,7 @@ class LiveWatcher(QThread):
         self._db.replace_live("twitch", rows)
         try:
             youtube = self._check_youtube()
-        except Exception as exc:                                    # noqa: BLE001
+        except Exception as exc:
             # One half failing must not cost the other. Before this, a mistake
             # in here stopped the whole check and the update was never
             # reported, so the Twitch results never reached the bar either.
@@ -781,7 +759,7 @@ class LiveWatcher(QThread):
             found += 1 if state.still_live else 0
         return found
 
-    def _fetch_missing_avatars(self, client: "twitch.Client") -> None:
+    def _fetch_missing_avatars(self, client: twitch.Client) -> None:
         missing = self._db.channels_missing_avatar("twitch")
         if not missing or self._cancel.is_set():
             return
@@ -789,7 +767,7 @@ class LiveWatcher(QThread):
             self._db.add_channel(f"twitch:{login}", "twitch", login, display, picture or None)
 
 
-class DetailFetcher(QThread):
+class DetailFetcher(Worker):
     """Everything the detail panel needs that is not already stored.
 
     The dislike count and the comments come from different places and take very
@@ -810,11 +788,7 @@ class DetailFetcher(QThread):
         self._ext_id = ext_id
         self._url = url
         self._threads = threads
-        self._cancel = threading.Event()
-        self._throttle = Throttle(2, cfg.min_request_interval_s)
-
-    def cancel(self) -> None:
-        self._cancel.set()
+        self._throttle = self._throttle_for(cfg, 2)
 
     def run(self) -> None:
         fetcher = Fetcher(self._throttle, cancel=self._cancel)
@@ -831,7 +805,7 @@ class DetailFetcher(QThread):
         _spend(self._db, self._cfg, DISLIKES)
         try:
             found = dislike_source.fetch(fetcher, self._ext_id)
-        except Exception as exc:                                    # noqa: BLE001
+        except Exception as exc:
             _spend(self._db, self._cfg, DISLIKES, count=0, refused=1)
             self.failed.emit("dislikes", f"{type(exc).__name__}: {exc}")
             return
@@ -874,7 +848,7 @@ class DetailFetcher(QThread):
         }
 
 
-class MusicSearch(QThread):
+class MusicSearch(Worker):
     """Searching YouTube Music, off the interface thread."""
 
     results = Signal("QVariantList")
@@ -884,9 +858,6 @@ class MusicSearch(QThread):
         super().__init__(parent)
         self._cfg = cfg
         self._query = query
-
-    def cancel(self) -> None:
-        pass                                    # one short call, nothing to stop
 
     def run(self) -> None:
         from .sources import ytmusic
@@ -903,7 +874,7 @@ class MusicSearch(QThread):
         } for track in tracks])
 
 
-class MusicHome(QThread):
+class MusicHome(Worker):
     """The shelves YouTube Music opens on, which is what fills the music view
     before anything has been searched for."""
 
@@ -913,9 +884,6 @@ class MusicHome(QThread):
     def __init__(self, cfg: Config, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._cfg = cfg
-
-    def cancel(self) -> None:
-        pass
 
     def run(self) -> None:
         from .sources import ytmusic
@@ -966,7 +934,7 @@ class MusicHome(QThread):
                    "--print", "%(id)s\t%(title)s\t%(channel)s", ":ytrec"]
         try:
             result = run_process(command, timeout=120)
-        except Exception:                                           # noqa: BLE001
+        except Exception:
             return {"title": "From your YouTube", "items": []}
 
         items = []
@@ -983,7 +951,7 @@ class MusicHome(QThread):
         return {"title": "From your YouTube", "items": items}
 
 
-class TrackList(QThread):
+class TrackList(Worker):
     """Tracks for one thing that was chosen. A playlist from YouTube Music, or
     the liked videos from YouTube, which are a different list entirely."""
 
@@ -991,6 +959,7 @@ class TrackList(QThread):
     failed = Signal(str)
 
     LIKED = "liked"
+    RADIO = "radio"
 
     def __init__(self, cfg: Config, what: str, playlist_id: str = "",
                  label: str = "", parent: QObject | None = None) -> None:
@@ -999,12 +968,6 @@ class TrackList(QThread):
         self._what = what
         self._playlist_id = playlist_id
         self._label = label
-        self._cancel = threading.Event()
-
-    def cancel(self) -> None:
-        self._cancel.set()
-
-    RADIO = "radio"
 
     def run(self) -> None:
         if self._what == self.LIKED:
@@ -1055,7 +1018,7 @@ class TrackList(QThread):
         self._playlist()
 
 
-class SourceDetails(QThread):
+class SourceDetails(Worker):
     """A picture and a name for a saved address, so the row is worth looking
     at rather than being a bare string."""
 
@@ -1067,10 +1030,6 @@ class SourceDetails(QThread):
         self._db = db
         self._cfg = cfg
         self._url = url
-        self._cancel = threading.Event()
-
-    def cancel(self) -> None:
-        self._cancel.set()
 
     def run(self) -> None:
         from .cookies import args as cookie_args
@@ -1079,9 +1038,9 @@ class SourceDetails(QThread):
                    "--print", "%(title)s\t%(thumbnail)s", self._url]
         try:
             result = run_process(command, cancel=self._cancel, timeout=120)
-        except Exception:                                           # noqa: BLE001
+        except Exception:
             return
-        line = next((l for l in result.stdout.splitlines() if l.strip()), "")
+        line = next((row for row in result.stdout.splitlines() if row.strip()), "")
         parts = line.split("\t")
         title = parts[0].strip() if parts and parts[0] != "NA" else None
         picture = parts[1].strip() if len(parts) > 1 and parts[1] != "NA" else None

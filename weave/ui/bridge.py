@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import time
 
-from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
+from PySide6.QtCore import Property, QObject, Qt, QTimer, Signal, Slot
 
 from .. import format as fmt
 from .. import ids
@@ -22,11 +22,25 @@ from ..config import Config
 from ..db import Database
 from ..imagecache import qml_source
 from ..player.mpv import Player
-from ..poller import (ChannelAdder, ChannelDetailsFetcher, DetailFetcher, FeedPoller,
-                      HistoryImporter, LiveWatcher, MusicHome, MusicSearch,
-                      Checkup, PlaylistItemsFetcher, PlaylistsFetcher,
-                      RecommendationsFetcher, SearchFetcher, SourceDetails, TrackList,
-                      SubsImporter, TwitchLogin)
+from ..poller import (
+    ChannelAdder,
+    ChannelDetailsFetcher,
+    Checkup,
+    DetailFetcher,
+    FeedPoller,
+    HistoryImporter,
+    LiveWatcher,
+    MusicHome,
+    MusicSearch,
+    PlaylistItemsFetcher,
+    PlaylistsFetcher,
+    RecommendationsFetcher,
+    SearchFetcher,
+    SourceDetails,
+    SubsImporter,
+    TrackList,
+    TwitchLogin,
+)
 from .feed_model import FeedModel
 
 ALL = "all"
@@ -94,6 +108,10 @@ class Bridge(QObject):
         # Set once the window is going away, so nothing starts a new thread
         # after the shutdown has already waited for the old ones.
         self._stopping = False
+        # Every worker that has been started and has not finished. Kept so
+        # the shutdown knows exactly what to wait for, and so a finished one
+        # can be let go rather than kept for the life of the window.
+        self._threads: set = set()
         self._details: ChannelDetailsFetcher | None = None
         self._live: LiveWatcher | None = None
         self._twitch: TwitchLogin | None = None
@@ -150,7 +168,7 @@ class Bridge(QObject):
         self._loading_more = False
         self._exhausted = False
         # Where a search started, so emptying the box goes back there.
-        self._before_search: tuple[str, int, str] = (ALL, -1, "")
+        self._before_search: tuple[str, int, str, str] = (ALL, -1, "", "")
 
         self._hide_watched = self._db.get_state("hide_watched", "1") == "1"
         self._live_collapsed = self._db.get_state("live_collapsed", "0") == "1"
@@ -654,13 +672,14 @@ class Bridge(QObject):
         text = (text or "").strip()
         if not text:
             if self._view_kind == SEARCH:
-                kind, view_id, channel = self._before_search
+                kind, view_id, channel, playlist = self._before_search
                 self._search_text = ""
-                self._set_view(kind, view_id, channel)
+                self._set_view(kind, view_id, channel, playlist)
             return
         first = self._view_kind != SEARCH
         if first:
-            self._before_search = (self._view_kind, self._view_id, self._view_channel)
+            self._before_search = (self._view_kind, self._view_id, self._view_channel,
+                                   self._view_playlist)
         self._search_text = text
         # Typing is always the local search. Asking YouTube is a separate
         # thing you press for, since it costs a request.
@@ -1426,12 +1445,12 @@ class Bridge(QObject):
         self.detailChanged.emit()
 
     def _on_now_playing(self, key: str, _title: str) -> None:
+        """The panel follows mpv, so whatever starts playing is what it shows,
+        including a track mpv moved to on its own."""
         # mpv reports the file before its window is up, so the line stays a
         # moment longer rather than going as the screen is still empty.
         if self._notice:
             self._set_notice(self._notice, clear_after_s=3)
-        """The panel follows mpv, so whatever starts playing is what it shows,
-        including a track mpv moved to on its own."""
         self.openDetail(key)
 
     # ---- twitch ----------------------------------------------------------
@@ -1552,11 +1571,40 @@ class Bridge(QObject):
         was already due can fire after the shutdown has finished, start a
         fresh thread, and Qt then aborts the process when it destroys a live
         QThread. So starting is refused once shutdown has begun.
+
+        Every worker is parented to this object so Qt owns its lifetime, and
+        without the reaping below each one would then be kept until the window
+        closed. A poll a minute and a live check every ninety seconds add up
+        over an evening, so a finished worker is let go and the attribute that
+        held it is cleared.
         """
         if self._stopping:
             return False
+        self._threads.add(thread)
+        thread.finished.connect(self._reap, Qt.ConnectionType.QueuedConnection)
         thread.start()
         return True
+
+    @Slot()
+    def _reap(self) -> None:
+        """A worker has finished. Forget it everywhere and let Qt delete it.
+
+        Runs on this object's thread through a queued connection, after the
+        worker's own thread has stopped, which is the one moment a QThread
+        may be deleted. Deleting it later rather than now is the idiom Qt
+        documents for exactly this.
+        """
+        thread = self.sender()
+        done = [thread] if thread is not None else [
+            worker for worker in self._threads if worker.isFinished()]
+        for worker in done:
+            self._threads.discard(worker)
+            for name, value in list(vars(self).items()):
+                if value is worker:
+                    setattr(self, name, None)
+            if worker in self._source_details:
+                self._source_details.remove(worker)
+            worker.deleteLater()
 
     def shutdown(self, timeout_ms: int = 15000) -> None:
         """Stop every background thread before Qt tears them down.
@@ -1566,15 +1614,13 @@ class Bridge(QObject):
         All threads are cancelled first and then waited on, so they stop in
         parallel rather than one after another. This runs after the window is
         already gone, so any short wait here is invisible.
+
+        What is waited for is what was launched and has not been reaped, so a
+        worker added later is covered by being started the same way every
+        other one is.
         """
         self._stopping = True
-        # Found rather than listed. A list written out by hand goes stale the
-        # first time a worker is added and forgotten, and forgetting one means
-        # Qt aborts the process on the way out.
-        threads = [value for value in vars(self).values()
-                   if hasattr(value, "cancel") and hasattr(value, "wait")]
-        threads.extend(self._source_details)
-        alive = [thread for thread in threads if thread is not None]
+        alive = list(self._threads)
         for thread in alive:
             thread.cancel()
         for thread in alive:
@@ -1613,8 +1659,8 @@ class Bridge(QObject):
     def _on_twitch_code(self, user_code: str, address: str) -> None:
         """The address already contains the code, so the browser lands on a
         page with nothing to type."""
-        from PySide6.QtGui import QDesktopServices
         from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
 
         self._twitch_status = f"approve {user_code} in the browser"
         self.twitchChanged.emit()
@@ -1664,4 +1710,3 @@ class Bridge(QObject):
         self.reload()
         suffix = f", {failures} failed" if failures else ""
         self._set_status(f"{channels} channels checked, {touched} rows updated{suffix}")
-        self._poller = None
