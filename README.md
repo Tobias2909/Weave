@@ -259,6 +259,13 @@ something is actually broken, so it can be run from a script.
 gone wrong lately and a table of when each channel was last asked and when it
 is next due, in the order the poller will take them.
 
+**Settings** sits under it and holds what belongs to the whole application
+rather than to any one view. The theme, importing your subscription list,
+choosing which playlists to show, and how much room the pictures take, with a
+button to drop what has aged out and one to drop the lot. It also states what
+the application talks to, whether Twitch is connected, where the cookies are
+read from and which YouTube identity the music speaks as.
+
 ## The panel
 
 It mirrors what mpv is playing, whatever that is. A video from the feed shows
@@ -397,7 +404,7 @@ python -m weave themes export Ember
 
 Exporting copies a theme into `~/.config/weave/themes`, where you can edit it.
 The running window repaints as you save, which is the only time anyone is
-editing a palette. There is a picker in the toolbar as well.
+editing a palette. There is a picker on the settings page as well.
 
 A file that is wrong in some way still loads. Colours it leaves out keep their
 default, colours it invents are reported and ignored, and a value that is not a

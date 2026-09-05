@@ -168,6 +168,7 @@ class Smoke:
         # Every view, since a binding that only exists in one of them is only
         # evaluated once that view is shown.
         for name, slot in (("music", "showMusic"), ("debug", "showDebug"),
+                           ("settings", "showSettings"),
                            ("recommended", "showRecommended"), ("history", "showHistory")):
             getattr(bridge, slot)()
             settle(0.3)
@@ -207,15 +208,6 @@ class Smoke:
             settle(0.2)
             self.check(f"{name} opens and closes", opened and not read(popup, "visible"))
 
-        # The theme menu lists every theme and picks one.
-        theme_menu = find(window, "themeMenu")
-        theme_menu.open()
-        settle(0.3)
-        entries = [text.strip().lstrip("✓").strip() for text, _ in menu_entries(theme_menu)]
-        self.check("theme menu lists the themes", len(entries) >= 2, ", ".join(entries))
-        theme_menu.close()
-        settle(0.2)
-
         # Search, local, then back out of it.
         bridge.search("Video 3")
         settle(0.3)
@@ -224,6 +216,51 @@ class Smoke:
         bridge.search("")
         settle(0.3)
         self.check("emptying the search returns to the feed", read(bridge, "viewKind") == "all")
+
+        # The settings page. Last, so the picture is of the page rather than
+        # of the grid, and so the theme it is drawn in is the one just chosen.
+        bridge.showDebug()
+        settle(0.2)
+        bridge.stepSelection(1)
+        settle(0.3)
+        self.check("the wheel walks from How things are onto Settings",
+                   read(bridge, "viewKind") == "settings", read(bridge, "viewKind"))
+        bridge.stepSelection(-1)
+        settle(0.3)
+        self.check("and back off it the way it came",
+                   read(bridge, "viewKind") == "debug", read(bridge, "viewKind"))
+        bridge.showSettings()
+        settle(0.4)
+
+        # The theme picker that replaced the toolbar's menu, which is the one
+        # thing on the page that changes what the window looks like.
+        current = find(window, "currentTheme")
+        # A Repeater's delegates are visual children and not QObject children,
+        # so findChild cannot reach them and childItems can. They arrive as
+        # plain items rather than as buttons too, so the press is invoked
+        # rather than called.
+        choices = [item for item in find(window, "themeChoices").childItems()
+                   if str(read(item, "objectName")).startswith("themeChoice")]
+        labels = [str(read(item, "text")) for item in choices]
+        self.check("the settings page offers the themes", len(choices) >= 2, ", ".join(labels))
+        was = str(read(current, "text"))
+        other = next((item for item in choices if str(read(item, "text")) != was), None)
+        if other is not None:
+            call(other, "click")
+            settle(0.3)
+            self.check("a theme can be chosen from the page",
+                       str(read(current, "text")) == str(read(other, "text")),
+                       f"{was} to {read(current, 'text')}")
+            call(next(item for item in choices if str(read(item, "text")) == was), "click")
+            settle(0.3)
+            self.check("and the one it was on chosen again", str(read(current, "text")) == was,
+                       str(read(current, "text")))
+
+        # What the page says about the cache and the connections, which is
+        # read rather than acted on, so an empty one is a binding that failed.
+        for name in ("cacheSize", "cookieSource", "musicIdentity", "twitchState"):
+            self.check(f"the page states the {name}", str(read(find(window, name), "text")) != "",
+                       str(read(find(window, name), "text")))
 
         if self.shot:
             self.check("screenshot written", screenshot(window, self.shot), self.shot)

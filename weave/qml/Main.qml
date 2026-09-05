@@ -274,11 +274,17 @@ ApplicationWindow {
                 // to be given up outright, and each width below is where what
                 // remains stops fitting even once those three have shrunk as
                 // far as they may.
+                //
+                // Two buttons left this row for the settings page, which gave
+                // the rest 257 pixels back. The two widths that were measured
+                // with those buttons in the way came down by what they took,
+                // so each cell goes at the same squeeze it went at before,
+                // and the order is unchanged.
                 Label {
                     objectName: "wordmark"
                     // First to go. The name is decoration, and the task
                     // switcher says it anyway.
-                    visible: root.width >= 1230
+                    visible: root.width >= 975
                     text: "Weave"
                     color: Theme.colors.text
                     font.pixelSize: 18
@@ -288,7 +294,7 @@ ApplicationWindow {
                 TextField {
                     id: addField
                     objectName: "addField"
-                    // Sixth to go, and narrower than it asks for well before
+                    // Fourth to go, and narrower than it asks for well before
                     // that. Never reached by dragging: the window cannot be
                     // made narrower than 760.
                     visible: root.width >= 710
@@ -353,30 +359,14 @@ ApplicationWindow {
                     Keys.onEscapePressed: text = ""
                 }
 
-                FlatButton {
-                    objectName: "importSubscriptions"
-                    // Second to go. Read once and then rarely again.
-                    visible: root.width >= 1160
-                    text: "Import subscriptions"
-                    onClicked: App.importSubscriptions()
-                }
-
-                FlatButton {
-                    objectName: "themeButton"
-                    // Fourth to go.
-                    visible: root.width >= 990
-                    text: Theme.current
-                    onClicked: themeMenu.popup()
-                }
-
                 Item { Layout.fillWidth: true }
 
                 Label {
                     objectName: "status"
-                    // Third to go, and the one thing here allowed to be
-                    // narrower than its text, so it elides away to nothing
-                    // before it goes at all.
-                    visible: root.width >= 1005
+                    // Second to go, and the one thing here allowed to be
+                    // narrower than its text, so it is down to a sliver of a
+                    // line by the time it goes at all.
+                    visible: root.width >= 905
                     text: App.status
                     color: Theme.colors.textMuted
                     font.pixelSize: 12
@@ -390,7 +380,7 @@ ApplicationWindow {
 
                 Switch {
                     objectName: "hideWatched"
-                    // Fifth to go.
+                    // Third to go.
                     visible: root.width >= 875
                     text: "Hide watched"
                     checked: App.hideWatched
@@ -409,7 +399,7 @@ ApplicationWindow {
                 // the middle of the bar.
                 FlatButton {
                     objectName: "viewAction"
-                    // Seventh to go, and only below the narrowest window
+                    // Fifth to go, and only below the narrowest window
                     // anyone can drag to.
                     visible: root.viewActionText !== "" && root.width >= 530
                     text: root.viewActionText
@@ -651,6 +641,15 @@ ApplicationWindow {
                     onRevealRequested: root.revealRow(this)
                 }
 
+                SidebarRow {
+                    width: sidebarColumn.width
+                    label: "Settings"
+                    count: 0
+                    selected: App.viewKind === "settings"
+                    onActivated: App.showSettings()
+                    onRevealRequested: root.revealRow(this)
+                }
+
                 Item { width: 1; height: 10 }
 
                 Item { width: 1; height: 10 }
@@ -787,10 +786,23 @@ ApplicationWindow {
         anchors.bottom: miniPlayer.top
     }
 
+    SettingsView {
+        id: settingsView
+        objectName: "settingsView"
+        visible: App.viewKind === "settings"
+        anchors.left: sidebar.right
+        anchors.right: parent.right
+        anchors.top: liveBar.visible ? liveBar.bottom : parent.top
+        anchors.topMargin: liveBar.visible ? 0 : banner.height
+        anchors.bottom: miniPlayer.top
+        onPlaylistsRequested: playlistChooser.open()
+    }
+
     GridView {
         id: grid
         objectName: "grid"
         visible: App.viewKind !== "music" && App.viewKind !== "debug"
+                 && App.viewKind !== "settings"
         anchors.left: sidebar.right
         anchors.right: detailPanel.visible ? detailPanel.left : parent.right
         anchors.top: channelHeader.visible ? channelHeader.bottom
@@ -1027,30 +1039,6 @@ ApplicationWindow {
         MenuItem {
             text: "Put in a new box"
             onTriggered: { videoMenu.dismiss(); root.askForName("box", -1, root.menuKey, "") }
-        }
-    }
-
-    Menu {
-        id: themeMenu
-        objectName: "themeMenu"
-
-        Instantiator {
-            model: Theme.names
-            onObjectAdded: (index, object) => {
-                object.owner = themeMenu
-                themeMenu.insertItem(index, object)
-            }
-            onObjectRemoved: (index, object) => themeMenu.removeItem(object)
-            delegate: MenuItem {
-                required property var modelData
-                property var owner: null
-                text: (modelData === Theme.current ? "✓  " : "   ") + modelData
-                onTriggered: {
-                    Theme.select(modelData)
-                    if (owner)
-                        owner.dismiss()
-                }
-            }
         }
     }
 

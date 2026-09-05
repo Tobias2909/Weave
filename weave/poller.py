@@ -30,10 +30,11 @@ import random
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-from . import tokens
+from . import imagecache, tokens
 from .budget import BROWSE, DISLIKES, FEEDS, PLAYER, TWITCH, Budget
 from .config import Config
 from .db import Database
@@ -566,6 +567,43 @@ class Checkup(Worker):
         self.ready.emit([{"name": check.name, "state": check.state,
                           "detail": check.detail, "fix": check.fix}
                          for check in report.checks])
+
+
+class ImageCacheJob(Worker):
+    """The picture cache measured, tidied or emptied, off the interface thread.
+
+    All three walk the whole cache directory, which on a full one is tens of
+    thousands of files, so none of them belongs on the thread that draws. The
+    rules stay in imagecache, where the launch and the cache subcommand read
+    them too, so the three cannot come to mean different things.
+    """
+
+    MEASURE = "measure"
+    PRUNE = "prune"
+    CLEAR = "clear"
+
+    # what was asked for, bytes held afterwards, pictures dropped
+    done = Signal(str, int, int)
+
+    def __init__(self, directory: Path, what: str = MEASURE, ttl_seconds: int = 0,
+                 max_bytes: int = 0, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._directory = directory
+        self._what = what
+        self._ttl = ttl_seconds
+        self._max_bytes = max_bytes
+
+    def run(self) -> None:
+        dropped = 0
+        if self._what == self.CLEAR:
+            # Everything is past its window when the window is nothing, so
+            # emptying is the same call rather than a second way to delete.
+            dropped, _freed = imagecache.prune(self._directory, 0)
+        elif self._what == self.PRUNE:
+            aged, _freed = imagecache.prune(self._directory, self._ttl)
+            spilled, _over = imagecache.enforce_ceiling(self._directory, self._max_bytes)
+            dropped = aged + spilled
+        self.done.emit(self._what, imagecache.size_bytes(self._directory), dropped)
 
 
 class ChannelDetailsFetcher(Worker):

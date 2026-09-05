@@ -18,9 +18,11 @@ from PySide6.QtCore import Property, QObject, Qt, QTimer, Signal, Slot
 
 from .. import format as fmt
 from .. import ids
+from .. import paths, tokens
 from ..config import Config
+from ..cookies import browser_spec
 from ..db import Database
-from ..imagecache import qml_source
+from ..imagecache import SECONDS_PER_DAY, qml_source
 from ..player.mpv import Player
 from ..poller import (
     ChannelAdder,
@@ -29,6 +31,7 @@ from ..poller import (
     DetailFetcher,
     FeedPoller,
     HistoryImporter,
+    ImageCacheJob,
     LiveWatcher,
     MusicHome,
     MusicSearch,
@@ -54,6 +57,7 @@ HISTORY = "history"
 RECOMMENDED = "recommended"
 PLAYLIST = "playlist"
 DEBUG = "debug"
+SETTINGS = "settings"
 
 # How long a set of recommendations is worth showing before asking for another,
 # and how long a playlist's contents are trusted before reading them again.
@@ -94,6 +98,7 @@ class Bridge(QObject):
     noticeChanged = Signal()
     searchEnded = Signal()
     checksChanged = Signal()
+    cacheChanged = Signal()
     boxesChanged = Signal()
     viewChanged = Signal()
     liveChanged = Signal()
@@ -190,6 +195,12 @@ class Bridge(QObject):
         self._searcher: SearchFetcher | None = None
         self._checkup: Checkup | None = None
         self._checks: list = []
+        self._cache_job: ImageCacheJob | None = None
+        # What the picture cache holds, as the line the settings page shows.
+        # Empty until it has been measured, because walking the whole cache
+        # directory is not free and nothing else needs the answer.
+        self._cache_line = ""
+        self._cache_working = False
         self._loading_more = False
         self._exhausted = False
         # Where a search started, so emptying the box goes back there.
@@ -312,6 +323,33 @@ class Bridge(QObject):
             return "No videos stored yet.\nPress Refresh to fetch them."
         return "Everything here is watched.\nTurn off Hide watched to see it again."
 
+    def _get_cache_text(self) -> str:
+        """What the picture cache holds, in the words the cache subcommand
+        prints, since both are reading the same two numbers."""
+        if not self._cache_line:
+            return "Measuring" if self._cache_working else ""
+        return self._cache_line
+
+    def _get_cookie_source(self) -> str:
+        """Where yt-dlp is told to look for cookies. The checks answer this
+        from the same call, so the two cannot disagree."""
+        return browser_spec(self._cfg)
+
+    def _get_music_identity(self) -> str:
+        """Which YouTube identity the music requests speak as.
+
+        What the config decides, not what the page says. Reading it off the
+        page is a request, and this is a line of text on a page that is only
+        being looked at.
+        """
+        pinned = self._cfg.music_identity
+        if pinned and pinned != "auto":
+            return f"{pinned}, pinned in the config"
+        return "read from the music page"
+
+    def _get_twitch_connected(self) -> bool:
+        return tokens.load() is not None
+
     status = Property(str, _get_status, notify=statusChanged)
     busy = Property(bool, _get_busy, notify=busyChanged)
     hideWatched = Property(bool, _get_hide_watched, notify=hideWatchedChanged)
@@ -321,6 +359,8 @@ class Bridge(QObject):
     boxes = Property("QVariantList", _get_boxes, notify=boxesChanged)
     notice = Property(str, lambda self: self._notice, notify=noticeChanged)
     checks = Property("QVariantList", lambda self: list(self._checks), notify=checksChanged)
+    cacheText = Property(str, _get_cache_text, notify=cacheChanged)
+    cacheWorking = Property(bool, lambda self: self._cache_working, notify=cacheChanged)
     schedule = Property("QVariantList", lambda self: self._get_schedule(),
                         notify=checksChanged)
     playlists = Property("QVariantList", _get_playlists, notify=playlistsChanged)
@@ -359,6 +399,11 @@ class Bridge(QObject):
     liveStreams = Property("QVariantList", _get_live, notify=liveChanged)
     twitchStatus = Property(str, _get_twitch_status, notify=twitchChanged)
     twitchNeedsLogin = Property(bool, _get_twitch_needs_login, notify=twitchChanged)
+    twitchConnected = Property(bool, _get_twitch_connected, notify=twitchChanged)
+    # The config is read once at startup, so neither of these can change while
+    # the window is open.
+    cookieSource = Property(str, _get_cookie_source, constant=True)
+    musicIdentity = Property(str, _get_music_identity, constant=True)
 
     def _get_live_collapsed(self) -> bool:
         return self._live_collapsed
@@ -676,6 +721,8 @@ class Bridge(QObject):
             self._show_music_list(music)
         if kind == DEBUG and not self._checks:
             self.runChecks(True)
+        if kind == SETTINGS and not self._cache_line:
+            self.measureCache()
         if kind == RECOMMENDED:
             self._exhausted = False
             self._fetch_recommended()
@@ -734,6 +781,7 @@ class Bridge(QObject):
         entries.append((HISTORY, -1))
         entries.append((MUSIC, -1))
         entries.append((DEBUG, -1))
+        entries.append((SETTINGS, -1))
         entries.extend((BOX, int(row["id"])) for row in self._db.boxes())
         entries.extend((PLAYLIST, index) for index, _ in enumerate(self._db.playlists()))
         return entries
@@ -953,6 +1001,49 @@ class Bridge(QObject):
     @Slot()
     def showDebug(self) -> None:
         self._set_view(DEBUG, -1)
+
+    @Slot()
+    def showSettings(self) -> None:
+        self._set_view(SETTINGS, -1)
+
+    @Slot()
+    def measureCache(self) -> None:
+        """How much room the pictures take. Asked for on the way into the
+        settings page, and again after anything has been dropped."""
+        self._run_cache_job(ImageCacheJob.MEASURE)
+
+    @Slot()
+    def pruneImageCache(self) -> None:
+        """Drop what has aged out and whatever has spilled over the ceiling,
+        which is what a launch does and what the cache subcommand prunes."""
+        self._run_cache_job(ImageCacheJob.PRUNE)
+
+    @Slot()
+    def clearImageCache(self) -> None:
+        """Drop the lot. Every picture is fetched again the next time it is
+        looked at, so this costs time rather than anything else."""
+        self._run_cache_job(ImageCacheJob.CLEAR)
+
+    def _run_cache_job(self, what: str) -> None:
+        if self._cache_job is not None and self._cache_job.isRunning():
+            return
+        self._cache_working = True
+        self.cacheChanged.emit()
+        self._cache_job = ImageCacheJob(paths.IMAGE_CACHE, what,
+                                        self._cfg.image_days * SECONDS_PER_DAY,
+                                        self._cfg.image_max_mb * 1024 * 1024, self)
+        self._cache_job.done.connect(self._on_cache_job)
+        if not self._launch(self._cache_job):
+            self._cache_working = False
+            self.cacheChanged.emit()
+
+    def _on_cache_job(self, what: str, held: int, dropped: int) -> None:
+        self._cache_working = False
+        self._cache_line = (f"{held / 1024 / 1024:.1f} MB of a {self._cfg.image_max_mb} MB "
+                            f"ceiling, kept for {self._cfg.image_days} days")
+        self.cacheChanged.emit()
+        if what != ImageCacheJob.MEASURE:
+            self._set_status(f"{dropped} pictures dropped from the cache")
 
     @Slot(bool)
     def runChecks(self, network: bool = True) -> None:
