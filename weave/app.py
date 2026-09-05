@@ -22,12 +22,13 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickWindow
 from PySide6.QtQuickControls2 import QQuickStyle
 
-from . import config, imagecache, paths
+from . import config, imagecache, mpris, paths
 from .audio import AudioPlayer
 from .db import Database
 from .player.mpv import Player
 from .sources import ytmusic
 from .sources.progress import default_dir as default_watch_later
+from .ui import navigation
 from .ui.bridge import Bridge
 from .ui.feed_model import FeedModel
 from .ui.theme import Theme
@@ -95,6 +96,9 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
     bridge = Bridge(db, cfg, model, player, parent=app)
     audio = AudioPlayer(cfg, db, parent=app)
     bridge.attach_audio(audio)
+    # The mouse back and forward buttons are not delivered to any one item,
+    # so they are read at the application before anything else sees them.
+    navigation.install(app, bridge)
 
     engine = QQmlApplicationEngine()
     # Installed before anything loads, so the very first images already go
@@ -120,6 +124,10 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
     # context property re-evaluates the bindings that read it.
     context.setContextProperty("EffectsAvailable", _effects_available())
     _restore_geometry(window, db)
+    # The media keys reach a player over MPRIS. Installed once the window
+    # exists, so the panel can raise it. A machine with no session bus gets
+    # no adapter and everything else still runs.
+    mpris.install(audio, parent=app, on_raise=window.requestActivate)
 
     player.start()
 
