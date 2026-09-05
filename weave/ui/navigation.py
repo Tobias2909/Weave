@@ -1,9 +1,11 @@
 """Walking back and forward through the views, and the mouse buttons that do it.
 
-Two things live here. A plain record of the views that have been landed on,
-which the bridge writes into and reads back, and the event filter that turns
-the mouse's back and forward buttons into a step through it. The record needs
-no Qt at all, which is what lets it be tested without a window.
+Three things live here. A plain record of the views that have been landed on,
+which the bridge writes into and reads back, the memory of the music track
+lists that were visited, so walking back onto one does not fetch it again, and
+the event filter that turns the mouse's back and forward buttons into a step
+through the record. Only the filter needs Qt, which is what lets the rest be
+tested without a window.
 
 The filter is application wide on purpose. The buttons have to work wherever
 the pointer happens to be, and the only way of catching them from QML would be
@@ -22,8 +24,34 @@ from PySide6.QtCore import QEvent, QObject, Qt
 # thought. Once it is full the oldest entry is dropped.
 LIMIT = 50
 
-# What fully describes a view: its kind, its id, its channel and its playlist.
-View = tuple[str, int, str, str]
+# How many track lists are held in memory at once. A list is a few hundred
+# small rows, so the cost is nothing beside a fetch of several seconds against
+# YouTube Music, and holding the last few covers a walk back through an
+# evening of pressing tiles. Bounded by lists rather than by rows, since what
+# is walked back to is a list and not a number of songs.
+TRACK_LISTS = 8
+
+
+@dataclass(frozen=True)
+class MusicList:
+    """One track list inside the music view.
+
+    What kind of fetch it is, what to fetch it for, and the heading it is
+    shown under, which together are both what tells two lists apart and what
+    is needed to ask for one again. The shelves are not one of these. They are
+    what the music view shows when there is no list at all, which is None.
+
+    Frozen, so it can be compared and used as a key.
+    """
+
+    what: str
+    ident: str = ""
+    label: str = ""
+
+
+# What fully describes a view: its kind, its id, its channel, its playlist and,
+# inside music, the track list showing rather than the shelves.
+View = tuple[str, int, str, str, MusicList | None]
 
 
 @dataclass
@@ -105,6 +133,46 @@ class History:
             return None
         self._index += 1
         return self._entries[self._index]
+
+
+class TrackCache:
+    """The last few music track lists, so walking back onto one puts it back
+    rather than asking YouTube Music for it a second time.
+
+    Newest last, and reading a list makes it the newest again, so the ones
+    being walked through are the ones that stay held.
+    """
+
+    def __init__(self, limit: int = TRACK_LISTS) -> None:
+        self._held: dict[MusicList, tuple[list, str]] = {}
+        self._limit = max(1, limit)
+
+    def __len__(self) -> int:
+        return len(self._held)
+
+    def __contains__(self, key: MusicList) -> bool:
+        return key in self._held
+
+    def put(self, key: MusicList, rows: list, label: str) -> None:
+        """Hold the rows a list arrived with, dropping the oldest once full.
+
+        The heading is held beside them because it is not always the one that
+        was asked for. A playlist with removed videos in it comes back saying
+        how many are still playable.
+        """
+        self._held.pop(key, None)
+        self._held[key] = (list(rows), label)
+        while len(self._held) > self._limit:
+            del self._held[next(iter(self._held))]
+
+    def get(self, key: MusicList) -> tuple[list, str] | None:
+        """The rows and heading held for a list, or nothing when it has gone."""
+        found = self._held.get(key)
+        if found is None:
+            return None
+        del self._held[key]
+        self._held[key] = found
+        return found
 
 
 class MouseNavigation(QObject):

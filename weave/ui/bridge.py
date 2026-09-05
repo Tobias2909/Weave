@@ -42,7 +42,7 @@ from ..poller import (
     TwitchLogin,
 )
 from .feed_model import FeedModel
-from .navigation import History
+from .navigation import History, MusicList, TrackCache
 
 ALL = "all"
 MUSIC = "music"
@@ -70,6 +70,17 @@ PAGE = 24
 # How long the shelves are trusted before being gathered again. They are a
 # recommendation, not a fact, and they cost several seconds to fetch.
 SHELF_LIFETIME_S = 6 * 3600
+
+# A search of YouTube Music is a track list like any other, so it is a place
+# with the same shape as one. Its own kind, since it is not one of the fetches
+# TrackList knows.
+MUSIC_SEARCH = "search"
+MUSIC_SEARCH_LABEL = "Search results"
+
+# Told apart from an explicit None, which is the shelves. A route into music
+# that names no list means wherever music was left, which is what coming back
+# to it did before a track list was a place of its own.
+KEEP_MUSIC = object()
 
 
 class Bridge(QObject):
@@ -145,7 +156,16 @@ class Bridge(QObject):
         self._tracks: TrackList | None = None
         self._source_details: list = []
         self._results_label = ""
-        self._autoplay_tracks = False
+        # Which track list the music view is showing, None being the shelves.
+        # Kept while another view is up, since the results are kept too, so
+        # coming back to music lands where it was left.
+        self._music_list: MusicList | None = None
+        # The lists that were visited, so walking back onto one puts it back
+        # instead of asking YouTube Music again.
+        self._music_cache = TrackCache()
+        # The list a press asked to hear, so a station started by pressing it
+        # is told apart from the same station landed on by walking.
+        self._music_autoplay: MusicList | None = None
 
         self._busy = False
         self._problems: list[str] = []
@@ -178,7 +198,7 @@ class Bridge(QObject):
         # Seeded with the view the window opens on, so the first step back has
         # somewhere to land rather than one fewer place than was visited.
         self._nav = History((self._view_kind, self._view_id, self._view_channel,
-                             self._view_playlist))
+                             self._view_playlist, self._music_list))
         # Raised while a remembered view is being restored. Without it the
         # replay would record itself as a fresh step and forward would never
         # be reachable. An explicit flag rather than comparing the view being
@@ -608,21 +628,32 @@ class Bridge(QObject):
             self._notice_timer.start(int(clear_after_s * 1000))
 
     def _set_view(self, kind: str, view_id: int = -1, channel_key: str = "",
-                  playlist_id: str = "") -> None:
-        if (kind, view_id, channel_key, playlist_id) == (
-                self._view_kind, self._view_id, self._view_channel, self._view_playlist):
+                  playlist_id: str = "", music=KEEP_MUSIC) -> None:
+        # Only music has a place inside it. A route in that names no list
+        # means wherever music was left, so reaching it from the sidebar shows
+        # the list that was open rather than throwing it away.
+        if kind != MUSIC:
+            music = None
+        elif music is KEEP_MUSIC:
+            music = self._music_list
+        showing = self._music_list if self._view_kind == MUSIC else None
+        if (kind, view_id, channel_key, playlist_id, music) == (
+                self._view_kind, self._view_id, self._view_channel,
+                self._view_playlist, showing):
             return
         left_search = self._view_kind == SEARCH and kind != SEARCH
         self._view_kind = kind
         self._view_id = view_id
         self._view_channel = channel_key
         self._view_playlist = playlist_id
+        if kind == MUSIC:
+            self._music_list = music
         # Below the guard above, which returns before this on a view that is
         # already showing, so setting the same view twice is one entry rather
         # than two. The words come along for a search only, and only as
         # something to restore, never as part of what makes a view itself.
         if not self._nav_replaying and self._nav.record(
-                (kind, view_id, channel_key, playlist_id),
+                (kind, view_id, channel_key, playlist_id, music),
                 self._search_text if kind == SEARCH else ""):
             self.navChanged.emit()
         if left_search:
@@ -639,8 +670,10 @@ class Bridge(QObject):
         # Work a view needs on entry happens here, so every way of reaching it
         # behaves the same. It used to hang off the sidebar row, and the wheel
         # then landed on an empty page.
-        if kind == MUSIC and not self._shelves:
-            self.loadHome()
+        if kind == MUSIC:
+            if not self._shelves:
+                self.loadHome()
+            self._show_music_list(music)
         if kind == DEBUG and not self._checks:
             self.runChecks(True)
         if kind == RECOMMENDED:
@@ -673,6 +706,9 @@ class Bridge(QObject):
         """
         if entry is None:
             return
+        # Walking is not pressing. A station landed on this way is put back to
+        # look at, the way a playlist is.
+        self._music_autoplay = None
         self._nav_replaying = True
         try:
             if entry.view[0] == SEARCH:
@@ -1253,15 +1289,16 @@ class Bridge(QObject):
 
     @Slot()
     def clearResults(self) -> None:
-        self._results = []
-        self._results_label = ""
-        self.musicChanged.emit()
+        """Back to the shelves, which the music view shows when there are no
+        results. A place of its own, so the list left behind is still there to
+        walk back to."""
+        self._set_view(MUSIC, -1, "", "", None)
 
     @Slot()
     def playLiked(self) -> None:
         """Liked videos come from YouTube rather than YouTube Music. The two
         lists are separate and this is the one with anything in it."""
-        self._start_tracks(TrackList(self._cfg, TrackList.LIKED, label="Liked", parent=self))
+        self._open_music_list(MusicList(TrackList.LIKED, "", "Liked"))
 
     @Slot(int, int)
     def playShelfItem(self, shelf_index: int, item_index: int) -> None:
@@ -1280,14 +1317,13 @@ class Bridge(QObject):
         # it. Pressing it plays that song and then things like it, which is
         # what the music application does, so the station is what to fetch.
         if video and playlist:
-            self._start_tracks(TrackList(self._cfg, TrackList.RADIO, video,
-                                         item.get("title", ""), self), autoplay=True)
+            self._open_music_list(MusicList(TrackList.RADIO, video, item.get("title", "")),
+                                  autoplay=True)
             return
         # A playlist is opened to look at. Nothing starts until something in it
         # is chosen.
         if playlist:
-            self._start_tracks(TrackList(self._cfg, "playlist", playlist,
-                                         item.get("title", ""), self))
+            self._open_music_list(MusicList("playlist", playlist, item.get("title", "")))
             return
         if video and self._audio:
             self._audio.play_items([{
@@ -1296,16 +1332,77 @@ class Bridge(QObject):
                 "live": False, "url": ids.watch_url("youtube", video),
             }])
 
-    def _start_tracks(self, worker: TrackList, autoplay: bool = False) -> None:
+    def _open_music_list(self, target: MusicList, autoplay: bool = False) -> None:
+        """A track list was asked for. Landing on one is a step, so the back
+        button returns to the shelves and forward opens it again."""
+        if autoplay:
+            self._music_autoplay = target
+        if self._view_kind == MUSIC and self._music_list == target:
+            # Already the place showing, so not a step. A station pressed a
+            # second time is still a press and starts, and a list whose rows
+            # never arrived is asked for again rather than sitting empty.
+            if target not in self._music_cache:
+                self._fetch_music_list(target)
+            elif autoplay and self._results:
+                self._music_autoplay = None
+                self.playResult(0)
+            return
+        self._set_view(MUSIC, -1, "", "", target)
+
+    def _show_music_list(self, target: MusicList | None) -> None:
+        """Put the music view on one track list, or back on the shelves.
+
+        Reached from _set_view alone, so pressing a tile, searching and
+        walking back onto a list all arrive the same way.
+        """
+        if target is None:
+            # The shelves are what the view shows when there are no results,
+            # so landing on them is emptying them.
+            self._results = []
+            self._results_label = ""
+            self.musicChanged.emit()
+            return
+        held = self._music_cache.get(target)
+        if held is not None:
+            self._results, self._results_label = held
+            self._searching = False
+            self.musicChanged.emit()
+            return
+        # Not held any more, so it has to be asked for again. What is on
+        # screen stays there while that runs, which is what pressing a tile
+        # has always looked like.
+        self._fetch_music_list(target)
+
+    def _fetch_music_list(self, target: MusicList) -> None:
+        """Ask for a list that is not held in memory."""
+        if target.what == MUSIC_SEARCH:
+            self._start_music_search(target)
+            return
+        self._start_tracks(TrackList(self._cfg, target.what, target.ident,
+                                     target.label, self), target)
+
+    def _start_tracks(self, worker: TrackList, target: MusicList) -> None:
         if self._tracks is not None and self._tracks.isRunning():
             return
-        self._autoplay_tracks = autoplay
         self._searching = True
         self.musicChanged.emit()
         self._tracks = worker
-        self._tracks.tracks.connect(self._on_tracks)
+        # The list the rows belong to travels with the worker, since the view
+        # can have moved on by the time they arrive.
+        self._tracks.tracks.connect(
+            lambda rows, label: self._on_tracks(rows, label, target))
         self._tracks.failed.connect(self._on_search_failed)
         self._launch(self._tracks)
+
+    def _start_music_search(self, target: MusicList) -> None:
+        if self._search is not None and self._search.isRunning():
+            return
+        self._searching = True
+        self.musicChanged.emit()
+        self._search = MusicSearch(self._cfg, target.ident, self)
+        self._search.results.connect(lambda rows: self._on_results(rows, target))
+        self._search.failed.connect(self._on_search_failed)
+        self._launch(self._search)
 
     def _on_shelves(self, shelves: list) -> None:
         self._shelves = shelves
@@ -1318,25 +1415,39 @@ class Bridge(QObject):
     def refreshMusic(self) -> None:
         self.loadHome(force=True)
 
-    def _on_tracks(self, rows: list, label: str) -> None:
+    def _on_tracks(self, rows: list, label: str, target: MusicList | None = None) -> None:
+        """Rows for one list. The heading they arrive with is the one kept,
+        since a playlist with removed videos says how many are still
+        playable."""
+        if target is None:
+            target = self._music_list
+        if target is not None:
+            self._music_cache.put(target, rows, label)
         self._searching = False
+        if target is not None and target != self._music_list:
+            # Walked away while this was in flight, so it is held for the walk
+            # back rather than dropped onto a view that asked for something
+            # else.
+            self.musicChanged.emit()
+            return
         self._results = rows
         self._results_label = label
         self.musicChanged.emit()
-        # Only a station starts on its own. A list is opened to look at.
-        if rows and self._autoplay_tracks:
+        # Only a station starts on its own, and only for the press that asked
+        # for it. A list is opened to look at.
+        if rows and self._music_autoplay is not None and self._music_autoplay == target:
+            self._music_autoplay = None
             self.playResult(0)
 
     @Slot(str)
     def musicSearch(self, query: str) -> None:
-        if self._search is not None and self._search.isRunning():
+        """Results that replace what the view was showing, so a search is a
+        place like a list is. Asked for by pressing search rather than by
+        typing, so this is once per search and never once per letter."""
+        query = (query or "").strip()
+        if not query:
             return
-        self._searching = True
-        self.musicChanged.emit()
-        self._search = MusicSearch(self._cfg, query, self)
-        self._search.results.connect(self._on_results)
-        self._search.failed.connect(self._on_search_failed)
-        self._launch(self._search)
+        self._open_music_list(MusicList(MUSIC_SEARCH, query, MUSIC_SEARCH_LABEL))
 
     @Slot(int)
     def playResult(self, index: int) -> None:
@@ -1414,11 +1525,10 @@ class Bridge(QObject):
         self._db.remove_source(source_id)
         self.musicChanged.emit()
 
-    def _on_results(self, rows: list) -> None:
-        self._searching = False
-        self._results = rows
-        self._results_label = "Search results"
-        self.musicChanged.emit()
+    def _on_results(self, rows: list, target: MusicList | None = None) -> None:
+        # A search comes back as a list of tracks like any other, so it is
+        # held and shown by the one path rather than a second copy of it.
+        self._on_tracks(rows, target.label if target else MUSIC_SEARCH_LABEL, target)
 
     def _on_search_failed(self, message: str) -> None:
         self._searching = False
