@@ -661,6 +661,15 @@ ApplicationWindow {
         id: videoMenu
         objectName: "videoMenu"
 
+        // Where the box entries go. Looked up rather than counted, so adding
+        // an entry above the separator cannot quietly misplace every box.
+        function slotAfter(item) {
+            for (var i = 0; i < count; i++)
+                if (itemAt(i) === item)
+                    return i + 1
+            return count
+        }
+
         // Every entry dismisses the menu itself. A Menu is supposed to close
         // on its own when an item fires, and it did not here, so it is done
         // explicitly rather than left to chance.
@@ -691,7 +700,7 @@ ApplicationWindow {
             }
         }
 
-        MenuSeparator {}
+        MenuSeparator { id: boxSeparator }
 
         // Built from the box list at the moment the menu opens, with a tick
         // beside the boxes this video is already in, so one menu both adds and
@@ -703,11 +712,9 @@ ApplicationWindow {
             // it cannot see videoMenu, and reaching for it raises a reference
             // error that also leaves the menu open. The menu is handed to each
             // entry from out here, where the id does resolve.
-            // Five, counting the entries declared above this and the
-            // separator. Adding another entry up there means changing this.
             onObjectAdded: (index, object) => {
                 object.owner = videoMenu
-                videoMenu.insertItem(index + 5, object)
+                videoMenu.insertItem(videoMenu.slotAfter(boxSeparator) + index, object)
             }
             onObjectRemoved: (index, object) => videoMenu.removeItem(object)
             delegate: MenuItem {

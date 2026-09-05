@@ -40,8 +40,8 @@ This is the first milestone. Working right now
   remembered
 * Themes as files you can write yourself, several built in, some with a
   gradient that washes across the window
-* A music area that plays audio inside Weave rather than handing it to `mpv`,
-  with search, saved addresses, and a player bar that survives switching views
+* A music area with its own player bar that survives switching views, playing
+  through a second `mpv` with no window, with search and saved addresses
 * A grid of cards in a dark window, sized to the space it has
 * A duration badge, view and like counts, the channel icon, and a progress line
   showing where you stopped, read out of the resume files `mpv` already writes
@@ -613,8 +613,30 @@ python -m unittest discover -s tests -t .
 They cover the parts where a silent mistake would be expensive. Video and
 channel identity, the RSS parser, the watched rule, display formatting, the
 storage rules, the polling schedule, the endpoint budget, resume position
-lookup, and cancellation.
-There are no interface tests, because they cost more than they find.
+lookup, and cancellation. Every background worker is run once with its source
+stubbed, because a worker that reads an attribute its constructor never set
+raises nothing until it runs against the network. The music engine is driven
+against a real `mpv` on generated tones and skips where there is none.
+
+The window is tested too, in its own process. A clean boot proves almost
+nothing about an interface, since it never opens a menu or commits a popup,
+and those are the places a binding reaches for an id it cannot see. So the
+real window is booted on the offscreen platform against a scratch home, walked
+through every view, the menus and the popups with every request failing at
+once, and the test fails on any warning the QML engine raises. The same walk
+is a tool on its own, and it can leave a picture of the window behind.
+
+```sh
+python tools/drive.py smoke --offline --screenshot /tmp/weave.png
+```
+
+Point it at a scratch home first with the usual `XDG_CONFIG_HOME`,
+`XDG_STATE_HOME` and `XDG_CACHE_HOME` variables, or it opens your real
+database. The helpers at the top of that file are what any further driving
+should be built from, and its docstring lists what does not work from Python.
+
+Lint with `ruff check .` from the root. The rules and the reasons for what is
+ignored live in `pyproject.toml`.
 
 ## A note on how this talks to YouTube
 
