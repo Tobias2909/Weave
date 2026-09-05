@@ -42,6 +42,7 @@ from ..poller import (
     TwitchLogin,
 )
 from .feed_model import FeedModel
+from .navigation import History
 
 ALL = "all"
 MUSIC = "music"
@@ -88,6 +89,7 @@ class Bridge(QObject):
     twitchChanged = Signal()
     detailChanged = Signal()
     musicChanged = Signal()
+    navChanged = Signal()
 
     def __init__(self, db: Database, cfg: Config, model: FeedModel,
                  player: Player, parent: QObject | None = None) -> None:
@@ -172,6 +174,17 @@ class Bridge(QObject):
         self._exhausted = False
         # Where a search started, so emptying the box goes back there.
         self._before_search: tuple[str, int, str, str] = (ALL, -1, "", "")
+        # Every view landed on, walked by the back and forward mouse buttons.
+        # Seeded with the view the window opens on, so the first step back has
+        # somewhere to land rather than one fewer place than was visited.
+        self._nav = History((self._view_kind, self._view_id, self._view_channel,
+                             self._view_playlist))
+        # Raised while a remembered view is being restored. Without it the
+        # replay would record itself as a fresh step and forward would never
+        # be reachable. An explicit flag rather than comparing the view being
+        # set against the one the record points at, since those are equal in
+        # ordinary use as well.
+        self._nav_replaying = False
 
         self._hide_watched = self._db.get_state("hide_watched", "1") == "1"
         self._live_collapsed = self._db.get_state("live_collapsed", "0") == "1"
@@ -225,6 +238,12 @@ class Bridge(QObject):
 
     def _get_view_id(self) -> int:
         return self._view_id
+
+    def _get_can_go_back(self) -> bool:
+        return self._nav.can_go_back()
+
+    def _get_can_go_forward(self) -> bool:
+        return self._nav.can_go_forward()
 
     def _get_channel_info(self) -> dict:
         if self._view_kind != CHANNEL:
@@ -291,6 +310,8 @@ class Bridge(QObject):
     viewPlaylist = Property(str, lambda self: self._view_playlist, notify=viewChanged)
     searchScope = Property(str, lambda self: self._search_scope, notify=viewChanged)
     channelInfo = Property("QVariantMap", _get_channel_info, notify=viewChanged)
+    canGoBack = Property(bool, _get_can_go_back, notify=navChanged)
+    canGoForward = Property(bool, _get_can_go_forward, notify=navChanged)
 
     def _get_live(self) -> list:
         rows = []
@@ -596,6 +617,14 @@ class Bridge(QObject):
         self._view_id = view_id
         self._view_channel = channel_key
         self._view_playlist = playlist_id
+        # Below the guard above, which returns before this on a view that is
+        # already showing, so setting the same view twice is one entry rather
+        # than two. The words come along for a search only, and only as
+        # something to restore, never as part of what makes a view itself.
+        if not self._nav_replaying and self._nav.record(
+                (kind, view_id, channel_key, playlist_id),
+                self._search_text if kind == SEARCH else ""):
+            self.navChanged.emit()
         if left_search:
             # Going anywhere else ends the search, so the words go with it
             # rather than sitting in the box describing a view you left.
@@ -622,6 +651,37 @@ class Bridge(QObject):
             self._fetch_history()
         if kind == PLAYLIST:
             self._fetch_playlist_items(playlist_id)
+
+    @Slot()
+    def goBack(self) -> None:
+        """One view back, the way a browser's back button walks."""
+        self._walk(self._nav.back())
+
+    @Slot()
+    def goForward(self) -> None:
+        """Back towards where walking back came from."""
+        self._walk(self._nav.forward())
+
+    def _walk(self, entry) -> None:
+        """Show a remembered view without recording it as a new one.
+
+        A search is put back with the words it was made with, and always
+        against what is stored rather than against YouTube. The results of a
+        web search are held in memory and a later search replaces them, so
+        restoring that scope could show one search's results under another
+        search's words. Pressing Enter asks YouTube again.
+        """
+        if entry is None:
+            return
+        self._nav_replaying = True
+        try:
+            if entry.view[0] == SEARCH:
+                self._search_text = entry.search_text
+                self._search_scope = "stored"
+            self._set_view(*entry.view)
+        finally:
+            self._nav_replaying = False
+        self.navChanged.emit()
 
     def _selectable(self) -> list[tuple[str, int]]:
         """Everything the sidebar offers, in the order it is drawn.
@@ -701,6 +761,7 @@ class Bridge(QObject):
             self._set_view(SEARCH, -1)
         else:
             # Same view, new words, so the guard in _set_view would drop it.
+            self._nav.note_search(text)
             self.reload()
             self.viewChanged.emit()
 
