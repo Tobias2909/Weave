@@ -528,13 +528,31 @@ ApplicationWindow {
         anchors.leftMargin: 10
         anchors.rightMargin: 10
         clip: true
-        cellWidth: Math.max(260, Math.floor(width / Math.max(1, Math.floor(width / 330))))
+
+        // Cards grow with the window instead of snapping between sizes, so a
+        // row always fills the width. Two is the fewest columns worth showing,
+        // since one card a row reads as a list and wastes the width. The lower
+        // bound on a cell only keeps a card from collapsing, and at any width
+        // where three or more columns fit it never applies.
+        readonly property int columnCount: Math.max(2, Math.floor(width / 330))
+        cellWidth: Math.max(200, Math.floor(width / columnCount))
         cellHeight: cellWidth * 9 / 16 + 108
         model: feedModel
         cacheBuffer: 800
 
-        // Reaching the bottom asks for more. Which views can answer that is
-        // the bridge's business, so this does not have to know.
+        // Asking only once the bottom is reached leaves the reader sitting at
+        // the end while the next page is fetched, so ask about two rows early
+        // and the rows are usually in place before they are reached. The bound
+        // value changes only when the view crosses into or out of that band,
+        // which is what keeps this from asking again on every pixel of
+        // movement. Which views can answer at all is the bridge's business, so
+        // this does not have to know.
+        readonly property bool nearEnd: count > 0 && contentHeight > height
+                                        && contentY + height >= contentHeight - cellHeight * 2
+        onNearEndChanged: if (nearEnd) App.loadMore()
+
+        // A backstop for what the band cannot cover, such as a feed short
+        // enough to fit on screen whole.
         onAtYEndChanged: if (atYEnd && count > 0) App.loadMore()
 
         // Always on rather than only while moving. Knowing how much is above
