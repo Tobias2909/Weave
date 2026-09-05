@@ -190,9 +190,15 @@ Rectangle {
         }
     }
 
+    // Inset by the same amount above and below, so the row sits in the middle
+    // of the bar. Room left for the scrub track on the top side alone pushed
+    // the row down and left a band of empty bar over it. Ten clears the track
+    // at its thickest and the handle on it, and the artwork fills the forty
+    // four that are left.
     RowLayout {
         anchors.fill: parent
-        anchors.topMargin: 14
+        anchors.topMargin: 10
+        anchors.bottomMargin: 10
         anchors.leftMargin: 12
         anchors.rightMargin: 12
         spacing: 12
