@@ -114,6 +114,9 @@ class Bridge(QObject):
         self._threads: set = set()
         self._details: ChannelDetailsFetcher | None = None
         self._live: LiveWatcher | None = None
+        # Raised while a live check is in flight. The bar reads it so the
+        # first check after start says it is working instead of sitting empty.
+        self._live_checking = False
         self._twitch: TwitchLogin | None = None
         self._twitch_status = ""
         self._twitch_needs_login = False
@@ -319,7 +322,11 @@ class Bridge(QObject):
     def _get_live_collapsed(self) -> bool:
         return self._live_collapsed
 
+    def _get_live_checking(self) -> bool:
+        return self._live_checking
+
     liveCollapsed = Property(bool, _get_live_collapsed, notify=liveChanged)
+    liveChecking = Property(bool, _get_live_checking, notify=liveChanged)
 
     def _video_for_detail(self, key: str):
         """The video the panel is showing, from wherever it is known.
@@ -506,6 +513,11 @@ class Bridge(QObject):
         if value != self._busy:
             self._busy = value
             self.busyChanged.emit()
+
+    def _set_live_checking(self, value: bool) -> None:
+        if value != self._live_checking:
+            self._live_checking = value
+            self.liveChanged.emit()
 
     def _idle_status(self) -> str:
         counts = self._db.counts()
@@ -1474,9 +1486,15 @@ class Bridge(QObject):
         self._live = LiveWatcher(self._db, self._cfg, self)
         self._live.updated.connect(self._on_live)
         self._live.needsLogin.connect(self._on_twitch_needs_login)
-        self._live.failed.connect(
-            lambda message: self._set_status(f"could not check Twitch, {message}"))
-        self._launch(self._live)
+        self._live.failed.connect(self._on_live_failed)
+        # A check ends three ways and can also be cancelled on the way out,
+        # and only one of those three carries results. Lowering the flag on
+        # finished covers every one of them, so the bar cannot be left saying
+        # it is working when nothing is.
+        self._live.finished.connect(self._on_live_done,
+                                    Qt.ConnectionType.QueuedConnection)
+        if self._launch(self._live):
+            self._set_live_checking(True)
 
     @Slot(bool)
     def setLiveCollapsed(self, value: bool) -> None:
@@ -1688,8 +1706,26 @@ class Bridge(QObject):
 
     def _on_live(self, count: int) -> None:
         self._twitch_needs_login = False
+        self._live_checking = False
         self.liveChanged.emit()
         self.twitchChanged.emit()
+
+    def _on_live_failed(self, message: str) -> None:
+        self._set_live_checking(False)
+        self._set_status(f"could not check Twitch, {message}")
+
+    @Slot()
+    def _on_live_done(self) -> None:
+        """A check has stopped, whichever way it stopped.
+
+        Delivered queued, so a check that started in the meantime would
+        otherwise be cut short by the previous one ending. The sender is
+        compared against the current worker for that reason.
+        """
+        worker = self.sender()
+        if worker is not None and self._live is not None and self._live is not worker:
+            return
+        self._set_live_checking(False)
 
     def _on_watched(self, key: str, progress: float) -> None:
         self._db.set_watched(key, progress, "mpv")

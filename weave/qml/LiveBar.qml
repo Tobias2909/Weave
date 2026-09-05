@@ -6,9 +6,16 @@ import QtQuick.Layouts
 // is showing, because it is the one thing that is only worth knowing now.
 Rectangle {
     id: bar
+    objectName: "liveBar"
 
     readonly property bool hasStreams: App.liveStreams.length > 0
-    readonly property bool showing: hasStreams || App.twitchNeedsLogin
+
+    // Only while the bar would otherwise be blank. On the repeat checks there
+    // are already cards up, and swapping them for a line about checking would
+    // make the bar flicker every ninety seconds for no gain.
+    readonly property bool checking: App.liveChecking && !hasStreams
+                                     && !App.twitchNeedsLogin
+    readonly property bool showing: hasStreams || App.twitchNeedsLogin || checking
     readonly property bool expanded: !App.liveCollapsed
 
     visible: showing
@@ -42,9 +49,11 @@ Rectangle {
         }
 
         Label {
+            objectName: "liveHeading"
             text: bar.hasStreams
                   ? "Live now  ·  " + App.liveStreams.length
-                  : "Twitch is not connected"
+                  : (bar.checking ? "Checking who is live"
+                                  : "Twitch is not connected")
             color: Theme.colors.textMuted
             font.pixelSize: 11
             font.letterSpacing: 1.1

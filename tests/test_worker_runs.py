@@ -35,6 +35,18 @@ _app = QCoreApplication.instance() or QCoreApplication([])
 MISTAKES = ("AttributeError", "NameError", "TypeError", "KeyError", "ImportError")
 
 
+def live_checking(bridge) -> bool:
+    """What the live bar reads, through the getter the property is built on.
+
+    Not the property itself. On a bridge built with __new__ an unbound
+    Property reads back as the Property object rather than the value, and that
+    object is always truthy, so asserting on it would pass either way.
+    """
+    from weave.ui.bridge import Bridge
+
+    return Bridge._get_live_checking(bridge)
+
+
 class _Stream:
     key = "twitch:alpha"
     login = "alpha"
@@ -373,6 +385,132 @@ class WorkerRuns(unittest.TestCase):
                     if "_spend(" in match.group(2) or "budget.spend(" in match.group(2)}
         self.assertEqual(spenders - run_here, set())
         self.assertTrue(spenders, "the pattern no longer matches the workers")
+
+    def test_the_live_check_says_it_is_working_and_stops_saying_so(self):
+        """The bar sits empty until the first check comes back, so it says it
+        is checking in the meantime. A check ends three ways and can also be
+        cancelled, and every one of them has to put the flag back down, or the
+        line stays up for the rest of the evening.
+        """
+        from weave.ui import bridge as bridge_module
+        from weave.ui.bridge import Bridge
+
+        class Recorder:
+            def __init__(self):
+                self.count = 0
+
+            def emit(self, *_a):
+                self.count += 1
+
+        class Wire:
+            """A signal that keeps its slots, so the test can fire it."""
+
+            def __init__(self):
+                self.slots = []
+
+            def connect(self, slot, *_a):
+                self.slots.append(slot)
+
+            def emit(self, *args):
+                for slot in list(self.slots):
+                    slot(*args)
+
+        class Watcher:
+            def __init__(self, *_a, **_k):
+                self.updated = Wire()
+                self.needsLogin = Wire()
+                self.failed = Wire()
+                self.finished = Wire()
+                self.started = False
+
+            def isRunning(self):
+                return False
+
+            def isFinished(self):
+                return self.started
+
+            def start(self):
+                self.started = True
+
+            def deleteLater(self):
+                pass
+
+        def make():
+            bridge = Bridge.__new__(Bridge)
+            bridge._db = self.db
+            bridge._cfg = self.cfg
+            bridge._live = None
+            bridge._live_checking = False
+            bridge._twitch_needs_login = False
+            bridge._status = ""
+            bridge._stopping = False
+            bridge._threads = set()
+            bridge._source_details = []
+            bridge.liveChanged = Recorder()
+            bridge.twitchChanged = Recorder()
+            bridge.statusChanged = Recorder()
+            bridge.sender = lambda: None
+            return bridge
+
+        self.patch(bridge_module, "LiveWatcher", Watcher)
+
+        # The success path. Results arrive and the line goes.
+        bridge = make()
+        Bridge.refreshLive(bridge)
+        self.assertTrue(bridge._live.started)
+        self.assertTrue(live_checking(bridge), "the bar was never told a check began")
+        Bridge._on_live(bridge, 1)
+        self.assertFalse(live_checking(bridge))
+
+        # The failure path. Twitch said no, and the line still goes.
+        bridge = make()
+        Bridge.refreshLive(bridge)
+        self.assertTrue(live_checking(bridge))
+        bridge._live.failed.emit("Twitch is unhappy")
+        self.assertFalse(live_checking(bridge), "a failed check left the bar checking")
+        self.assertIn("Twitch is unhappy", bridge._status)
+
+        # And the ends that carry no result at all, a login that is missing
+        # and a check cancelled on the way out. Both reach finished only.
+        for name in ("needsLogin", "finished"):
+            bridge = make()
+            Bridge.refreshLive(bridge)
+            self.assertTrue(live_checking(bridge))
+            worker = bridge._live
+            if name == "needsLogin":
+                worker.needsLogin.emit()
+            worker.finished.emit()
+            self.assertFalse(live_checking(bridge), f"{name} left the bar checking")
+
+        # Nothing starts once the window is going, so nothing may claim to be
+        # checking either.
+        bridge = make()
+        bridge._stopping = True
+        Bridge.refreshLive(bridge)
+        self.assertFalse(live_checking(bridge))
+
+    def test_a_finished_check_does_not_cut_short_the_one_after_it(self):
+        """finished is delivered queued, so it can arrive after the timer has
+        already started the next check. The flag belongs to that next check by
+        then, and the late arrival must leave it alone."""
+        from weave.ui.bridge import Bridge
+
+        class Recorder:
+            def emit(self, *_a):
+                pass
+
+        bridge = Bridge.__new__(Bridge)
+        bridge._live_checking = True
+        bridge.liveChanged = Recorder()
+        older, newer = object(), object()
+        bridge._live = newer
+        bridge.sender = lambda: older
+        Bridge._on_live_done(bridge)
+        self.assertTrue(live_checking(bridge), "the running check was cut short")
+
+        bridge.sender = lambda: newer
+        Bridge._on_live_done(bridge)
+        self.assertFalse(live_checking(bridge))
 
     def test_every_worker_is_built_on_the_base(self):
         """A worker that is not is a worker with no cancel, which Qt turns into
