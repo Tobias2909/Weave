@@ -1030,7 +1030,7 @@ ApplicationWindow {
 
     // ---- menus and the name popup ---------------------------------------
 
-    Menu {
+    ThemedMenu {
         id: videoMenu
         objectName: "videoMenu"
 
@@ -1046,15 +1046,15 @@ ApplicationWindow {
         // Every entry dismisses the menu itself. A Menu is supposed to close
         // on its own when an item fires, and it did not here, so it is done
         // explicitly rather than left to chance.
-        MenuItem {
+        ThemedMenuItem {
             text: "Play in mpv"
             onTriggered: { App.play(root.menuKey); videoMenu.dismiss() }
         }
-        MenuItem {
+        ThemedMenuItem {
             text: "Open the channel"
             onTriggered: { App.openChannel(root.menuChannelKey); videoMenu.dismiss() }
         }
-        MenuItem {
+        ThemedMenuItem {
             objectName: "musicFavoriteEntry"
             // Only where a video is a song already, which is a playlist marked
             // as music and the listening history. Anywhere else a video is a
@@ -1065,12 +1065,12 @@ ApplicationWindow {
                                                : "Add to music favorites"
             onTriggered: { App.favoriteVideo(root.menuKey); videoMenu.dismiss() }
         }
-        MenuItem {
+        ThemedMenuItem {
             objectName: "copyLinkEntry"
             text: "Share"
             onTriggered: { App.copyLink(root.menuKey); videoMenu.dismiss() }
         }
-        MenuItem {
+        ThemedMenuItem {
             text: "Groups for this channel"
             onTriggered: {
                 var key = root.menuChannelKey
@@ -1078,7 +1078,7 @@ ApplicationWindow {
                 root.askForGroups(key)
             }
         }
-        MenuItem {
+        ThemedMenuItem {
             text: root.menuWatched ? "Mark as not watched" : "Mark as watched"
             onTriggered: {
                 if (root.menuWatched)
@@ -1089,7 +1089,7 @@ ApplicationWindow {
             }
         }
 
-        MenuSeparator { id: boxSeparator }
+        ThemedMenuSeparator { id: boxSeparator }
 
         // Built from the box list at the moment the menu opens, with a tick
         // beside the boxes this video is already in, so one menu both adds and
@@ -1106,7 +1106,7 @@ ApplicationWindow {
                 videoMenu.insertItem(videoMenu.slotAfter(boxSeparator) + index, object)
             }
             onObjectRemoved: (index, object) => videoMenu.removeItem(object)
-            delegate: MenuItem {
+            delegate: ThemedMenuItem {
                 required property var modelData
                 property var owner: null
                 text: (App.boxesHolding(root.menuKey).indexOf(modelData.id) >= 0
@@ -1122,7 +1122,7 @@ ApplicationWindow {
             }
         }
 
-        MenuItem {
+        ThemedMenuItem {
             text: "Put in a new box"
             onTriggered: { videoMenu.dismiss(); root.askForName("box", -1, root.menuKey, "") }
         }
@@ -1130,7 +1130,7 @@ ApplicationWindow {
 
     // The groups one channel is in, ticked, so one menu both adds and removes.
     // Opened from a video's menu and from the channel page.
-    Menu {
+    ThemedMenu {
         id: channelGroupMenu
         objectName: "channelGroupMenu"
         property string channelKey: ""
@@ -1148,7 +1148,7 @@ ApplicationWindow {
                 channelGroupMenu.insertItem(index, object)
             }
             onObjectRemoved: (index, object) => channelGroupMenu.removeItem(object)
-            delegate: MenuItem {
+            delegate: ThemedMenuItem {
                 required property var modelData
                 property var owner: null
                 text: (App.groupsHolding(channelGroupMenu.channelKey).indexOf(modelData.id) >= 0
@@ -1164,7 +1164,7 @@ ApplicationWindow {
             }
         }
 
-        MenuItem {
+        ThemedMenuItem {
             text: "Put in a new group"
             onTriggered: {
                 var key = channelGroupMenu.channelKey
@@ -1174,28 +1174,28 @@ ApplicationWindow {
         }
     }
 
-    Menu {
+    ThemedMenu {
         id: playlistMenu
         objectName: "playlistMenu"
 
-        MenuItem {
+        ThemedMenuItem {
             text: "Read the list again"
             onTriggered: { App.refreshPlaylists(); playlistMenu.dismiss() }
         }
-        MenuItem {
+        ThemedMenuItem {
             text: "Playlist settings"
             onTriggered: { playlistMenu.dismiss(); playlistChooser.open() }
         }
     }
 
-    Menu {
+    ThemedMenu {
         id: playlistRowMenu
         objectName: "playlistRowMenu"
         property string playlistId: ""
         property string playlistName: ""
         property bool isMusic: false
 
-        MenuItem {
+        ThemedMenuItem {
             objectName: "playlistMusicEntry"
             // A playlist of music is listened to rather than watched, so a
             // press on one of its videos goes where the headphone goes.
@@ -1206,7 +1206,7 @@ ApplicationWindow {
                 playlistRowMenu.dismiss()
             }
         }
-        MenuItem {
+        ThemedMenuItem {
             text: "Read it again"
             onTriggered: {
                 var id = playlistRowMenu.playlistId
@@ -1215,7 +1215,7 @@ ApplicationWindow {
                 App.refreshPlaylist()
             }
         }
-        MenuItem {
+        ThemedMenuItem {
             // Hiding is not forgetting. It keeps its contents and comes back
             // from the chooser.
             text: "Hide it"
@@ -1226,13 +1226,13 @@ ApplicationWindow {
         }
     }
 
-    Menu {
+    ThemedMenu {
         id: groupMenu
         objectName: "groupMenu"
         property int groupId: -1
         property string groupName: ""
 
-        MenuItem {
+        ThemedMenuItem {
             text: "Rename"
             onTriggered: {
                 var id = groupMenu.groupId, name = groupMenu.groupName
@@ -1240,15 +1240,15 @@ ApplicationWindow {
                 root.askForName("group", id, "", name)
             }
         }
-        MenuItem {
+        ThemedMenuItem {
             text: "Move up"
             onTriggered: { App.moveGroup(groupMenu.groupId, -1); groupMenu.dismiss() }
         }
-        MenuItem {
+        ThemedMenuItem {
             text: "Move down"
             onTriggered: { App.moveGroup(groupMenu.groupId, 1); groupMenu.dismiss() }
         }
-        MenuItem {
+        ThemedMenuItem {
             // The channels themselves are untouched, as with a box and its
             // videos.
             text: "Delete the group"
@@ -1256,12 +1256,12 @@ ApplicationWindow {
         }
     }
 
-    Menu {
+    ThemedMenu {
         id: boxMenu
         property int boxId: -1
         property string boxName: ""
 
-        MenuItem {
+        ThemedMenuItem {
             text: "Rename"
             onTriggered: {
                 var id = boxMenu.boxId, name = boxMenu.boxName
@@ -1269,7 +1269,7 @@ ApplicationWindow {
                 root.askForName("box", id, "", name)
             }
         }
-        MenuItem {
+        ThemedMenuItem {
             text: "Delete the box"
             onTriggered: { App.deleteBox(boxMenu.boxId); boxMenu.dismiss() }
         }

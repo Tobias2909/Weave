@@ -37,7 +37,7 @@ Item {
         songMenu.popup()
     }
 
-    Menu {
+    ThemedMenu {
         id: songMenu
         objectName: "songMenu"
 
@@ -45,7 +45,7 @@ Item {
         // is the reason to press a song rather than play it. Only while
         // something is playing, because with an empty player there is no
         // queue to add to and no next to be.
-        MenuItem {
+        ThemedMenuItem {
             objectName: "songPlayNextEntry"
             visible: Audio.hasQueue
             height: visible ? implicitHeight : 0
@@ -59,7 +59,7 @@ Item {
             }
         }
 
-        MenuItem {
+        ThemedMenuItem {
             objectName: "songQueueEntry"
             visible: Audio.hasQueue
             height: visible ? implicitHeight : 0
@@ -75,7 +75,7 @@ Item {
 
         // One entry for both, since keeping a song is the same act whether it
         // was drawn as a tile or as a row in a list that was opened.
-        MenuItem {
+        ThemedMenuItem {
             objectName: "songFavoriteEntry"
             readonly property bool kept: view.askedResult >= 0
                                          ? App.resultIsFavorite(view.askedResult)
