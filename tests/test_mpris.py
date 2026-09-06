@@ -10,13 +10,12 @@ import contextlib
 import io
 import os
 import unittest
-from pathlib import Path
 
 from PySide6.QtCore import QCoreApplication
 from PySide6.QtDBus import QDBus, QDBusArgument, QDBusConnection, QDBusMessage, QDBusObjectPath
 
 from tests.test_audio import FakeEngine, FakeResolver, signed, track
-from weave import mpris
+from weave import desktop, mpris
 from weave.audio import AudioPlayer
 from weave.config import Config
 from weave.engine import NEXT
@@ -191,8 +190,10 @@ class WhatIsReadBack(_Base):
 
 class TheApplicationItself(_Base):
     def test_it_says_which_desktop_file_is_its_own(self):
-        shipped = Path(__file__).resolve().parent.parent / f"{mpris.DESKTOP_ENTRY}.desktop"
+        shipped = desktop.SHARE_DIR / f"{mpris.DESKTOP_ENTRY}.desktop"
         self.assertTrue(shipped.is_file(), "the name has to match the file that ships")
+        self.assertEqual(mpris.DESKTOP_ENTRY, desktop.ICON_NAME,
+                         "the panel finds the icon and the window through the same name")
 
     def test_it_names_itself(self):
         self.assertEqual(self.root.Identity, "Weave")

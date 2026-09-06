@@ -29,6 +29,13 @@ def ensure_dirs() -> None:
         path.mkdir(parents=True, exist_ok=True)
 
 
+def data_home() -> Path:
+    """Where the desktop entry and the icons belong. Not a platformdirs call,
+    because this is the share tree itself and not an application folder inside
+    it."""
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+
+
 def runtime_dir() -> Path:
     """Where mpv puts its IPC socket. Falls back to /tmp when unset."""
     return Path(os.environ.get("XDG_RUNTIME_DIR") or "/tmp")

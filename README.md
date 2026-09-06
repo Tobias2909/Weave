@@ -499,6 +499,20 @@ pipx install git+https://github.com/Tobias2909/Weave
 weave
 ```
 
+Weave draws its own window frame, so a panel takes the name and the icon from a
+desktop entry rather than from the window itself. Write that entry and the
+icons into your own share tree.
+
+```sh
+python -m weave desktop install
+```
+
+Nothing outside your home directory is touched and nothing needs root. Use
+`python -m weave desktop remove` to take it out again, or
+`python -m weave desktop status` to ask whether it is there. Run from a clone
+the entry names your interpreter and the clone, so the menu launches the same
+thing you launch by hand.
+
 ## Use
 
 Add a channel, then refresh.

@@ -11,7 +11,7 @@ import argparse
 import sys
 import time
 
-from . import config, ids, imagecache, paths, themes, tokens
+from . import config, desktop, ids, imagecache, paths, themes, tokens
 from . import format as fmt
 from .budget import Budget
 from .db import Database
@@ -669,6 +669,40 @@ def _cmd_gui(_args) -> int:
     return run(sys.argv[:1])
 
 
+def _cmd_desktop(args) -> int:
+    """Put Weave in the menu, or take it out again.
+
+    Only your own share tree is touched, so this needs no root and
+    a second account is unaffected.
+    """
+    if args.action == "remove":
+        gone = desktop.remove()
+        if not gone:
+            print("nothing was installed")
+            return 1
+        for path in gone:
+            print(f"removed {path}")
+        return 0
+
+    if args.action == "status":
+        missing = [path for path in desktop.installed() if not path.exists()]
+        if not missing:
+            print(f"installed, {len(desktop.installed())} files under {paths.data_home()}")
+            return 0
+        print(f"not installed, {len(missing)} of {len(desktop.installed())} files missing")
+        return 1
+
+    written = desktop.install()
+    for path in written:
+        print(f"wrote {path}")
+    exec_line, work_dir = desktop.launcher()
+    print(f"the menu entry runs {exec_line}")
+    if work_dir:
+        print(f"from {work_dir}, the clone it imports Weave from")
+    print("A panel may need a moment, or a logout, to notice a new entry.")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="weave", description="A personal YouTube and Twitch client")
     subparsers = parser.add_subparsers(dest="command")
@@ -788,6 +822,14 @@ def main() -> int:
     box_take.add_argument("name")
     box_take.add_argument("video", nargs="+")
     box.set_defaults(func=_cmd_box)
+
+    menu = subparsers.add_parser(
+        "desktop", help="put Weave in the application menu, with its icon")
+    menu_actions = menu.add_subparsers(dest="action")
+    menu_actions.add_parser("install", help="write the entry and the icons")
+    menu_actions.add_parser("remove", help="take them out again")
+    menu_actions.add_parser("status", help="report whether they are there")
+    menu.set_defaults(func=_cmd_desktop, action="install")
 
     parser.set_defaults(func=_cmd_gui)
     args = parser.parse_args()

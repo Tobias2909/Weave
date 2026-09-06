@@ -17,12 +17,12 @@ from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, QUrl
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickWindow
 from PySide6.QtQuickControls2 import QQuickStyle
 
-from . import config, imagecache, mpris, paths
+from . import config, desktop, imagecache, mpris, paths
 from .audio import AudioPlayer
 from .db import Database
 from .player.mpv import Player
@@ -34,6 +34,21 @@ from .ui.feed_model import FeedModel
 from .ui.theme import Theme
 
 QML_DIR = Path(__file__).parent / "qml"
+
+
+def _app_icon() -> QIcon:
+    """The window icon, built from the shipped pictures.
+
+    Each size is added by hand rather than handing Qt the drawing, so the icon
+    needs no SVG plugin and the small sizes are the ones that were rendered
+    rather than ones Qt shrank.
+    """
+    icon = QIcon()
+    for size in desktop.PNG_SIZES:
+        picture = desktop.SHARE_DIR / f"weave-{size}.png"
+        if picture.exists():
+            icon.addFile(str(picture))
+    return icon
 
 
 def _effects_available() -> bool:
@@ -77,6 +92,12 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
     app = QGuiApplication(argv)
     app.setApplicationName("Weave")
     app.setOrganizationName("Weave")
+    # Wayland has no window class to match on. The compositor identifies a
+    # window by the desktop entry it names, and that is what a task bar reads
+    # the icon and the title from, so this line is the icon on Wayland. The
+    # window icon below is what X11 and the window list use instead.
+    app.setDesktopFileName(desktop.ICON_NAME)
+    app.setWindowIcon(_app_icon())
 
     configured = cfg.watch_later_dir
     watch_later = (default_watch_later() if configured == "auto"

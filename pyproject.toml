@@ -30,7 +30,7 @@ Homepage = "https://github.com/Tobias2909/Weave"
 include = ["weave*"]
 
 [tool.setuptools.package-data]
-weave = ["qml/*.qml", "themes/*.toml"]
+weave = ["qml/*.qml", "themes/*.toml", "share/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
