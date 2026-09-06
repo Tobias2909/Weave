@@ -83,6 +83,7 @@ class TheBridgeMarksThem(unittest.TestCase):
         bridge = Bridge.__new__(Bridge)
         bridge._db = db
         bridge._audio = None
+        bridge._music_list = None
         bridge._shelves = [{"title": "A section", "kind": "songs", "items": [
             {"title": "A song", "subtitle": "An artist", "thumbnail": "",
              "videoId": "aaaaaaaaaaa", "playlistId": "RDAMVMaaa"},
@@ -164,3 +165,109 @@ class TheBridgeMarksThem(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WithNothingKept(unittest.TestCase):
+    """Every path has to cope with an empty list, which is what everybody has
+    until they keep their first song."""
+
+    def bridge(self):
+        from weave.ui.bridge import Bridge
+
+        db = Database(Path(tempfile.mkdtemp()) / "weave.db")
+
+        class Quiet:
+            def emit(self, *_a):
+                pass
+
+        class Audio:
+            def __init__(self):
+                self.queues = []
+                self.track = {}
+
+            def play_items(self, items, start=0):
+                self.queues.append(list(items))
+
+        bridge = Bridge.__new__(Bridge)
+        bridge._db = db
+        bridge._audio = Audio()
+        bridge._shelves = []
+        bridge._favorites_order = []
+        bridge._view_kind = "music"
+        bridge._music_list = None
+        bridge._set_notice = lambda *a, **k: None
+        bridge._set_status = lambda *a, **k: None
+        bridge.favoritesChanged = Quiet()
+        bridge.musicChanged = Quiet()
+        return bridge
+
+    def test_there_is_no_section_until_a_song_is_kept(self) -> None:
+        from weave.ui.bridge import Bridge
+
+        bridge = self.bridge()
+        bridge._db.set_state = lambda *a, **k: None
+        bridge._db.sources = lambda: []
+        self.assertEqual(Bridge._favorites_shelf(bridge)["items"], [])
+        titles = [shelf["title"] for shelf in Bridge._get_shelves(bridge)]
+        self.assertNotIn("Favorites", titles)
+
+    def test_the_section_appears_once_one_is_kept(self) -> None:
+        from weave.ui.bridge import Bridge
+
+        bridge = self.bridge()
+        bridge._db.set_state = lambda *a, **k: None
+        bridge._db.sources = lambda: []
+        bridge._db.set_music_favorite("aaaaaaaaaaa", True, "A song", "An artist", None)
+        titles = [shelf["title"] for shelf in Bridge._get_shelves(bridge)]
+        self.assertEqual(titles, ["Favorites"])
+
+    def test_pressing_play_with_nothing_kept_does_nothing(self) -> None:
+        from weave.ui.bridge import Bridge
+
+        bridge = self.bridge()
+        Bridge._play_favorites(bridge, "aaaaaaaaaaa")
+        self.assertEqual(bridge._audio.queues, [])
+
+    def test_the_heart_is_dark_when_nothing_is_playing(self) -> None:
+        from weave.ui.bridge import Bridge
+
+        bridge = self.bridge()
+        self.assertFalse(Bridge._get_playing_favorite(bridge))
+
+    def test_giving_back_the_last_one_leaves_its_page(self) -> None:
+        from weave.ui.bridge import Bridge
+        from weave.ui.navigation import MusicList
+
+        bridge = self.bridge()
+        bridge._db.set_music_favorite("aaaaaaaaaaa", True, "A song", None, None)
+        bridge._music_list = MusicList("shelf", "Favorites", "Favorites")
+        bridge.left = []
+        bridge._set_view = lambda *a, **k: bridge.left.append(a)
+
+        class Model:
+            def row_for_key(self, key):
+                return {"key": key, "title": "A song", "channelTitle": None,
+                        "thumbnail": None}
+
+        bridge._model = Model()
+        Bridge.favoriteVideo(bridge, "yt:aaaaaaaaaaa")
+        self.assertEqual(bridge._db.music_favorite_count(), 0)
+        self.assertEqual(bridge.left, [("music", -1, "", "", None)])
+
+    def test_keeping_a_song_does_not_leave_the_page(self) -> None:
+        from weave.ui.bridge import Bridge
+        from weave.ui.navigation import MusicList
+
+        bridge = self.bridge()
+        bridge._music_list = MusicList("shelf", "Favorites", "Favorites")
+        bridge.left = []
+        bridge._set_view = lambda *a, **k: bridge.left.append(a)
+
+        class Model:
+            def row_for_key(self, key):
+                return {"key": key, "title": "A song", "channelTitle": None,
+                        "thumbnail": None}
+
+        bridge._model = Model()
+        Bridge.favoriteVideo(bridge, "yt:aaaaaaaaaaa")
+        self.assertEqual(bridge.left, [])

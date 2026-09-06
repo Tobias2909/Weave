@@ -60,9 +60,12 @@ def track(name: str) -> dict:
 
 class NoDatabase:
     """Enough of a database for the sections to be arranged: no saved
-    addresses of its own and no order kept for them."""
+    addresses of its own, no songs kept, and no order kept for them."""
 
     def sources(self):
+        return []
+
+    def music_favorites(self, limit=500):
         return []
 
     def get_state(self, name, default=""):

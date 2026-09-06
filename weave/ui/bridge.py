@@ -12,6 +12,7 @@ letting them be set separately would allow combinations with no meaning.
 from __future__ import annotations
 
 import json
+import random
 import time
 
 from PySide6.QtCore import Property, QObject, Qt, QTimer, Signal, Slot
@@ -88,6 +89,9 @@ MUSIC_SEARCH_LABEL = "Search results"
 # A place with the same shape as a track list, so the mouse buttons walk on and
 # off it, but nothing is fetched for it. It is the shelf that is already held.
 MUSIC_SHELF = "shelf"
+# What the section of kept songs is called, in one place, because the
+# arrangement of the sections is stored by title.
+FAVORITES = "Favorites"
 
 # Told apart from an explicit None, which is the shelves. A route into music
 # that names no list means wherever music was left, which is what coming back
@@ -223,6 +227,9 @@ class Bridge(QObject):
         # been listened to. One view, two lists, since they answer the same
         # question about two kinds of thing.
         self._history_music = False
+        # The order the kept songs are shown in, shuffled once so the tiles
+        # stay where they are between reads.
+        self._favorites_order: list[str] = []
         self._music_history: MusicHistoryReader | None = None
         # Every view landed on, walked by the back and forward mouse buttons.
         # Seeded with the view the window opens on, so the first step back has
@@ -577,6 +584,9 @@ class Bridge(QObject):
     def _get_shelves(self) -> list:
         """In the order they were arranged, with anything new on the end."""
         shelves = list(self._shelves)
+        favorites = self._favorites_shelf()
+        if favorites["items"]:
+            shelves.insert(0, favorites)
         saved = self._saved_shelf()
         if saved["items"]:
             shelves.insert(0, saved)
@@ -597,6 +607,35 @@ class Bridge(QObject):
                     break
         ordered.extend(remaining)
         return ordered
+
+    def _favorites_shelf(self) -> dict:
+        """The songs kept on purpose, in a shuffled order.
+
+        Shuffled once and remembered, not on every read. The section is read
+        again whenever anything about music changes, so shuffling per read
+        would make the tiles swap places under the pointer. The whole list is
+        handed over and the window shows two rows of it, so what is on those
+        two rows is a sample of everything kept rather than the newest few.
+        """
+        rows = {row["ext_id"]: row for row in self._db.music_favorites()}
+        if not rows:
+            self._favorites_order = []
+            return {"title": FAVORITES, "kind": "favorites", "items": []}
+        kept = [ext_id for ext_id in self._favorites_order if ext_id in rows]
+        fresh = [ext_id for ext_id in rows if ext_id not in set(kept)]
+        if fresh:
+            # Newly kept songs join the order rather than resettling all of
+            # it, so keeping one does not rearrange what is on screen.
+            random.shuffle(fresh)
+            kept = fresh + kept
+        self._favorites_order = kept
+        return {"title": FAVORITES, "kind": "favorites", "items": [{
+            "title": rows[ext_id]["title"],
+            "subtitle": rows[ext_id]["channel_title"] or "",
+            "videoId": ext_id,
+            "playlistId": "",
+            "thumbnail": qml_source(rows[ext_id]["thumbnail_url"]),
+        } for ext_id in kept]}
 
     def _saved_shelf(self) -> dict:
         """Saved addresses are a section like any other, so they can be moved
@@ -1700,6 +1739,15 @@ class Bridge(QObject):
         self._set_status("added to favorites" if wanted else "removed from favorites")
         self.favoritesChanged.emit()
         self.musicChanged.emit()
+        # Giving back the last one empties the section, and the whole page of
+        # it with that. The window falls back to the sections on its own, so
+        # the record of where it is follows rather than pointing at a page
+        # that no longer exists.
+        open_on = self._music_list
+        if (not wanted and open_on is not None and open_on.what == MUSIC_SHELF
+                and open_on.ident == FAVORITES
+                and not self._db.music_favorite_count()):
+            self._set_view(MUSIC, -1, "", "", None)
 
     @Slot(str)
     def favoriteVideo(self, key: str) -> None:
@@ -1745,6 +1793,32 @@ class Bridge(QObject):
         video = item.get("videoId")
         return bool(video) and self._db.is_music_favorite(video)
 
+    def _play_favorites(self, video_id: str) -> None:
+        """Start on the song that was pressed and shuffle the rest behind it.
+
+        The queue is built here rather than left to the player's own shuffle,
+        so the one pressed is heard first and the order is decided once. It
+        goes straight into the queue and opens nothing, like a station.
+        """
+        rows = self._db.music_favorites()
+        if not rows:
+            return
+        tracks = [{
+            "key": row["key"], "title": row["title"],
+            "artist": row["channel_title"] or "",
+            "thumbnail": qml_source(row["thumbnail_url"]),
+            "live": False,
+            "url": ids.watch_url("youtube", row["ext_id"]),
+        } for row in rows]
+        rest = [track for track in tracks if track["key"] != f"yt:{video_id}"]
+        random.shuffle(rest)
+        chosen = [track for track in tracks if track["key"] == f"yt:{video_id}"]
+        queue = chosen + rest
+        if not self._audio or not queue:
+            return
+        self._audio.play_items(queue, start=0)
+        self._set_status(f"listening to your favorites from {queue[0]['title']}")
+
     @Slot(int, int)
     def playShelfItem(self, shelf_index: int, item_index: int) -> None:
         # The index comes from what is on screen, which is the arranged list
@@ -1752,11 +1826,19 @@ class Bridge(QObject):
         # here meant a tile acted on some other section's entry as soon as an
         # order was kept or an address was saved.
         try:
-            item = self._get_shelves()[shelf_index]["items"][item_index]
+            shelf = self._get_shelves()[shelf_index]
+            item = shelf["items"][item_index]
         except (IndexError, KeyError, TypeError):
             return
         video = item.get("videoId")
         playlist = item.get("playlistId")
+
+        # A kept song is heard among the others that were kept, in no
+        # particular order, rather than starting a station of things like it.
+        # That is the whole point of having kept them.
+        if shelf.get("kind") == "favorites" and video:
+            self._play_favorites(video)
+            return
 
         # A song carries both its own id and the id of the station built from
         # it. Pressing it plays that song and then things like it, which is
