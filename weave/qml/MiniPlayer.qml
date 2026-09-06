@@ -121,13 +121,18 @@ Rectangle {
 
                 delegate: Rectangle {
                     id: queuedRow
+                    // Which row is playing is read beside the list rather
+                    // than carried in it, so moving through the queue does
+                    // not rebuild every row.
+                    readonly property bool playing: index === Audio.queueIndex
                     required property var modelData
+                    required property int index
                     width: queued.width
                     height: 44
                     radius: 5
                     // The one playing stays marked, since the list holds
                     // everything rather than only what is still to come.
-                    color: queuedRow.modelData.current ? Theme.colors.surfaceRaised
+                    color: queuedRow.playing ? Theme.colors.surfaceRaised
                                                        : (queuedHover.hovered
                                                           ? Theme.colors.surface
                                                           : "transparent")
@@ -169,18 +174,18 @@ Rectangle {
                         }
                         Label {
                             width: parent.width
-                            visible: (modelData.artist || "") !== "" || modelData.current
+                            visible: (modelData.artist || "") !== "" || queuedRow.playing
                             // The one playing says so, since the list holds
                             // what has been played as well as what has not.
-                            text: modelData.current
+                            text: queuedRow.playing
                                   ? ("Playing now"
                                      + ((modelData.artist || "") !== ""
                                         ? "  ·  " + modelData.artist : ""))
                                   : modelData.artist
-                            color: modelData.current ? Theme.colors.accent
+                            color: queuedRow.playing ? Theme.colors.accent
                                                      : Theme.colors.textMuted
                             font.pixelSize: 10
-                            font.weight: modelData.current ? Font.DemiBold : Font.Normal
+                            font.weight: queuedRow.playing ? Font.DemiBold : Font.Normal
                             elide: Text.ElideRight
                         }
                     }

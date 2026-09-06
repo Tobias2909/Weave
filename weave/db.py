@@ -1177,13 +1177,21 @@ class Database:
         touched = 0
         with self.conn as conn:
             for table in ("cached_videos", "playlist_items"):
+                # Only rows a value would really reach. An update that matches
+                # a row and changes nothing still counts as one, and the view
+                # was being drawn again for it, which throws away rows the
+                # grid is still building.
                 touched += conn.execute(
                     f"UPDATE {table} SET "
                     "  views = COALESCE(?, views), "
                     "  published_at = COALESCE(?, published_at), "
                     "  duration_s = COALESCE(?, duration_s) "
-                    "WHERE ext_id = ?",
-                    (views, published_at, duration_s, ext_id)).rowcount
+                    "WHERE ext_id = ? AND ("
+                    "  (? IS NOT NULL AND views IS NULL) OR "
+                    "  (? IS NOT NULL AND published_at IS NULL) OR "
+                    "  (? IS NOT NULL AND duration_s IS NULL))",
+                    (views, published_at, duration_s, ext_id,
+                     views, published_at, duration_s)).rowcount
         return touched
 
     def music_history(self, limit: int = 400) -> list[sqlite3.Row]:

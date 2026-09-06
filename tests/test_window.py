@@ -26,7 +26,11 @@ DRIVER = ROOT / "tools" / "drive.py"
 # What a QML mistake looks like on stderr. The engine's own warnings arrive
 # through the driver; these catch what Qt prints past it.
 QML_TROUBLE = ("ReferenceError", "TypeError", "Unable to assign", "is not defined",
-               "is not a type", "Cannot assign", "QML Connections")
+               "is not a type", "Cannot assign", "QML Connections",
+               # A view was still building a row when its model was replaced.
+               # It does not appear on this platform, where rows are built at
+               # once, so it is watched for rather than relied upon.
+               "DelegateModel::cancel")
 
 
 def _quick_available() -> bool:

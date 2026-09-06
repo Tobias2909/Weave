@@ -173,9 +173,27 @@ class TheQueue(_Base):
         self.player._at = 2
         self.assertEqual([t["title"] for t in self.player.queue], ["aaa", "bbb", "ccc", "ddd"])
 
-    def test_the_one_playing_is_marked(self):
+    def test_the_one_playing_is_found_beside_the_list(self):
+        """Which row is playing is a number, not a field in every row.
+
+        Carried in the rows, it made the whole list change every time playback
+        moved, which rebuilds the view and throws away rows it was still
+        building.
+        """
         self.player._at = 2
-        self.assertEqual([t["title"] for t in self.player.queue if t["current"]], ["ccc"])
+        self.assertEqual(self.player.queueIndex, 2)
+        self.assertEqual(self.player.queue[self.player.queueIndex]["title"], "ccc")
+
+    def test_the_index_follows_the_play_order(self):
+        self.player.setShuffle(True)
+        self.player._order = [2, 0, 3, 1]
+        self.player._at = 3
+        self.assertEqual(self.player.queueIndex, 2)
+        self.assertEqual(self.player.queue[2]["title"], "ddd")
+
+    def test_nothing_playing_has_no_row(self):
+        self.player._at = -1
+        self.assertEqual(self.player.queueIndex, -1)
 
     def test_it_follows_the_play_order_not_the_order_it_was_given(self):
         self.player.setShuffle(True)

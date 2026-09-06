@@ -58,6 +58,23 @@ class KeepingWhatWasLearned(unittest.TestCase):
     def test_a_video_nobody_has_cached_is_no_error(self) -> None:
         self.assertEqual(self.db.fill_in_details("bbbbbbbbbbb", views=1), 0)
 
+    def test_learning_the_same_thing_twice_changes_nothing(self) -> None:
+        """The second answer must not count as a change.
+
+        A row that is already complete would otherwise have the view drawn
+        again for nothing, and a redraw throws away rows the grid is still
+        building, which is what Qt complains about as a cancelled delegate.
+        """
+        self.db.replace_cached(self.db.RECOMMENDED, [listing_row()])
+        self.assertEqual(self.db.fill_in_details("aaaaaaaaaaa", views=5,
+                                                 published_at=1700000000,
+                                                 duration_s=60), 1)
+        self.assertEqual(self.db.fill_in_details("aaaaaaaaaaa", views=5,
+                                                 published_at=1700000000,
+                                                 duration_s=60), 0)
+        row = self.db.cached(self.db.RECOMMENDED)[0]
+        self.assertEqual(row["views"], 5)
+
 
 class TheBridgeKeepsThem(unittest.TestCase):
     def test_details_from_the_panel_reach_the_row(self) -> None:

@@ -156,6 +156,11 @@ class _Resolver(QThread):
 
 class AudioPlayer(QObject):
     trackChanged = Signal()
+    # The queue as a list changes far less often than the track does. Bound to
+    # trackChanged, a twenty six row popup was rebuilt every time playback
+    # moved, which resets the view and throws away delegates it was still
+    # building. What is playing is a number now, read beside the list.
+    queueChanged = Signal()
     stateChanged = Signal()
     progressChanged = Signal()
     failed = Signal(str)
@@ -285,7 +290,6 @@ class AudioPlayer(QObject):
             "title": self._queue[i].get("title", ""),
             "artist": self._queue[i].get("artist", ""),
             "thumbnail": self._queue[i].get("thumbnail", ""),
-            "current": i == self._at,
             # Where it sits in the queue, so it can be jumped to directly.
             "at": i,
         } for i in self._order]
@@ -313,7 +317,13 @@ class AudioPlayer(QObject):
     repeatLabel = Property(str, _get_repeat_label, notify=stateChanged)
     autoPause = Property(bool, _get_auto_pause, notify=stateChanged)
     queueLength = Property(int, _get_queue_length, notify=trackChanged)
-    queue = Property("QVariantList", _get_queue, notify=trackChanged)
+    queue = Property("QVariantList", _get_queue, notify=queueChanged)
+
+    def _get_queue_index(self) -> int:
+        """Where in the queue the track being played sits, or -1."""
+        return self._order.index(self._at) if self._at in self._order else -1
+
+    queueIndex = Property(int, _get_queue_index, notify=trackChanged)
     stillToCome = Property(int, _get_still_to_come, notify=trackChanged)
 
     # ---- the queue -------------------------------------------------------
@@ -330,6 +340,7 @@ class AudioPlayer(QObject):
             # Whatever was picked stays first, the rest are shuffled behind it.
             self._order = [self._at] + [i for i in self._order if i != self._at]
         self._forget_recovery()
+        self.queueChanged.emit()
         self._start_current()
 
     def _rebuild_order(self) -> None:
@@ -733,6 +744,7 @@ class AudioPlayer(QObject):
         if not self._idle:
             self._prepare_next()
         self.stateChanged.emit()
+        self.queueChanged.emit()
         self.trackChanged.emit()
 
     @Slot()
@@ -763,6 +775,7 @@ class AudioPlayer(QObject):
         self._order = []
         self._at = -1
         self._appended = None
+        self.queueChanged.emit()
         self.trackChanged.emit()
         self.stateChanged.emit()
 
