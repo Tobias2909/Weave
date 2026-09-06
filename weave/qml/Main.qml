@@ -780,7 +780,9 @@ ApplicationWindow {
         objectName: "debugView"
         visible: App.viewKind === "debug"
         anchors.left: sidebar.right
-        anchors.right: parent.right
+        // The panel is drawn over this view, so step aside for it the way the
+        // grid does rather than running underneath it.
+        anchors.right: detailPanel.visible ? detailPanel.left : parent.right
         anchors.top: liveBar.visible ? liveBar.bottom : parent.top
         anchors.topMargin: liveBar.visible ? 0 : banner.height
         anchors.bottom: miniPlayer.top
@@ -791,7 +793,9 @@ ApplicationWindow {
         objectName: "settingsView"
         visible: App.viewKind === "settings"
         anchors.left: sidebar.right
-        anchors.right: parent.right
+        // The panel is drawn over this view, so step aside for it the way the
+        // grid does rather than running underneath it.
+        anchors.right: detailPanel.visible ? detailPanel.left : parent.right
         anchors.top: liveBar.visible ? liveBar.bottom : parent.top
         anchors.topMargin: liveBar.visible ? 0 : banner.height
         anchors.bottom: miniPlayer.top
