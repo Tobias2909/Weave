@@ -15,6 +15,7 @@ import json
 import time
 
 from PySide6.QtCore import Property, QObject, Qt, QTimer, Signal, Slot
+from PySide6.QtGui import QGuiApplication
 
 from .. import format as fmt
 from .. import ids
@@ -1467,12 +1468,42 @@ class Bridge(QObject):
             # back there is nothing on screen to say anything happened.
             self._set_notice("Starting in mpv", clear_after_s=30)
 
+    def _get_press_is_music(self) -> bool:
+        """Whether a plain press in the open view already means listening.
+
+        The headphone on a card reads as an offer of something else, so where
+        it would do exactly what the press does it is not drawn at all.
+        """
+        if self._view_kind == HISTORY:
+            return self._history_music
+        return self._view_kind == PLAYLIST and self._playing_is_music()
+
+    pressIsMusic = Property(bool, _get_press_is_music, notify=viewChanged)
+
     def _playing_is_music(self) -> bool:
         """Whether the open playlist is one that was marked as music."""
         if not self._view_playlist:
             return False
         found = self._db.playlist(self._view_playlist)
         return bool(found and found.get("is_music"))
+
+    @Slot(str)
+    def copyLink(self, key: str) -> None:
+        """Put the address of a video on the clipboard.
+
+        Inside a playlist the list travels with it, so whoever opens the
+        address lands in the list at that video, which is what the address in
+        a browser's own bar would have been.
+        """
+        row = self._model.row_for_key(key)
+        if not row:
+            return
+        url = row["url"]
+        if self._view_kind == PLAYLIST and self._view_playlist \
+                and not key.startswith("twitch:"):
+            url = ids.playlist_watch_url(key.split(":", 1)[1], self._view_playlist)
+        QGuiApplication.clipboard().setText(url)
+        self._set_status("address copied")
 
     @Slot(str)
     def markWatched(self, key: str) -> None:

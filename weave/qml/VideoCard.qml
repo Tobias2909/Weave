@@ -17,6 +17,7 @@ Rectangle {
     property bool watched: false
     property bool isLive: false
     property bool isUpcoming: false
+    property bool canListen: true
     property string scheduledText: ""
     property real progress: 0
 
@@ -98,9 +99,11 @@ Rectangle {
                 }
             }
 
-            // Sound without a window. Only on hover, so it costs no layout.
+            // Sound without a window. Only on hover, so it costs no layout,
+            // and not at all where a plain press already means listening,
+            // since then it offers nothing the card does not already do.
             Rectangle {
-                visible: hover.hovered
+                visible: hover.hovered && card.canListen
                 anchors.right: parent.right
                 anchors.top: parent.top
                 anchors.margins: 6

@@ -166,7 +166,7 @@ Item {
 
                             FlatButton {
                                 objectName: "settingsPlaylists"
-                                text: "Choose which playlists to show"
+                                text: "Playlist settings"
                                 onClicked: view.playlistsRequested()
                             }
                         }

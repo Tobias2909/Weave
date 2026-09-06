@@ -167,3 +167,35 @@ class ShelfArrangement(unittest.TestCase):
         for wanted in ([], ["C"], ["B", "B"], ["Z"], ["C", "B", "A"]):
             with self.subTest(wanted=wanted):
                 self.assertEqual(sorted(self.arrange(shelves, wanted)), ["A", "B", "B", "C"])
+
+
+class ColoursThatCarryAlpha(unittest.TestCase):
+    """Eight digit colours are read as alpha first, and that bit me.
+
+    Qt reads #AARRGGBB, so a value written as black with an alpha suffix,
+    #000000e0, is a fully transparent blue instead. The duration badge was
+    drawn on nothing at all in every theme because of it.
+    """
+
+    def test_every_shipped_badge_background_is_actually_opaque(self) -> None:
+        from PySide6.QtGui import QColor
+
+        from weave import themes
+
+        shipped = [themes.load_file(path)
+                   for path in sorted(themes.builtin_dir().glob("*.toml"))]
+        self.assertTrue(shipped, "no themes are shipped at all")
+        for theme in shipped:
+            with self.subTest(theme=theme.name):
+                colour = QColor(theme.colors["badgeBackground"])
+                self.assertTrue(colour.isValid())
+                self.assertGreater(colour.alpha(), 128,
+                                   "the badge needs a plate behind the text")
+
+    def test_the_colours_in_code_are_the_same(self) -> None:
+        from PySide6.QtGui import QColor
+
+        from weave import themes
+
+        colour = QColor(themes.FALLBACK["badgeBackground"])
+        self.assertGreater(colour.alpha(), 128)

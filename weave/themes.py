@@ -32,11 +32,15 @@ ROLES = (
 
 # Kept in code as well as in dark.toml, so a broken or missing set of files
 # cannot leave the interface with no colours at all.
+#
+# A colour with eight digits is read as #AARRGGBB, alpha first. Written the
+# other way round it is not a translucent black but a transparent blue, which
+# is how the badge behind a duration came to be drawn on nothing at all.
 FALLBACK: dict[str, str] = {
     "background": "#0f1115", "surface": "#171a21", "surfaceRaised": "#1f2430",
     "border": "#2a3040", "text": "#e7eaf0", "textMuted": "#98a0b3",
     "accent": "#7c5cff", "accentHover": "#9a80ff", "live": "#ff4d4f",
-    "progress": "#ff3b30", "watchedDim": "#5a6072", "badgeBackground": "#000000e0",
+    "progress": "#ff3b30", "watchedDim": "#5a6072", "badgeBackground": "#e0000000",
     "badgeText": "#f2f4f8", "error": "#ffb020", "twitch": "#9146ff",
     "youtube": "#ff3d3d",
 }

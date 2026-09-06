@@ -949,6 +949,8 @@ ApplicationWindow {
                 isLive: model.isLive
                 isUpcoming: model.isUpcoming
                 scheduledText: model.scheduledText
+                // Where a press already listens, the headphone offers nothing.
+                canListen: !App.pressIsMusic
                 progress: model.progress
                 onPlayRequested: App.play(model.key)
                 onListenRequested: App.playAudio(model.key)
@@ -1048,6 +1050,11 @@ ApplicationWindow {
         MenuItem {
             text: "Open the channel"
             onTriggered: { App.openChannel(root.menuChannelKey); videoMenu.dismiss() }
+        }
+        MenuItem {
+            objectName: "copyLinkEntry"
+            text: "Copy the address"
+            onTriggered: { App.copyLink(root.menuKey); videoMenu.dismiss() }
         }
         MenuItem {
             text: "Groups for this channel"
