@@ -22,6 +22,10 @@ music = ["ytmusicapi>=1.10"]
 
 [project.scripts]
 weave = "weave.__main__:main"
+# TeX Live ships a program called weave too, its literate programming tool.
+# Whichever of the two comes first on the path wins, and that is not something
+# an install can decide, so this second name is always this program.
+weave-app = "weave.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/Tobias2909/Weave"

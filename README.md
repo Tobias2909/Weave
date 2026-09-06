@@ -513,6 +513,13 @@ Nothing outside your home directory is touched and nothing needs root. Use
 the entry names your interpreter and the clone, so the menu launches the same
 thing you launch by hand.
 
+A word about the name. TeX Live ships a program called weave as well, its
+literate programming tool, so on a machine carrying both, whichever comes
+first on your path wins. That is why this one also installs as `weave-app`,
+which is always this program, and why `python -m weave` always works. The menu
+entry names your interpreter rather than either command, so it is never
+affected.
+
 ## Use
 
 Add a channel, then refresh.

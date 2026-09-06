@@ -46,6 +46,20 @@ class Shipped(unittest.TestCase):
         self.assertEqual(work_dir, str(root))
 
 
+class TheCommandName(unittest.TestCase):
+    """TeX Live owns a program called weave, so the name is not ours alone."""
+
+    def test_the_package_offers_a_name_that_cannot_collide(self):
+        import tomllib
+
+        root = desktop.SHARE_DIR.parent.parent
+        if not (root / "pyproject.toml").is_file():
+            self.skipTest("not running from a clone")
+        scripts = tomllib.loads((root / "pyproject.toml").read_text())["project"]["scripts"]
+        self.assertEqual(scripts["weave"], "weave.__main__:main")
+        self.assertEqual(scripts["weave-app"], "weave.__main__:main")
+
+
 class Installing(unittest.TestCase):
     def setUp(self):
         self._temp = tempfile.TemporaryDirectory()
