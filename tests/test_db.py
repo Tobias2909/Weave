@@ -785,6 +785,24 @@ class Playlists(DatabaseCase):
         self.db.replace_playlist_items("PL1", self.items("aaaaaaaaaaa", "bbbbbbbbbbb"))
         self.assertEqual(self.db.playlists()[0]["items"], 2)
 
+    def test_a_playlist_starts_with_nothing_skipped(self):
+        self.db.replace_playlists([{"ext_id": "PL1", "title": "One"}])
+        self.assertEqual(self.db.playlist("PL1")["skipped"], 0)
+
+    def test_the_skipped_count_is_kept_with_the_playlist(self):
+        # A private or a deleted entry never becomes a row at all, so the
+        # count travels alongside the fetch rather than being derivable from
+        # the items table afterwards.
+        self.db.replace_playlists([{"ext_id": "PL1", "title": "One"}])
+        self.db.replace_playlist_items("PL1", self.items("aaaaaaaaaaa"), skipped=3)
+        self.assertEqual(self.db.playlist("PL1")["skipped"], 3)
+
+    def test_reading_the_contents_again_replaces_the_skipped_count(self):
+        self.db.replace_playlists([{"ext_id": "PL1", "title": "One"}])
+        self.db.replace_playlist_items("PL1", self.items("aaaaaaaaaaa"), skipped=2)
+        self.db.replace_playlist_items("PL1", self.items("aaaaaaaaaaa"), skipped=0)
+        self.assertEqual(self.db.playlist("PL1")["skipped"], 0)
+
 
 class LiveFreshness(DatabaseCase):
     """A live bar that lies is worse than an empty one."""

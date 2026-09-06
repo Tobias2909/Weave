@@ -829,6 +829,26 @@ ApplicationWindow {
         model: feedModel
         cacheBuffer: 800
 
+        // A private or a deleted entry never reaches the grid as a card, so
+        // this is the only place either is mentioned at all. It sits after
+        // the last row rather than always on screen, since it only matters
+        // once you have scrolled far enough to wonder where a video went.
+        footer: Component {
+            Item {
+                width: grid.width
+                height: App.playlistSkippedText.length > 0 ? 34 : 0
+                visible: App.playlistSkippedText.length > 0
+
+                Label {
+                    anchors.centerIn: parent
+                    horizontalAlignment: Text.AlignHCenter
+                    color: Theme.colors.textMuted
+                    font.pixelSize: 13
+                    text: App.playlistSkippedText
+                }
+            }
+        }
+
         // Asking only once the bottom is reached leaves the reader sitting at
         // the end while the next page is fetched, so ask about two rows early
         // and the rows are usually in place before they are reached. The bound

@@ -174,11 +174,17 @@ class WorkerRuns(unittest.TestCase):
     def test_playlist_items_fetcher(self):
         self.db.replace_playlists([{"ext_id": "PL1", "title": "One"}])
         self.patch(poller.playlist_source, "fetch_items",
-                   lambda *a, **k: [poller.playlist_source.PlaylistItem(
-                       "aaaaaaaaaaa", "In a playlist", "Someone", "UC9", 60, "t")])
+                   lambda *a, **k: ([poller.playlist_source.PlaylistItem(
+                       "aaaaaaaaaaa", "In a playlist", "Someone", "UC9", 60, "t")], 0))
         self.run_worker(poller.PlaylistItemsFetcher(self.db, self.cfg, "PL1"))
         self.assertEqual([i["title"] for i in self.db.playlist_items("PL1")],
                          ["In a playlist"])
+
+    def test_playlist_items_fetcher_stores_the_skipped_count(self):
+        self.db.replace_playlists([{"ext_id": "PL1", "title": "One"}])
+        self.patch(poller.playlist_source, "fetch_items", lambda *a, **k: ([], 2))
+        self.run_worker(poller.PlaylistItemsFetcher(self.db, self.cfg, "PL1"))
+        self.assertEqual(self.db.playlist("PL1")["skipped"], 2)
 
     def test_search_fetcher(self):
         got = []

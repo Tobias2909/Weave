@@ -1328,11 +1328,19 @@ class Database:
 
     def playlist(self, playlist_id: str) -> dict | None:
         row = self.conn.execute(
-            "SELECT ext_id, title, items_at FROM playlists WHERE ext_id=?",
+            "SELECT ext_id, title, items_at, skipped FROM playlists WHERE ext_id=?",
             (playlist_id,)).fetchone()
         return dict(row) if row else None
 
-    def replace_playlist_items(self, playlist_id: str, rows: list[dict]) -> int:
+    def replace_playlist_items(self, playlist_id: str, rows: list[dict],
+                               skipped: int = 0) -> int:
+        """Swap in one playlist's videos.
+
+        `skipped` is how many rows the fetch itself already left out, a video
+        gone private or deleted, YouTube's own placeholder rather than an
+        error. Kept on the playlist itself rather than counted from the rows
+        here, since by the time they reach this call they are already gone.
+        """
         with self.conn as conn:
             conn.execute("DELETE FROM playlist_items WHERE playlist_id=?", (playlist_id,))
             conn.executemany(
@@ -1346,8 +1354,8 @@ class Database:
                   index)
                  for index, row in enumerate(rows)],
             )
-            conn.execute("UPDATE playlists SET items_at=? WHERE ext_id=?",
-                         (int(time.time()), playlist_id))
+            conn.execute("UPDATE playlists SET items_at=?, skipped=? WHERE ext_id=?",
+                         (int(time.time()), skipped, playlist_id))
         return len(rows)
 
     def playlist_items(self, playlist_id: str, limit: int = 500) -> list[sqlite3.Row]:

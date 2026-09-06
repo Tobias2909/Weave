@@ -24,7 +24,7 @@ from ..config import Config
 from ..cookies import args as cookie_args
 from ..net import Throttle
 from . import ytdlp
-from .flatlist import APPROXIMATE_DATES, FIELDS, FlatVideo, parse
+from .flatlist import APPROXIMATE_DATES, FIELDS, FlatVideo, is_unavailable, parse
 
 FEED_PLAYLISTS = "https://www.youtube.com/feed/playlists"
 PLAYLIST_URL = "https://www.youtube.com/playlist?list={playlist_id}"
@@ -39,7 +39,20 @@ ITEM_FIELDS = FIELDS
 # A playlist entry is the same thing a recommendation and a search result are,
 # so it is read by the same parser.
 PlaylistItem = FlatVideo
-parse_items = parse
+
+
+def parse_items(text: str) -> tuple[list[PlaylistItem], int]:
+    """A playlist's rows, with the ones YouTube itself will not resolve
+    counted and left out rather than shown as a video with nothing behind it.
+
+    There is nothing this app, or YouTube's own apps, can do about a private
+    or a deleted entry, so it is not treated as an error. It is just worth
+    saying somewhere that it happened, which is why the count travels with
+    the list instead of being thrown away here.
+    """
+    found = parse(text)
+    kept = [item for item in found if not is_unavailable(item)]
+    return kept, len(found) - len(kept)
 
 
 class PlaylistError(RuntimeError):
@@ -89,7 +102,7 @@ def fetch_list(cfg: Config, limit: int = 100, throttle: Throttle | None = None,
 
 def fetch_items(cfg: Config, playlist_id: str, limit: int = 300,
                 throttle: Throttle | None = None, timeout: float = 300.0,
-                cancel: threading.Event | None = None) -> list[PlaylistItem]:
+                cancel: threading.Event | None = None) -> tuple[list[PlaylistItem], int]:
     command = [
         "yt-dlp", "--no-warnings", "--flat-playlist",
         *cookie_args(cfg), *APPROXIMATE_DATES,
@@ -98,9 +111,11 @@ def fetch_items(cfg: Config, playlist_id: str, limit: int = 300,
         PLAYLIST_URL.format(playlist_id=playlist_id),
     ]
     result = ytdlp.run(command, PlaylistError, "the playlist", throttle, cancel, timeout)
-    found = parse_items(result.stdout)
+    found, skipped = parse_items(result.stdout)
     # An empty playlist is a real thing and not a failure, so a clean run that
     # simply had nothing in it is reported as nothing rather than as a problem.
-    if found or not ytdlp.complained(result):
-        return found
+    # A playlist that is nothing but private or deleted entries counts as
+    # having found something too, for the same reason.
+    if found or skipped or not ytdlp.complained(result):
+        return found, skipped
     raise ytdlp.blame(result, PlaylistError, "the playlist")

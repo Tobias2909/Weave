@@ -492,9 +492,9 @@ class PlaylistItemsFetcher(Worker):
     def run(self) -> None:
         _spend(self._db, self._cfg, BROWSE)
         try:
-            items = playlist_source.fetch_items(self._cfg, self._playlist_id,
-                                                throttle=self._throttle,
-                                                cancel=self._cancel)
+            items, skipped = playlist_source.fetch_items(self._cfg, self._playlist_id,
+                                                         throttle=self._throttle,
+                                                         cancel=self._cancel)
         except ProcessCancelled:
             return
         except playlist_source.PlaylistError as exc:
@@ -502,7 +502,7 @@ class PlaylistItemsFetcher(Worker):
             self.failed.emit(self._playlist_id, str(exc))
             return
         count = self._db.replace_playlist_items(
-            self._playlist_id, [flatlist.as_row(item) for item in items])
+            self._playlist_id, [flatlist.as_row(item) for item in items], skipped)
         self._db.close()
         self.ready.emit(self._playlist_id, count)
 

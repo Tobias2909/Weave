@@ -6,9 +6,14 @@ tab separated, because a title can contain very nearly anything else.
 
 Two things worth keeping in mind about these lists. They mix in rows that are
 not videos at all, radio playlists whose id is thirteen characters and whose
-every other field is NA, and they carry rows for videos that have been deleted,
-which come back with no title. Both are dropped here rather than in each
-caller.
+every other field is NA, and dropped here rather than in each caller.
+
+A playlist adds a third case a search or a recommendation never produces: a
+video the owner made private, or one that no longer exists. Both keep a real
+id and every other field goes NA, but the title is not blank, it is YouTube's
+own placeholder text. That is a real row, not junk, so it is named here
+rather than dropped, and left to the caller that knows what a playlist is
+supposed to do with it.
 """
 
 from __future__ import annotations
@@ -38,6 +43,17 @@ class FlatVideo:
     thumbnail_url: str | None = None
     views: int | None = None
     published_at: int | None = None
+
+
+# The exact titles YouTube substitutes for a playlist entry it will not
+# resolve. Measured against a real playlist rather than assumed: both come
+# back with a valid video id, no channel, no thumbnail, and this text as the
+# whole title.
+UNAVAILABLE_TITLES = frozenset({"[Private video]", "[Deleted video]"})
+
+
+def is_unavailable(item: FlatVideo) -> bool:
+    return item.title in UNAVAILABLE_TITLES
 
 
 def optional(text: str) -> str | None:

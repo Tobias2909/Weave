@@ -101,6 +101,7 @@ class Bridge(QObject):
     emptyHintChanged = Signal()
     groupsChanged = Signal()
     playlistsChanged = Signal()
+    playlistSkippedChanged = Signal()
     noticeChanged = Signal()
     searchEnded = Signal()
     checksChanged = Signal()
@@ -298,6 +299,21 @@ class Bridge(QObject):
             "platform": found.get("platform", "youtube"),
         }
 
+    def _get_playlist_skipped_text(self) -> str:
+        """A private or a deleted entry is left off the grid rather than shown
+        as a broken card, since there is nothing behind either one to play.
+        Said once here instead, for the foot of the list, pre-formatted since
+        the QML side never builds sentences of its own."""
+        if self._view_kind != PLAYLIST or not self._view_playlist:
+            return ""
+        count = int((self._db.playlist(self._view_playlist) or {}).get("skipped") or 0)
+        if count <= 0:
+            return ""
+        if count == 1:
+            return "1 video in this playlist is private or has been deleted, and is left out."
+        return (f"{count} videos in this playlist are private or have been deleted, "
+                "and are left out.")
+
     def _get_empty_hint(self) -> str:
         """What to say when the grid is empty. There are several different
         reasons for that and they need different answers."""
@@ -362,6 +378,8 @@ class Bridge(QObject):
     hideWatched = Property(bool, _get_hide_watched, notify=hideWatchedChanged)
     problems = Property("QVariantList", _get_problems, notify=problemsChanged)
     emptyHint = Property(str, _get_empty_hint, notify=emptyHintChanged)
+    playlistSkippedText = Property(str, _get_playlist_skipped_text,
+                                   notify=playlistSkippedChanged)
     groups = Property("QVariantList", _get_groups, notify=groupsChanged)
     boxes = Property("QVariantList", _get_boxes, notify=boxesChanged)
     notice = Property(str, lambda self: self._notice, notify=noticeChanged)
@@ -639,6 +657,10 @@ class Bridge(QObject):
 
     @Slot()
     def reload(self) -> None:
+        # Fired unconditionally, not only from the playlist branch below, so
+        # the foot of the list clears the moment the view moves on rather than
+        # keeping a stale count from whichever playlist was open before.
+        self.playlistSkippedChanged.emit()
         # A channel page and a box both ignore the hide watched toggle. The
         # channel page is meant to show everything that channel has, and a box
         # was hand picked, so hiding half of it would be surprising.

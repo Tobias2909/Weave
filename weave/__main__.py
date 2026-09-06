@@ -250,13 +250,15 @@ def _cmd_playlists(args) -> int:
             return 1
         budget.spend("browse")
         try:
-            items = playlist_source.fetch_items(cfg, found["ext_id"], args.limit, throttle)
+            items, skipped = playlist_source.fetch_items(cfg, found["ext_id"], args.limit,
+                                                          throttle)
         except playlist_source.PlaylistError as exc:
             print(exc, file=sys.stderr)
             return 1
         db.replace_playlist_items(found["ext_id"],
-                                  [flatlist.as_row(item) for item in items])
-        print(f"{found['title']}, {len(items)} videos")
+                                  [flatlist.as_row(item) for item in items], skipped)
+        print(f"{found['title']}, {len(items)} videos"
+              + (f", {skipped} private or deleted skipped" if skipped else ""))
         for row in db.playlist_items(found["ext_id"]):
             print(f"  {row['ext_id']}  {(row['channel_title'] or '')[:22]:<22} {row['title'][:48]}")
         return 0
