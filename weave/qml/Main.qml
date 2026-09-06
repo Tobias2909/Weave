@@ -755,7 +755,10 @@ ApplicationWindow {
         anchors.topMargin: liveBar.visible ? 0 : banner.height
         info: App.channelInfo
         visible: App.viewKind === "channel"
-        onCloseRequested: App.selectGroup(-1)
+        // Walk the history if there is any, so the button does what its
+        // label promises. Falling back to the feed keeps it working on the
+        // very first view, where there is nothing behind it yet.
+        onCloseRequested: App.canGoBack ? App.goBack() : App.selectGroup(-1)
         onGroupsRequested: root.askForGroups(App.channelInfo.key)
     }
 

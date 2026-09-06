@@ -13,8 +13,23 @@ Rectangle {
     // Only while the bar would otherwise be blank. On the repeat checks there
     // are already cards up, and swapping them for a line about checking would
     // make the bar flicker every ninety seconds for no gain.
-    readonly property bool checking: App.liveChecking && !hasStreams
+    //
+    // A check can answer in a fraction of a second, which put the line on
+    // screen for too short a time to read, so once it appears it stays for a
+    // moment even if the answer has already arrived.
+    property bool held: false
+    readonly property bool working: App.liveChecking && !hasStreams
+                                    && !App.twitchNeedsLogin
+    readonly property bool checking: (working || held) && !hasStreams
                                      && !App.twitchNeedsLogin
+
+    onWorkingChanged: if (working) { bar.held = true; holdOn.restart() }
+
+    Timer {
+        id: holdOn
+        interval: 1500
+        onTriggered: bar.held = false
+    }
     readonly property bool showing: hasStreams || App.twitchNeedsLogin || checking
     readonly property bool expanded: !App.liveCollapsed
 

@@ -93,6 +93,16 @@ class History:
     def current(self) -> Entry:
         return self._entries[self._index]
 
+    def previous(self) -> Entry | None:
+        """Where a step back would land, without taking it.
+
+        What a back button is allowed to call itself, so that the label can
+        never claim somewhere the button does not actually go.
+        """
+        if self._index <= 0:
+            return None
+        return self._entries[self._index - 1]
+
     def record(self, view: View, search_text: str = "") -> bool:
         """A view has been landed on. True when that counted as a step.
 

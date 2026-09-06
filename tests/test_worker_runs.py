@@ -401,6 +401,48 @@ class WorkerRuns(unittest.TestCase):
         self.assertEqual(spenders - run_here, set())
         self.assertTrue(spenders, "the pattern no longer matches the workers")
 
+    def test_the_bar_says_it_is_working_before_the_check_even_starts(self):
+        """A Twitch answer arrives in a fraction of a second, so a flag raised
+        only while the request is in flight was never on screen long enough to
+        read. It goes up when the check is promised instead, and a check that
+        never happens must not leave it up for ever.
+        """
+        from weave.ui.bridge import Bridge
+
+        class Recorder:
+            def emit(self, *_a):
+                pass
+
+        bridge = Bridge.__new__(Bridge)
+        bridge._live = None
+        bridge._live_checking = False
+        bridge.liveChanged = Recorder()
+
+        Bridge.expectLiveCheck(bridge)
+        self.assertTrue(bridge._live_checking)
+
+        # Nothing ever ran, so the guard puts it back down.
+        Bridge._live_check_gave_up(bridge)
+        self.assertFalse(bridge._live_checking)
+
+    def test_a_running_check_is_left_alone_by_the_guard(self):
+        from weave.ui.bridge import Bridge
+
+        class Recorder:
+            def emit(self, *_a):
+                pass
+
+        class Running:
+            def isRunning(self):
+                return True
+
+        bridge = Bridge.__new__(Bridge)
+        bridge._live = Running()
+        bridge._live_checking = True
+        bridge.liveChanged = Recorder()
+        Bridge._live_check_gave_up(bridge)
+        self.assertTrue(bridge._live_checking)
+
     def test_the_live_check_says_it_is_working_and_stops_saying_so(self):
         """The bar sits empty until the first check comes back, so it says it
         is checking in the meantime. A check ends three ways and can also be

@@ -793,6 +793,41 @@ class Bridge(QObject):
         if kind == PLAYLIST:
             self._fetch_playlist_items(playlist_id)
 
+    def _name_of_view(self, view) -> str:
+        """What to call a view in a sentence, from the record of it.
+
+        Read from the history rather than written next to each button, since a
+        label that names a fixed parent goes wrong the moment a view gains a
+        second way in, which is exactly what happened with the music page.
+        """
+        kind, view_id, channel_key, playlist_id, _music = view
+        if kind == GROUP:
+            found = next((g for g in self._db.groups() if g["id"] == view_id), None)
+            return found["name"] if found else "the group"
+        if kind == BOX:
+            found = next((box for box in self._db.boxes() if box["id"] == view_id), None)
+            return found["name"] if found else "the box"
+        if kind == PLAYLIST:
+            found = self._db.playlist(playlist_id) if playlist_id else None
+            return found["title"] if found else "the playlist"
+        if kind == CHANNEL:
+            found = self._db.channel(channel_key) if channel_key else None
+            return (found["title"] if found and found["title"] else "the channel")
+        return {
+            ALL: "the feed", MUSIC: "music", HISTORY: "history",
+            RECOMMENDED: "suggestions", SEARCH: "the search",
+            SETTINGS: "settings", DEBUG: "how things are",
+        }.get(kind, "the feed")
+
+    def _get_back_label(self) -> str:
+        """What the back button in a view should call itself."""
+        entry = self._nav.previous()
+        if entry is None:
+            return ""
+        return f"Back to {self._name_of_view(entry.view)}"
+
+    backLabel = Property(str, _get_back_label, notify=navChanged)
+
     @Slot()
     def goBack(self) -> None:
         """One view back, the way a browser's back button walks."""
@@ -1999,6 +2034,25 @@ class Bridge(QObject):
         self._twitch.finished_login.connect(self._on_twitch_done)
         self._twitch.failed.connect(self._on_twitch_failed)
         self._launch(self._twitch)
+
+    @Slot()
+    def expectLiveCheck(self) -> None:
+        """Say the bar is working before the first check has even begun.
+
+        The first check is scheduled a moment after the window opens and a
+        Twitch answer arrives in a fraction of a second, so a flag raised only
+        while the request is in flight was on screen too briefly to read. This
+        raises it at the point the check is promised instead. Every end of the
+        check lowers it again, and a check that never starts at all is caught
+        by the guard below.
+        """
+        self._set_live_checking(True)
+        QTimer.singleShot(15000, self._live_check_gave_up)
+
+    def _live_check_gave_up(self) -> None:
+        """Nothing may leave the bar saying it is working for ever."""
+        if self._live is None or not self._live.isRunning():
+            self._set_live_checking(False)
 
     @Slot()
     def refreshLive(self) -> None:

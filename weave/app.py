@@ -146,6 +146,9 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
 
     # Refresh once the window has actually painted.
     QTimer.singleShot(400, bridge.poll)
+    # The bar says it is working from the first frame, rather than from
+    # the moment the request goes out a breath later.
+    bridge.expectLiveCheck()
     QTimer.singleShot(600, bridge.refreshLive)
 
     def shutdown() -> None:

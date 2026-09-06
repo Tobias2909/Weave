@@ -105,7 +105,9 @@ Item {
                 onClicked: header.groupsRequested()
             }
             FlatButton {
-                text: "Back to the feed"
+                // Where a step back actually lands, since a channel page is
+                // opened from the feed, a group, a box and a search alike.
+                text: App.backLabel !== "" ? App.backLabel : "Back to the feed"
                 onClicked: header.closeRequested()
             }
         }

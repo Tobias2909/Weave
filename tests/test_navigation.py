@@ -691,5 +691,49 @@ class TheMouseButtons(unittest.TestCase):
         self.assertEqual(bridge.calls, [])
 
 
+class WhatTheBackButtonCallsItself(unittest.TestCase):
+    """The label is read from the record, never written beside a button.
+
+    A hand written label names one parent, and a view with a second way in
+    then makes it a lie, which is exactly how the music page came to offer
+    a way back to the suggestions.
+    """
+
+    def test_the_first_view_has_nowhere_to_go_back_to(self) -> None:
+        from weave.ui.navigation import History
+
+        record = History(("all", -1, "", "", None))
+        self.assertIsNone(record.previous())
+
+    def test_it_names_the_view_a_step_back_lands_on(self) -> None:
+        from weave.ui.navigation import History
+
+        record = History(("all", -1, "", "", None))
+        record.record(("music", -1, "", "", None))
+        record.record(("history", -1, "", "", None))
+        self.assertEqual(record.previous().view[0], "music")
+
+    def test_looking_does_not_move_the_finger(self) -> None:
+        from weave.ui.navigation import History
+
+        record = History(("all", -1, "", "", None))
+        record.record(("music", -1, "", "", None))
+        record.previous()
+        record.previous()
+        self.assertEqual(record.current().view[0], "music")
+        self.assertEqual(record.previous().view[0], "all")
+
+    def test_after_walking_back_it_names_the_one_before_that(self) -> None:
+        from weave.ui.navigation import History
+
+        record = History(("all", -1, "", "", None))
+        record.record(("music", -1, "", "", None))
+        record.record(("history", -1, "", "", None))
+        record.back()
+        self.assertEqual(record.previous().view[0], "all")
+        record.back()
+        self.assertIsNone(record.previous())
+
+
 if __name__ == "__main__":
     unittest.main()
