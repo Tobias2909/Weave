@@ -42,7 +42,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QT_QUICK_BACKEND", "software")
 
 from PySide6.QtCore import QCoreApplication, QEventLoop, QMetaObject, QObject, QTimer  # noqa: E402
+from PySide6.QtGui import QColor, QImage  # noqa: E402
 from PySide6.QtQml import QQmlProperty  # noqa: E402
+
+# A colour nothing in any theme uses, so finding it in a picture of the window
+# can only mean the seeded artwork was drawn.
+ARTWORK = (255, 0, 255)
 
 
 # ---- helpers ---------------------------------------------------------------
@@ -96,6 +101,78 @@ def screenshot(window, path: str) -> bool:
     return bool(image.save(path))
 
 
+def item_named(root, name: str):
+    """A named item anywhere below this one, walking the visual tree.
+
+    A Repeater's delegates are not QObject children of anything, so findChild
+    cannot see them or anything inside them. The tree they are in is the
+    visual one, which is what this walks.
+    """
+    if root is None:
+        return None
+    for child in root.childItems():
+        if QQmlProperty.read(child, "objectName") == name:
+            return child
+        found = item_named(child, name)
+        if found is not None:
+            return found
+    return None
+
+
+def visible_children(item) -> list:
+    """What a positioner has actually laid out, which is where a Repeater puts
+    its delegates. The Repeater itself is a child with no size, and is left out
+    along with anything the positioner skipped.
+    """
+    if item is None:
+        return []
+    return [child for child in item.childItems()
+            if QQmlProperty.read(child, "visible")
+            and QQmlProperty.read(child, "width") > 0
+            and QQmlProperty.read(child, "height") > 0]
+
+
+def source_of(item) -> str:
+    """An image source as the string it was given. Read back it is a QUrl,
+    whose repr is not the address."""
+    value = QQmlProperty.read(item, "source")
+    return value.toString() if hasattr(value, "toString") else str(value or "")
+
+
+def colour_count(image: QImage, rgb: tuple[int, int, int], tolerance: int = 24) -> int:
+    """How many pixels of a picture are about this colour.
+
+    A missing picture is exactly the thing being guarded against, and a source
+    string that reads correctly proves only that the binding ran. This looks at
+    what was actually painted.
+    """
+    if image is None or image.isNull():
+        return 0
+    small = image.convertToFormat(QImage.Format.Format_RGB32)
+    want = QColor(*rgb)
+    found = 0
+    for y in range(0, small.height(), 2):
+        for x in range(0, small.width(), 2):
+            pixel = QColor(small.pixel(x, y))
+            if (abs(pixel.red() - want.red()) <= tolerance
+                    and abs(pixel.green() - want.green()) <= tolerance
+                    and abs(pixel.blue() - want.blue()) <= tolerance):
+                found += 1
+    return found
+
+
+def artwork_file() -> str:
+    """A small picture on disk, so the walk has something real to draw without
+    reaching the network. Returned as a URL, which is what QML wants."""
+    from weave import paths
+
+    path = paths.CACHE_DIR / "drive-artwork.png"
+    image = QImage(16, 16, QImage.Format.Format_RGB32)
+    image.fill(QColor(*ARTWORK))
+    image.save(str(path))
+    return path.as_uri()
+
+
 class Warnings:
     """Every warning the QML engine raises while the window is driven."""
 
@@ -132,7 +209,10 @@ def go_offline() -> None:
 
 def seed() -> None:
     """A channel with a few videos, so the grid and the menus have something
-    to act on."""
+    to act on, and a music section wider than the two rows it is shown in."""
+    import json
+    import time
+
     from weave import paths
     from weave.db import Database, VideoRow
 
@@ -144,6 +224,18 @@ def seed() -> None:
                  published_at=1_700_000_000 + i, duration_s=600 + i)
         for i in range(6)
     ])
+    # Written where the music view reads what was on the shelves last time, so
+    # the sections are there without a request. Forty entries, which is more
+    # than two rows hold at any window width worth drawing, and each with a
+    # picture on disk so a missing one is a fault and not the network.
+    art = artwork_file()
+    db.set_state("music_shelves", json.dumps([{
+        "title": "Listen again",
+        "items": [{"title": f"Track {i}", "subtitle": "Someone",
+                   "videoId": f"smoketrack{i:02d}", "playlistId": f"RDsmoke{i:02d}",
+                   "thumbnail": art} for i in range(40)],
+    }]))
+    db.set_state("music_shelves_at", str(int(time.time())))
     db.close()
 
 
@@ -157,6 +249,90 @@ class Smoke:
 
     def check(self, name: str, ok: bool, detail: str = "") -> None:
         self.checks.append((name, bool(ok), detail))
+
+    def music(self, bridge, window) -> None:
+        """The music page: two rows a section, the page behind them, and a
+        picture everywhere a track is drawn."""
+        bridge.showMusic()
+        settle(0.6)
+        shelves = read(bridge, "musicShelves")
+        total = len(shelves[0]["items"]) if shelves else 0
+        self.check("the music page has its sections", total > 0, f"{total} entries")
+
+        # Two rows, ending in the tile that opens the rest.
+        shelves_area = find(window, "shelfArea")
+        tiles = visible_children(item_named(shelves_area, "shelfRow0"))
+        more = item_named(shelves_area, "seeAll0")
+        self.check("a section is cut to two rows", 0 < len(tiles) < total,
+                   f"{len(tiles)} tiles of {total}")
+        self.check("the two rows end in a See all tile",
+                   more is not None and bool(read(more, "visible")))
+        pictures = [str(read(tile, "picture")) for tile in tiles
+                    if read(tile, "picture") is not None]
+        self.check("the tiles carry a picture", bool(pictures) and all(pictures),
+                   f"{len(pictures)} of {len(tiles)}")
+
+        # The whole section, and a place the mouse buttons walk off again.
+        bridge.openShelf(0)
+        settle(0.5)
+        page = find(window, "shelfPage")
+        shown = visible_children(find(window, "shelfPageFlow"))
+        self.check("See all opens the whole section",
+                   bool(read(page, "visible")) and len(shown) == total,
+                   f"{len(shown)} of {total}")
+        bridge.goBack()
+        settle(0.4)
+        self.check("walking back leaves the section page", not read(page, "visible"))
+
+        # Pressing a song fills the queue and opens nothing. Offline the
+        # station never arrives, which is the point: the decision not to open
+        # a list is taken when the tile is pressed, not when rows land.
+        steps_before = bool(read(bridge, "canGoBack"))
+        bridge.playShelfItem(0, 0)
+        settle(0.4)
+        self.check("pressing a song opens no list",
+                   not read(find(window, "musicResultsList"), "visible")
+                   and read(bridge, "viewKind") == "music")
+        self.check("and takes no step to walk back from",
+                   bool(read(bridge, "canGoBack")) == steps_before)
+
+        # A queue with a picture in it, which is the third place one was lost.
+        art = artwork_file()
+        bridge._audio.play_items([
+            {"key": f"yt:smoketrack{i:02d}", "title": f"Track {i}", "artist": "Someone",
+             "thumbnail": art, "live": False, "url": f"https://example.invalid/{i}"}
+            for i in range(3)])
+        settle(0.5)
+        queued = read(bridge._audio, "queue")
+        self.check("the queue holds the tracks with their pictures",
+                   len(queued) == 3 and all(row["thumbnail"] == art for row in queued),
+                   f"{len(queued)} queued")
+        self.check("the player draws the artwork beside what is playing",
+                   source_of(find(window, "nowPlayingArt")) == art,
+                   source_of(find(window, "nowPlayingArt")))
+
+        # What was painted, rather than what a binding says. A picture that is
+        # bound and never drawn is the fault being guarded against.
+        if self.shot:
+            self.check("music page written", screenshot(window, shot_beside(self.shot, "music")))
+        drawn = colour_count(window.grabWindow(), ARTWORK)
+        self.check("the artwork is on the screen", drawn > 0, f"{drawn} pixels")
+
+        popup = find(window, "upNext")
+        call(popup, "open")
+        settle(0.5)
+        rows = read(find(window, "queuedList"), "count")
+        in_queue = colour_count(window.grabWindow(), ARTWORK)
+        self.check("the queue lists what is coming", rows == 3, f"{rows} rows")
+        self.check("with a picture on every row", in_queue > drawn,
+                   f"{in_queue} pixels against {drawn} with the queue shut")
+        if self.shot:
+            self.check("queue written", screenshot(window, shot_beside(self.shot, "queue")))
+        call(popup, "close")
+        settle(0.3)
+        # Left on the feed, so what follows this starts where it always did.
+        bridge.selectGroup(-1)
+        settle(0.3)
 
     def run(self, engine, bridge, window) -> None:
         self.warnings = Warnings(engine)
@@ -175,6 +351,8 @@ class Smoke:
             self.check(f"{name} view opens", read(bridge, "viewKind") == name)
         bridge.selectGroup(-1)
         settle(0.3)
+
+        self.music(bridge, window)
 
         # A box, then the video menu, whose box entries sit between the
         # separator and the last entry however many entries come above.
@@ -264,6 +442,12 @@ class Smoke:
 
         if self.shot:
             self.check("screenshot written", screenshot(window, self.shot), self.shot)
+
+
+def shot_beside(path: str, suffix: str) -> str:
+    """A second picture next to the one that was asked for."""
+    where = Path(path)
+    return str(where.with_name(f"{where.stem}-{suffix}{where.suffix}"))
 
 
 def boot(walk, hold_s: float = 6.0) -> int:

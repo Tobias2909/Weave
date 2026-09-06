@@ -144,8 +144,19 @@ def client(profile_path: str):
 
 
 def _thumb(item: dict) -> str:
-    thumbs = item.get("thumbnails") or []
-    return str(thumbs[-1].get("url") or "") if thumbs else ""
+    """The largest picture an entry carries.
+
+    Two spellings, because the library's own parsers do not agree. A song from
+    a search, a playlist or a home shelf carries `thumbnails`, while a song
+    from a station carries the same list under `thumbnail`. Reading only the
+    first spelling is what left a station with no pictures at all, in the list,
+    in the queue and beside what was playing.
+    """
+    thumbs = item.get("thumbnails") or item.get("thumbnail") or []
+    if not isinstance(thumbs, list) or not thumbs:
+        return ""
+    largest = thumbs[-1]
+    return str(largest.get("url") or "") if isinstance(largest, dict) else ""
 
 
 def _artist(item: dict) -> str:
@@ -164,7 +175,8 @@ def to_track(item: dict) -> Track | None:
         title=str(item.get("title") or ""),
         artist=_artist(item),
         album=str(album.get("name")) if isinstance(album, dict) else "",
-        duration=str(item.get("duration") or ""),
+        # A station spells the length differently as well.
+        duration=str(item.get("duration") or item.get("length") or ""),
         thumbnail_url=_thumb(item),
     )
 

@@ -33,10 +33,20 @@ CHANNEL = ("channel", -1, "yt:UC1", "", None)
 MUSIC = ("music", -1, "", "", None)
 SEARCH = ("search", -1, "", "", None)
 
-# The two things the music view can be showing besides its shelves.
+# The three things the music view can be showing besides its shelves.
 MIX = MusicList("playlist", "PL1", "A mix")
-STATION = MusicList("radio", "vid1", "A song")
 FOUND = MusicList("search", "otters", "Search results")
+SECTION = MusicList("shelf", "Listen again", "Listen again")
+
+# One section of the shelves, holding one of each kind of tile. A song carries
+# both its own id and the id of the station built from it, which is exactly
+# what tells it apart from a tile that stands for a playlist.
+SHELF = {"title": "Listen again", "items": [
+    {"title": "A song", "subtitle": "Someone", "videoId": "vid1",
+     "playlistId": "RDvid1", "thumbnail": "a picture"},
+    {"title": "A mix", "subtitle": "", "videoId": "", "playlistId": "PL1",
+     "thumbnail": "a picture"},
+]}
 
 
 def in_music(what: MusicList) -> tuple:
@@ -46,6 +56,17 @@ def in_music(what: MusicList) -> tuple:
 def track(name: str) -> dict:
     return {"key": f"yt:{name}", "videoId": name, "title": name, "artist": "",
             "album": "", "duration": 0, "thumbnail": ""}
+
+
+class NoDatabase:
+    """Enough of a database for the sections to be arranged: no saved
+    addresses of its own and no order kept for them."""
+
+    def sources(self):
+        return []
+
+    def get_state(self, name, default=""):
+        return default
 
 
 class Recorder:
@@ -67,7 +88,9 @@ def make_bridge():
     bridge._view_channel, bridge._view_playlist = "", ""
     bridge._search_text = ""
     bridge._search_scope = "stored"
-    bridge._shelves = [1]                    # so entering music fetches nothing
+    bridge._db = NoDatabase()
+    bridge._shelves = [SHELF]                # so entering music fetches nothing
+    bridge._status = ""
     bridge._checks = [1]
     bridge._exhausted = False
     bridge._nav = History(ALL)
@@ -79,6 +102,7 @@ def make_bridge():
     bridge._results_label = ""
     bridge._searching = False
     bridge.viewChanged = Recorder()
+    bridge.statusChanged = Recorder()
     bridge.searchEnded = Recorder()
     bridge.navChanged = Recorder()
     bridge.musicChanged = Recorder()
@@ -453,19 +477,6 @@ class TheMusicPlaces(unittest.TestCase):
         self.assertEqual(bridge._audio.queued, [(2, 1)])
         self.assertEqual([e.view for e in bridge._nav.entries], before)
 
-    def test_a_station_starts_when_pressed_and_not_when_walked_onto(self):
-        from weave.ui.bridge import Bridge
-
-        bridge = make_bridge()
-        Bridge.showMusic(bridge)
-        Bridge._open_music_list(bridge, STATION, autoplay=True)
-        Bridge._on_tracks(bridge, [track("a"), track("b")], "A song", STATION)
-        self.assertEqual(bridge.played, [0], "a station did not start on its own")
-        Bridge.clearResults(bridge)
-        Bridge.goBack(bridge)
-        self.assertEqual(view_of(bridge), in_music(STATION))
-        self.assertEqual(bridge.played, [0], "walking onto a station started it playing")
-
     def test_a_list_that_arrives_after_walking_away_is_held_not_shown(self):
         from weave.ui.bridge import Bridge
 
@@ -479,6 +490,160 @@ class TheMusicPlaces(unittest.TestCase):
         Bridge.goForward(bridge)
         self.assertEqual([row["title"] for row in bridge._results], ["a"])
         self.assertEqual(bridge.fetched, [MIX], "the rows were dropped rather than held")
+
+
+class PressingATile(unittest.TestCase):
+    """What a tile in a section does.
+
+    A song is heard, a playlist is looked at. The first is the change: a
+    pressed song used to open the station it built, which left a list on the
+    screen that nobody asked to read and a step to walk back over.
+    """
+
+    def press(self, bridge, item_index):
+        from weave.ui.bridge import Bridge
+
+        Bridge.showMusic(bridge)
+        bridge.stations = []
+        bridge._play_station = lambda video, label: bridge.stations.append((video, label))
+        before = [e.view for e in bridge._nav.entries]
+        Bridge.playShelfItem(bridge, 0, item_index)
+        return before
+
+    def test_a_song_plays_and_opens_nothing(self):
+        bridge = make_bridge()
+        before = self.press(bridge, 0)
+        self.assertEqual(bridge.stations, [("vid1", "A song")])
+        self.assertEqual(view_of(bridge), MUSIC, "pressing a song opened a list")
+        self.assertEqual(bridge._results, [])
+        self.assertEqual([e.view for e in bridge._nav.entries], before,
+                         "pressing a song left a step to walk back over")
+
+    def test_a_playlist_is_still_opened_to_look_at(self):
+        bridge = make_bridge()
+        self.press(bridge, 1)
+        self.assertEqual(bridge.stations, [])
+        self.assertEqual(view_of(bridge), in_music(MIX))
+        self.assertEqual(bridge.fetched, [MIX])
+
+    def test_a_tile_that_is_not_there_does_nothing(self):
+        bridge = make_bridge()
+        before = self.press(bridge, 9)
+        self.assertEqual(bridge.stations, [])
+        self.assertEqual([e.view for e in bridge._nav.entries], before)
+
+    def test_the_station_reaches_the_queue_with_its_pictures(self):
+        """Where the picture used to be lost. The rows go to the player and
+        not to the view, so this is the only place they are seen."""
+        from weave.ui.bridge import Bridge
+
+        class Audio:
+            def __init__(self):
+                self.queued = []
+
+            def play_items(self, items, start=0):
+                self.queued.append((items, start))
+
+        bridge = make_bridge()
+        bridge._audio = Audio()
+        rows = [dict(track("a"), thumbnail="a picture"),
+                dict(track("b"), thumbnail="another picture")]
+        Bridge._on_station(bridge, rows)
+        items, start = bridge._audio.queued[0]
+        self.assertEqual(start, 0)
+        self.assertEqual([item["thumbnail"] for item in items],
+                         ["a picture", "another picture"])
+        self.assertEqual([item["title"] for item in items], ["a", "b"])
+        self.assertFalse(bridge._searching)
+
+    def test_a_station_that_comes_back_empty_queues_nothing(self):
+        from weave.ui.bridge import Bridge
+
+        bridge = make_bridge()
+        bridge._audio = None
+        Bridge._on_station(bridge, [])
+        self.assertFalse(bridge._searching)
+
+
+class TheSectionPage(unittest.TestCase):
+    """One section shown in full, which is what the tile at the end of the two
+    rows opens. A place, so the mouse buttons walk on and off it, and one that
+    is drawn from what is already held rather than fetched."""
+
+    def open_section(self, bridge):
+        from weave.ui.bridge import Bridge
+
+        Bridge.showMusic(bridge)
+        Bridge.openShelf(bridge, 0)
+
+    def test_opening_a_section_is_a_step_and_asks_for_nothing(self):
+        bridge = make_bridge()
+        self.open_section(bridge)
+        self.assertEqual(view_of(bridge), in_music(SECTION))
+        self.assertEqual([e.view for e in bridge._nav.entries],
+                         [ALL, MUSIC, in_music(SECTION)])
+        self.assertEqual(bridge.fetched, [], "a section was fetched rather than shown")
+
+    def test_the_page_names_the_section_and_holds_all_of_it(self):
+        from weave.ui.bridge import Bridge
+
+        bridge = make_bridge()
+        self.open_section(bridge)
+        page = Bridge._get_shelf_page(bridge)
+        self.assertEqual(page["title"], "Listen again")
+        self.assertEqual(page["index"], 0)
+        self.assertEqual(len(page["items"]), len(SHELF["items"]))
+
+    def test_back_returns_to_the_shelves(self):
+        from weave.ui.bridge import Bridge
+
+        bridge = make_bridge()
+        self.open_section(bridge)
+        Bridge.goBack(bridge)
+        self.assertEqual(view_of(bridge), MUSIC)
+        self.assertEqual(Bridge._get_shelf_page(bridge), {})
+        Bridge.goForward(bridge)
+        self.assertEqual(Bridge._get_shelf_page(bridge)["title"], "Listen again")
+
+    def test_a_section_page_shows_no_track_list(self):
+        from weave.ui.bridge import Bridge
+
+        bridge = make_bridge()
+        Bridge.showMusic(bridge)
+        Bridge._open_music_list(bridge, MIX)
+        Bridge._on_tracks(bridge, [track("a")], "A mix", MIX)
+        Bridge.openShelf(bridge, 0)
+        self.assertEqual(bridge._results, [], "the list stayed under the section page")
+        Bridge.goBack(bridge)
+        self.assertEqual([row["title"] for row in bridge._results], ["a"])
+
+    def test_the_same_section_pressed_twice_is_one_place(self):
+        from weave.ui.bridge import Bridge
+
+        bridge = make_bridge()
+        self.open_section(bridge)
+        Bridge.openShelf(bridge, 0)
+        self.assertEqual([e.view for e in bridge._nav.entries],
+                         [ALL, MUSIC, in_music(SECTION)])
+        self.assertEqual(bridge.fetched, [])
+
+    def test_a_section_that_is_not_there_opens_nothing(self):
+        from weave.ui.bridge import Bridge
+
+        bridge = make_bridge()
+        Bridge.showMusic(bridge)
+        Bridge.openShelf(bridge, 9)
+        self.assertEqual(view_of(bridge), MUSIC)
+
+    def test_a_section_that_has_gone_leaves_an_empty_page(self):
+        """Kept by name, so a page open while the shelves are gathered again
+        follows the section rather than whatever took its place."""
+        from weave.ui.bridge import Bridge
+
+        bridge = make_bridge()
+        self.open_section(bridge)
+        bridge._shelves = [{"title": "Something else", "items": []}]
+        self.assertEqual(Bridge._get_shelf_page(bridge), {})
 
 
 class TheMouseButtons(unittest.TestCase):

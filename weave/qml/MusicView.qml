@@ -7,6 +7,18 @@ import QtQuick.Layouts
 Item {
     id: view
 
+    // A tile and the gap after it. The two row band has to count how many fit
+    // across, so the size lives here rather than being left to each tile.
+    readonly property int tileSize: 132
+    readonly property int tileSpacing: 10
+
+    // The one section opened in full, empty when the page is not on one. The
+    // shelves, one section in full and a track list are the three things this
+    // view shows, and exactly one of them is up at a time.
+    readonly property var openShelf: App.musicShelfPage
+    readonly property var openShelfItems: openShelf.items ? openShelf.items : []
+    readonly property bool onShelfPage: openShelfItems.length > 0
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 14
@@ -59,19 +71,19 @@ Item {
             }
 
             FlatButton {
-                visible: App.musicResults.length > 0
+                visible: App.musicResults.length > 0 || view.onShelfPage
                 text: "Back to recommended"
                 onClicked: { query.text = ""; App.clearResults() }
             }
 
             FlatButton {
-                visible: App.musicResults.length === 0
+                visible: App.musicResults.length === 0 && !view.onShelfPage
                 text: "Refresh"
                 onClicked: App.refreshMusic()
             }
 
             FlatButton {
-                visible: App.musicResults.length === 0
+                visible: App.musicResults.length === 0 && !view.onShelfPage
                 text: "Reset order"
                 onClicked: App.resetShelfOrder()
             }
@@ -81,7 +93,8 @@ Item {
 
         Flickable {
             id: shelfArea
-            visible: App.musicResults.length === 0
+            objectName: "shelfArea"
+            visible: App.musicResults.length === 0 && !view.onShelfPage
             Layout.fillWidth: true
             Layout.fillHeight: true
             contentHeight: shelfColumn.height
@@ -103,6 +116,19 @@ Item {
                         // without colliding with its own index.
                         readonly property int shelfIndex: index
                         readonly property bool saved: modelData.kind === "saved"
+                        // Two rows and no more, so a section stays something
+                        // glanced at rather than a page in its own right. How
+                        // many fit across is worked out rather than assumed,
+                        // since the window is resized and the tiles are not.
+                        readonly property int columns:
+                            Math.max(1, Math.floor((width + view.tileSpacing)
+                                                   / (view.tileSize + view.tileSpacing)))
+                        readonly property int total: modelData.items.length
+                        readonly property bool overflowing: total > columns * 2
+                        // The last place of the two rows belongs to the tile
+                        // that opens the whole section, so what does not fit
+                        // is still reachable rather than quietly gone.
+                        readonly property int shown: overflowing ? columns * 2 - 1 : total
                         Layout.fillWidth: true
                         spacing: 8
 
@@ -139,13 +165,20 @@ Item {
                         }
 
                         Flow {
+                            objectName: "shelfRow" + shelf.shelfIndex
                             Layout.fillWidth: true
-                            spacing: 10
+                            spacing: view.tileSpacing
                             Repeater {
                                 model: shelf.modelData.items
                                 MusicTile {
                                     required property var modelData
                                     required property int index
+                                    // A Flow skips what is not visible, so the
+                                    // rows beyond the second cost a delegate
+                                    // and no space.
+                                    visible: index < shelf.shown
+                                    width: view.tileSize
+                                    height: view.tileSize
                                     title: modelData.title
                                     subtitle: modelData.subtitle
                                     picture: modelData.thumbnail
@@ -153,6 +186,44 @@ Item {
                                     onChosen: shelf.saved ? App.playSource(modelData.sourceId)
                                                           : App.playShelfItem(shelf.shelfIndex, index)
                                     onRemoveRequested: App.removeSource(modelData.sourceId)
+                                }
+                            }
+
+                            Rectangle {
+                                objectName: "seeAll" + shelf.shelfIndex
+                                visible: shelf.overflowing
+                                width: view.tileSize
+                                height: view.tileSize
+                                radius: 8
+                                color: seeAllHover.hovered ? Theme.colors.surfaceRaised
+                                                           : Theme.colors.surface
+                                border.width: 1
+                                border.color: seeAllHover.hovered ? Theme.colors.accent
+                                                                  : Theme.colors.border
+
+                                HoverHandler { id: seeAllHover }
+
+                                Column {
+                                    anchors.centerIn: parent
+                                    spacing: 3
+                                    Label {
+                                        anchors.horizontalCenter: parent.horizontalCenter
+                                        text: "See all"
+                                        color: Theme.colors.text
+                                        font.pixelSize: 12
+                                        font.weight: Font.DemiBold
+                                    }
+                                    Label {
+                                        anchors.horizontalCenter: parent.horizontalCenter
+                                        text: shelf.total + " in all"
+                                        color: Theme.colors.textMuted
+                                        font.pixelSize: 10
+                                    }
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    onClicked: App.openShelf(shelf.shelfIndex)
                                 }
                             }
                         }
@@ -169,6 +240,64 @@ Item {
                 }
 
                 Item { Layout.preferredHeight: 4 }
+            }
+        }
+
+        // ---- one section in full -----------------------------------------
+
+        RowLayout {
+            visible: view.onShelfPage
+            Layout.fillWidth: true
+            Label {
+                text: (view.openShelf.title ? view.openShelf.title : "").toUpperCase()
+                color: Theme.colors.textMuted
+                font.pixelSize: 10
+                font.letterSpacing: 1.2
+                font.weight: Font.DemiBold
+            }
+            Item { Layout.fillWidth: true }
+            Label {
+                text: view.openShelfItems.length + " entries"
+                color: Theme.colors.textMuted
+                font.pixelSize: 11
+            }
+        }
+
+        Flickable {
+            id: shelfPageArea
+            objectName: "shelfPage"
+            visible: view.onShelfPage
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            contentHeight: shelfPageFlow.height
+            clip: true
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+            Flow {
+                id: shelfPageFlow
+                objectName: "shelfPageFlow"
+                width: shelfPageArea.width
+                spacing: view.tileSpacing
+
+                Repeater {
+                    model: view.openShelfItems
+                    MusicTile {
+                        required property var modelData
+                        required property int index
+                        width: view.tileSize
+                        height: view.tileSize
+                        title: modelData.title
+                        subtitle: modelData.subtitle
+                        picture: modelData.thumbnail
+                        removable: view.openShelf.kind === "saved"
+                        // Played through the section it belongs to, so a tile
+                        // does the same thing here as it does in the two rows.
+                        onChosen: view.openShelf.kind === "saved"
+                                  ? App.playSource(modelData.sourceId)
+                                  : App.playShelfItem(view.openShelf.index, index)
+                        onRemoveRequested: App.removeSource(modelData.sourceId)
+                    }
+                }
             }
         }
 
@@ -192,6 +321,7 @@ Item {
 
         ListView {
             id: results
+            objectName: "musicResultsList"
             visible: App.musicResults.length > 0
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -304,5 +434,6 @@ Item {
     }
 
     SmoothScroll { flickable: shelfArea }
+    SmoothScroll { flickable: shelfPageArea }
     SmoothScroll { flickable: results }
 }

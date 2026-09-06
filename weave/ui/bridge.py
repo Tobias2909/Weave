@@ -81,6 +81,11 @@ SHELF_LIFETIME_S = 6 * 3600
 MUSIC_SEARCH = "search"
 MUSIC_SEARCH_LABEL = "Search results"
 
+# One shelf shown in full, which is where the tile at the end of a shelf goes.
+# A place with the same shape as a track list, so the mouse buttons walk on and
+# off it, but nothing is fetched for it. It is the shelf that is already held.
+MUSIC_SHELF = "shelf"
+
 # Told apart from an explicit None, which is the shelves. A route into music
 # that names no list means wherever music was left, which is what coming back
 # to it did before a track list was a place of its own.
@@ -159,6 +164,9 @@ class Bridge(QObject):
         self._shelves: list = []
         self._shelves_age = 0
         self._tracks: TrackList | None = None
+        # The station a pressed song built. Its own worker, so asking to hear
+        # a song and asking to look at a list never wait on each other.
+        self._station: TrackList | None = None
         self._source_details: list = []
         self._results_label = ""
         # Which track list the music view is showing, None being the shelves.
@@ -168,9 +176,6 @@ class Bridge(QObject):
         # The lists that were visited, so walking back onto one puts it back
         # instead of asking YouTube Music again.
         self._music_cache = TrackCache()
-        # The list a press asked to hear, so a station started by pressing it
-        # is told apart from the same station landed on by walking.
-        self._music_autoplay: MusicList | None = None
 
         self._busy = False
         self._problems: list[str] = []
@@ -576,10 +581,28 @@ class Bridge(QObject):
             return []
         return [str(title) for title in order] if isinstance(order, list) else []
 
+    def _get_shelf_page(self) -> dict:
+        """The shelf being shown in full, or an empty one when none is.
+
+        Found by name rather than kept as a copy, so a shelf that was refreshed
+        while it was open shows what arrived rather than what was pressed. Its
+        place in the arranged list travels with it, since that is what a tile
+        inside it is played by.
+        """
+        open_on = self._music_list
+        if self._view_kind != MUSIC or open_on is None or open_on.what != MUSIC_SHELF:
+            return {}
+        for index, shelf in enumerate(self._get_shelves()):
+            if shelf["title"] == open_on.ident:
+                return {"title": shelf["title"], "kind": shelf.get("kind", ""),
+                        "index": index, "items": shelf["items"]}
+        return {}
+
     def _get_results_label(self) -> str:
         return self._results_label
 
     musicShelves = Property("QVariantList", _get_shelves, notify=musicChanged)
+    musicShelfPage = Property("QVariantMap", _get_shelf_page, notify=musicChanged)
     musicLabel = Property(str, _get_results_label, notify=musicChanged)
     musicResults = Property("QVariantList", _get_results, notify=musicChanged)
     musicSearching = Property(bool, _get_searching, notify=musicChanged)
@@ -753,9 +776,6 @@ class Bridge(QObject):
         """
         if entry is None:
             return
-        # Walking is not pressing. A station landed on this way is put back to
-        # look at, the way a playlist is.
-        self._music_autoplay = None
         self._nav_replaying = True
         try:
             if entry.view[0] == SEARCH:
@@ -1391,6 +1411,19 @@ class Bridge(QObject):
         lists are separate and this is the one with anything in it."""
         self._open_music_list(MusicList(TrackList.LIKED, "", "Liked"))
 
+    @Slot(int)
+    def openShelf(self, shelf_index: int) -> None:
+        """A whole shelf, rather than the two rows of it the view has room for.
+
+        Kept by name, so walking back onto it after the shelves were gathered
+        again lands on the same section and not on whatever took its place.
+        """
+        try:
+            shelf = self._get_shelves()[shelf_index]
+        except (IndexError, KeyError, TypeError):
+            return
+        self._open_music_list(MusicList(MUSIC_SHELF, shelf["title"], shelf["title"]))
+
     @Slot(int, int)
     def playShelfItem(self, shelf_index: int, item_index: int) -> None:
         # The index comes from what is on screen, which is the arranged list
@@ -1407,9 +1440,11 @@ class Bridge(QObject):
         # A song carries both its own id and the id of the station built from
         # it. Pressing it plays that song and then things like it, which is
         # what the music application does, so the station is what to fetch.
+        # Into the queue and nowhere else. Pressing a song is asking to hear
+        # it, not asking to read what follows, and the player already lists
+        # what follows, so nothing is opened and nothing is walked onto.
         if video and playlist:
-            self._open_music_list(MusicList(TrackList.RADIO, video, item.get("title", "")),
-                                  autoplay=True)
+            self._play_station(video, item.get("title", ""))
             return
         # A playlist is opened to look at. Nothing starts until something in it
         # is chosen.
@@ -1423,20 +1458,15 @@ class Bridge(QObject):
                 "live": False, "url": ids.watch_url("youtube", video),
             }])
 
-    def _open_music_list(self, target: MusicList, autoplay: bool = False) -> None:
-        """A track list was asked for. Landing on one is a step, so the back
-        button returns to the shelves and forward opens it again."""
-        if autoplay:
-            self._music_autoplay = target
+    def _open_music_list(self, target: MusicList) -> None:
+        """A track list or a shelf was asked for. Landing on one is a step, so
+        the back button returns to the shelves and forward opens it again."""
         if self._view_kind == MUSIC and self._music_list == target:
-            # Already the place showing, so not a step. A station pressed a
-            # second time is still a press and starts, and a list whose rows
-            # never arrived is asked for again rather than sitting empty.
-            if target not in self._music_cache:
+            # Already the place showing, so not a step. A list whose rows never
+            # arrived is asked for again rather than sitting empty. A shelf has
+            # no rows to ask for, since it is what the view already holds.
+            if target.what != MUSIC_SHELF and target not in self._music_cache:
                 self._fetch_music_list(target)
-            elif autoplay and self._results:
-                self._music_autoplay = None
-                self.playResult(0)
             return
         self._set_view(MUSIC, -1, "", "", target)
 
@@ -1446,9 +1476,10 @@ class Bridge(QObject):
         Reached from _set_view alone, so pressing a tile, searching and
         walking back onto a list all arrive the same way.
         """
-        if target is None:
+        if target is None or target.what == MUSIC_SHELF:
             # The shelves are what the view shows when there are no results,
-            # so landing on them is emptying them.
+            # so landing on them is emptying them. One shelf in full is the
+            # same, with the shelf itself naming which of them to draw.
             self._results = []
             self._results_label = ""
             self.musicChanged.emit()
@@ -1484,6 +1515,30 @@ class Bridge(QObject):
             lambda rows, label: self._on_tracks(rows, label, target))
         self._tracks.failed.connect(self._on_search_failed)
         self._launch(self._tracks)
+
+    def _play_station(self, video_id: str, label: str) -> None:
+        """The station built from one song, into the player and nowhere else.
+
+        The rows are handed to the queue as they arrive and are not kept, since
+        what is not showing does not have to be walked back to. The view stays
+        exactly where the press found it.
+        """
+        if self._station is not None and self._station.isRunning():
+            return
+        self._searching = True
+        self.musicChanged.emit()
+        self._set_status(f"starting {label}" if label else "starting a station")
+        self._station = TrackList(self._cfg, TrackList.RADIO, video_id, label, self)
+        self._station.tracks.connect(lambda rows, _label: self._on_station(rows))
+        self._station.failed.connect(self._on_search_failed)
+        self._launch(self._station)
+
+    def _on_station(self, rows: list) -> None:
+        self._searching = False
+        self.musicChanged.emit()
+        if not rows or not self._audio:
+            return
+        self._audio.play_items(self._track_items(rows))
 
     def _start_music_search(self, target: MusicList) -> None:
         if self._search is not None and self._search.isRunning():
@@ -1524,11 +1579,6 @@ class Bridge(QObject):
         self._results = rows
         self._results_label = label
         self.musicChanged.emit()
-        # Only a station starts on its own, and only for the press that asked
-        # for it. A list is opened to look at.
-        if rows and self._music_autoplay is not None and self._music_autoplay == target:
-            self._music_autoplay = None
-            self.playResult(0)
 
     @Slot(str)
     def musicSearch(self, query: str) -> None:
@@ -1546,11 +1596,17 @@ class Bridge(QObject):
         songs is for."""
         if not self._audio or not self._results:
             return
-        items = [{"key": row["key"], "title": row["title"], "artist": row["artist"],
-                  "thumbnail": row["thumbnail"], "live": False,
-                  "url": ids.watch_url("youtube", row["videoId"])}
-                 for row in self._results]
+        items = self._track_items(self._results)
         self._audio.play_items(items, max(0, min(index, len(items) - 1)))
+
+    @staticmethod
+    def _track_items(rows: list) -> list:
+        """Track rows as the player wants them. One place, so the picture a
+        row arrived with reaches the queue whichever list it came from."""
+        return [{"key": row["key"], "title": row["title"], "artist": row["artist"],
+                 "thumbnail": row["thumbnail"], "live": False,
+                 "url": ids.watch_url("youtube", row["videoId"])}
+                for row in rows]
 
     @Slot(int)
     def playSource(self, source_id: int) -> None:

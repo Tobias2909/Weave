@@ -204,6 +204,7 @@ Rectangle {
         spacing: 12
 
         RoundedImage {
+            objectName: "nowPlayingArt"
             Layout.preferredWidth: 44
             Layout.preferredHeight: 44
             radius: 6

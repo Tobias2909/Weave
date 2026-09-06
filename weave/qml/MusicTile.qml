@@ -13,6 +13,8 @@ Item {
     signal chosen()
     signal removeRequested()
 
+    // The size a shelf gives it. Kept as a default so the tile stands on its
+    // own, and overridden by whatever lays a row of them out.
     width: 132
     height: 132
 
