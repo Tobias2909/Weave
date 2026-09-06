@@ -1,4 +1,4 @@
-# Weave
+<h1><img src="weave/share/weave-128.png" width="40" height="40" align="absmiddle" alt=""> Weave</h1>
 
 A personal YouTube and Twitch client for Linux. Weave shows what the channels
 you track have posted, sorted into groups you make yourself, and hands playback
