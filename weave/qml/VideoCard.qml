@@ -19,6 +19,10 @@ Rectangle {
     property bool isUpcoming: false
     property bool canListen: true
     property string scheduledText: ""
+    // Where an announced stream begins, on the reader's own clock. It takes
+    // the place of the age, which for one of these is the day somebody put the
+    // announcement up and answers nothing anybody asked.
+    property string startsText: ""
     property real progress: 0
 
     signal playRequested()
@@ -169,47 +173,70 @@ Rectangle {
         }
 
         // The channel line is its own click target, so a left click here opens
-        // the channel page rather than starting the video.
+        // the channel page rather than starting the video. The picture stands
+        // as tall as both lines beside it, which is what gives a card a face
+        // to recognise from across the grid.
         Row {
             id: channelRow
             width: parent.width
-            spacing: 6
-
-            HoverHandler { id: channelHover }
-            TapHandler {
-                gesturePolicy: TapHandler.ReleaseWithinBounds
-                onTapped: card.channelRequested()
-            }
+            spacing: 8
 
             RoundedImage {
-                width: 24
-                height: 24
+                id: avatar
+                width: 44
+                height: 44
                 circle: true
                 visible: card.channelAvatar !== ""
                 source: card.channelAvatar
+
+                HoverHandler { id: avatarHover }
+                TapHandler {
+                    gesturePolicy: TapHandler.ReleaseWithinBounds
+                    onTapped: card.channelRequested()
+                }
             }
 
-            Text {
-                width: channelRow.width - (card.channelAvatar !== "" ? 30 : 0)
-                text: card.channelTitle
-                color: channelHover.hovered ? Theme.colors.text : Theme.colors.textMuted
-                font.pixelSize: 12
-                font.underline: channelHover.hovered
-                elide: Text.ElideRight
-            }
-        }
+            Column {
+                anchors.verticalCenter: parent.verticalCenter
+                width: channelRow.width
+                       - (card.channelAvatar !== "" ? avatar.width + channelRow.spacing : 0)
+                spacing: 3
 
-        Text {
-            width: parent.width
-            color: Theme.colors.textMuted
-            font.pixelSize: 11
-            elide: Text.ElideRight
-            text: {
-                var parts = []
-                if (card.viewsText !== "") parts.push(card.viewsText + " views")
-                if (card.likesText !== "") parts.push(card.likesText + " likes")
-                if (card.ageText !== "") parts.push(card.ageText)
-                return parts.join("  ·  ")
+                Text {
+                    width: parent.width
+                    text: card.channelTitle
+                    color: (channelHover.hovered || avatarHover.hovered)
+                           ? Theme.colors.text : Theme.colors.textMuted
+                    font.pixelSize: 12
+                    font.underline: channelHover.hovered || avatarHover.hovered
+                    elide: Text.ElideRight
+
+                    HoverHandler { id: channelHover }
+                    TapHandler {
+                        gesturePolicy: TapHandler.ReleaseWithinBounds
+                        onTapped: card.channelRequested()
+                    }
+                }
+
+                Text {
+                    width: parent.width
+                    color: Theme.colors.textMuted
+                    font.pixelSize: 11
+                    elide: Text.ElideRight
+                    text: {
+                        var parts = []
+                        if (card.viewsText !== "") parts.push(card.viewsText + " views")
+                        if (card.likesText !== "") parts.push(card.likesText + " likes")
+                        // The day it starts, or for anything else the day it
+                        // was published. Never both, since a card has one line
+                        // for it.
+                        if (card.isUpcoming && card.startsText !== "")
+                            parts.push(card.startsText)
+                        else if (card.ageText !== "")
+                            parts.push(card.ageText)
+                        return parts.join("  ·  ")
+                    }
+                }
             }
         }
     }

@@ -1,3 +1,5 @@
+import os
+import time
 import unittest
 
 from weave import format as fmt
@@ -50,6 +52,59 @@ class UpcomingText(unittest.TestCase):
         self.assertEqual(self.upcoming(60), "Starts in 1 minute")
         self.assertEqual(self.upcoming(3600), "Starts in 1 hour")
         self.assertEqual(self.upcoming(86400), "Starts in 1 day")
+
+
+class StartTimeText(unittest.TestCase):
+    """The clock an announced stream begins on.
+
+    The zone is pinned here, since the point of the function is that it
+    answers in whatever zone the machine is set to, and a test that ran in
+    the local one would pass anywhere and prove nothing.
+    """
+
+    # Friday 15 January 2027, 12:00 UTC.
+    NOON = 1_800_014_400
+
+    def setUp(self):
+        self._was = os.environ.get("TZ")
+        os.environ["TZ"] = "UTC"
+        time.tzset()
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        if self._was is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = self._was
+        time.tzset()
+
+    def starts(self, seconds_from_now):
+        return fmt.start_time_text(self.NOON + seconds_from_now, now=self.NOON)
+
+    def test_nothing_scheduled_is_empty(self):
+        self.assertEqual(fmt.start_time_text(None), "")
+
+    def test_later_today_and_tomorrow(self):
+        self.assertEqual(self.starts(6 * 3600), "today at 18:00")
+        self.assertEqual(self.starts(20 * 3600), "tomorrow at 08:00")
+
+    def test_a_day_this_week_is_named(self):
+        self.assertEqual(self.starts(3 * 86400), "Monday at 12:00")
+
+    def test_further_off_carries_the_date(self):
+        self.assertEqual(self.starts(30 * 86400), "14 Feb at 12:00")
+
+    def test_another_year_carries_the_year(self):
+        self.assertEqual(self.starts(400 * 86400), "19 Feb 2028 at 12:00")
+
+    def test_the_hour_is_the_local_one(self):
+        os.environ["TZ"] = "Europe/Berlin"
+        time.tzset()
+        # An hour ahead of UTC in January, so noon there is 13:00 here.
+        self.assertEqual(self.starts(0), "today at 13:00")
+
+    def test_a_time_already_past_still_reads_as_a_date(self):
+        self.assertEqual(self.starts(-10 * 86400), "5 Jan at 12:00")
 
 
 class CountText(unittest.TestCase):

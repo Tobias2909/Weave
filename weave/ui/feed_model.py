@@ -18,7 +18,7 @@ from ..sources import progress as mpv_progress
 ROLES = (
     "key", "title", "channelKey", "channelTitle", "channelAvatar", "thumbnail", "ageText",
     "durationText", "viewsText", "likesText", "watched", "url", "isLive",
-    "isUpcoming", "scheduledText", "progress",
+    "isUpcoming", "scheduledText", "startsText", "progress",
 )
 
 
@@ -116,6 +116,10 @@ class FeedModel(QAbstractListModel):
             # starts instead of a duration and the play path refuses it.
             "isUpcoming": is_upcoming,
             "scheduledText": fmt.upcoming_text(scheduled_at) if is_upcoming else "",
+            # An announced stream has no age worth showing, since when it was
+            # announced says nothing about when to turn up. The card puts this
+            # where the age of an ordinary video goes.
+            "startsText": fmt.start_time_text(scheduled_at) if is_upcoming else "",
             "progress": 0.0,
         }
 

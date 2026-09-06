@@ -959,6 +959,7 @@ ApplicationWindow {
                 isLive: model.isLive
                 isUpcoming: model.isUpcoming
                 scheduledText: model.scheduledText
+                startsText: model.startsText
                 // Where a press already listens, the headphone offers nothing.
                 canListen: !App.pressIsMusic
                 progress: model.progress

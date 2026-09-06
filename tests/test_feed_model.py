@@ -93,6 +93,9 @@ class Showing(unittest.TestCase):
         built = self.model.row_at(0)
         self.assertTrue(built["isUpcoming"])
         self.assertNotEqual(built["scheduledText"], "")
+        # The card puts this where the age of an ordinary video goes, so an
+        # announced stream that carries no clock time would leave a gap.
+        self.assertIn(" at ", built["startsText"])
 
 
 if __name__ == "__main__":

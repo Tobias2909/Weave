@@ -4,6 +4,12 @@ every rounding decision in one place."""
 from __future__ import annotations
 
 import time
+from datetime import date
+
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+             "Saturday", "Sunday")
 
 _AGE_STEPS = (
     (60, 1, "second"),
@@ -49,6 +55,35 @@ def upcoming_text(scheduled_at: int | None, now: int | None = None) -> str:
             value = delta // divisor
             return f"Starts in {value} {unit}{'s' if value != 1 else ''}"
     return "Starts later"
+
+
+def start_time_text(scheduled_at: int | None, now: int | None = None) -> str:
+    """When an announced stream begins, on the clock this machine is set to.
+
+    The badge already says how long there is to wait, which answers a different
+    question from the one somebody deciding whether to be there asks. So this
+    is the wall clock rather than another relative phrase, and it is local
+    because a time in anybody else's zone is a puzzle rather than an answer.
+    """
+    if not scheduled_at:
+        return ""
+    when = time.localtime(int(scheduled_at))
+    today = time.localtime(int(time.time()) if now is None else int(now))
+    clock = f"{when.tm_hour:02d}:{when.tm_min:02d}"
+    # Calendar days apart, not chunks of 24 hours. A stream at nine tomorrow
+    # morning is tomorrow whether it is now noon or midnight.
+    days = (date(when.tm_year, when.tm_mon, when.tm_mday)
+            - date(today.tm_year, today.tm_mon, today.tm_mday)).days
+    if days == 0:
+        return f"today at {clock}"
+    if days == 1:
+        return f"tomorrow at {clock}"
+    if 1 < days < 7:
+        return f"{_WEEKDAYS[when.tm_wday]} at {clock}"
+    month = _MONTHS[when.tm_mon - 1]
+    if when.tm_year != today.tm_year:
+        return f"{when.tm_mday} {month} {when.tm_year} at {clock}"
+    return f"{when.tm_mday} {month} at {clock}"
 
 
 def count_text(value: int | None) -> str:
