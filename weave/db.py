@@ -685,11 +685,14 @@ class Database:
             )
             return conn.total_changes - before
 
-    def fill_details(self, rows: list[tuple[str, int | None, str | None]]) -> int:
-        """Apply the durations and live flags the subscriptions sweep found.
+    def fill_details(self, rows: list[tuple[str, int | None, str | None, int | None]]) -> int:
+        """Apply the durations, live flags and start times the subscriptions
+        sweep found.
 
-        Only fills what is missing. RSS never carries either, and a value
-        already stored is not worth overwriting with the same thing.
+        Only fills what is missing. RSS never carries any of them, and a
+        value already stored is not worth overwriting with the same thing.
+        A stale scheduled_at left behind once a stream goes live is harmless,
+        since the card only reads it while live_status is still is_upcoming.
         """
         if not rows:
             return 0
@@ -697,9 +700,11 @@ class Database:
             before = conn.total_changes
             conn.executemany(
                 "UPDATE videos SET duration_s=COALESCE(duration_s, ?), "
-                "live_status=COALESCE(?, live_status) "
+                "live_status=COALESCE(?, live_status), "
+                "scheduled_at=COALESCE(scheduled_at, ?) "
                 "WHERE key=? AND (duration_s IS NULL OR live_status IS NOT ?)",
-                [(duration, live, key, live) for key, duration, live in rows],
+                [(duration, live, scheduled, key, live)
+                 for key, duration, live, scheduled in rows],
             )
             # A duration past the Shorts ceiling settles the question with no
             # request at all, which is what keeps the redirect test to a

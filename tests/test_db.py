@@ -216,9 +216,16 @@ class VideoKind(DatabaseCase):
 
     def test_a_long_duration_settles_it_with_no_request(self):
         self.db.upsert_videos([self.video("aaaaaaaaaaa")])
-        self.db.fill_details([("yt:aaaaaaaaaaa", SHORTS_CEILING_S + 1, None)])
+        self.db.fill_details([("yt:aaaaaaaaaaa", SHORTS_CEILING_S + 1, None, None)])
         row = next(r for r in self.db.feed() if r["ext_id"] == "aaaaaaaaaaa")
         self.assertEqual(row["is_short"], 0)
+
+    def test_an_announced_stream_is_stored_with_its_start_time(self):
+        self.db.upsert_videos([self.video("aaaaaaaaaaa")])
+        self.db.fill_details([("yt:aaaaaaaaaaa", None, "is_upcoming", 1_900_000_000)])
+        row = next(r for r in self.db.feed() if r["ext_id"] == "aaaaaaaaaaa")
+        self.assertEqual(row["live_status"], "is_upcoming")
+        self.assertEqual(row["scheduled_at"], 1_900_000_000)
 
     def test_a_stored_decision_is_never_overwritten(self):
         # A Short that later turns up in the mixed feed, which says nothing

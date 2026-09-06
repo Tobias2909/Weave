@@ -173,7 +173,8 @@ class FeedPoller(Worker):
         # Stamped only on an answer, so a failure is retried on the next tick
         # rather than waiting out the interval.
         self._db.set_state("sweep_at", str(int(time.time())))
-        filled = self._db.fill_details([(v.key, v.duration_s, v.live_status) for v in videos])
+        filled = self._db.fill_details(
+            [(v.key, v.duration_s, v.live_status, v.scheduled_at) for v in videos])
 
         unknown = self._db.unknown_video_keys([v.key for v in videos])
         if unknown:

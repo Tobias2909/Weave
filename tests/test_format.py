@@ -32,6 +32,26 @@ class AgeText(unittest.TestCase):
         self.assertEqual(fmt.age_text(self.NOW + 7200, now=self.NOW), "just now")
 
 
+class UpcomingText(unittest.TestCase):
+    NOW = 1_800_000_000
+
+    def upcoming(self, seconds_from_now):
+        return fmt.upcoming_text(self.NOW + seconds_from_now, now=self.NOW)
+
+    def test_unknown_time_still_says_upcoming(self):
+        self.assertEqual(fmt.upcoming_text(None), "Upcoming")
+
+    def test_due_now_or_past_due(self):
+        self.assertEqual(self.upcoming(0), "Starting soon")
+        self.assertEqual(self.upcoming(-30), "Starting soon")
+
+    def test_singular_and_plural(self):
+        self.assertEqual(self.upcoming(30), "Starts in seconds")
+        self.assertEqual(self.upcoming(60), "Starts in 1 minute")
+        self.assertEqual(self.upcoming(3600), "Starts in 1 hour")
+        self.assertEqual(self.upcoming(86400), "Starts in 1 day")
+
+
 class CountText(unittest.TestCase):
     def test_none_is_empty_not_zero(self):
         self.assertEqual(fmt.count_text(None), "")

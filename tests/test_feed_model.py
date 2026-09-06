@@ -77,6 +77,23 @@ class Showing(unittest.TestCase):
         self.assertEqual([self.model.key_at(i) for i in range(3)],
                          ["yt:aaaaaaaaaaa", "yt:bbbbbbbbbbb", "yt:ccccccccccc"])
 
+    def test_a_row_shaped_with_no_scheduled_at_column_is_never_upcoming(self):
+        # Recommendations and playlist items never select scheduled_at at
+        # all, so the row dict simply has no such key.
+        self.model.show([row("aaaaaaaaaaa")])
+        built = self.model.row_at(0)
+        self.assertFalse(built["isUpcoming"])
+        self.assertEqual(built["scheduledText"], "")
+
+    def test_an_announced_video_is_marked_upcoming_with_its_start_time(self):
+        one = row("aaaaaaaaaaa")
+        one["live_status"] = "is_upcoming"
+        one["scheduled_at"] = 1_900_000_000
+        self.model.show([one])
+        built = self.model.row_at(0)
+        self.assertTrue(built["isUpcoming"])
+        self.assertNotEqual(built["scheduledText"], "")
+
 
 if __name__ == "__main__":
     unittest.main()

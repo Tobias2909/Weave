@@ -46,6 +46,20 @@ class ParseLines(unittest.TestCase):
         self.assertEqual(sweep.parse_lines("aaaaaaaaaaa|100|NA")[0].channel_id, None)
         self.assertEqual(sweep.parse_lines("aaaaaaaaaaa|100|NA|NA")[0].channel_id, None)
 
+    def test_an_announced_stream_carries_its_start_time(self):
+        # A stream that has not begun reports no duration but does report
+        # when it is due, which is the only way to tell it apart from a
+        # video RSS found that no sweep has reached yet.
+        got = sweep.parse_lines(
+            "aaaaaaaaaaa|NA|is_upcoming|UCabcdefghijklmnopqrstuv|1900000000")
+        self.assertEqual(got[0].live_status, "is_upcoming")
+        self.assertIsNone(got[0].duration_s)
+        self.assertEqual(got[0].scheduled_at, 1900000000)
+
+    def test_a_row_with_no_start_time_carries_none(self):
+        self.assertIsNone(sweep.parse_lines("aaaaaaaaaaa|100|NA|NA|NA")[0].scheduled_at)
+        self.assertIsNone(sweep.parse_lines("aaaaaaaaaaa|100|NA")[0].scheduled_at)
+
 
 if __name__ == "__main__":
     unittest.main()

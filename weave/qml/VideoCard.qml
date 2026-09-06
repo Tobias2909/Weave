@@ -16,6 +16,8 @@ Rectangle {
     property string likesText: ""
     property bool watched: false
     property bool isLive: false
+    property bool isUpcoming: false
+    property string scheduledText: ""
     property real progress: 0
 
     signal playRequested()
@@ -27,7 +29,9 @@ Rectangle {
     color: hover.hovered ? Theme.colors.surfaceRaised : Theme.colors.surface
     border.width: 1
     border.color: hover.hovered ? Theme.colors.accent : Theme.colors.border
-    opacity: watched ? 0.55 : 1.0
+    // Dimmed the same amount as something already watched. It cannot be
+    // played yet either, so it should not read as fully available.
+    opacity: (watched || isUpcoming) ? 0.55 : 1.0
 
     HoverHandler { id: hover }
 
@@ -120,19 +124,27 @@ Rectangle {
             }
 
             Rectangle {
-                visible: card.durationText !== "" || card.isLive
+                visible: card.durationText !== "" || card.isLive || card.isUpcoming
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
                 anchors.margins: 6
                 anchors.bottomMargin: card.progress > 0 ? 9 : 6
                 radius: 4
-                color: card.isLive ? Theme.colors.live : Theme.colors.badgeBackground
+                color: card.isLive ? Theme.colors.live
+                       : card.isUpcoming ? Theme.colors.accent
+                       : Theme.colors.badgeBackground
                 width: badge.implicitWidth + 12
                 height: badge.implicitHeight + 6
                 Text {
                     id: badge
                     anchors.centerIn: parent
-                    text: card.isLive ? "LIVE" : card.durationText
+                    // An announced stream cannot be played yet, so the badge
+                    // says when it starts rather than a duration it does not
+                    // have. isLive wins if somehow both are set, since a
+                    // stream that has gone live is no longer upcoming.
+                    text: card.isLive ? "LIVE"
+                          : card.isUpcoming ? card.scheduledText
+                          : card.durationText
                     color: Theme.colors.badgeText
                     font.pixelSize: 11
                     font.bold: true

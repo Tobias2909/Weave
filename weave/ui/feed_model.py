@@ -18,7 +18,7 @@ from ..sources import progress as mpv_progress
 ROLES = (
     "key", "title", "channelKey", "channelTitle", "channelAvatar", "thumbnail", "ageText",
     "durationText", "viewsText", "likesText", "watched", "url", "isLive",
-    "progress",
+    "isUpcoming", "scheduledText", "progress",
 )
 
 
@@ -88,6 +88,15 @@ class FeedModel(QAbstractListModel):
 
     @staticmethod
     def _build(row) -> dict:
+        # scheduled_at is only on the videos table. Recommendations, playlist
+        # items and search results are shaped the same otherwise, so a source
+        # that has never heard of a scheduled stream is asked rather than
+        # assumed, instead of raising on a column it never selected. `in row`
+        # alone would not do here: a sqlite3.Row tests membership against its
+        # values, not its column names, unlike the plain dict a few callers
+        # still hand in.
+        scheduled_at = row["scheduled_at"] if "scheduled_at" in row.keys() else None  # noqa: SIM118
+        is_upcoming = row["live_status"] == "is_upcoming"
         return {
             "key": row["key"],
             "title": row["title"],
@@ -102,6 +111,11 @@ class FeedModel(QAbstractListModel):
             "watched": bool(row["watched"]),
             "url": ids.watch_url(row["platform"], row["ext_id"]),
             "isLive": row["live_status"] == "is_live",
+            # An announced stream behaves like a normal video everywhere
+            # except that mpv cannot open it yet, so the card says when it
+            # starts instead of a duration and the play path refuses it.
+            "isUpcoming": is_upcoming,
+            "scheduledText": fmt.upcoming_text(scheduled_at) if is_upcoming else "",
             "progress": 0.0,
         }
 

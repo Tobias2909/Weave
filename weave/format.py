@@ -33,6 +33,24 @@ def age_text(published_at: int | None, now: int | None = None) -> str:
     return f"{years} year{'s' if years != 1 else ''} ago"
 
 
+def upcoming_text(scheduled_at: int | None, now: int | None = None) -> str:
+    """When an announced stream is due, for the card badge. A missing time
+    still lets the card say "Upcoming" on its own rather than nothing."""
+    if not scheduled_at:
+        return "Upcoming"
+    now = int(time.time()) if now is None else now
+    delta = int(scheduled_at) - now
+    if delta <= 0:
+        return "Starting soon"
+    if delta < 60:
+        return "Starts in seconds"
+    for limit, divisor, unit in _AGE_STEPS:
+        if delta < limit:
+            value = delta // divisor
+            return f"Starts in {value} {unit}{'s' if value != 1 else ''}"
+    return "Starts later"
+
+
 def count_text(value: int | None) -> str:
     """Compact counts. None becomes an empty string rather than a zero, so the
     UI can tell "no data yet" from "genuinely nothing"."""

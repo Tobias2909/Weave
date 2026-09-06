@@ -1351,6 +1351,12 @@ class Bridge(QObject):
         row = self._model.row_for_key(key)
         if not row:
             return
+        if row.get("isUpcoming"):
+            # An announced stream is still just a listing. Handing its watch
+            # URL to mpv crashes it, since there is nothing there yet, so the
+            # click opens what can actually be shown right now instead.
+            self.openDetail(key)
+            return
         login = key.split(":", 1)[1] if key.startswith("twitch:") else None
         # A Twitch entry is only ever a live channel for now, and a YouTube one
         # says so in the row. Either way mpv must not mark it watched.

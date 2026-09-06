@@ -40,6 +40,10 @@ class SweptVideo:
     # as a filler: one call names every channel that has something new, so the
     # feeds of the rest do not have to be asked to find out.
     channel_id: str | None = None
+    # When an announced stream or premiere is due to start. Only meaningful
+    # while live_status is is_upcoming; yt-dlp reports NA once the wait is
+    # over, so a video that has since gone live or ended carries none.
+    scheduled_at: int | None = None
 
     @property
     def key(self) -> str:
@@ -74,11 +78,13 @@ def parse_lines(text: str) -> list[SweptVideo]:
         if not is_video_id(ext_id) or ext_id in seen:
             continue
         seen.add(ext_id)
-        # Older output had three fields. Tolerated so a partial line is still
-        # worth its duration rather than being dropped.
+        # Older output had three fields, and four before the start time was
+        # added. Tolerated so a partial line is still worth its duration
+        # rather than being dropped.
         channel = _optional_text(parts[3]) if len(parts) > 3 else None
+        scheduled = _optional_int(parts[4]) if len(parts) > 4 else None
         out.append(SweptVideo(ext_id, _optional_int(parts[1]), _optional_text(parts[2]),
-                              channel))
+                              channel, scheduled))
     return out
 
 
@@ -89,7 +95,8 @@ def fetch(cfg: Config, limit: int = 400, throttle: Throttle | None = None,
         "yt-dlp", "--no-warnings", "--flat-playlist",
         *cookie_args(cfg),
         "--playlist-end", str(max(1, limit)),
-        "--print", "%(id)s|%(duration)s|%(live_status)s|%(channel_id)s",
+        "--print",
+        "%(id)s|%(duration)s|%(live_status)s|%(channel_id)s|%(release_timestamp)s",
         SUBSCRIPTIONS,
     ]
     result = ytdlp.run(command, SweepError, "the sweep", throttle, cancel, timeout)
