@@ -14,17 +14,29 @@ from pathlib import Path
 QML_DIR = Path("weave/qml")
 CALL = re.compile(r"\bApp\.([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 READ = re.compile(r"\bApp\.([A-Za-z_][A-Za-z0-9_]*)\b")
+AUDIO_CALL = re.compile(r"\bAudio\.([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+AUDIO_READ = re.compile(r"\bAudio\.([A-Za-z_][A-Za-z0-9_]*)\b")
 
 
-def bridge_names():
-    from weave.ui.bridge import Bridge
-
-    meta = Bridge.staticMetaObject
+def names_of(cls):
+    meta = cls.staticMetaObject
     methods = {bytes(meta.method(i).name()).decode()
                for i in range(meta.methodCount())}
     # A property's name comes back as a plain string here, unlike a method's.
     properties = {meta.property(i).name() for i in range(meta.propertyCount())}
     return methods, properties
+
+
+def bridge_names():
+    from weave.ui.bridge import Bridge
+
+    return names_of(Bridge)
+
+
+def audio_names():
+    from weave.audio import AudioPlayer
+
+    return names_of(AudioPlayer)
 
 
 class TheWindowCanReachWhatItCalls(unittest.TestCase):
@@ -50,6 +62,21 @@ class TheWindowCanReachWhatItCalls(unittest.TestCase):
                     if name not in self.properties and name not in self.methods:
                         missing.append(f"{path.name}:{line_no} App.{name}")
         self.assertEqual(missing, [], "not exposed by the bridge")
+
+    def test_every_call_on_the_player_is_a_slot(self) -> None:
+        """The player is reached from the window the same way, so it is worth
+        the same check. The queue is edited through it."""
+        methods, properties = audio_names()
+        missing = []
+        for path in self.files:
+            for line_no, line in enumerate(path.read_text().splitlines(), 1):
+                for name in AUDIO_CALL.findall(line):
+                    if name not in methods:
+                        missing.append(f"{path.name}:{line_no} Audio.{name}()")
+                for name in AUDIO_READ.findall(line):
+                    if name not in properties and name not in methods:
+                        missing.append(f"{path.name}:{line_no} Audio.{name}")
+        self.assertEqual(missing, [], "not reachable from the window")
 
     def test_the_check_would_notice_a_lost_decorator(self) -> None:
         """A method that is not a slot must not pass as one."""

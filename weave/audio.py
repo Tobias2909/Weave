@@ -637,6 +637,59 @@ class AudioPlayer(QObject):
             self._at = index
             self._start_current()
 
+    @Slot(int, int)
+    def moveInQueue(self, from_place: int, to_place: int) -> None:
+        """Move a song to another place in the play order.
+
+        Places are places in the list as it is shown, which is the play order
+        and not the order the songs were handed over, so this holds under
+        shuffle as well. A song already heard can be moved ahead of what is
+        still to come, and it is then heard again when it is reached, which is
+        the point of being allowed to move it at all.
+        """
+        if from_place == to_place:
+            return
+        if not (0 <= from_place < len(self._order)) or not (0 <= to_place < len(self._order)):
+            return
+        self._order.insert(to_place, self._order.pop(from_place))
+        # What mpv holds as the next file was chosen before the move, so it is
+        # chosen again. Without this the old next is still what plays.
+        if not self._idle:
+            self._prepare_next()
+        self.queueChanged.emit()
+        self.trackChanged.emit()
+
+    @Slot(int)
+    def removeFromQueue(self, index: int) -> None:
+        """Take a song out of the queue, and out of nothing else.
+
+        The list it came from is untouched. Taking out the one playing moves
+        on to what follows it, since the alternative is a player still playing
+        something it was told to forget.
+        """
+        if not (0 <= index < len(self._queue)):
+            return
+        was_current = index == self._at
+        following = self._next_index() if was_current else None
+        self._queue.pop(index)
+        self._order = [i - 1 if i > index else i
+                       for i in self._order if i != index]
+        if was_current:
+            if following is None:
+                self.stop()
+                return
+            self._at = following - 1 if following > index else following
+            self._forget_recovery()
+            self._start_current()
+        elif index < self._at:
+            self._at -= 1
+        elif not self._idle:
+            # It was one still to come, so what mpv holds as next may have
+            # been the one that just went.
+            self._prepare_next()
+        self.queueChanged.emit()
+        self.trackChanged.emit()
+
     @Slot()
     def next(self) -> None:
         if not self._queue:

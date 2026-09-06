@@ -117,6 +117,11 @@ Rectangle {
                 clip: true
                 spacing: 2
                 model: Audio.queue
+                // A row picked up leaves a gap that the others slide into,
+                // rather than the list jumping to its new shape at the drop.
+                moveDisplaced: Transition {
+                    NumberAnimation { properties: "y"; duration: 140 }
+                }
                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
                 delegate: Rectangle {
@@ -138,12 +143,77 @@ Rectangle {
                                                           : "transparent")
 
                     HoverHandler { id: queuedHover }
+
+                    // Carried above its neighbours while it is held, and
+                    // never taken out of the list. Reparenting a row into the
+                    // view is the other way to do this and it fights the
+                    // view's own placing of its rows.
+                    z: rowDrag.active ? 2 : 0
+                    opacity: rowDrag.active ? 0.85 : 1.0
+
+                    // Picked up and put down somewhere else. Where it landed
+                    // is worked out from how far it moved, since every row is
+                    // the same height and the list has no gaps in it.
+                    DragHandler {
+                        id: rowDrag
+                        objectName: "queueRowDrag"
+                        xAxis.enabled: false
+                        yAxis.enabled: true
+                        onActiveChanged: {
+                            if (active)
+                                return
+                            var step = queuedRow.height + queued.spacing
+                            var slot = queuedRow.index * step
+                            var landed = Math.max(0, Math.min(
+                                queued.count - 1,
+                                queuedRow.index
+                                + Math.round((queuedRow.y - slot) / step)))
+                            // Put back where the view wants it either way. A
+                            // move rebuilds the row from the new order, and a
+                            // drop that landed where it started must not
+                            // leave the row sitting off its line.
+                            queuedRow.y = slot
+                            if (landed !== queuedRow.index)
+                                Audio.moveInQueue(queuedRow.index, landed)
+                        }
+                    }
+
                     // Skip straight to it rather than pressing next repeatedly.
+                    // A press that turned into a drag is not a press.
                     MouseArea {
                         anchors.fill: parent
+                        anchors.rightMargin: 26
                         onClicked: {
+                            if (rowDrag.active)
+                                return
                             Audio.jumpTo(queuedRow.modelData.at)
                             queuedRow.ListView.view.owner.close()
+                        }
+                    }
+
+                    // Out of the queue, and out of nothing else.
+                    Rectangle {
+                        objectName: "queueRowRemove"
+                        anchors.right: parent.right
+                        anchors.rightMargin: 4
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 20
+                        height: 20
+                        radius: 10
+                        visible: queuedHover.hovered
+                        color: removeHover.hovered ? Theme.colors.live
+                                                   : Theme.colors.surfaceRaised
+
+                        HoverHandler { id: removeHover }
+                        Text {
+                            anchors.centerIn: parent
+                            text: "\u2715"
+                            font.pixelSize: 10
+                            color: Theme.colors.text
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: Audio.removeFromQueue(queuedRow.modelData.at)
                         }
                     }
 
