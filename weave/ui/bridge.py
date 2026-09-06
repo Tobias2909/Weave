@@ -24,7 +24,7 @@ from .. import paths, tokens
 from ..config import Config
 from ..cookies import browser_spec
 from ..db import Database
-from ..imagecache import SECONDS_PER_DAY, qml_source
+from ..imagecache import SECONDS_PER_DAY, plain_source, qml_source
 from ..player.mpv import Player
 from ..poller import (
     ChannelAdder,
@@ -1733,7 +1733,10 @@ class Bridge(QObject):
             return
         ext_id = key.split(":", 1)[1]
         wanted = (not self._db.is_music_favorite(ext_id)) if keep is None else keep
-        self._db.set_music_favorite(ext_id, wanted, title or "", artist, thumbnail)
+        # Stored plain. What comes from the window has been wrapped for the
+        # cache already, and wrapping it again would leave nothing at all.
+        self._db.set_music_favorite(ext_id, wanted, title or "", artist,
+                                    plain_source(thumbnail))
         self._set_notice("Added to favorites" if wanted else "Removed from favorites",
                          clear_after_s=4)
         self._set_status("added to favorites" if wanted else "removed from favorites")

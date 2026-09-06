@@ -93,6 +93,18 @@ def qml_source(url: str | None) -> str:
     return f"image://{PROVIDER_ID}/{url}"
 
 
+def plain_source(value: str | None) -> str:
+    """The picture address without the wrapper, whether it had one or not.
+
+    Anything read back out of the window has already been wrapped for the
+    cache, and wrapping it a second time throws it away, since a wrapped
+    address does not begin with http. So whatever is stored is stored plain.
+    """
+    value = (value or "").strip()
+    prefix = f"image://{PROVIDER_ID}/"
+    return value[len(prefix):] if value.startswith(prefix) else value
+
+
 def path_for(directory: Path, url: str) -> Path:
     """Where a picture is kept. Hashed, because a URL is not a filename, and
     spread over a first byte of the digest so no directory holds thousands of

@@ -271,3 +271,63 @@ class WithNothingKept(unittest.TestCase):
         bridge._model = Model()
         Bridge.favoriteVideo(bridge, "yt:aaaaaaaaaaa")
         self.assertEqual(bridge.left, [])
+
+
+class ThePicture(unittest.TestCase):
+    """Wrapping an address twice leaves nothing at all.
+
+    Everything read back out of the window has already been wrapped for the
+    picture cache, and the wrapper only accepts an address beginning with
+    http, so wrapping it again returns an empty string. Whatever is stored is
+    stored plain.
+    """
+
+    def setUp(self) -> None:
+        self.db = Database(Path(tempfile.mkdtemp()) / "weave.db")
+
+    def test_wrapping_a_wrapped_address_gives_nothing(self) -> None:
+        from weave.imagecache import plain_source, qml_source
+
+        wrapped = qml_source("https://example/a.jpg")
+        self.assertEqual(qml_source(wrapped), "")
+        self.assertEqual(plain_source(wrapped), "https://example/a.jpg")
+
+    def test_a_plain_address_is_left_as_it_is(self) -> None:
+        from weave.imagecache import plain_source
+
+        self.assertEqual(plain_source("https://example/a.jpg"), "https://example/a.jpg")
+        self.assertEqual(plain_source(""), "")
+        self.assertEqual(plain_source(None), "")
+
+    def test_what_the_window_hands_over_is_stored_plain(self) -> None:
+        from weave.imagecache import qml_source
+        from weave.ui.bridge import Bridge
+
+        class Quiet:
+            def emit(self, *_a):
+                pass
+
+        bridge = Bridge.__new__(Bridge)
+        bridge._db = self.db
+        bridge._music_list = None
+        bridge._set_notice = lambda *a, **k: None
+        bridge._set_status = lambda *a, **k: None
+        bridge.favoritesChanged = Quiet()
+        bridge.musicChanged = Quiet()
+        Bridge._mark_favorite(bridge, "yt:aaaaaaaaaaa", "A song", "An artist",
+                              qml_source("https://example/a.jpg"), keep=True)
+        stored = self.db.music_favorites()[0]["thumbnail_url"]
+        self.assertEqual(stored, "https://example/a.jpg")
+        self.assertTrue(qml_source(stored).startswith("image://"))
+
+    def test_a_song_played_here_stores_its_picture_plain(self) -> None:
+        from weave.audio import AudioPlayer
+        from weave.imagecache import qml_source
+
+        player = AudioPlayer.__new__(AudioPlayer)
+        player._db = self.db
+        AudioPlayer._remember(player, {
+            "key": "yt:bbbbbbbbbbb", "title": "A song", "artist": "An artist",
+            "thumbnail": qml_source("https://example/b.jpg"), "live": False})
+        row = self.db.music_history()[0]
+        self.assertEqual(row["thumbnail_url"], "https://example/b.jpg")

@@ -37,6 +37,7 @@ from PySide6.QtCore import (
 from .config import Config
 from .cookies import args as cookie_args
 from .engine import CURRENT, NEXT, MusicEngine
+from .imagecache import plain_source
 from .process import Cancelled, Timeout
 from .process import run as run_process
 
@@ -374,9 +375,12 @@ class AudioPlayer(QObject):
         key = str(entry.get("key") or "")
         if not key.startswith("yt:"):
             return
+        # The picture is stored plain. A queue entry carries it already
+        # wrapped for the cache, and wrapping it twice leaves nothing.
         self._db.remember_played(
             key.split(":", 1)[1], str(entry.get("title") or ""),
-            entry.get("artist") or None, entry.get("thumbnail") or None,
+            entry.get("artist") or None,
+            plain_source(entry.get("thumbnail")) or None,
             entry.get("duration_s"))
 
     def _start_current(self) -> None:

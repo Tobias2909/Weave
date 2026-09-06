@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -355,6 +355,15 @@ class Database:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
             row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             was = int(row["value"]) if row else 0
+            if was and was < 24:
+                # Pictures were stored as the window had them, wrapped for the
+                # cache. Read back out they were wrapped a second time, which
+                # leaves an empty address, so a kept song showed no picture.
+                # The wrapper is taken back off what was stored that way.
+                conn.execute(
+                    "UPDATE music_history "
+                    "SET thumbnail_url = substr(thumbnail_url, length('image://cached/') + 1) "
+                    "WHERE thumbnail_url LIKE 'image://cached/%'")
             if was and was < 18:
                 # Stored before there was anywhere to put a publish date, and
                 # nothing revisits a row, so they are fetched again.
