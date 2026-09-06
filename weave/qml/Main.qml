@@ -908,6 +908,8 @@ ApplicationWindow {
                 likesText: model.likesText
                 watched: model.watched
                 isLive: model.isLive
+                isUpcoming: model.isUpcoming
+                scheduledText: model.scheduledText
                 progress: model.progress
                 onPlayRequested: App.play(model.key)
                 onListenRequested: App.playAudio(model.key)
