@@ -222,8 +222,8 @@ def _twitch(cfg: Config, report: Report, network: bool) -> None:
     from .sources import twitch
 
     if not cfg.twitch_client_id:
-        report.add("Twitch", WARN, "no client id configured",
-                   "Twitch is optional. See the readme to set one up")
+        report.add("Twitch", WARN, "the client id is empty",
+                   "Unset it to use the one Weave ships, or put your own there")
         return
     stored = tokens.load()
     if stored is None:

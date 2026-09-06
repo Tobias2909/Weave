@@ -79,11 +79,13 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     },
     "watched": {"threshold": 0.85},
     "twitch": {
-        # From a Twitch application you register once at dev.twitch.tv. A
-        # client id is public by design, it ships inside every browser
-        # extension that talks to Twitch, but it identifies your developer
-        # account so it stays out of the repository.
-        "client_id": "",
+        # The application this project registered. A client id is public by
+        # design, it ships inside every browser extension that talks to
+        # Twitch, and the login used here needs no secret at all, so there is
+        # nothing to register before pressing Connect. Put your own here if
+        # you would rather the authorisation sat under an application of your
+        # own, and an empty value simply turns the Twitch side off.
+        "client_id": "1vkr3gus4nnxmpcodpbqv9urjkpc4b",
     },
     "cache": {
         # Images live on disk this long. The server asks for five minutes,

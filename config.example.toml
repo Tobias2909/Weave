@@ -77,12 +77,16 @@ twitch = 120
 threshold = 0.85
 
 [twitch]
-# From a Twitch application you register once at dev.twitch.tv. A client id is
-# public by design, it ships inside every browser extension that talks to
-# Twitch, but it identifies your developer account, so this file is not
-# committed. Set the application's client type to public. The redirect URL the
-# console asks for is not used by the login Weave performs.
-client_id = ""
+# The application Weave itself registered, so there is nothing to set up before
+# pressing Connect. A client id is public by design, it ships inside every
+# browser extension that talks to Twitch, and the device login used here has no
+# client secret anywhere in it.
+#
+# Replace it to have the authorisation sit under an application of your own.
+# Register one at dev.twitch.tv, set its client type to public, and paste the
+# client id here. The redirect URL the console insists on is never used. An
+# empty value turns the Twitch side off.
+client_id = "1vkr3gus4nnxmpcodpbqv9urjkpc4b"
 
 [cache]
 # Thumbnails, avatars and banners live on disk this long. The server asks for

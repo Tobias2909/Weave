@@ -506,9 +506,11 @@ def _cmd_twitch(args) -> int:
         return 0
 
     if not client_id:
-        print("no Twitch client id is configured. Register an application at "
-              "dev.twitch.tv, set its client type to public, and put the client id "
-              "in the config file.", file=sys.stderr)
+        # One is shipped, so an empty value is somebody who cleared it on
+        # purpose or a config that overrides it with nothing.
+        print("the Twitch client id in the config is empty, so there is nothing "
+              "to log in with. Leave it unset to use the one Weave ships, or put "
+              "your own application's client id there.", file=sys.stderr)
         return 1
 
     if args.action == "status":

@@ -228,7 +228,8 @@ class WorkerRuns(unittest.TestCase):
         self.run_worker(poller.SourceDetails(self.db, self.cfg, "https://a/stream"))
 
     def test_twitch_login_without_a_client_id_is_a_message_not_a_crash(self):
-        worker = poller.TwitchLogin(self.db, Config(raw={}))
+        # One is shipped, so this is somebody who deliberately emptied it.
+        worker = poller.TwitchLogin(self.db, Config(raw={"twitch": {"client_id": ""}}))
         said = self.run_worker(worker)
         self.assertTrue(any("client id" in line for line in said))
 
