@@ -333,18 +333,24 @@ def seed(theme: str, height: int = HEIGHT) -> None:
 
     # What the service suggests, and the history it keeps, both their own
     # tables so nothing of this reaches the feed.
+    # Two of them are streams, since a listing says which and the card badges
+    # them the same way a feed row is badged.
     db.replace_cached("recommended", [{
         "ext_id": f"mockrec{index:03d}", "title": title,
         "channel_name": name, "channel_ext_id": None,
-        "duration_s": 480 + index * 211, "views": 88_000 + index * 41_000,
+        "duration_s": None if index in (1, 4) else 480 + index * 211,
+        "views": 88_000 + index * 41_000,
         "published_at": NOW - (index + 1) * DAY,
+        "live_status": ("is_live" if index == 1
+                        else "is_upcoming" if index == 4 else None),
+        "scheduled_at": NOW + 5 * 3600 if index == 4 else None,
         "thumbnail_url": thumb(f"rec{index:02d}", index + 81),
     } for index, (title, name) in enumerate([
         ("A workshop built into a stairwell", "Copper & Coil"),
-        ("The quietest fan I could find", "Bench Notes"),
+        ("Soldering along, live for an hour", "Bench Notes"),
         ("Two weeks of bread, one starter", "The Slow Kitchen"),
         ("Mapping a cave with a phone", "Northern Trailhead"),
-        ("Why rockets throttle down", "Orbital Mechanics Weekly"),
+        ("Launch day, the whole descent", "Orbital Mechanics Weekly"),
         ("Light, and how a lens bends it", "Lantern Studio"),
         ("One shelf, no screws", "Pixel Forge"),
         ("Recording rain properly", "Field Recordings"),
@@ -535,6 +541,35 @@ def shot_playlist(bridge, window) -> None:
     settle(1.2)
 
 
+# What a search of YouTube itself comes back with. Offline nothing arrives, so
+# the answer is handed to the bridge the way the worker would hand it over.
+SEARCH_RESULTS = [
+    ("Turning a taper without a taper attachment", "Pixel Forge", 1_204, 51_200, None, None),
+    ("Live from the bench, finishing the lathe", "Pixel Forge", None, 2_180, "is_live", None),
+    ("Premiere, the whole rebuild in one cut", "Pixel Forge", None, None, "is_upcoming", 4 * 3600),
+    ("Lathe basics for somebody with no lathe", "Bench Notes", 2_311, 88_400, None, None),
+    ("Cutting threads, slowly and badly", "Copper & Coil", 940, 12_050, None, None),
+    ("A lathe rescued from a barn", "Field Recordings", 3_120, 33_900, None, None),
+]
+
+
+def shot_search(bridge, _window) -> None:
+    bridge.search("lathe")
+    settle(0.4)
+    bridge._search_scope = "youtube"
+    rows = [{
+        "ext_id": f"mocksearch{index:02d}", "title": title, "channel_name": channel,
+        "channel_ext_id": f"UCmock{0:018d}" if channel == "Pixel Forge" else None,
+        "duration_s": duration, "views": views,
+        "published_at": None if live else NOW - (index + 2) * DAY,
+        "live_status": live, "scheduled_at": NOW + starts if starts else None,
+        "thumbnail_url": thumb(f"search{index:02d}", index + 101),
+    } for index, (title, channel, duration, views, live, starts)
+        in enumerate(SEARCH_RESULTS)]
+    bridge._on_web_results("lathe", 1, rows)
+    settle(1.4)
+
+
 def shot_suggestions(bridge, _window) -> None:
     bridge.showRecommended()
     settle(1.4)
@@ -568,6 +603,7 @@ SHOTS = {
     "channel": ("Deep Sea", shot_channel, HEIGHT),
     "playlist": ("Paper", shot_playlist, HEIGHT),
     "suggestions": ("Aurora", shot_suggestions, HEIGHT),
+    "search": ("Ultraviolet", shot_search, HEIGHT),
     "history": ("Linen", shot_history, HEIGHT),
     "themes": ("Sunset Drive", shot_themes, 1080),
 }

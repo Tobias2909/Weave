@@ -161,15 +161,35 @@ Rectangle {
             }
         }
 
-        Text {
+        // Always as tall as two lines, whether the title needs them or not.
+        // Sized from a hidden two line copy rather than from a number, since
+        // the line height belongs to the font the platform actually loaded.
+        // Without this a one line title pulled the channel row up and nothing
+        // below the picture lined up from card to card.
+        Item {
             width: parent.width
-            text: card.title
-            color: card.watched ? Theme.colors.watchedDim : Theme.colors.text
-            font.pixelSize: 13
-            font.weight: Font.DemiBold
-            wrapMode: Text.Wrap
-            maximumLineCount: 2
-            elide: Text.ElideRight
+            height: titleSizer.height
+
+            Text {
+                id: titleSizer
+                visible: false
+                text: "Ag\nAg"
+                font: titleText.font
+            }
+
+            Text {
+                id: titleText
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                text: card.title
+                color: card.watched ? Theme.colors.watchedDim : Theme.colors.text
+                font.pixelSize: 13
+                font.weight: Font.DemiBold
+                wrapMode: Text.Wrap
+                maximumLineCount: 2
+                elide: Text.ElideRight
+            }
         }
 
         // The channel line is its own click target, so a left click here opens
@@ -179,10 +199,16 @@ Rectangle {
         Row {
             id: channelRow
             width: parent.width
+            // As tall as the picture whether there is one or not. A listing
+            // from a channel nothing is stored about has no picture to draw,
+            // and letting the row shrink to its text put those cards half a
+            // line out of step with the rest of the grid.
+            height: 44
             spacing: 8
 
             RoundedImage {
                 id: avatar
+                anchors.verticalCenter: parent.verticalCenter
                 width: 44
                 height: 44
                 circle: true

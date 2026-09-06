@@ -23,7 +23,12 @@ from dataclasses import dataclass
 from ..ids import CHANNEL_ID, is_video_id
 
 FIELDS = ("%(id)s\t%(title)s\t%(channel)s\t%(channel_id)s\t%(duration)s"
-          "\t%(thumbnails.-1.url)s\t%(view_count)s\t%(timestamp)s")
+          "\t%(thumbnails.-1.url)s\t%(view_count)s\t%(timestamp)s"
+          # A stream is a listing like any other here, and neither of these
+          # costs a request, so what the feed already knows about one is known
+          # in a search and in the suggestions too. Ordinary videos answer NA
+          # to both, measured, rather than saying not_live.
+          "\t%(live_status)s\t%(release_timestamp)s")
 
 # What turns "3 weeks ago" in the listing into a date. YouTube sends the age of
 # a video in every listing as a relative phrase, and yt-dlp parses it only when
@@ -43,6 +48,8 @@ class FlatVideo:
     thumbnail_url: str | None = None
     views: int | None = None
     published_at: int | None = None
+    live_status: str | None = None
+    scheduled_at: int | None = None
 
 
 # The exact titles YouTube substitutes for a playlist entry it will not
@@ -95,6 +102,8 @@ def parse(text: str) -> list[FlatVideo]:
             thumbnail_url=_field(parts, 5),
             views=_number(parts[6]) if len(parts) > 6 else None,
             published_at=_number(parts[7]) if len(parts) > 7 else None,
+            live_status=_field(parts, 8),
+            scheduled_at=_number(parts[9]) if len(parts) > 9 else None,
         ))
     return out
 
@@ -106,4 +115,5 @@ def as_row(item: FlatVideo) -> dict:
         "channel_name": item.channel_name, "channel_ext_id": item.channel_ext_id,
         "duration_s": item.duration_s, "thumbnail_url": item.thumbnail_url,
         "views": item.views, "published_at": item.published_at,
+        "live_status": item.live_status, "scheduled_at": item.scheduled_at,
     }

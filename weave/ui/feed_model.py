@@ -88,13 +88,12 @@ class FeedModel(QAbstractListModel):
 
     @staticmethod
     def _build(row) -> dict:
-        # scheduled_at is only on the videos table. Recommendations, playlist
-        # items and search results are shaped the same otherwise, so a source
-        # that has never heard of a scheduled stream is asked rather than
-        # assumed, instead of raising on a column it never selected. `in row`
-        # alone would not do here: a sqlite3.Row tests membership against its
-        # values, not its column names, unlike the plain dict a few callers
-        # still hand in.
+        # The feed, the suggestions, the history and a search all carry a
+        # scheduled time now. A playlist entry does not, so the column is asked
+        # for rather than assumed, instead of raising on one a source never
+        # selected. `in row` alone would not do here: a sqlite3.Row tests
+        # membership against its values, not its column names, unlike the plain
+        # dict a few callers still hand in.
         scheduled_at = row["scheduled_at"] if "scheduled_at" in row.keys() else None  # noqa: SIM118
         is_upcoming = row["live_status"] == "is_upcoming"
         return {

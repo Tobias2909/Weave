@@ -64,3 +64,42 @@ class ParseLines(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StreamsInTheseLists(unittest.TestCase):
+    """A stream is a listing like any other here.
+
+    A suggestion or a search result can be a channel that is live now or a
+    premiere that has been announced, and the flat listing says which without
+    a second request. Reading it is what lets the card badge them the way a
+    feed row is badged, and what lets the play path refuse one that has not
+    begun.
+    """
+
+    LIVE = ("bbbbbbbbbbb\tOn air now\tSome channel\tUCabcdefghijklmnopqrstuv\tNA"
+            "\thttps://i/x.jpg\t1200\tNA\tis_live\tNA")
+    SOON = ("ccccccccccc\tStarting later\tSome channel\tUCabcdefghijklmnopqrstuv\tNA"
+            "\thttps://i/x.jpg\tNA\tNA\tis_upcoming\t1800000000")
+
+    def test_a_stream_that_is_on_says_so(self):
+        item = recommended.parse_lines(self.LIVE)[0]
+        self.assertEqual(item.live_status, "is_live")
+        self.assertIsNone(item.scheduled_at)
+
+    def test_an_announced_stream_carries_when_it_begins(self):
+        item = recommended.parse_lines(self.SOON)[0]
+        self.assertEqual((item.live_status, item.scheduled_at),
+                         ("is_upcoming", 1800000000))
+
+    def test_an_ordinary_video_answers_neither(self):
+        # Measured: yt-dlp says NA rather than not_live for these.
+        item = recommended.parse_lines(REAL)[0]
+        self.assertIsNone(item.live_status)
+        self.assertIsNone(item.scheduled_at)
+
+    def test_the_row_handed_on_carries_both(self):
+        from weave.sources import flatlist
+
+        row = flatlist.as_row(recommended.parse_lines(self.SOON)[0])
+        self.assertEqual((row["live_status"], row["scheduled_at"]),
+                         ("is_upcoming", 1800000000))

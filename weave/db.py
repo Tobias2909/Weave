@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -318,6 +318,12 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # the feed. Existing rows default to being in All, since everything stored
     # before this was followed by hand.
     ("channels", "in_all", "INTEGER NOT NULL DEFAULT 1"),
+    # A search result and a suggestion can be a stream that is on now or one
+    # that is announced, exactly as a feed row can, and the flat listing says
+    # which without being asked twice. Kept so the card can badge it and the
+    # play path can refuse to hand an announced stream to a player.
+    ("cached_videos", "live_status", "TEXT"),
+    ("cached_videos", "scheduled_at", "INTEGER"),
 )
 
 
@@ -1384,12 +1390,13 @@ class Database:
             conn.executemany(
                 "INSERT INTO cached_videos(kind, ext_id, title, channel_name, "
                 "  channel_ext_id, duration_s, thumbnail_url, views, published_at, "
-                "  position, seen_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                "  live_status, scheduled_at, position, seen_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
                 [(kind, row["ext_id"], row["title"], row.get("channel_name"),
                   row.get("channel_ext_id"), row.get("duration_s"),
                   row.get("thumbnail_url"), row.get("views"),
-                  row.get("published_at"), index, now)
+                  row.get("published_at"), row.get("live_status"),
+                  row.get("scheduled_at"), index, now)
                  for index, row in enumerate(rows)],
             )
         self.set_state(f"{kind}_at", str(now))
@@ -1413,12 +1420,13 @@ class Database:
             conn.executemany(
                 "INSERT INTO cached_videos(kind, ext_id, title, channel_name, "
                 "  channel_ext_id, duration_s, thumbnail_url, views, published_at, "
-                "  position, seen_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                "  live_status, scheduled_at, position, seen_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
                 [(kind, row["ext_id"], row["title"], row.get("channel_name"),
                   row.get("channel_ext_id"), row.get("duration_s"),
                   row.get("thumbnail_url"), row.get("views"),
-                  row.get("published_at"), start + index, now)
+                  row.get("published_at"), row.get("live_status"),
+                  row.get("scheduled_at"), start + index, now)
                  for index, row in enumerate(rows)],
             )
             return conn.total_changes - before
@@ -1449,7 +1457,8 @@ class Database:
                    r.duration_s                AS duration_s,
                    r.views                     AS views,
                    NULL                        AS likes,
-                   NULL                        AS live_status,
+                   r.live_status               AS live_status,
+                   r.scheduled_at              AS scheduled_at,
                    COALESCE(c.title, r.channel_name) AS channel_title,
                    c.avatar_url                AS avatar_url,
                    w.video_key IS NOT NULL     AS watched
@@ -1526,7 +1535,9 @@ class Database:
                 "title": row["title"], "published_at": row.get("published_at"),
                 "thumbnail_url": row.get("thumbnail_url"),
                 "duration_s": row.get("duration_s"),
-                "views": row.get("views"), "likes": None, "live_status": None,
+                "views": row.get("views"), "likes": None,
+                "live_status": row.get("live_status"),
+                "scheduled_at": row.get("scheduled_at"),
                 "channel_title": (channel["title"] if channel else None)
                                  or row.get("channel_name") or "",
                 "avatar_url": channel["avatar_url"] if channel else None,
