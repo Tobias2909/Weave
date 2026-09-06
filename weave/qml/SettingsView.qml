@@ -119,6 +119,39 @@ Item {
                                 }
                             }
                         }
+
+                        ThemedMenuSeparator {
+                            width: parent.width
+                        }
+
+                        Label {
+                            text: "Make your own"
+                            color: Theme.colors.text
+                            font.pixelSize: 13
+                            font.weight: Font.DemiBold
+                        }
+
+                        ThemeMaker {
+                            objectName: "themeMaker"
+                            width: parent.width
+                        }
+
+                        Flow {
+                            objectName: "ownThemes"
+                            width: parent.width
+                            spacing: 8
+                            visible: App.ownThemes.length > 0
+
+                            Repeater {
+                                model: App.ownThemes
+
+                                FlatButton {
+                                    required property var modelData
+                                    text: "Throw away " + modelData
+                                    onClicked: App.deleteTheme(modelData)
+                                }
+                            }
+                        }
                     }
                 }
 

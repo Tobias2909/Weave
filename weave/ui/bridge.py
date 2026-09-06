@@ -19,6 +19,7 @@ from PySide6.QtCore import Property, QObject, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QGuiApplication
 
 from .. import format as fmt
+from .. import palette, themes
 from .. import ids
 from .. import paths, tokens
 from ..config import Config
@@ -120,6 +121,7 @@ class Bridge(QObject):
     musicChanged = Signal()
     navChanged = Signal()
     favoritesChanged = Signal()
+    themesChanged = Signal()
 
     def __init__(self, db: Database, cfg: Config, model: FeedModel,
                  player: Player, parent: QObject | None = None) -> None:
@@ -230,6 +232,7 @@ class Bridge(QObject):
         # The order the kept songs are shown in, shuffled once so the tiles
         # stay where they are between reads.
         self._favorites_order: list[str] = []
+        self._theme = None
         self._music_history: MusicHistoryReader | None = None
         # Every view landed on, walked by the back and forward mouse buttons.
         # Seeded with the view the window opens on, so the first step back has
@@ -1615,6 +1618,85 @@ class Bridge(QObject):
         self.reload()
 
     # ---- music -----------------------------------------------------------
+
+    def attach_theme(self, theme) -> None:
+        """Given after construction, like the player, since the window's own
+        theme object is built beside the bridge rather than by it."""
+        self._theme = theme
+
+    def _get_own_themes(self) -> list:
+        """The themes that were made here, by the name they were given.
+
+        These are the ones that can be thrown away. What ships with the
+        application cannot be, and a file is read for its name rather than
+        having the file name shown, since one is a name and the other is where
+        it happens to live.
+        """
+        found = []
+        for path in sorted(themes.user_dir().glob("*.toml")):
+            loaded = themes.load_file(path)
+            if loaded is not None:
+                found.append(loaded.name)
+        return found
+
+    ownThemes = Property("QVariantList", _get_own_themes, notify=themesChanged)
+
+    @Slot(str, str, str)
+    def previewTheme(self, ground: str, accent: str, second: str) -> None:
+        """Paint the window with the dots as they are being moved.
+
+        Nothing is written. The file is only made when it is saved, so a theme
+        can be tried for as long as it takes without leaving anything behind.
+        """
+        if self._theme is None:
+            return
+        self._theme.show_draft(palette.from_dots(ground, accent, second or None))
+
+    @Slot()
+    def stopPreview(self) -> None:
+        """Put the draft down and go back to the theme that was chosen."""
+        if self._theme is not None:
+            self._theme.show_draft(None)
+
+    @Slot(str, str, str, str, result=bool)
+    def saveTheme(self, name: str, ground: str, accent: str, second: str) -> bool:
+        """Write the dots out as a theme of its own, and wear it.
+
+        It lands in the same folder a hand written theme goes in and is read
+        the same way, so there is nothing special about one made here.
+        """
+        name = name.strip()
+        if not name or self._theme is None:
+            self._set_notice("A theme needs a name", clear_after_s=4)
+            return False
+        made = palette.from_dots(ground, accent, second or None)
+        target = themes.user_dir() / f"{themes.file_name(name)}.toml"
+        try:
+            themes.user_dir().mkdir(parents=True, exist_ok=True)
+            target.write_text(palette.as_toml(name, made), encoding="utf-8")
+        except OSError as exc:
+            self._set_notice(f"Could not save the theme, {exc}", clear_after_s=6)
+            return False
+        self._theme.show_draft(None)
+        self._theme.reload()
+        self._theme.select(name)
+        self.themesChanged.emit()
+        self._set_notice(f"Saved {name}", clear_after_s=4)
+        return True
+
+    @Slot(str, result=bool)
+    def deleteTheme(self, name: str) -> bool:
+        """Throw away a theme that was made here. What ships is left alone."""
+        target = themes.user_dir() / f"{themes.file_name(name)}.toml"
+        if not target.exists():
+            self._set_notice("That theme is not one of yours", clear_after_s=4)
+            return False
+        target.unlink()
+        if self._theme is not None:
+            self._theme.reload()
+        self.themesChanged.emit()
+        self._set_notice(f"Threw away {name}", clear_after_s=4)
+        return True
 
     def attach_audio(self, audio) -> None:
         """Given after construction, since the player needs the config the

@@ -141,6 +141,19 @@ def _gradient(raw: dict | None, problems: list[str]) -> dict | None:
     }
 
 
+def file_name(name: str) -> str:
+    """What a theme called this is stored as.
+
+    Kept to letters, digits and dashes, so a name with a slash or a quote in
+    it cannot decide where the file lands.
+    """
+    kept = [ch.lower() if ch.isalnum() else "-" for ch in name.strip()]
+    slug = "".join(kept).strip("-")
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    return slug or "theme"
+
+
 def load_file(path: Path) -> Loaded | None:
     try:
         raw = tomllib.loads(path.read_text())

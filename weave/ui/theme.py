@@ -28,6 +28,10 @@ class Theme(QObject):
         self._db = db
         name = db.get_state("theme", themes.DEFAULT_NAME) if db else themes.DEFAULT_NAME
         self._loaded = themes.find(name or themes.DEFAULT_NAME)
+        # A theme being made, held here and never written, so dragging a dot
+        # repaints the window without touching a file the watcher would then
+        # read back a moment later.
+        self._draft: dict | None = None
 
         themes.user_dir().mkdir(parents=True, exist_ok=True)
         self._watcher = QFileSystemWatcher(self)
@@ -52,9 +56,13 @@ class Theme(QObject):
     # ---- what QML reads --------------------------------------------------
 
     def _get_colors(self) -> dict:
+        if self._draft is not None:
+            return dict(self._draft["colors"])
         return dict(self._loaded.colors)
 
     def _get_gradient(self) -> dict:
+        if self._draft is not None:
+            return dict(self._draft.get("gradient") or {})
         return dict(self._loaded.gradient) if self._loaded.gradient else {}
 
     def _get_names(self) -> list:
@@ -79,6 +87,13 @@ class Theme(QObject):
 
     @Slot(str)
     def select(self, name: str) -> None:
+        # Choosing a theme is also how a draft is put down, so the same name
+        # is not a no-op while one is being worn.
+        if self._draft is not None:
+            self._draft = None
+            if name == self._loaded.name:
+                self.changed.emit()
+                return
         if not name or name == self._loaded.name:
             return
         self._loaded = themes.find(name)
@@ -86,6 +101,20 @@ class Theme(QObject):
             self._db.set_state("theme", self._loaded.name)
         self._rewatch()
         self.changed.emit()
+
+    def show_draft(self, made: dict | None) -> None:
+        """Paint the window with a theme that is being made, or stop.
+
+        Held in memory on purpose. Writing the file on every movement of a dot
+        would have the watcher read it back and repaint a second time, and the
+        file would be full of half finished themes.
+        """
+        self._draft = made
+        self.changed.emit()
+
+    @property
+    def drafting(self) -> bool:
+        return self._draft is not None
 
     @Slot()
     def reload(self) -> None:

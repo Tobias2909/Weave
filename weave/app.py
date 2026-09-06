@@ -95,6 +95,7 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
     player = Player(cfg, parent=app)
     bridge = Bridge(db, cfg, model, player, parent=app)
     audio = AudioPlayer(cfg, db, parent=app)
+    bridge.attach_theme(theme)
     bridge.attach_audio(audio)
     # The mouse back and forward buttons are not delivered to any one item,
     # so they are read at the application before anything else sees them.
