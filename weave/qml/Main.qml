@@ -1053,7 +1053,7 @@ ApplicationWindow {
         }
         MenuItem {
             objectName: "copyLinkEntry"
-            text: "Copy the address"
+            text: "Share"
             onTriggered: { App.copyLink(root.menuKey); videoMenu.dismiss() }
         }
         MenuItem {
@@ -1169,7 +1169,7 @@ ApplicationWindow {
             onTriggered: { App.refreshPlaylists(); playlistMenu.dismiss() }
         }
         MenuItem {
-            text: "Choose which to show"
+            text: "Playlist settings"
             onTriggered: { playlistMenu.dismiss(); playlistChooser.open() }
         }
     }

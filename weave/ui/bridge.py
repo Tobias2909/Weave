@@ -1504,6 +1504,9 @@ class Bridge(QObject):
             url = ids.playlist_watch_url(key.split(":", 1)[1], self._view_playlist)
         QGuiApplication.clipboard().setText(url)
         self._set_status("address copied")
+        # The same line that says a video is starting, since a copy is just as
+        # invisible as mpv taking a few seconds to put a window up.
+        self._set_notice("Address copied, ready to paste", clear_after_s=4)
 
     @Slot(str)
     def markWatched(self, key: str) -> None:
