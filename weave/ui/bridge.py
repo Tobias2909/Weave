@@ -679,8 +679,12 @@ class Bridge(QObject):
         # A channel page and a box both ignore the hide watched toggle. The
         # channel page is meant to show everything that channel has, and a box
         # was hand picked, so hiding half of it would be surprising.
-        if self._view_kind == MUSIC:
-            self._model.reload(hide_watched=False, channel_key="__none__")
+        if self._view_kind in (MUSIC, DEBUG, SETTINGS):
+            # These draw their own page and the grid is hidden behind them, so
+            # the rows in it are nobody's business. Emptying it cost a query
+            # that could only answer nothing, and a walk along the sidebar
+            # emptied and refilled it once per row, throwing away rows the
+            # grid was still building each time.
             self.emptyHintChanged.emit()
             self.groupsChanged.emit()
             self.boxesChanged.emit()

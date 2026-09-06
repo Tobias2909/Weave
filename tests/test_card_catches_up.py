@@ -119,3 +119,64 @@ class TheBridgeKeepsThem(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WalkingPastAViewWithNoGrid(unittest.TestCase):
+    """The wheel over the sidebar steps the selection, so a fast walk lands on
+    Music, How things are and Settings in quick succession. Those draw their
+    own page over a hidden grid, and emptying that grid on the way past threw
+    away rows it was still building, which Qt reports as a cancelled delegate.
+    """
+
+    def bridge(self, kind: str):
+        from weave.ui.bridge import Bridge
+
+        db = Database(Path(tempfile.mkdtemp()) / "weave.db")
+
+        class Model:
+            def __init__(self):
+                self.calls = []
+
+            def show(self, rows):
+                self.calls.append(("show", len(list(rows))))
+
+            def reload(self, **kw):
+                self.calls.append(("reload", kw))
+
+        class Quiet:
+            def emit(self, *_a):
+                pass
+
+        bridge = Bridge.__new__(Bridge)
+        bridge._db = db
+        bridge._model = Model()
+        bridge._view_kind = kind
+        bridge._view_id = -1
+        bridge._view_channel = ""
+        bridge._view_playlist = ""
+        bridge._search_text = ""
+        bridge._search_scope = "stored"
+        bridge._history_music = False
+        bridge._hide_watched = True
+        bridge._web_results = []
+        for name in ("playlistSkippedChanged", "emptyHintChanged", "groupsChanged",
+                     "boxesChanged", "countsChanged"):
+            setattr(bridge, name, Quiet())
+        return bridge
+
+    def test_the_grid_is_left_alone_by_those_three(self) -> None:
+        from weave.ui.bridge import Bridge
+
+        for kind in ("music", "debug", "settings"):
+            with self.subTest(kind=kind):
+                bridge = self.bridge(kind)
+                Bridge.reload(bridge)
+                self.assertEqual(bridge._model.calls, [],
+                                 "the hidden grid was touched anyway")
+
+    def test_a_view_that_does_have_a_grid_still_fills_it(self) -> None:
+        from weave.ui.bridge import Bridge
+
+        bridge = self.bridge("all")
+        Bridge.reload(bridge)
+        self.assertEqual([call[0] for call in bridge._model.calls], ["reload"])
