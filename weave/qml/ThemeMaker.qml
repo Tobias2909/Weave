@@ -42,9 +42,40 @@ Item {
                                       maker.hex(maker.secondColour))
     }
 
+    // While the dots are being put where a theme already is, moving them must
+    // not ask for a draft of the theme that is already on screen.
+    property bool adopting: false
+
     function refresh() {
-        settle.restart()
+        if (!adopting)
+            settle.restart()
     }
+
+    // Put the dots where they would have to be to make the theme in use.
+    // Pressing one of the themes offered above therefore moves them, and a
+    // theme can be taken as the starting point for one of your own.
+    function adoptCurrent() {
+        adopting = true
+        // The roles are handed over as text, so they are read as colours
+        // before anything is asked of them.
+        var ground = Qt.color(Theme.colors.background)
+        var accent = Qt.color(Theme.colors.accent)
+        var stops = Theme.gradient && Theme.gradient.stops ? Theme.gradient.stops : []
+        var far = stops.length > 0 ? Qt.color(stops[0].color) : accent
+
+        lightWindow = ground.hslLightness > 0.5
+        groundHue = ground.hsvHue < 0 ? 0 : ground.hsvHue
+        // The ground's colour is damped when it is derived, so the same
+        // damping is taken back off here and the dot lands where it was.
+        groundSpread = Math.min(1, ground.hsvSaturation / 0.55)
+        accentHue = accent.hsvHue < 0 ? 0 : accent.hsvHue
+        accentSpread = accent.hsvSaturation
+        secondHue = far.hsvHue < 0 ? 0 : far.hsvHue
+        secondSpread = far.hsvSaturation
+        adopting = false
+    }
+
+    Component.onCompleted: adoptCurrent()
 
     onGroundHueChanged: refresh()
     onGroundSpreadChanged: refresh()
@@ -80,6 +111,10 @@ Item {
                 MouseArea {
                     anchors.fill: parent
                     acceptedButtons: Qt.LeftButton
+                    // The page this sits on scrolls, and a drag begun here
+                    // would otherwise be taken from us and read as a scroll
+                    // the moment the pointer moved a few pixels.
+                    preventStealing: true
                     onPressed: function (mouse) {
                         if (!disc.inside(mouse.x, mouse.y)) {
                             maker.held = -1

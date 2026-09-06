@@ -115,7 +115,13 @@ Item {
                                     objectName: "themeChoice" + index
                                     text: modelData
                                     accent: modelData === Theme.current
-                                    onClicked: Theme.select(modelData)
+                                    onClicked: {
+                                        Theme.select(modelData)
+                                        // The dots follow, so a theme can be
+                                        // picked up and altered rather than
+                                        // started from nothing.
+                                        maker.adoptCurrent()
+                                    }
                                 }
                             }
                         }
@@ -132,6 +138,7 @@ Item {
                         }
 
                         ThemeMaker {
+                            id: maker
                             objectName: "themeMaker"
                             width: parent.width
                         }
