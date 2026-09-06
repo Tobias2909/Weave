@@ -98,9 +98,10 @@ class StartTimeText(unittest.TestCase):
         self.assertEqual(self.starts(400 * 86400), "19 Feb 2028 at 12:00")
 
     def test_the_hour_is_the_local_one(self):
-        os.environ["TZ"] = "Europe/Berlin"
+        # An hour ahead of UTC and no daylight saving anywhere in the year, so
+        # the arithmetic is the same whenever this runs.
+        os.environ["TZ"] = "Africa/Lagos"
         time.tzset()
-        # An hour ahead of UTC in January, so noon there is 13:00 here.
         self.assertEqual(self.starts(0), "today at 13:00")
 
     def test_a_time_already_past_still_reads_as_a_date(self):
