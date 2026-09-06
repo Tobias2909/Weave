@@ -1240,6 +1240,16 @@ ApplicationWindow {
         property string groupName: ""
 
         ThemedMenuItem {
+            text: "Manage the group"
+            onTriggered: {
+                var id = groupMenu.groupId, name = groupMenu.groupName
+                groupMenu.dismiss()
+                manageGroup.groupId = id
+                manageGroup.groupName = name
+                manageGroup.open()
+            }
+        }
+        ThemedMenuItem {
             text: "Rename"
             onTriggered: {
                 var id = groupMenu.groupId, name = groupMenu.groupName
@@ -1280,6 +1290,10 @@ ApplicationWindow {
             text: "Delete the box"
             onTriggered: { App.deleteBox(boxMenu.boxId); boxMenu.dismiss() }
         }
+    }
+
+    ManageGroup {
+        id: manageGroup
     }
 
     // A checklist rather than a menu, because a menu of a hundred playlists is

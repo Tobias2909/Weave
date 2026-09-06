@@ -154,7 +154,12 @@ def _database(db: Database, report: Report) -> None:
     # not followed and are not counted as channels anywhere else, so the line
     # says so rather than leaving the table looking bigger than the count.
     loose = f", {counts['loose']} kept only for saved videos" if counts["loose"] else ""
-    report.add("database", OK, f"{size:.1f} MB, {counts['channels']} channels, "
+    # Followed, polled, and shown in their own group rather than in All. They
+    # are part of the channel count, so the line says how many of it they are
+    # instead of the feed looking short of them.
+    grouped = (f", {counts['group_only']} of them in groups only"
+               if counts.get("group_only") else "")
+    report.add("database", OK, f"{size:.1f} MB, {counts['channels']} channels{grouped}, "
                                f"{counts['videos']} videos{loose}")
     if not counts["channels"]:
         report.add("channels", FAIL, "nothing is tracked",

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -312,6 +312,12 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # the same row into two places is how the two of them come apart.
     ("music_history", "favorite", "INTEGER NOT NULL DEFAULT 0"),
     ("music_history", "favorite_at", "INTEGER"),
+    # Whether this channel belongs in All. Following one by name puts it there;
+    # putting one in a group only asks for it inside that group, so a channel
+    # reached that way is polled and shows in its group without pouring into
+    # the feed. Existing rows default to being in All, since everything stored
+    # before this was followed by hand.
+    ("channels", "in_all", "INTEGER NOT NULL DEFAULT 1"),
 )
 
 
@@ -355,6 +361,13 @@ class Database:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
             row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             was = int(row["value"]) if row else 0
+            if was and was < 25:
+                # in_all arrives set for every existing row, which is right for
+                # the channels followed and wrong for the ones a saved video
+                # brought along. Left as it came, putting one of those in a
+                # group would raise it into All, which is the one thing the
+                # flag exists to prevent.
+                conn.execute("UPDATE channels SET in_all=0 WHERE tracked=0")
             if was and was < 24:
                 # Pictures were stored as the window had them, wrapped for the
                 # cache. Read back out they were wrapped a second time, which
@@ -414,7 +427,7 @@ class Database:
     # ---- channels --------------------------------------------------------
 
     def add_channel(self, key: str, platform: str, ext_id: str, title: str | None = None,
-                    avatar_url: str | None = None) -> bool:
+                    avatar_url: str | None = None, in_all: bool = True) -> bool:
         """Follow a channel. Returns whether it was newly followed.
 
         COALESCE keeps a known title or avatar when the caller has none, so a
@@ -423,19 +436,25 @@ class Database:
         A channel that was only carried along by a saved video becomes a
         followed one here, so a row that already existed but was not followed
         still counts as new.
+
+        `in_all` false is a channel wanted inside a group and nowhere else. It
+        is taken as the greater of what is asked and what is already there, so
+        following a channel by name puts it in All and being added to a second
+        group afterwards cannot take it back out again.
         """
         with self.conn as conn:
             existed = conn.execute(
                 "SELECT tracked FROM channels WHERE key=?", (key,)).fetchone()
             conn.execute(
                 "INSERT INTO channels(key, platform, ext_id, title, avatar_url, added_at, "
-                "  tracked) "
-                "VALUES(?,?,?,?,?,?,1) "
+                "  tracked, in_all) "
+                "VALUES(?,?,?,?,?,?,1,?) "
                 "ON CONFLICT(key) DO UPDATE SET "
                 "  title=COALESCE(excluded.title, channels.title), "
                 "  avatar_url=COALESCE(excluded.avatar_url, channels.avatar_url), "
-                "  tracked=1",
-                (key, platform, ext_id, title, avatar_url, int(time.time())),
+                "  tracked=1, "
+                "  in_all=MAX(channels.in_all, excluded.in_all)",
+                (key, platform, ext_id, title, avatar_url, int(time.time()), int(in_all)),
             )
             return existed is None or not existed["tracked"]
 
@@ -457,8 +476,8 @@ class Database:
         with self.conn as conn:
             conn.execute(
                 "INSERT INTO channels(key, platform, ext_id, title, avatar_url, added_at, "
-                "  tracked) "
-                "VALUES(?,?,?,?,?,?,0) "
+                "  tracked, in_all) "
+                "VALUES(?,?,?,?,?,?,0,0) "
                 "ON CONFLICT(key) DO UPDATE SET "
                 "  title=COALESCE(excluded.title, channels.title), "
                 "  avatar_url=COALESCE(excluded.avatar_url, channels.avatar_url)",
@@ -466,7 +485,7 @@ class Database:
             )
 
     def track_channel(self, key: str, title: str | None = None,
-                      avatar_url: str | None = None) -> bool:
+                      avatar_url: str | None = None, in_all: bool = True) -> bool:
         """Follow a channel named only by its key.
 
         Reached from putting a channel in a group, where all that is on hand
@@ -479,7 +498,8 @@ class Database:
             return False
         platform = "youtube" if prefix == "yt" else "twitch"
         return self.add_channel(key, platform, ext_id,
-                                title or self._name_from_lists(ext_id), avatar_url)
+                                title or self._name_from_lists(ext_id), avatar_url,
+                                in_all=in_all)
 
     def _name_from_lists(self, ext_id: str) -> str | None:
         """What the lists that come from YouTube call this channel, if any of
@@ -621,11 +641,16 @@ class Database:
             conn.execute("DELETE FROM channels WHERE key=?", (key,))
 
     def channels(self, platform: str | None = None,
-                 include_untracked: bool = False) -> list[sqlite3.Row]:
+                 include_untracked: bool = False,
+                 in_all_only: bool = False) -> list[sqlite3.Row]:
         """The channels followed. This is the answer to how many there are, so
         the ones carried along by a saved video are left out unless asked
-        for."""
+        for. A channel wanted inside a group and nowhere else is one of the
+        channels followed, and it is counted here, but it is not one of the
+        channels All is made of, which is what `in_all_only` asks for."""
         where = [] if include_untracked else ["tracked=1"]
+        if in_all_only:
+            where.append("in_all=1")
         args: Sequence[Any] = ()
         if platform:
             where.append("platform=?")
@@ -931,8 +956,14 @@ class Database:
         group holds a whole channel and fills itself from what that channel
         posts, so a group of channels nothing ever asks after would sit empty
         for good.
+
+        What it does not do is add to All. A group is a question about a few
+        channels, and answering it by also pouring them into the feed makes
+        the group the only place they are not. A channel already followed by
+        name stays in All, since `in_all` is only ever raised.
         """
-        if not self.track_channel(channel_key) and not self.channel(channel_key):
+        if not self.track_channel(channel_key, in_all=False) \
+                and not self.channel(channel_key):
             return False
         with self.conn as conn:
             conn.execute(
@@ -940,10 +971,41 @@ class Database:
                 "ON CONFLICT DO NOTHING", (group_id, channel_key))
         return True
 
-    def remove_from_group(self, group_id: int, channel_key: str) -> None:
+    def remove_from_group(self, group_id: int, channel_key: str) -> bool:
+        """Take a channel out of a group. Says whether that also stopped it
+        being followed.
+
+        A channel that is in All was followed on its own account and stays
+        followed. One that is not is here because a group asked for it, so
+        once the last group lets go of it there is nothing left that shows it
+        and nothing that should go on polling it. The row itself stays, the
+        way a box's channel does, so a card that names it still has a name and
+        a picture to show.
+        """
         with self.conn as conn:
             conn.execute("DELETE FROM group_members WHERE group_id=? AND channel_key=?",
                          (group_id, channel_key))
+            row = conn.execute(
+                "SELECT in_all FROM channels WHERE key=? AND tracked=1", (channel_key,)
+            ).fetchone()
+            if row is None or row["in_all"]:
+                return False
+            held = conn.execute(
+                "SELECT 1 FROM group_members WHERE channel_key=? LIMIT 1", (channel_key,)
+            ).fetchone()
+            if held is not None:
+                return False
+            conn.execute("UPDATE channels SET tracked=0 WHERE key=?", (channel_key,))
+            return True
+
+    def group_channels(self, group_id: int) -> list[sqlite3.Row]:
+        """The channels in one group, for the window that manages it. Named
+        ones first and alphabetically, since a channel added by id before its
+        details arrived has no name yet and would otherwise sort under it."""
+        return list(self.conn.execute(
+            "SELECT c.* FROM group_members m JOIN channels c ON c.key = m.channel_key "
+            "WHERE m.group_id=? ORDER BY c.title IS NULL, c.title COLLATE NOCASE",
+            (group_id,)))
 
     def groups_holding(self, channel_key: str) -> list[int]:
         return [int(row["group_id"]) for row in self.conn.execute(
@@ -1727,7 +1789,7 @@ class Database:
         those are the only ones All shows."""
         return int(self.conn.execute(
             "SELECT COUNT(*) FROM videos v "
-            "JOIN channels c ON c.key = v.channel_key AND c.tracked = 1 "
+            "JOIN channels c ON c.key = v.channel_key AND c.tracked = 1 AND c.in_all = 1 "
             "LEFT JOIN watched w ON w.video_key = v.key "
             "WHERE w.video_key IS NULL AND (v.is_short IS NULL OR v.is_short = 0)"
         ).fetchone()[0])
@@ -1764,6 +1826,10 @@ class Database:
 
         if group_id is None and box_id is None and channel_key is None and not query:
             where.append("c.tracked = 1")
+            # A channel put in a group and never followed by name is asked
+            # after inside that group only, so All leaves it out the same way
+            # it leaves out the channel behind a video saved into a box.
+            where.append("c.in_all = 1")
         if hide_watched:
             where.append("w.video_key IS NULL")
         if group_id is not None:
@@ -1860,6 +1926,8 @@ class Database:
         row = self.conn.execute(
             "SELECT (SELECT COUNT(*) FROM channels WHERE tracked=1) AS channels,"
             "       (SELECT COUNT(*) FROM channels WHERE tracked=0) AS loose,"
+            "       (SELECT COUNT(*) FROM channels WHERE tracked=1 AND in_all=0)"
+            "                                                       AS group_only,"
             "       (SELECT COUNT(*) FROM videos)   AS videos,"
             "       (SELECT COUNT(*) FROM watched)  AS watched"
         ).fetchone()

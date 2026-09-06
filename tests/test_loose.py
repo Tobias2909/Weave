@@ -225,7 +225,9 @@ class TheChannelThatCameAlong(LooseCase):
 
 class PuttingTheChannelInAGroup(LooseCase):
     """The other half of the rule. A group holds channels and fills itself from
-    what they post, so putting one in a group follows it."""
+    what they post, so putting one in a group follows it. Following it is all
+    it does, though: the channel is polled and shows inside that group, and
+    All is left exactly as it was."""
 
     def setUp(self):
         super().setUp()
@@ -259,11 +261,14 @@ class PuttingTheChannelInAGroup(LooseCase):
         self.assertEqual(len(self.db.channels(include_untracked=True)), 1)
         self.assertEqual(self.db.counts()["loose"], 0)
 
-    def test_and_its_saved_video_reaches_the_feed_once_it_is_followed(self):
+    def test_and_its_saved_video_reaches_the_group_and_not_the_feed(self):
+        # Following it is what fills the group. All is a separate question and
+        # a group does not answer it, so the video shows in the group it was
+        # asked for and All is exactly as it was.
         self.db.add_to_box(self.box, "yt:aaaaaaaaaaa")
         self.db.add_to_group(self.group, STRANGER_KEY)
-        self.assertEqual(self.keys(self.db.feed()), ["yt:aaaaaaaaaaa"])
         self.assertEqual(self.keys(self.db.feed(group_id=self.group)), ["yt:aaaaaaaaaaa"])
+        self.assertEqual(self.db.feed(), [])
 
     def test_the_row_that_stands_for_no_channel_cannot_be_put_in_one(self):
         self.assertFalse(self.db.add_to_group(self.group, ""))
@@ -380,7 +385,8 @@ class Migration(unittest.TestCase):
         self.assertEqual([row["key"] for row in db.channels()], [FOLLOWED_KEY])
         self.assertEqual([row["key"] for row in db.channels_due(TIERS)], [FOLLOWED_KEY])
         self.assertEqual([row["key"] for row in db.feed()], ["yt:fffffffffff"])
-        self.assertEqual(db.counts(), {"channels": 1, "loose": 0, "videos": 1, "watched": 0})
+        self.assertEqual(db.counts(), {"channels": 1, "loose": 0, "group_only": 0,
+                                       "videos": 1, "watched": 0})
 
     def test_opening_it_twice_changes_nothing(self):
         self.make_old()

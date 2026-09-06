@@ -63,6 +63,10 @@ def read(obj, name: str):
     return QQmlProperty.read(obj, name)
 
 
+def write(obj, name: str, value) -> None:
+    QQmlProperty.write(obj, name, value)
+
+
 def call(obj, method: str) -> None:
     """Call a QML function with no arguments."""
     QMetaObject.invokeMethod(obj, method)
@@ -224,6 +228,15 @@ def seed() -> None:
                  published_at=1_700_000_000 + i, duration_s=600 + i)
         for i in range(6)
     ])
+    # Kept without being followed, the way a channel behind a saved video is.
+    # Putting this one in a group follows it for that group alone, and All must
+    # not gain its video, which is what the walk checks.
+    db.remember_channel("yt:UCsmokesmokesmokesmokes2", "youtube",
+                        "UCsmokesmokesmokesmokes2", "Smoke two")
+    db.upsert_videos([
+        VideoRow("youtube", "smokegroupvid", "yt:UCsmokesmokesmokesmokes2",
+                 "Video in a group only", published_at=1_700_000_100, duration_s=700),
+    ])
     # Written where the music view reads what was on the shelves last time, so
     # the sections are there without a request. Forty entries, which is more
     # than two rows hold at any window width worth drawing, and each with a
@@ -372,9 +385,52 @@ class Smoke:
 
         # A group made and found in the sidebar list.
         before = len(read(bridge, "groups"))
-        bridge.createGroup("Smoke group")
+        group_id = bridge.createGroup("Smoke group")
         settle(0.2)
         self.check("a new group appears", len(read(bridge, "groups")) == before + 1)
+
+        # The group's own window, and the rule it exists for: a channel put in
+        # a group is followed for that group and All is left as it was.
+        other = "yt:UCsmokesmokesmokesmokes2"
+        bridge.addChannelToGroup(group_id, other)
+        settle(0.3)
+        bridge.selectGroup(group_id)
+        settle(0.4)
+        self.check("the group shows the channel put in it", read(grid, "count") == 1,
+                   f"count {read(grid, 'count')}")
+        bridge.selectGroup(-1)
+        settle(0.4)
+        self.check("and All is exactly as it was", read(grid, "count") == 6,
+                   f"count {read(grid, 'count')}")
+
+        menu = find(window, "groupMenu")
+        write(menu, "groupId", group_id)
+        write(menu, "groupName", "Smoke group")
+        menu.open()
+        settle(0.3)
+        labels = [text.strip() for text, _ in menu_entries(menu)]
+        self.check("the group menu leads with managing it",
+                   labels[:1] == ["Manage the group"], ", ".join(labels))
+        menu.close()
+        settle(0.2)
+
+        manage = find(window, "manageGroup")
+        write(manage, "groupId", group_id)
+        write(manage, "groupName", "Smoke group")
+        call(manage, "open")
+        settle(0.4)
+        rows = find(window, "manageGroupList")
+        self.check("the group window lists who is in it",
+                   bool(read(manage, "visible")) and read(rows, "count") == 1,
+                   f"count {read(rows, 'count')}")
+        bridge.removeChannelFromGroup(group_id, other)
+        settle(0.4)
+        self.check("and empties as the last one is taken out", read(rows, "count") == 0,
+                   f"count {read(rows, 'count')}")
+        call(manage, "close")
+        settle(0.2)
+        bridge.deleteGroup(group_id)
+        settle(0.2)
 
         # The two popups open and close cleanly.
         for name in ("playlistChooser", "namePopup"):

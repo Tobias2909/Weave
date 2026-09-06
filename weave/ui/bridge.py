@@ -16,6 +16,7 @@ import random
 import time
 
 from pathlib import Path
+from typing import Any
 
 from PySide6.QtCore import Property, QObject, Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QGuiApplication
@@ -72,6 +73,11 @@ RECOMMENDED_TRUST_S = 6 * 3600
 PLAYLIST_TRUST_S = 6 * 3600
 # Shorter, because a history changes every time something is played.
 HISTORY_TRUST_S = 30 * 60
+
+# How many channels may be waiting for their details at once. A page fetch each
+# against the same budget as everything else, so opening a group of a hundred
+# channels asks for the first of them and not for all hundred.
+DETAILS_WAITING = 25
 
 # How many results one page of a YouTube search or one more helping of
 # recommendations asks for. Small enough to arrive quickly, since scrolling to
@@ -135,6 +141,13 @@ class Bridge(QObject):
 
         self._poller: FeedPoller | None = None
         self._adder: ChannelAdder | None = None
+        # References waiting to be resolved, as (ref, group id), and the group
+        # the running one belongs to. Resolving is one at a time by design, and
+        # before this a second reference typed while the first was in flight
+        # was simply refused, which is felt as the window ignoring a paste.
+        # A group id below zero is a plain follow, which goes into All.
+        self._add_queue: list[tuple[Any, int]] = []
+        self._adding = -1
         self._importer: SubsImporter | None = None
         self._history: HistoryImporter | None = None
         self._recommended: RecommendationsFetcher | None = None
@@ -150,6 +163,10 @@ class Bridge(QObject):
         # can be let go rather than kept for the life of the window.
         self._threads: set = set()
         self._details: ChannelDetailsFetcher | None = None
+        # Channels whose details are wanted and whose turn has not come, as
+        # (key, ext id). A group can hold more channels than anyone would want
+        # fetched at once, so the list is capped.
+        self._details_queue: list[tuple[str, str]] = []
         self._live: LiveWatcher | None = None
         # Raised while a live check is in flight.
         self._live_checking = False
@@ -279,7 +296,11 @@ class Bridge(QObject):
     def _get_groups(self) -> list:
         """All first, then the configured groups. Shipped as one list so QML
         has no special case for the All row."""
-        rows = [{"id": -1, "name": "All", "members": len(self._db.channels()),
+        # Counted over the channels in All rather than every channel
+        # followed. One kept for a group alone is followed, and is counted as
+        # such on the settings page, but it is not part of this row.
+        rows = [{"id": -1, "name": "All",
+                 "members": len(self._db.channels(in_all_only=True)),
                  "unwatched": self._db.unwatched_total()}]
         rows.extend(self._db.groups())
         return rows
@@ -360,7 +381,7 @@ class Bridge(QObject):
             return "Nothing here yet.\nAdd a channel above, then press Refresh."
         if self._view_kind == GROUP:
             return ("This group has no channels in it yet.\n"
-                    "Right click a video, or use the Groups button on a channel page.")
+                    "Right click the group and manage it, or right click a video.")
         if not len(self._db.channels(platform="youtube")):
             return ("Only Twitch channels are tracked so far.\n"
                     "Twitch appears in the live bar, which is not built yet, so it "
@@ -1359,13 +1380,44 @@ class Bridge(QObject):
             self._fetch_channel_details(channel_key, found["ext_id"])
 
     def _fetch_channel_details(self, channel_key: str, ext_id: str) -> None:
+        """Ask for one channel's picture, banner and follower count.
+
+        One at a time, since each is a page fetch against the same budget as
+        everything else. A second while one is in flight waits rather than
+        being dropped, which is what a group of channels none of which has
+        been opened yet needs: it wants every name in the window, not the
+        first one that happened to ask.
+        """
         if self._details is not None and self._details.isRunning():
+            pair = (channel_key, ext_id)
+            if pair not in self._details_queue and len(self._details_queue) < DETAILS_WAITING:
+                self._details_queue.append(pair)
             return
+        self._start_details(channel_key, ext_id)
+
+    def _start_details(self, channel_key: str, ext_id: str) -> None:
         self._details = ChannelDetailsFetcher(self._db, self._cfg, channel_key, ext_id, self)
-        self._details.fetched.connect(lambda _key: self.viewChanged.emit())
-        self._details.failed.connect(
-            lambda _key, message: self._set_status(f"could not load the channel, {message}"))
-        self._launch(self._details)
+        self._details.fetched.connect(self._on_details_fetched)
+        self._details.failed.connect(self._on_details_failed)
+        if not self._launch(self._details):
+            self._details_queue.clear()
+
+    def _on_details_fetched(self, _key: str) -> None:
+        self.viewChanged.emit()
+        # A group's window shows the name, the picture and the follower count
+        # of each channel in it, and those are what just arrived.
+        self.groupsChanged.emit()
+        self._next_details()
+
+    def _on_details_failed(self, _key: str, message: str) -> None:
+        self._set_status(f"could not load the channel, {message}")
+        self._next_details()
+
+    def _next_details(self) -> None:
+        if not self._details_queue:
+            return
+        channel_key, ext_id = self._details_queue.pop(0)
+        self._start_details(channel_key, ext_id)
 
     # ---- boxes -----------------------------------------------------------
 
@@ -1480,10 +1532,58 @@ class Bridge(QObject):
     def removeChannelFromGroup(self, group_id: int, channel_key: str) -> None:
         if not channel_key:
             return
-        self._db.remove_from_group(group_id, channel_key)
+        found = self._db.channel(channel_key)
+        dropped = self._db.remove_from_group(group_id, channel_key)
+        if dropped:
+            # Worth saying. The channel was only ever followed because a group
+            # asked for it, so taking it out of the last one stops it being
+            # polled, and nothing on screen would otherwise show that.
+            name = (found or {}).get("title") or channel_key.split(":", 1)[-1]
+            self._set_status(f"{name} is no longer followed, it was in this group only")
         self.groupsChanged.emit()
         if self._view_kind == GROUP:
             self.reload()
+
+    @Slot(int, result="QVariantList")
+    def groupChannels(self, group_id: int) -> list:
+        """The channels in one group, for the window that manages it.
+
+        A follower count is only there once the channel's own page has been
+        fetched, so it is handed over pre-formatted and empty when it is not
+        known yet rather than shown as a confident zero.
+        """
+        rows = []
+        for row in self._db.group_channels(group_id):
+            found = dict(row)
+            followers = found.get("follower_count")
+            rows.append({
+                "key": found.get("key", ""),
+                "title": found.get("title") or found.get("ext_id", ""),
+                "avatar": qml_source(found.get("avatar_url")),
+                "followersText": fmt.count_text(followers) if followers else "",
+                "platform": found.get("platform", "youtube"),
+                "inAll": bool(found.get("in_all")),
+            })
+        return rows
+
+    @Slot(int)
+    def fillGroupDetails(self, group_id: int) -> None:
+        """Ask for whatever this group's channels have not told us yet.
+
+        A channel put in a group off a video card is known by id and by
+        whatever name that card carried, which is often none and never a
+        picture or a follower count. One page fetch each fills that in, queued
+        so they go one at a time.
+        """
+        for row in self._db.group_channels(group_id):
+            found = dict(row)
+            if found.get("platform") != "youtube":
+                continue
+            if found.get("title") and found.get("avatar_url") and found.get("follower_count"):
+                continue
+            if not self._db.channel_details_are_stale(found["key"]):
+                continue
+            self._fetch_channel_details(found["key"], found["ext_id"])
 
     @Slot(str, result="QVariantList")
     def groupsHolding(self, channel_key: str) -> list:
@@ -2568,21 +2668,57 @@ class Bridge(QObject):
     def addChannel(self, text: str) -> bool:
         """Accepts a channel id, an @handle, a legacy channel URL or a Twitch
         link. Returns whether the reference was understood at all. Resolving a
-        handle then happens in the background."""
+        handle then happens in the background.
+
+        This is following a channel by name, so it goes into All, and it says
+        so for a channel that was until now kept for one group alone."""
+        return self._queue_channel(text, -1)
+
+    @Slot(int, str, result=bool)
+    def addChannelToGroupByRef(self, group_id: int, text: str) -> bool:
+        """The same reference, wanted in one group and not in All.
+
+        Reached from the window that manages a group. A channel already
+        followed keeps its place in All, since being asked for by a group
+        never takes one out.
+        """
+        if group_id < 0:
+            return False
+        return self._queue_channel(text, group_id)
+
+    def _queue_channel(self, text: str, group_id: int) -> bool:
         ref = ids.parse_channel_ref(text)
         if not ref:
             self._set_status("could not read that as a channel")
             return False
+        self._add_queue.append((ref, group_id))
         if self._adder is not None and self._adder.isRunning():
-            self._set_status("still adding the previous channel")
-            return False
+            waiting = len(self._add_queue)
+            self._set_status(f"{ref.value} is waiting, "
+                             f"{waiting} to resolve after the one in flight"
+                             if waiting > 1 else f"{ref.value} is waiting its turn")
+            return True
+        self._start_next_add()
+        return True
 
+    def _start_next_add(self) -> None:
+        """Resolve the next queued reference, if any.
+
+        A new worker is started from inside the previous one's own signal, by
+        which point that one has finished resolving even though Qt may not
+        have marked the thread done yet. The old one stays in `_threads` until
+        it is reaped, so nothing is lost by pointing `_adder` at the new one.
+        """
+        if not self._add_queue:
+            return
+        ref, group_id = self._add_queue.pop(0)
+        self._adding = group_id
         self._set_status(f"resolving {ref.value}")
         self._adder = ChannelAdder(ref, self._cfg, self)
         self._adder.added.connect(self._on_channel_added)
         self._adder.failed.connect(self._on_channel_failed)
-        self._launch(self._adder)
-        return True
+        if not self._launch(self._adder):
+            self._add_queue.clear()
 
     def _launch(self, thread) -> bool:
         """Start a background thread, unless the application is going away.
@@ -2651,9 +2787,21 @@ class Bridge(QObject):
     # ---- reactions -------------------------------------------------------
 
     def _on_channel_added(self, key: str, platform: str, ext_id: str, title: str) -> None:
-        self._db.add_channel(key, platform, ext_id, title or None)
+        group_id = self._adding
+        self._adding = -1
+        # A reference typed into a group's own window is followed for that
+        # group only, so it is added with in_all off. One typed into the
+        # toolbar is a plain follow and goes into All, which also brings a
+        # channel back that a group had been keeping on its own.
+        self._db.add_channel(key, platform, ext_id, title or None, in_all=group_id < 0)
         label = title or ext_id
-        if platform == "twitch":
+        if group_id >= 0:
+            self._db.add_to_group(group_id, key)
+            self.groupsChanged.emit()
+            self._set_status(f"added {label} to {self._group_name(group_id)}, "
+                             f"which is the only place it shows")
+            self.refresh()
+        elif platform == "twitch":
             # Said plainly. A Twitch channel adding no rows to the feed looks
             # broken otherwise.
             self._set_status(f"added {label}, which will show in the live bar rather than the feed")
@@ -2661,9 +2809,18 @@ class Bridge(QObject):
         else:
             self._set_status(f"added {label}, fetching videos")
             self.refresh()
+        self._start_next_add()
 
     def _on_channel_failed(self, message: str) -> None:
+        self._adding = -1
         self._set_status(f"could not add that channel, {message}")
+        self._start_next_add()
+
+    def _group_name(self, group_id: int) -> str:
+        for row in self._db.groups():
+            if int(row["id"]) == group_id:
+                return str(row["name"])
+        return "the group"
 
     def _on_imported(self, found: int, added: int) -> None:
         self._set_status(f"{found} subscriptions found, {added} newly tracked")
