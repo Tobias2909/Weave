@@ -4,7 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "weave"
-version = "0.1.0"
+# Read from the package, so the number the user agent reports and the number a
+# release is built under cannot drift apart.
+dynamic = ["version"]
 description = "A personal YouTube and Twitch client that hands playback to mpv"
 readme = "README.md"
 license = "MIT"
@@ -29,6 +31,9 @@ weave-app = "weave.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/Tobias2909/Weave"
+
+[tool.setuptools.dynamic]
+version = { attr = "weave.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["weave*"]
