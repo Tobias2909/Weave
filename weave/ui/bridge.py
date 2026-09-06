@@ -1675,7 +1675,6 @@ class Bridge(QObject):
             return
         self._open_music_list(MusicList(MUSIC_SHELF, shelf["title"], shelf["title"]))
 
-    @Slot(int, int)
     @Slot(str, result=bool)
     def isFavorite(self, key: str) -> bool:
         """Whether a song is one of the kept ones."""
@@ -1746,6 +1745,7 @@ class Bridge(QObject):
         video = item.get("videoId")
         return bool(video) and self._db.is_music_favorite(video)
 
+    @Slot(int, int)
     def playShelfItem(self, shelf_index: int, item_index: int) -> None:
         # The index comes from what is on screen, which is the arranged list
         # with the saved section in it, not the raw one. Reading the raw list
