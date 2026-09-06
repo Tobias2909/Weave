@@ -179,10 +179,7 @@ For Twitch, press **Connect Twitch** in the live bar and approve the page it
 opens, which already has the code filled in, so there is nothing to type and
 nothing to register. Every channel you follow is tracked from that moment. Weave
 comes with its own Twitch application, because a client id is public by design
-and the login used here has no client secret anywhere in it. If you would rather
-the authorisation sat under an application of your own, register one at
-`dev.twitch.tv` with its client type set to public and put its client id in
-`~/.config/weave/config.toml`.
+and the login used here has no client secret anywhere in it.
 
 There is a command behind most of it as well, for a script or for setting a
 machine up over ssh, and it can list itself.
