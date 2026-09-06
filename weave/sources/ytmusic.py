@@ -236,6 +236,37 @@ def playlist_tracks(profile_path: str, playlist_id: str,
     return to_tracks(offered), len(offered)
 
 
+def history(profile_path: str, limit: int = 200) -> list[dict]:
+    """What the music service remembers having played.
+
+    Measured against a real account, this answers with a couple of hundred
+    songs, each carrying an id, a title, artists, a length and a picture. What
+    it does not carry is a time. Every row says only a phrase such as today or
+    last week, so that phrase is passed on as it stands rather than being
+    turned into a timestamp it cannot support.
+    """
+    try:
+        found = client(profile_path).get_history()
+    except MusicError:
+        raise
+    except Exception as exc:
+        raise MusicError(f"{type(exc).__name__}: {exc}") from exc
+    out: list[dict] = []
+    for item in (found or [])[:limit]:
+        video_id = str(item.get("videoId") or "").strip()
+        if not video_id:
+            continue
+        out.append({
+            "ext_id": video_id,
+            "title": str(item.get("title") or ""),
+            "artist": _artist(item),
+            "thumbnail_url": _thumb(item),
+            "duration_s": item.get("duration_seconds"),
+            "played_text": str(item.get("played") or "") or None,
+        })
+    return out
+
+
 def radio(profile_path: str, video_id: str, limit: int = 40) -> list[Track]:
     """A station built from one track, which is where most listening starts
     when there is no library to speak of."""

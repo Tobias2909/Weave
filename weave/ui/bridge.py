@@ -34,6 +34,7 @@ from ..poller import (
     HistoryImporter,
     ImageCacheJob,
     LiveWatcher,
+    MusicHistoryReader,
     MusicHome,
     MusicSearch,
     PlaylistItemsFetcher,
@@ -213,6 +214,11 @@ class Bridge(QObject):
         self._exhausted = False
         # Where a search started, so emptying the box goes back there.
         self._before_search: tuple[str, int, str, str] = (ALL, -1, "", "")
+        # The history view shows what YouTube says was watched, or what has
+        # been listened to. One view, two lists, since they answer the same
+        # question about two kinds of thing.
+        self._history_music = False
+        self._music_history: MusicHistoryReader | None = None
         # Every view landed on, walked by the back and forward mouse buttons.
         # Seeded with the view the window opens on, so the first step back has
         # somewhere to land rather than one fewer place than was visited.
@@ -682,6 +688,10 @@ class Bridge(QObject):
             self._model.show(self._db.playlist_items(self._view_playlist))
             self.emptyHintChanged.emit()
             return
+        if self._view_kind == HISTORY and self._history_music:
+            self._model.show(self._db.music_history())
+            self.emptyHintChanged.emit()
+            return
         if self._view_kind in (RECOMMENDED, HISTORY):
             # Both come from YouTube rather than from the feed, and are shaped
             # the same so one grid draws them. Nothing here is a video you
@@ -775,7 +785,10 @@ class Bridge(QObject):
             self._fetch_recommended()
         if kind == HISTORY:
             self._exhausted = False
-            self._fetch_history()
+            if self._history_music:
+                self._read_music_history()
+            else:
+                self._fetch_history()
         if kind == PLAYLIST:
             self._fetch_playlist_items(playlist_id)
 
@@ -961,6 +974,46 @@ class Bridge(QObject):
         self._loading_more = False
         self._set_notice("")
         self._set_status(f"search, {message}")
+
+    def _get_history_music(self) -> bool:
+        return self._history_music
+
+    historyShowsMusic = Property(bool, _get_history_music, notify=viewChanged)
+
+    @Slot(bool)
+    def showMusicInHistory(self, music: bool) -> None:
+        """Switch the history between what was watched and what was heard."""
+        if music == self._history_music:
+            return
+        self._history_music = music
+        if music:
+            self._read_music_history()
+        self.reload()
+        self.viewChanged.emit()
+
+    @Slot()
+    def readMusicHistory(self) -> None:
+        """Ask the music service again, from the button beside Refresh."""
+        self._read_music_history()
+
+    def _read_music_history(self) -> None:
+        """Ask the music service what it remembers, behind what is on screen.
+
+        What Weave played is already stored as it played, so the view has
+        something to draw at once and this only fills in the older listening.
+        """
+        if self._music_history is not None and self._music_history.isRunning():
+            return
+        self._music_history = MusicHistoryReader(self._db, self._cfg, self)
+        self._music_history.ready.connect(self._on_music_history)
+        self._music_history.failed.connect(
+            lambda message: self._set_status(f"music history, {message}"))
+        self._launch(self._music_history)
+
+    def _on_music_history(self, count: int) -> None:
+        self._set_status(f"{count} songs from your listening history")
+        if self._view_kind == HISTORY and self._history_music:
+            self.reload()
 
     @Slot()
     def showHistory(self) -> None:
@@ -1388,6 +1441,10 @@ class Bridge(QObject):
             # URL to mpv crashes it, since there is nothing there yet, so the
             # click opens what can actually be shown right now instead.
             self.openDetail(key)
+            return
+        if self._view_kind == HISTORY and self._history_music:
+            # These are songs, and they were listened to rather than watched.
+            self.playAudio(key)
             return
         if self._view_kind == PLAYLIST and self._playing_is_music():
             # A playlist marked as music is listened to rather than watched, so

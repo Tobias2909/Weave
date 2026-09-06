@@ -351,6 +351,23 @@ class AudioPlayer(QObject):
 
     # ---- starting a track ------------------------------------------------
 
+    def _remember(self, entry: dict) -> None:
+        """Note a song in the listening history as it starts.
+
+        A stream is left out, since it is a place rather than a song and has
+        no end to come back to. Anything without a YouTube id is left out too,
+        because the history is addressed by that id.
+        """
+        if self._db is None or entry.get("live"):
+            return
+        key = str(entry.get("key") or "")
+        if not key.startswith("yt:"):
+            return
+        self._db.remember_played(
+            key.split(":", 1)[1], str(entry.get("title") or ""),
+            entry.get("artist") or None, entry.get("thumbnail") or None,
+            entry.get("duration_s"))
+
     def _start_current(self) -> None:
         """Play the current track from the top, or from where a recovery left
         off. Whatever mpv held as next is dropped with the load and queued
@@ -364,6 +381,7 @@ class AudioPlayer(QObject):
             self._resume_at = 0.0
         self._pos = 0.0
         self._dur = 0.0
+        self._remember(entry)
         self.trackChanged.emit()
         self.progressChanged.emit()
         if self._resolver is not None and self._resolver.isRunning():

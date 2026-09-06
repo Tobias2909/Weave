@@ -28,7 +28,9 @@ ApplicationWindow {
     // What the open view can do, if anything, shown as one button beside
     // Refresh.
     readonly property string viewActionText: {
-        if (App.viewKind === "history") return "Read it again"
+        if (App.viewKind === "history") return App.historyShowsMusic
+                                              ? "Read the listening again"
+                                              : "Read it again"
         if (App.viewKind === "recommended") return "Ask again"
         if (App.viewKind === "playlist") return "Read it again"
         if (App.viewKind === "search") return App.searchScope === "youtube"
@@ -37,7 +39,10 @@ ApplicationWindow {
     }
 
     function doViewAction() {
-        if (App.viewKind === "history") App.importHistory()
+        if (App.viewKind === "history") {
+            if (App.historyShowsMusic) App.readMusicHistory()
+            else App.importHistory()
+        }
         else if (App.viewKind === "recommended") App.refreshRecommended()
         else if (App.viewKind === "playlist") App.refreshPlaylist()
         else if (App.viewKind === "search") App.searchYouTube()
@@ -834,6 +839,39 @@ ApplicationWindow {
         // this is the only place either is mentioned at all. It sits after
         // the last row rather than always on screen, since it only matters
         // once you have scrolled far enough to wonder where a video went.
+        // The history answers two questions with one view, so it says which
+        // one it is answering and lets the other be asked. It rides above the
+        // first row rather than sitting in the toolbar, which is already full
+        // and has nothing to do with this view.
+        header: Component {
+            Item {
+                objectName: "historyHeader"
+                width: grid.width
+                height: App.viewKind === "history" ? 42 : 0
+                visible: App.viewKind === "history"
+
+                Row {
+                    anchors.left: parent.left
+                    anchors.leftMargin: 6
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 8
+
+                    FlatButton {
+                        objectName: "historyVideos"
+                        text: "Videos"
+                        accent: !App.historyShowsMusic
+                        onClicked: App.showMusicInHistory(false)
+                    }
+                    FlatButton {
+                        objectName: "historyMusic"
+                        text: "Music"
+                        accent: App.historyShowsMusic
+                        onClicked: App.showMusicInHistory(true)
+                    }
+                }
+            }
+        }
+
         footer: Component {
             Item {
                 width: grid.width

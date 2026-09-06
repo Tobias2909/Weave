@@ -990,6 +990,38 @@ class MusicHome(Worker):
         return {"title": "From your YouTube", "items": items}
 
 
+class MusicHistoryReader(Worker):
+    """What the music service remembers having listened to.
+
+    A snapshot, like the other lists that come from outside, so it replaces
+    the last one. Songs played in Weave itself are written as they play and
+    are not touched by this.
+    """
+
+    ready = Signal(int)
+    failed = Signal(str)
+
+    def __init__(self, db: Database, cfg: Config, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._db = db
+        self._cfg = cfg
+
+    def run(self) -> None:
+        # Imported here like every other use of it in this file, so a machine
+        # without the music library still runs everything else.
+        from .sources import ytmusic
+
+        try:
+            rows = ytmusic.history(self._cfg.browser_profile_path)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+            return
+        if self.cancelled:
+            return
+        self._db.replace_service_music_history(rows)
+        self.ready.emit(len(rows))
+
+
 class TrackList(Worker):
     """Tracks for one thing that was chosen. A playlist from YouTube Music, or
     the liked videos from YouTube, which are a different list entirely."""

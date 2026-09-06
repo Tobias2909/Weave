@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -95,6 +95,24 @@ CREATE TABLE IF NOT EXISTS playlist_items (
     published_at   INTEGER,                 -- approximate, from "3 weeks ago"
     position       INTEGER NOT NULL,
     PRIMARY KEY (playlist_id, ext_id)
+);
+
+-- What has been listened to. Two sources meet here. A row written by Weave
+-- knows exactly when it was played, and one read from the music service knows
+-- only the phrase it gave, such as last week, so that phrase is kept as it was
+-- rather than being turned into a time it does not really have. A song played
+-- here wins over the service's memory of it.
+CREATE TABLE IF NOT EXISTS music_history (
+    ext_id        TEXT PRIMARY KEY,
+    title         TEXT NOT NULL,
+    artist        TEXT,
+    thumbnail_url TEXT,
+    duration_s    INTEGER,
+    played_at     INTEGER,
+    played_text   TEXT,
+    plays         INTEGER NOT NULL DEFAULT 0,
+    position      INTEGER NOT NULL DEFAULT 0,
+    source        TEXT NOT NULL DEFAULT 'weave'
 );
 
 CREATE TABLE IF NOT EXISTS channels (
@@ -1094,6 +1112,93 @@ class Database:
             "SELECT box_id FROM box_items WHERE video_key=?", (video_key,))]
 
     # ---- lists that come from YouTube ------------------------------------
+
+    def remember_played(self, ext_id: str, title: str, artist: str | None,
+                        thumbnail_url: str | None, duration_s: int | None = None) -> None:
+        """Note that a song was played here, now.
+
+        Playing the same song again moves it to the top and counts one more
+        play rather than making a second row, which is what a list of what has
+        been listened to is for. A song the service also remembers becomes
+        ours, since our time is the exact one.
+        """
+        with self.conn as conn:
+            conn.execute(
+                "INSERT INTO music_history(ext_id, title, artist, thumbnail_url, "
+                "                          duration_s, played_at, plays, source) "
+                "VALUES(?,?,?,?,?,?,1,'weave') "
+                "ON CONFLICT(ext_id) DO UPDATE SET "
+                "  title=excluded.title, "
+                "  artist=COALESCE(excluded.artist, music_history.artist), "
+                "  thumbnail_url=COALESCE(excluded.thumbnail_url, music_history.thumbnail_url), "
+                "  duration_s=COALESCE(excluded.duration_s, music_history.duration_s), "
+                "  played_at=excluded.played_at, "
+                "  plays=music_history.plays + 1, "
+                "  source='weave'",
+                (ext_id, title, artist, thumbnail_url, duration_s, int(time.time())),
+            )
+
+    def replace_service_music_history(self, rows: list[dict]) -> int:
+        """Take the service's own memory of what was listened to.
+
+        It is a snapshot, so it replaces the last one it gave. Songs played
+        here are left alone, because their exact time is better than the
+        phrase the service offers.
+        """
+        with self.conn as conn:
+            conn.execute("DELETE FROM music_history WHERE source='youtube'")
+            written = 0
+            for position, row in enumerate(rows):
+                ext_id = (row.get("ext_id") or "").strip()
+                if not ext_id:
+                    continue
+                written += conn.execute(
+                    "INSERT INTO music_history(ext_id, title, artist, thumbnail_url, "
+                    "                          duration_s, played_text, position, source) "
+                    "VALUES(?,?,?,?,?,?,?,'youtube') "
+                    "ON CONFLICT(ext_id) DO NOTHING",
+                    (ext_id, row.get("title") or "", row.get("artist"),
+                     row.get("thumbnail_url"), row.get("duration_s"),
+                     row.get("played_text"), position),
+                ).rowcount
+            return written
+
+    def music_history(self, limit: int = 400) -> list[sqlite3.Row]:
+        """Shaped like a feed row, so the same grid draws it.
+
+        What was played here comes first, newest first, then what the service
+        remembers in the order it gave. A song has no channel to open, so the
+        artist stands in as the name and the key is left empty.
+        """
+        return list(self.conn.execute(
+            """
+            SELECT 'yt:' || h.ext_id     AS key,
+                   'youtube'             AS platform,
+                   h.ext_id              AS ext_id,
+                   ''                    AS channel_key,
+                   h.title               AS title,
+                   h.played_at           AS published_at,
+                   h.thumbnail_url       AS thumbnail_url,
+                   h.duration_s          AS duration_s,
+                   NULL                  AS views,
+                   NULL                  AS likes,
+                   NULL                  AS live_status,
+                   h.artist              AS channel_title,
+                   NULL                  AS avatar_url,
+                   h.played_text         AS played_text,
+                   h.source              AS source,
+                   (w.video_key IS NOT NULL) AS watched
+            FROM music_history h
+            LEFT JOIN watched w ON w.video_key = 'yt:' || h.ext_id
+            ORDER BY h.source = 'weave' DESC,
+                     COALESCE(h.played_at, 0) DESC,
+                     h.position
+            LIMIT ?
+            """, (limit,)))
+
+    def music_history_count(self) -> int:
+        return int(self.conn.execute(
+            "SELECT COUNT(*) FROM music_history").fetchone()[0])
 
     RECOMMENDED = "recommended"
     HISTORY = "history"
