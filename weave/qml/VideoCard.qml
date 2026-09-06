@@ -30,11 +30,10 @@ Rectangle {
     border.width: 1
     border.color: hover.hovered ? Theme.colors.accent : Theme.colors.border
     // An announced stream is dimmed the same amount as something already
-    // watched, since it cannot be played yet either. Enough to tell the two
-    // states apart at a glance without making the card hard to read, which
-    // matters because the views that ignore the hide watched toggle draw a
-    // great many of them.
-    opacity: (watched || isUpcoming) ? 0.75 : 1.0
+    // watched, since it cannot be played yet either. On this palette a card
+    // sits close to the colour behind it, so raising this reads as almost no
+    // change at all and the separation was measured away at 0.75.
+    opacity: (watched || isUpcoming) ? 0.55 : 1.0
 
     HoverHandler { id: hover }
 
