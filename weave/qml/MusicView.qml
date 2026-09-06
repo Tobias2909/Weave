@@ -16,6 +16,32 @@ Item {
     // shelves, one section in full and a track list are the three things this
     // view shows, and exactly one of them is up at a time.
     readonly property var openShelf: App.musicShelfPage
+
+    // Right pressing a song offers to keep it. One menu for both the two rows
+    // and the whole section page, told which tile it was opened on.
+    property int askedShelf: -1
+    property int askedItem: -1
+
+    function askAbout(shelfIndex, itemIndex) {
+        view.askedShelf = shelfIndex
+        view.askedItem = itemIndex
+        songMenu.popup()
+    }
+
+    Menu {
+        id: songMenu
+        objectName: "songMenu"
+
+        MenuItem {
+            objectName: "songFavoriteEntry"
+            text: App.shelfItemIsFavorite(view.askedShelf, view.askedItem)
+                  ? "Remove from favorites" : "Add to favorites"
+            onTriggered: {
+                App.favoriteShelfItem(view.askedShelf, view.askedItem)
+                songMenu.dismiss()
+            }
+        }
+    }
     readonly property var openShelfItems: openShelf.items ? openShelf.items : []
     readonly property bool onShelfPage: openShelfItems.length > 0
 
@@ -192,6 +218,8 @@ Item {
                                     removable: shelf.saved
                                     onChosen: shelf.saved ? App.playSource(modelData.sourceId)
                                                           : App.playShelfItem(shelf.shelfIndex, index)
+                                    onAskedFor: if (!shelf.saved)
+                                                    view.askAbout(shelf.shelfIndex, index)
                                     onRemoveRequested: App.removeSource(modelData.sourceId)
                                 }
                             }
@@ -302,6 +330,8 @@ Item {
                         onChosen: view.openShelf.kind === "saved"
                                   ? App.playSource(modelData.sourceId)
                                   : App.playShelfItem(view.openShelf.index, index)
+                        onAskedFor: if (view.openShelf.kind !== "saved")
+                                        view.askAbout(view.openShelf.index, index)
                         onRemoveRequested: App.removeSource(modelData.sourceId)
                     }
                 }

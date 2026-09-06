@@ -1055,6 +1055,17 @@ ApplicationWindow {
             onTriggered: { App.openChannel(root.menuChannelKey); videoMenu.dismiss() }
         }
         MenuItem {
+            objectName: "musicFavoriteEntry"
+            // Only where a video is a song already, which is a playlist marked
+            // as music and the listening history. Anywhere else a video is a
+            // video and music favourites would mean nothing.
+            visible: App.pressIsMusic
+            height: visible ? implicitHeight : 0
+            text: App.isFavorite(root.menuKey) ? "Remove from music favorites"
+                                               : "Add to music favorites"
+            onTriggered: { App.favoriteVideo(root.menuKey); videoMenu.dismiss() }
+        }
+        MenuItem {
             objectName: "copyLinkEntry"
             text: "Share"
             onTriggered: { App.copyLink(root.menuKey); videoMenu.dismiss() }

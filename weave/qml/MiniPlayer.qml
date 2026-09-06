@@ -240,6 +240,36 @@ Rectangle {
             }
         }
 
+        // Kept or not. Grey until it is one of the kept ones, then red.
+        Item {
+            objectName: "favoriteHeart"
+            Layout.preferredWidth: 26
+            Layout.preferredHeight: 26
+            Layout.alignment: Qt.AlignVCenter
+            visible: (Audio.track.key || "") !== ""
+
+            Text {
+                id: heart
+                objectName: "favoriteHeartMark"
+                anchors.centerIn: parent
+                text: "♥"
+                font.pixelSize: 17
+                color: App.playingIsFavorite ? Theme.colors.live
+                       : (heartHover.hovered ? Theme.colors.text
+                                             : Theme.colors.watchedDim)
+
+                Behavior on color {
+                    ColorAnimation { duration: 120 }
+                }
+            }
+
+            HoverHandler { id: heartHover }
+            MouseArea {
+                anchors.fill: parent
+                onClicked: App.toggleFavorite()
+            }
+        }
+
         FlatButton {
             text: "◀◀"
             Layout.preferredWidth: 42

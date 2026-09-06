@@ -115,6 +115,7 @@ class Bridge(QObject):
     detailChanged = Signal()
     musicChanged = Signal()
     navChanged = Signal()
+    favoritesChanged = Signal()
 
     def __init__(self, db: Database, cfg: Config, model: FeedModel,
                  player: Player, parent: QObject | None = None) -> None:
@@ -1675,6 +1676,76 @@ class Bridge(QObject):
         self._open_music_list(MusicList(MUSIC_SHELF, shelf["title"], shelf["title"]))
 
     @Slot(int, int)
+    @Slot(str, result=bool)
+    def isFavorite(self, key: str) -> bool:
+        """Whether a song is one of the kept ones."""
+        return key.startswith("yt:") and self._db.is_music_favorite(key.split(":", 1)[1])
+
+    def _get_playing_favorite(self) -> bool:
+        track = self._audio.track if self._audio else {}
+        key = str((track or {}).get("key") or "")
+        return self.isFavorite(key)
+
+    playingIsFavorite = Property(bool, _get_playing_favorite, notify=favoritesChanged)
+
+    def _mark_favorite(self, key: str, title: str, artist: str | None,
+                       thumbnail: str | None, keep: bool | None = None) -> None:
+        """Keep a song or stop keeping it, and say which just happened."""
+        if not key.startswith("yt:"):
+            return
+        ext_id = key.split(":", 1)[1]
+        wanted = (not self._db.is_music_favorite(ext_id)) if keep is None else keep
+        self._db.set_music_favorite(ext_id, wanted, title or "", artist, thumbnail)
+        self._set_notice("Added to favorites" if wanted else "Removed from favorites",
+                         clear_after_s=4)
+        self._set_status("added to favorites" if wanted else "removed from favorites")
+        self.favoritesChanged.emit()
+        self.musicChanged.emit()
+
+    @Slot(str)
+    def favoriteVideo(self, key: str) -> None:
+        """From a card, in a playlist that holds music or in the listening
+        history, where a video is a song and the card is how it is reached."""
+        row = self._model.row_for_key(key) or {}
+        self._mark_favorite(key, row.get("title", ""), row.get("channelTitle"),
+                            row.get("thumbnail"))
+
+    @Slot()
+    def toggleFavorite(self) -> None:
+        """The heart beside what is playing."""
+        track = (self._audio.track if self._audio else {}) or {}
+        key = str(track.get("key") or "")
+        self._mark_favorite(key, str(track.get("title") or ""),
+                            track.get("artist"), track.get("thumbnail"))
+
+    @Slot(int, int)
+    def favoriteShelfItem(self, shelf_index: int, item_index: int) -> None:
+        """From a tile in the music page.
+
+        The index comes from the arranged list that is drawn, never the raw
+        one, for the same reason pressing a tile does.
+        """
+        try:
+            item = self._get_shelves()[shelf_index]["items"][item_index]
+        except (IndexError, KeyError, TypeError):
+            return
+        video = item.get("videoId")
+        if not video:
+            self._set_notice("Only a song can be kept, not a whole list",
+                             clear_after_s=4)
+            return
+        self._mark_favorite(f"yt:{video}", item.get("title", ""),
+                            item.get("subtitle"), item.get("thumbnail"))
+
+    @Slot(int, int, result=bool)
+    def shelfItemIsFavorite(self, shelf_index: int, item_index: int) -> bool:
+        try:
+            item = self._get_shelves()[shelf_index]["items"][item_index]
+        except (IndexError, KeyError, TypeError):
+            return False
+        video = item.get("videoId")
+        return bool(video) and self._db.is_music_favorite(video)
+
     def playShelfItem(self, shelf_index: int, item_index: int) -> None:
         # The index comes from what is on screen, which is the arranged list
         # with the saved section in it, not the raw one. Reading the raw list

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -307,6 +307,11 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # goes to the music player rather than to mpv, which is what the headphone
     # on the card does everywhere else.
     ("playlists", "is_music", "INTEGER NOT NULL DEFAULT 0"),
+    # A song kept on purpose. It sits beside what was played rather than in a
+    # table of its own, because a favourite is one of these songs and copying
+    # the same row into two places is how the two of them come apart.
+    ("music_history", "favorite", "INTEGER NOT NULL DEFAULT 0"),
+    ("music_history", "favorite_at", "INTEGER"),
 )
 
 
@@ -1146,7 +1151,10 @@ class Database:
         phrase the service offers.
         """
         with self.conn as conn:
-            conn.execute("DELETE FROM music_history WHERE source='youtube'")
+            # A favourite marked on one of these is kept. The rest are a
+            # snapshot and are replaced.
+            conn.execute(
+                "DELETE FROM music_history WHERE source='youtube' AND favorite=0")
             written = 0
             for position, row in enumerate(rows):
                 ext_id = (row.get("ext_id") or "").strip()
@@ -1193,6 +1201,68 @@ class Database:
                     (views, published_at, duration_s, ext_id,
                      views, published_at, duration_s)).rowcount
         return touched
+
+    def set_music_favorite(self, ext_id: str, favorite: bool, title: str = "",
+                           artist: str | None = None,
+                           thumbnail_url: str | None = None,
+                           duration_s: int | None = None) -> None:
+        """Keep a song, or stop keeping it.
+
+        A song that has never been played here has no row yet, so one is made
+        for it. Nothing about what was played is disturbed either way.
+        """
+        now = int(time.time())
+        with self.conn as conn:
+            conn.execute(
+                "INSERT INTO music_history(ext_id, title, artist, thumbnail_url, "
+                "                          duration_s, favorite, favorite_at, source) "
+                "VALUES(?,?,?,?,?,?,?,'weave') "
+                "ON CONFLICT(ext_id) DO UPDATE SET "
+                "  title=CASE WHEN excluded.title = '' THEN music_history.title "
+                "             ELSE excluded.title END, "
+                "  artist=COALESCE(excluded.artist, music_history.artist), "
+                "  thumbnail_url=COALESCE(excluded.thumbnail_url, "
+                "                         music_history.thumbnail_url), "
+                "  duration_s=COALESCE(excluded.duration_s, music_history.duration_s), "
+                "  favorite=excluded.favorite, "
+                "  favorite_at=excluded.favorite_at",
+                (ext_id, title, artist, thumbnail_url, duration_s,
+                 1 if favorite else 0, now if favorite else None),
+            )
+
+    def is_music_favorite(self, ext_id: str) -> bool:
+        row = self.conn.execute(
+            "SELECT favorite FROM music_history WHERE ext_id=?", (ext_id,)).fetchone()
+        return bool(row and row["favorite"])
+
+    def music_favorites(self, limit: int = 500) -> list[sqlite3.Row]:
+        """Every song kept, newest first, shaped like a feed row."""
+        return list(self.conn.execute(
+            """
+            SELECT 'yt:' || h.ext_id     AS key,
+                   'youtube'             AS platform,
+                   h.ext_id              AS ext_id,
+                   ''                    AS channel_key,
+                   h.title               AS title,
+                   h.favorite_at         AS published_at,
+                   h.thumbnail_url       AS thumbnail_url,
+                   h.duration_s          AS duration_s,
+                   NULL                  AS views,
+                   NULL                  AS likes,
+                   NULL                  AS live_status,
+                   h.artist              AS channel_title,
+                   NULL                  AS avatar_url,
+                   (w.video_key IS NOT NULL) AS watched
+            FROM music_history h
+            LEFT JOIN watched w ON w.video_key = 'yt:' || h.ext_id
+            WHERE h.favorite = 1
+            ORDER BY h.favorite_at DESC, h.title
+            LIMIT ?
+            """, (limit,)))
+
+    def music_favorite_count(self) -> int:
+        return int(self.conn.execute(
+            "SELECT COUNT(*) FROM music_history WHERE favorite=1").fetchone()[0])
 
     def music_history(self, limit: int = 400) -> list[sqlite3.Row]:
         """Shaped like a feed row, so the same grid draws it.

@@ -12,6 +12,9 @@ Item {
 
     signal chosen()
     signal removeRequested()
+    // Right pressing a song offers to keep it. What that means is the caller's
+    // business, since a tile does not know a favourite from a playlist.
+    signal askedFor(int x, int y)
 
     // The size a shelf gives it. Kept as a default so the tile stands on its
     // own, and overridden by whatever lays a row of them out.
@@ -100,6 +103,12 @@ Item {
     MouseArea {
         anchors.fill: parent
         z: -1
-        onClicked: tile.chosen()
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        onClicked: function (mouse) {
+            if (mouse.button === Qt.RightButton)
+                tile.askedFor(mouse.x, mouse.y)
+            else
+                tile.chosen()
+        }
     }
 }
