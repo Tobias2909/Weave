@@ -148,5 +148,135 @@ class TakingASongOut(unittest.TestCase):
         self.assertEqual(made._queue[made._at]["title"], "f")
 
 
+class AddingOneMoreSong(unittest.TestCase):
+    """One song, either behind everything or straight after this one.
+
+    Neither starts anything playing, because the point is to decide what
+    happens after what is playing now. An empty queue is the exception, since
+    adding to nothing and hearing nothing is not what was asked for.
+    """
+
+    def song(self, title="z"):
+        return {"key": f"yt:{title}", "title": title, "artist": "An artist",
+                "thumbnail": "", "live": False, "url": "https://example/watch"}
+
+    def test_it_goes_behind_everything_by_default(self) -> None:
+        from weave.audio import AudioPlayer
+
+        made = player(at=0)
+        made._prepare_next = lambda: None
+        self.assertTrue(AudioPlayer.add_item(made, self.song()))
+        self.assertEqual(shown(made), ["a", "b", "c", "d", "e", "f", "z"])
+
+    def test_played_next_goes_straight_after_this_one(self) -> None:
+        from weave.audio import AudioPlayer
+
+        made = player(at=2)
+        made._prepare_next = lambda: None
+        AudioPlayer.add_item(made, self.song(), play_next=True)
+        self.assertEqual(shown(made), ["a", "b", "c", "z", "d", "e", "f"])
+        self.assertEqual(made._queue[made._next_index()]["title"], "z")
+
+    def test_nothing_starts_playing_because_of_it(self) -> None:
+        from weave.audio import AudioPlayer
+
+        made = player(at=2)
+        made._prepare_next = lambda: None
+        made.started = []
+        made._start_current = lambda: made.started.append(True)
+        AudioPlayer.add_item(made, self.song())
+        AudioPlayer.add_item(made, self.song("y"), play_next=True)
+        self.assertEqual(made.started, [])
+        self.assertEqual(made._queue[made._at]["title"], "c")
+
+    def test_it_holds_under_shuffle(self) -> None:
+        from weave.audio import AudioPlayer
+
+        made = player(order=[3, 1, 4, 0, 5, 2], at=1, shuffle=True)
+        made._prepare_next = lambda: None
+        AudioPlayer.add_item(made, self.song(), play_next=True)
+        self.assertEqual(shown(made), ["d", "b", "z", "e", "a", "f", "c"])
+
+    def test_an_empty_queue_simply_starts_it(self) -> None:
+        from weave.audio import AudioPlayer
+
+        made = player(titles="", at=-1)
+        made.given = []
+        made.play_items = lambda items, start=0: made.given.append(
+            [i["title"] for i in items])
+        AudioPlayer.add_item(made, self.song())
+        self.assertEqual(made.given, [["z"]])
+
+    def test_a_song_with_no_address_is_refused(self) -> None:
+        from weave.audio import AudioPlayer
+
+        made = player(at=0)
+        self.assertFalse(AudioPlayer.add_item(made, {"title": "no address"}))
+        self.assertEqual(shown(made), list("abcdef"))
+
+
+class TheBridgeQueuesOne(unittest.TestCase):
+    def bridge(self):
+        from weave.ui.bridge import Bridge
+
+        class Player:
+            def __init__(self):
+                self.taken = []
+
+            def add_item(self, item, play_next=False):
+                self.taken.append((item["title"], play_next))
+                return True
+
+        bridge = Bridge.__new__(Bridge)
+        bridge._audio = Player()
+        bridge._shelves = [{"title": "A section", "kind": "songs", "items": [
+            {"title": "A song", "subtitle": "An artist", "thumbnail": "",
+             "videoId": "aaaaaaaaaaa", "playlistId": "RDAMVMaaa"},
+            {"title": "A list", "subtitle": "", "thumbnail": "",
+             "videoId": "", "playlistId": "PL1"}]}]
+        bridge._results = [{"key": "yt:bbbbbbbbbbb", "videoId": "bbbbbbbbbbb",
+                            "title": "A row", "artist": "An artist",
+                            "thumbnail": ""}]
+        bridge._get_shelves = lambda: bridge._shelves
+        bridge.notices = []
+        bridge._set_notice = lambda *a, **k: bridge.notices.append(a[0])
+        bridge._set_status = lambda *a, **k: None
+        return bridge
+
+    def test_a_tile_can_be_queued_and_played_next(self) -> None:
+        from weave.ui.bridge import Bridge
+
+        bridge = self.bridge()
+        Bridge.queueShelfItem(bridge, 0, 0, False)
+        Bridge.queueShelfItem(bridge, 0, 0, True)
+        self.assertEqual(bridge._audio.taken,
+                         [("A song", False), ("A song", True)])
+        self.assertEqual(bridge.notices,
+                         ["Added to the queue", "Playing it next"])
+
+    def test_a_row_can_be_queued(self) -> None:
+        from weave.ui.bridge import Bridge
+
+        bridge = self.bridge()
+        Bridge.queueResult(bridge, 0, True)
+        self.assertEqual(bridge._audio.taken, [("A row", True)])
+
+    def test_a_whole_list_is_not_one_song(self) -> None:
+        from weave.ui.bridge import Bridge
+
+        bridge = self.bridge()
+        Bridge.queueShelfItem(bridge, 0, 1, False)
+        self.assertEqual(bridge._audio.taken, [])
+        self.assertIn("Only a song", bridge.notices[-1])
+
+    def test_something_that_is_not_there_is_no_error(self) -> None:
+        from weave.ui.bridge import Bridge
+
+        bridge = self.bridge()
+        Bridge.queueShelfItem(bridge, 9, 9, False)
+        Bridge.queueResult(bridge, 9, False)
+        self.assertEqual(bridge._audio.taken, [])
+
+
 if __name__ == "__main__":
     unittest.main()

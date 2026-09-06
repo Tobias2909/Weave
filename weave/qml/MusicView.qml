@@ -58,6 +58,36 @@ Item {
                 songMenu.dismiss()
             }
         }
+
+        // Only while something is playing. With nothing in the player there is
+        // no queue to add to and no next to be, so pressing the song is what
+        // is meant instead.
+        MenuItem {
+            objectName: "songPlayNextEntry"
+            visible: Audio.hasQueue
+            height: visible ? implicitHeight : 0
+            text: "Play it next"
+            onTriggered: {
+                if (view.askedResult >= 0)
+                    App.queueResult(view.askedResult, true)
+                else
+                    App.queueShelfItem(view.askedShelf, view.askedItem, true)
+                songMenu.dismiss()
+            }
+        }
+        MenuItem {
+            objectName: "songQueueEntry"
+            visible: Audio.hasQueue
+            height: visible ? implicitHeight : 0
+            text: "Add to the queue"
+            onTriggered: {
+                if (view.askedResult >= 0)
+                    App.queueResult(view.askedResult, false)
+                else
+                    App.queueShelfItem(view.askedShelf, view.askedItem, false)
+                songMenu.dismiss()
+            }
+        }
     }
     readonly property var openShelfItems: openShelf.items ? openShelf.items : []
     readonly property bool onShelfPage: openShelfItems.length > 0

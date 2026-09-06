@@ -637,6 +637,31 @@ class AudioPlayer(QObject):
             self._at = index
             self._start_current()
 
+    def add_item(self, item: dict, play_next: bool = False) -> bool:
+        """Put one song in the queue, at the end or straight after this one.
+
+        Nothing starts playing because of this. A queue with nothing in it is
+        the one exception, since adding to an empty queue and hearing silence
+        would be a strange thing to have asked for.
+        """
+        if not item.get("url"):
+            return False
+        if not self._queue:
+            self.play_items([item])
+            return True
+        self._queue.append(dict(item))
+        index = len(self._queue) - 1
+        if play_next and self._at in self._order:
+            self._order.insert(self._order.index(self._at) + 1, index)
+        else:
+            self._order.append(index)
+        # What mpv holds as the next file was decided before this arrived.
+        if play_next and not self._idle:
+            self._prepare_next()
+        self.queueChanged.emit()
+        self.trackChanged.emit()
+        return True
+
     @Slot(int, int)
     def moveInQueue(self, from_place: int, to_place: int) -> None:
         """Move a song to another place in the play order.

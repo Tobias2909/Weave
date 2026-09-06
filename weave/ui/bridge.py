@@ -1768,6 +1768,45 @@ class Bridge(QObject):
         self._mark_favorite(key, str(track.get("title") or ""),
                             track.get("artist"), track.get("thumbnail"))
 
+    def _queue_track(self, track: dict | None, play_next: bool) -> None:
+        """Put one song in the queue, and say so."""
+        if not self._audio or not track:
+            return
+        if not self._audio.add_item(track, play_next=play_next):
+            return
+        self._set_notice("Playing it next" if play_next else "Added to the queue",
+                         clear_after_s=4)
+        self._set_status(f"queued {track.get('title', '')}")
+
+    @Slot(int, int, bool)
+    def queueShelfItem(self, shelf_index: int, item_index: int,
+                       play_next: bool = False) -> None:
+        """From a tile. Only a song, since a list is not one thing to queue."""
+        try:
+            item = self._get_shelves()[shelf_index]["items"][item_index]
+        except (IndexError, KeyError, TypeError):
+            return
+        video = item.get("videoId")
+        if not video:
+            self._set_notice("Only a song can be queued, not a whole list",
+                             clear_after_s=4)
+            return
+        self._queue_track({
+            "key": f"yt:{video}", "title": item.get("title", ""),
+            "artist": item.get("subtitle", ""), "thumbnail": item.get("thumbnail", ""),
+            "live": False, "url": ids.watch_url("youtube", video),
+        }, play_next)
+
+    @Slot(int, bool)
+    def queueResult(self, index: int, play_next: bool = False) -> None:
+        """From a row in a list that was opened."""
+        try:
+            row = self._results[index]
+        except (IndexError, TypeError):
+            return
+        found = self._track_items([row])
+        self._queue_track(found[0] if found else None, play_next)
+
     @Slot(int)
     def favoriteResult(self, index: int) -> None:
         """From a row in an opened list, a playlist or a station alike.
