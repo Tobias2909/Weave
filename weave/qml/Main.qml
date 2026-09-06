@@ -712,6 +712,7 @@ ApplicationWindow {
                         onContextRequested: {
                             playlistRowMenu.playlistId = modelData.ext_id
                             playlistRowMenu.playlistName = modelData.title
+                            playlistRowMenu.isMusic = modelData.is_music === 1
                             playlistRowMenu.popup()
                         }
                     }
@@ -1133,7 +1134,19 @@ ApplicationWindow {
         objectName: "playlistRowMenu"
         property string playlistId: ""
         property string playlistName: ""
+        property bool isMusic: false
 
+        MenuItem {
+            objectName: "playlistMusicEntry"
+            // A playlist of music is listened to rather than watched, so a
+            // press on one of its videos goes where the headphone goes.
+            text: playlistRowMenu.isMusic ? "Stop treating it as music"
+                                          : "Treat it as music"
+            onTriggered: {
+                App.setPlaylistMusic(playlistRowMenu.playlistId, !playlistRowMenu.isMusic)
+                playlistRowMenu.dismiss()
+            }
+        }
         MenuItem {
             text: "Read it again"
             onTriggered: {
@@ -1342,9 +1355,36 @@ ApplicationWindow {
                         elide: Text.ElideRight
                     }
 
+                    // A tick here sends a press on one of this playlist's
+                    // videos to the music player instead of mpv. The word is
+                    // a label of its own rather than the box's own text,
+                    // which this style draws in a colour of its choosing.
+                    CheckBox {
+                        id: musicBox
+                        objectName: "chooserMusicBox"
+                        anchors.right: order.left
+                        anchors.rightMargin: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        checked: entry.modelData.is_music === 1
+                        onToggled: {
+                            App.setPlaylistMusic(entry.modelData.ext_id, checked)
+                            playlistChooser.reload()
+                        }
+                    }
+
+                    Label {
+                        id: musicLabel
+                        anchors.right: musicBox.left
+                        anchors.rightMargin: 2
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Music"
+                        color: musicBox.checked ? Theme.colors.accent : Theme.colors.textMuted
+                        font.pixelSize: 11
+                    }
+
                     Label {
                         id: countLabel
-                        anchors.right: order.left
+                        anchors.right: musicLabel.left
                         anchors.rightMargin: 10
                         anchors.verticalCenter: parent.verticalCenter
                         text: entry.modelData.items ? entry.modelData.items + " videos" : ""

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -285,6 +285,10 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # private or gone. Counted rather than guessed, so the foot of the list can
     # say what is missing instead of the list quietly being short.
     ("playlists", "skipped", "INTEGER NOT NULL DEFAULT 0"),
+    # Whether this playlist holds music. A press on one of its videos then
+    # goes to the music player rather than to mpv, which is what the headphone
+    # on the card does everywhere else.
+    ("playlists", "is_music", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 
@@ -1316,10 +1320,20 @@ class Database:
         """
         where = "" if include_hidden else "WHERE p.hidden = 0"
         return [dict(row) for row in self.conn.execute(
-            "SELECT p.ext_id, p.title, p.position, p.items_at, p.hidden, "
+            "SELECT p.ext_id, p.title, p.position, p.items_at, p.hidden, p.is_music, "
             "       (SELECT COUNT(*) FROM playlist_items i WHERE i.playlist_id = p.ext_id) "
             "         AS items "
             f"FROM playlists p {where} ORDER BY p.position, p.title")]
+
+    def set_playlist_music(self, playlist_id: str, music: bool) -> None:
+        """Mark a playlist as music, or stop marking it.
+
+        Nothing about the stored videos changes. It only decides where a press
+        on one of them is handed to.
+        """
+        with self.conn as conn:
+            conn.execute("UPDATE playlists SET is_music=? WHERE ext_id=?",
+                         (1 if music else 0, playlist_id))
 
     def set_playlist_hidden(self, playlist_id: str, hidden: bool) -> None:
         with self.conn as conn:
@@ -1328,7 +1342,7 @@ class Database:
 
     def playlist(self, playlist_id: str) -> dict | None:
         row = self.conn.execute(
-            "SELECT ext_id, title, items_at, skipped FROM playlists WHERE ext_id=?",
+            "SELECT ext_id, title, items_at, skipped, is_music FROM playlists WHERE ext_id=?",
             (playlist_id,)).fetchone()
         return dict(row) if row else None
 

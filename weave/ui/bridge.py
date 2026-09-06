@@ -977,6 +977,16 @@ class Bridge(QObject):
             self.playlistsChanged.emit()
 
     @Slot(str, bool)
+    def setPlaylistMusic(self, playlist_id: str, music: bool) -> None:
+        """Say that a playlist holds music, or stop saying it.
+
+        The list itself does not change. All it decides is that a press on one
+        of its videos reaches the music player instead of mpv.
+        """
+        self._db.set_playlist_music(playlist_id, music)
+        self.playlistsChanged.emit()
+
+    @Slot(str, bool)
     def setPlaylistHidden(self, playlist_id: str, hidden: bool) -> None:
         self._db.set_playlist_hidden(playlist_id, hidden)
         if hidden and self._view_kind == PLAYLIST and self._view_playlist == playlist_id:
@@ -1379,6 +1389,11 @@ class Bridge(QObject):
             # click opens what can actually be shown right now instead.
             self.openDetail(key)
             return
+        if self._view_kind == PLAYLIST and self._playing_is_music():
+            # A playlist marked as music is listened to rather than watched, so
+            # a press means what the headphone on the card means.
+            self.playAudio(key)
+            return
         login = key.split(":", 1)[1] if key.startswith("twitch:") else None
         # A Twitch entry is only ever a live channel for now, and a YouTube one
         # says so in the row. Either way mpv must not mark it watched.
@@ -1394,6 +1409,13 @@ class Bridge(QObject):
             # Handing a URL to mpv takes a few seconds, and until it reports
             # back there is nothing on screen to say anything happened.
             self._set_notice("Starting in mpv", clear_after_s=30)
+
+    def _playing_is_music(self) -> bool:
+        """Whether the open playlist is one that was marked as music."""
+        if not self._view_playlist:
+            return False
+        found = self._db.playlist(self._view_playlist)
+        return bool(found and found.get("is_music"))
 
     @Slot(str)
     def markWatched(self, key: str) -> None:
