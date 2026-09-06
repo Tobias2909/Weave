@@ -226,6 +226,51 @@ class FromAnOpenedList(unittest.TestCase):
         self.assertEqual(bridge._db.music_favorite_count(), 0)
 
 
+class TheHeartFollowsTheSong(unittest.TestCase):
+    """Whether the heart is lit depends on two things, and both must say so.
+
+    It is a binding on which songs are kept, so a new song playing had to
+    announce itself as well. Without that the heart kept whatever it had read
+    for the song before, which showed as the first song of a session never
+    lighting up while every one after it did.
+    """
+
+    def test_a_new_song_announces_itself_to_the_heart(self) -> None:
+        from weave.ui.bridge import Bridge
+
+        class Wire:
+            def __init__(self):
+                self.slots = []
+
+            def connect(self, slot):
+                self.slots.append(slot)
+
+            def emit(self, *a):
+                for slot in self.slots:
+                    slot(*a)
+
+        class Player:
+            def __init__(self):
+                self.trackChanged = Wire()
+
+            def pause_for_video(self):
+                pass
+
+        class Video:
+            def __init__(self):
+                self.nowPlaying = Wire()
+
+        bridge = Bridge.__new__(Bridge)
+        bridge._player = Video()
+        told = []
+        bridge.favoritesChanged = type("S", (), {"emit": lambda self, *a: told.append(True)})()
+        audio = Player()
+        Bridge.attach_audio(bridge, audio)
+        self.assertEqual(told, [], "nothing has played yet")
+        audio.trackChanged.emit()
+        self.assertEqual(told, [True], "the heart was not told a song started")
+
+
 if __name__ == "__main__":
     unittest.main()
 

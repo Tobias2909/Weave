@@ -1621,6 +1621,10 @@ class Bridge(QObject):
         bridge already holds."""
         self._audio = audio
         self._player.nowPlaying.connect(lambda *_a: self._audio.pause_for_video())
+        # Whether the heart is lit depends on the song playing as much as on
+        # which songs are kept, so a new song has to say so too. Without this
+        # the heart kept whatever it read for the song before.
+        audio.trackChanged.connect(self.favoritesChanged.emit)
 
     @Slot()
     def showMusic(self) -> None:

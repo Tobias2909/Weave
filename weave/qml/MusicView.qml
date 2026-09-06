@@ -41,27 +41,10 @@ Item {
         id: songMenu
         objectName: "songMenu"
 
-        MenuItem {
-            objectName: "songFavoriteEntry"
-            // One menu for both, since keeping a song is the same act whether
-            // it was drawn as a tile or as a row in an opened list.
-            readonly property bool kept: view.askedResult >= 0
-                                         ? App.resultIsFavorite(view.askedResult)
-                                         : App.shelfItemIsFavorite(view.askedShelf,
-                                                                   view.askedItem)
-            text: kept ? "Remove from favorites" : "Add to favorites"
-            onTriggered: {
-                if (view.askedResult >= 0)
-                    App.favoriteResult(view.askedResult)
-                else
-                    App.favoriteShelfItem(view.askedShelf, view.askedItem)
-                songMenu.dismiss()
-            }
-        }
-
-        // Only while something is playing. With nothing in the player there is
-        // no queue to add to and no next to be, so pressing the song is what
-        // is meant instead.
+        // Queueing comes first, since it is about what happens next and that
+        // is the reason to press a song rather than play it. Only while
+        // something is playing, because with an empty player there is no
+        // queue to add to and no next to be.
         MenuItem {
             objectName: "songPlayNextEntry"
             visible: Audio.hasQueue
@@ -75,6 +58,7 @@ Item {
                 songMenu.dismiss()
             }
         }
+
         MenuItem {
             objectName: "songQueueEntry"
             visible: Audio.hasQueue
@@ -85,6 +69,24 @@ Item {
                     App.queueResult(view.askedResult, false)
                 else
                     App.queueShelfItem(view.askedShelf, view.askedItem, false)
+                songMenu.dismiss()
+            }
+        }
+
+        // One entry for both, since keeping a song is the same act whether it
+        // was drawn as a tile or as a row in a list that was opened.
+        MenuItem {
+            objectName: "songFavoriteEntry"
+            readonly property bool kept: view.askedResult >= 0
+                                         ? App.resultIsFavorite(view.askedResult)
+                                         : App.shelfItemIsFavorite(view.askedShelf,
+                                                                   view.askedItem)
+            text: kept ? "Remove from favorites" : "Add to favorites"
+            onTriggered: {
+                if (view.askedResult >= 0)
+                    App.favoriteResult(view.askedResult)
+                else
+                    App.favoriteShelfItem(view.askedShelf, view.askedItem)
                 songMenu.dismiss()
             }
         }
