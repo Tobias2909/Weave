@@ -170,11 +170,24 @@ def from_dots(ground: str, accent: str, second: str | None = None) -> dict:
 
     # The light comes from one corner and falls away to the ground, which is
     # the shape every theme that ships uses.
+    #
+    # How much of it there is depends on the ground. A dark window can take a
+    # good deal of colour in the corner, since it only lifts a nearly black
+    # surface. A pale window cannot: the same mix there is a slab of colour
+    # rather than a glow, and the bars that go translucent over a gradient
+    # turn dark under text meant for a pale ground. So on a light ground the
+    # colour is both weaker and lifted towards the ground first.
+    if dark:
+        corner = mix(ground, second, 0.55)
+        middle = mix(ground, accent_seen, 0.14)
+    else:
+        corner = mix(ground, lift(second, 0.28), 0.22)
+        middle = mix(ground, lift(accent_seen, 0.28), 0.07)
     gradient = {
         "angle": 45,
         "stops": [
-            {"position": 0.0, "color": mix(ground, second, 0.55)},
-            {"position": 0.55, "color": mix(ground, accent_seen, 0.14)},
+            {"position": 0.0, "color": corner},
+            {"position": 0.55, "color": middle},
             {"position": 1.0, "color": ground},
         ],
     }

@@ -71,6 +71,17 @@ class Theme(QObject):
     def _get_current(self) -> str:
         return self._loaded.name
 
+    def _get_light(self) -> bool:
+        """Whether the window is built on a pale ground.
+
+        The bars that go translucent over a gradient need to keep more of
+        themselves on a pale ground, or the colour behind them shows through
+        and the text on them, which is dark, stops being readable.
+        """
+        return themes.is_light(self._get_colors().get("background", "#000000"))
+
+    light = Property(bool, _get_light, notify=changed)
+
     def _get_washed(self) -> bool:
         """Whether a gradient is in play. The panels go translucent when there
         is one, otherwise they would cover the very corner the light comes

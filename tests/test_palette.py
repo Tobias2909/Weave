@@ -191,3 +191,117 @@ class KeepingAndThrowingAway(unittest.TestCase):
         self.assertEqual(Bridge._get_own_themes(bridge), ["Mine Alone"])
         self.assertTrue(Bridge.deleteTheme(bridge, "Mine Alone"))
         self.assertEqual(Bridge._get_own_themes(bridge), [])
+
+
+class HandingThemesAround(unittest.TestCase):
+    """A theme is a file of colours, so sharing one is copying it."""
+
+    def setUp(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        from weave import themes
+
+        self.home = Path(tempfile.mkdtemp())
+        self.away = Path(tempfile.mkdtemp())
+        self._was = themes.user_dir
+        themes.user_dir = lambda: self.home / "themes"
+        (self.home / "themes").mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self) -> None:
+        from weave import themes
+
+        themes.user_dir = self._was
+
+    def bridge(self):
+        from weave.ui.bridge import Bridge
+
+        class Quiet:
+            def emit(self, *_a):
+                pass
+
+        class Themes:
+            def reload(self):
+                pass
+
+        made = Bridge.__new__(Bridge)
+        made._theme = Themes()
+        made.notices = []
+        made._set_notice = lambda *a, **k: made.notices.append(a[0])
+        made.themesChanged = Quiet()
+        return made
+
+    def a_theme(self, name="Shared One"):
+        from weave import themes
+
+        made = palette.from_dots("#101216", "#7c5cff")
+        path = themes.user_dir() / f"{themes.file_name(name)}.toml"
+        path.write_text(palette.as_toml(name, made), encoding="utf-8")
+        return path
+
+    def test_one_can_be_handed_out(self) -> None:
+        from weave.ui.bridge import Bridge
+
+        self.a_theme()
+        bridge = self.bridge()
+        self.assertTrue(Bridge.exportTheme(bridge, "Shared One", str(self.away)))
+        self.assertEqual([path.name for path in self.away.glob("*.toml")],
+                         ["shared-one.toml"])
+
+    def test_a_shipped_one_can_be_handed_out_too(self) -> None:
+        from weave.ui.bridge import Bridge
+
+        bridge = self.bridge()
+        self.assertTrue(Bridge.exportTheme(bridge, "Weave Dark", str(self.away)))
+        self.assertTrue((self.away / "weave-dark.toml").exists())
+
+    def test_one_can_be_taken_in(self) -> None:
+        from weave import themes
+        from weave.ui.bridge import Bridge
+
+        source = self.a_theme("Given To Me")
+        moved = self.away / "given.toml"
+        moved.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+        source.unlink()
+
+        bridge = self.bridge()
+        self.assertTrue(Bridge.importTheme(bridge, str(moved)))
+        kept = themes.user_dir() / "given-to-me.toml"
+        self.assertTrue(kept.exists(), "it was not kept under its own name")
+        self.assertEqual(themes.load_file(kept).name, "Given To Me")
+
+    def test_a_file_that_is_not_a_theme_is_refused(self) -> None:
+        from weave.ui.bridge import Bridge
+
+        rubbish = self.away / "notes.txt"
+        rubbish.write_text("this is not a theme", encoding="utf-8")
+        bridge = self.bridge()
+        self.assertFalse(Bridge.importTheme(bridge, str(rubbish)))
+        self.assertIn("not a theme", bridge.notices[-1])
+        self.assertEqual(list((self.home / "themes").glob("*.toml")), [])
+
+    def test_a_theme_with_a_broken_colour_is_refused(self) -> None:
+        from weave.ui.bridge import Bridge
+
+        broken = self.away / "broken.toml"
+        broken.write_text('name = "Broken"\n\n[colors]\naccent = "not a colour"\n',
+                          encoding="utf-8")
+        bridge = self.bridge()
+        self.assertFalse(Bridge.importTheme(bridge, str(broken)))
+        self.assertIn("not a theme", bridge.notices[-1])
+
+    def test_a_file_address_is_understood_as_well_as_a_path(self) -> None:
+        from weave.ui.bridge import Bridge
+
+        source = self.a_theme("By Address")
+        moved = self.away / "by.toml"
+        moved.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+        bridge = self.bridge()
+        self.assertTrue(Bridge.importTheme(bridge, moved.as_uri()))
+
+    def test_handing_out_something_nobody_has_says_so(self) -> None:
+        from weave.ui.bridge import Bridge
+
+        bridge = self.bridge()
+        self.assertFalse(Bridge.exportTheme(bridge, "Nothing", str(self.away)))
+        self.assertIn("Could not find", bridge.notices[-1])

@@ -141,6 +141,13 @@ def _gradient(raw: dict | None, problems: list[str]) -> dict | None:
     }
 
 
+def is_light(colour: str) -> bool:
+    """Whether a colour is pale enough to need dark text on it."""
+    from .palette import _luminance
+
+    return _luminance(colour) > 0.4
+
+
 def file_name(name: str) -> str:
     """What a theme called this is stored as.
 

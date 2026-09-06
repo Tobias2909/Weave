@@ -15,7 +15,9 @@ import json
 import random
 import time
 
-from PySide6.QtCore import Property, QObject, Qt, QTimer, Signal, Slot
+from pathlib import Path
+
+from PySide6.QtCore import Property, QObject, Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QGuiApplication
 
 from .. import format as fmt
@@ -1683,6 +1685,90 @@ class Bridge(QObject):
         self.themesChanged.emit()
         self._set_notice(f"Saved {name}", clear_after_s=4)
         return True
+
+    @Slot(str, str, result=bool)
+    def exportTheme(self, name: str, where: str) -> bool:
+        """Copy a theme out, so it can be handed to somebody.
+
+        A theme is a file with nothing in it but colours, so sharing one is
+        copying it. Nothing is rewritten on the way out.
+        """
+        source = self._theme_file(name)
+        if source is None:
+            self._set_notice(f"Could not find {name}", clear_after_s=5)
+            return False
+        target = Path(self._local_path(where))
+        if target.is_dir():
+            # Named after the theme rather than after the file it happens to
+            # live in, since what ships is not named after itself and nobody
+            # receiving dark.toml would know it is called Weave Dark.
+            target = target / f"{themes.file_name(name)}.toml"
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+        except OSError as exc:
+            self._set_notice(f"Could not write it, {exc}", clear_after_s=6)
+            return False
+        self._set_notice(f"Copied {name} to {target}", clear_after_s=6)
+        return True
+
+    @staticmethod
+    def _theme_file(name: str) -> Path | None:
+        """The file a theme is written in, found by the name it goes by.
+
+        Searched rather than worked out from the name. What ships is not named
+        after itself on disk, Weave Dark being dark.toml, so building the file
+        name from the theme name finds nothing for half the list.
+        """
+        for folder in (themes.user_dir(), themes.builtin_dir()):
+            for path in sorted(folder.glob("*.toml")):
+                loaded = themes.load_file(path)
+                if loaded is not None and loaded.name == name:
+                    return path
+        return None
+
+    @Slot(str, result=bool)
+    def importTheme(self, where: str) -> bool:
+        """Take a theme somebody else made and keep it with your own.
+
+        It is read before it is kept, so a file that is not a theme is refused
+        with what was wrong with it rather than landing in the folder and
+        turning up broken in the list.
+        """
+        source = Path(self._local_path(where))
+        loaded = themes.load_file(source) if source.is_file() else None
+        if loaded is None:
+            self._set_notice("That is not a theme file", clear_after_s=5)
+            return False
+        if loaded.problems:
+            # A file that cannot be read at all comes back looking like a
+            # theme, with every role filled in from the fallback, and only the
+            # list of problems says otherwise. So anything with a problem is
+            # refused rather than kept and shown as a theme that is mostly not
+            # the one it claims to be.
+            self._set_notice(f"That is not a theme file, {loaded.problems[0]}",
+                             clear_after_s=6)
+            return False
+        target = themes.user_dir() / f"{themes.file_name(loaded.name)}.toml"
+        try:
+            themes.user_dir().mkdir(parents=True, exist_ok=True)
+            target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+        except OSError as exc:
+            self._set_notice(f"Could not keep it, {exc}", clear_after_s=6)
+            return False
+        if self._theme is not None:
+            self._theme.reload()
+        self.themesChanged.emit()
+        self._set_notice(f"Took in {loaded.name}", clear_after_s=5)
+        return True
+
+    @staticmethod
+    def _local_path(where: str) -> str:
+        """A path as typed, or as a file address dropped in from elsewhere."""
+        where = (where or "").strip()
+        if where.startswith("file://"):
+            return QUrl(where).toLocalFile()
+        return str(Path(where).expanduser())
 
     @Slot(str, result=bool)
     def deleteTheme(self, name: str) -> bool:

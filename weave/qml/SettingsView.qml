@@ -159,6 +159,51 @@ Item {
                                 }
                             }
                         }
+
+                        Label {
+                            width: parent.width
+                            text: "A theme is a file of colours and nothing else, so one "
+                                  + "can be handed to somebody or taken from them. Yours "
+                                  + "are kept in the themes folder beside the settings."
+                            color: Theme.colors.textMuted
+                            font.pixelSize: 11
+                            wrapMode: Text.Wrap
+                        }
+
+                        Row {
+                            spacing: 8
+
+                            TextField {
+                                id: themePath
+                                objectName: "themePath"
+                                width: view.width * 0.42
+                                placeholderText: "A file, or a folder to copy into"
+                                color: Theme.colors.text
+                                placeholderTextColor: Theme.colors.textMuted
+                                background: Rectangle {
+                                    radius: 6
+                                    color: Theme.colors.background
+                                    border.width: 1
+                                    border.color: themePath.activeFocus
+                                                  ? Theme.colors.accent : Theme.colors.border
+                                }
+                            }
+
+                            FlatButton {
+                                objectName: "importTheme"
+                                text: "Take one in"
+                                enabled: themePath.text.trim() !== ""
+                                onClicked: if (App.importTheme(themePath.text))
+                                               themePath.text = ""
+                            }
+
+                            FlatButton {
+                                objectName: "exportTheme"
+                                text: "Hand out " + Theme.current
+                                enabled: themePath.text.trim() !== ""
+                                onClicked: App.exportTheme(Theme.current, themePath.text)
+                            }
+                        }
                     }
                 }
 

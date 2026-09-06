@@ -93,9 +93,16 @@ ApplicationWindow {
 
     // A panel over a gradient is translucent, otherwise the bars would cover
     // the corner the light comes from and the wash would never be seen.
-    readonly property real panelOpacity: Theme.washed ? 0.62 : 1.0
+    // A pale bar keeps more of itself, or the colour of the gradient
+    // shows through it and the dark text on it stops being readable.
+    readonly property real panelOpacity: Theme.washed ? (Theme.light ? 0.9 : 0.62) : 1.0
+    // The role arrives as text, so it is read as a colour before its parts
+    // are asked for. Reading r, g and b off the text gives nothing, and a
+    // colour built from nothing is black, which is what every translucent bar
+    // in a theme with a gradient had quietly become.
     function panelColour(role) {
-        return Qt.rgba(role.r, role.g, role.b, root.panelOpacity)
+        var colour = Qt.color(role)
+        return Qt.rgba(colour.r, colour.g, colour.b, root.panelOpacity)
     }
 
     // ---- the window itself -----------------------------------------------

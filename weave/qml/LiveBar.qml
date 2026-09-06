@@ -34,8 +34,14 @@ Rectangle {
     Behavior on opacity {
         NumberAnimation { duration: 200; easing.type: Easing.InOutQuad }
     }
-    color: Qt.rgba(Theme.colors.surface.r, Theme.colors.surface.g,
-                   Theme.colors.surface.b, Theme.washed ? 0.62 : 1.0)
+    // Read as a colour first. The roles are handed over as text, and asking
+    // a piece of text for its red gives nothing, which builds a black bar.
+    readonly property color panel: Qt.color(Theme.colors.surface)
+    color: Qt.rgba(panel.r, panel.g, panel.b,
+                   // A pale bar keeps more of itself, or the gradient behind
+                   // it shows through and the dark text on it stops being
+                   // readable.
+                   Theme.washed ? (Theme.light ? 0.9 : 0.62) : 1.0)
 
     Rectangle {
         anchors.bottom: parent.bottom
