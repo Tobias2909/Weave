@@ -21,8 +21,17 @@ Item {
     // and the whole section page, told which tile it was opened on.
     property int askedShelf: -1
     property int askedItem: -1
+    property int askedResult: -1
+
+    function askAboutResult(resultIndex) {
+        view.askedShelf = -1
+        view.askedItem = -1
+        view.askedResult = resultIndex
+        songMenu.popup()
+    }
 
     function askAbout(shelfIndex, itemIndex) {
+        view.askedResult = -1
         view.askedShelf = shelfIndex
         view.askedItem = itemIndex
         songMenu.popup()
@@ -34,10 +43,18 @@ Item {
 
         MenuItem {
             objectName: "songFavoriteEntry"
-            text: App.shelfItemIsFavorite(view.askedShelf, view.askedItem)
-                  ? "Remove from favorites" : "Add to favorites"
+            // One menu for both, since keeping a song is the same act whether
+            // it was drawn as a tile or as a row in an opened list.
+            readonly property bool kept: view.askedResult >= 0
+                                         ? App.resultIsFavorite(view.askedResult)
+                                         : App.shelfItemIsFavorite(view.askedShelf,
+                                                                   view.askedItem)
+            text: kept ? "Remove from favorites" : "Add to favorites"
             onTriggered: {
-                App.favoriteShelfItem(view.askedShelf, view.askedItem)
+                if (view.askedResult >= 0)
+                    App.favoriteResult(view.askedResult)
+                else
+                    App.favoriteShelfItem(view.askedShelf, view.askedItem)
                 songMenu.dismiss()
             }
         }
@@ -377,6 +394,11 @@ Item {
 
                 HoverHandler { id: rowHover }
                 TapHandler { onTapped: App.playResult(index) }
+                // A song in an opened list is kept the same way a tile is.
+                TapHandler {
+                    acceptedButtons: Qt.RightButton
+                    onTapped: view.askAboutResult(index)
+                }
 
                 Row {
                     anchors.fill: parent

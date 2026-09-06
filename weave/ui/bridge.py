@@ -1768,6 +1768,28 @@ class Bridge(QObject):
         self._mark_favorite(key, str(track.get("title") or ""),
                             track.get("artist"), track.get("thumbnail"))
 
+    @Slot(int)
+    def favoriteResult(self, index: int) -> None:
+        """From a row in an opened list, a playlist or a station alike.
+
+        The same act as the tile and the card, reached from the third place a
+        song is drawn.
+        """
+        try:
+            row = self._results[index]
+        except (IndexError, TypeError):
+            return
+        self._mark_favorite(str(row.get("key") or ""), str(row.get("title") or ""),
+                            row.get("artist"), row.get("thumbnail"))
+
+    @Slot(int, result=bool)
+    def resultIsFavorite(self, index: int) -> bool:
+        try:
+            row = self._results[index]
+        except (IndexError, TypeError):
+            return False
+        return self.isFavorite(str(row.get("key") or ""))
+
     @Slot(int, int)
     def favoriteShelfItem(self, shelf_index: int, item_index: int) -> None:
         """From a tile in the music page.

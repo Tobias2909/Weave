@@ -163,6 +163,69 @@ class TheBridgeMarksThem(unittest.TestCase):
         self.assertEqual(bridge._db.music_favorite_count(), 0)
 
 
+class FromAnOpenedList(unittest.TestCase):
+    """A playlist or a station opened in music draws its songs as rows rather
+    than tiles, and a song is a song wherever it is drawn."""
+
+    def bridge(self, rows):
+        from weave.ui.bridge import Bridge
+
+        class Quiet:
+            def emit(self, *_a):
+                pass
+
+        bridge = Bridge.__new__(Bridge)
+        bridge._db = Database(Path(tempfile.mkdtemp()) / "weave.db")
+        bridge._results = rows
+        bridge._music_list = None
+        bridge.notices = []
+        bridge._set_notice = lambda *a, **k: bridge.notices.append(a[0])
+        bridge._set_status = lambda *a, **k: None
+        bridge.favoritesChanged = Quiet()
+        bridge.musicChanged = Quiet()
+        return bridge
+
+    def rows(self):
+        return [{"key": "yt:aaaaaaaaaaa", "videoId": "aaaaaaaaaaa",
+                 "title": "A song", "artist": "An artist",
+                 "thumbnail": "https://example/a.jpg"}]
+
+    def test_a_row_can_be_kept(self) -> None:
+        from weave.ui.bridge import Bridge
+
+        bridge = self.bridge(self.rows())
+        Bridge.favoriteResult(bridge, 0)
+        kept = bridge._db.music_favorites()[0]
+        self.assertEqual(kept["title"], "A song")
+        self.assertEqual(kept["channel_title"], "An artist")
+        self.assertEqual(kept["thumbnail_url"], "https://example/a.jpg")
+        self.assertEqual(bridge.notices, ["Added to favorites"])
+
+    def test_the_menu_knows_whether_it_is_kept(self) -> None:
+        from weave.ui.bridge import Bridge
+
+        bridge = self.bridge(self.rows())
+        self.assertFalse(Bridge.resultIsFavorite(bridge, 0))
+        Bridge.favoriteResult(bridge, 0)
+        self.assertTrue(Bridge.resultIsFavorite(bridge, 0))
+
+    def test_pressing_it_again_gives_the_song_back(self) -> None:
+        from weave.ui.bridge import Bridge
+
+        bridge = self.bridge(self.rows())
+        Bridge.favoriteResult(bridge, 0)
+        Bridge.favoriteResult(bridge, 0)
+        self.assertEqual(bridge._db.music_favorite_count(), 0)
+
+    def test_a_row_that_is_not_there_is_no_error(self) -> None:
+        from weave.ui.bridge import Bridge
+
+        bridge = self.bridge(self.rows())
+        Bridge.favoriteResult(bridge, 99)
+        self.assertFalse(Bridge.resultIsFavorite(bridge, 99))
+        self.assertEqual(bridge._db.music_favorite_count(), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
 
