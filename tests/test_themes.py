@@ -189,7 +189,10 @@ class ColoursThatCarryAlpha(unittest.TestCase):
             with self.subTest(theme=theme.name):
                 colour = QColor(theme.colors["badgeBackground"])
                 self.assertTrue(colour.isValid())
-                self.assertGreater(colour.alpha(), 128,
+                # How dark the plate is is taste and he has moved it twice.
+                # What this guards is the trap, a colour whose alpha ends up
+                # at nothing because it was written the wrong way round.
+                self.assertGreater(colour.alpha(), 64,
                                    "the badge needs a plate behind the text")
 
     def test_the_colours_in_code_are_the_same(self) -> None:
@@ -198,4 +201,4 @@ class ColoursThatCarryAlpha(unittest.TestCase):
         from weave import themes
 
         colour = QColor(themes.FALLBACK["badgeBackground"])
-        self.assertGreater(colour.alpha(), 128)
+        self.assertGreater(colour.alpha(), 64)
