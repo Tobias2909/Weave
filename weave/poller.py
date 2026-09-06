@@ -1085,3 +1085,59 @@ class SourceDetails(Worker):
         self._db.set_source_details(self._url, title, picture)
         self._db.close()
         self.done.emit()
+
+
+class ChannelAvatarsFetcher(Worker):
+    """Fills in a picture for the channels behind a list of suggestions.
+
+    A suggestion names its channel, but yt-dlp's flat listing of them never
+    carries a picture, only a channel's own page does, and that page costs
+    about six tenths of a second. Fetched here for a whole batch at once with
+    several requests in flight, rather than on the interface thread or as a
+    swarm of unrelated workers, and stopped by the same request budget every
+    other browse call answers to. A channel that fails is asked about again
+    on the next batch that names it, since a permanent memory of the failure
+    would need its own bookkeeping and the budget is already the backstop
+    against asking too often.
+    """
+
+    ready = Signal(int)   # channels that now have a picture
+
+    def __init__(self, db: Database, cfg: Config, channel_keys: list[str],
+                 parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._db = db
+        self._cfg = cfg
+        self._keys = channel_keys
+        self._throttle = self._throttle_for(cfg, cfg.max_concurrency)
+
+    def run(self) -> None:
+        budget = Budget(self._db, self._cfg.budget_limits, self._cfg.budget_window_s)
+        allowance = budget.allowance(BROWSE, len(self._keys))
+        keys = self._keys[:allowance.granted]
+        found = spent = refused = 0
+        if keys:
+            with ThreadPoolExecutor(max_workers=self._cfg.max_concurrency) as pool:
+                futures = {pool.submit(channel_source.fetch, key.split(":", 1)[1],
+                                       self._throttle, self._cancel): key for key in keys}
+                for future in as_completed(futures):
+                    if self._cancel.is_set():
+                        pool.shutdown(wait=False, cancel_futures=True)
+                        break
+                    key = futures[future]
+                    try:
+                        details = future.result()
+                    except (FetchCancelled, ProcessCancelled):
+                        break
+                    except channel_source.DetailsError:
+                        spent += 1
+                        refused += 1
+                        continue
+                    spent += 1
+                    self._db.set_channel_details(key, details.title, details.avatar_url,
+                                                 details.banner_url, details.follower_count)
+                    if details.avatar_url:
+                        found += 1
+        budget.spend(BROWSE, spent, refused=refused)
+        self._db.close()
+        self.ready.emit(found)

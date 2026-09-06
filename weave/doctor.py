@@ -150,8 +150,12 @@ def _cookies(cfg: Config, report: Report) -> None:
 def _database(db: Database, report: Report) -> None:
     size = paths.DB_FILE.stat().st_size / 1_048_576 if paths.DB_FILE.exists() else 0
     counts = db.counts()
+    # The loose ones are the channels a saved video brought along. They are
+    # not followed and are not counted as channels anywhere else, so the line
+    # says so rather than leaving the table looking bigger than the count.
+    loose = f", {counts['loose']} kept only for saved videos" if counts["loose"] else ""
     report.add("database", OK, f"{size:.1f} MB, {counts['channels']} channels, "
-                               f"{counts['videos']} videos")
+                               f"{counts['videos']} videos{loose}")
     if not counts["channels"]:
         report.add("channels", FAIL, "nothing is tracked",
                    "Add a channel, or run weave import")

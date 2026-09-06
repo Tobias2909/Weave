@@ -26,6 +26,7 @@ from ..imagecache import SECONDS_PER_DAY, qml_source
 from ..player.mpv import Player
 from ..poller import (
     ChannelAdder,
+    ChannelAvatarsFetcher,
     ChannelDetailsFetcher,
     Checkup,
     DetailFetcher,
@@ -125,6 +126,7 @@ class Bridge(QObject):
         self._importer: SubsImporter | None = None
         self._history: HistoryImporter | None = None
         self._recommended: RecommendationsFetcher | None = None
+        self._avatars: ChannelAvatarsFetcher | None = None
         self._playlists: PlaylistsFetcher | None = None
         self._playlist_items: PlaylistItemsFetcher | None = None
         self._view_playlist = ""
@@ -1089,6 +1091,11 @@ class Bridge(QObject):
 
     def _fetch_recommended(self, force: bool = False, start: int = 1,
                            append: bool = False) -> None:
+        # Whether or not this call ends up asking YouTube for anything new,
+        # the suggestions already on hand may still be missing a picture for
+        # the channel behind them, so that is checked every time this is
+        # reached rather than only when a fresh page comes in.
+        self._fetch_loose_avatars()
         if self._recommended is not None and self._recommended.isRunning():
             return
         # An empty list is worth asking for whatever its age. Otherwise a run
@@ -1117,6 +1124,33 @@ class Bridge(QObject):
         self._set_status(f"{self._db.recommended_count()} suggestions")
         if self._view_kind == RECOMMENDED:
             self.reload()
+        # The batch that just landed may name channels the earlier check, run
+        # before this one was on hand, could not have seen yet.
+        self._fetch_loose_avatars()
+
+    def _fetch_loose_avatars(self) -> None:
+        """Ask for a picture for every suggested channel that still has none.
+
+        A suggestion names its channel but never carries a picture for it,
+        only a channel's own page does, so this is what a card's icon is
+        actually waiting on. One worker fetches the whole batch, bounded by
+        the same request budget every other browse call answers to, and
+        redraws the grid once it is done if the suggestions are still what is
+        showing.
+        """
+        if self._avatars is not None and self._avatars.isRunning():
+            return
+        keys = self._db.channels_missing_picture(
+            self._db.channels_named_in(self._db.RECOMMENDED))
+        if not keys:
+            return
+        self._avatars = ChannelAvatarsFetcher(self._db, self._cfg, keys, parent=self)
+        self._avatars.ready.connect(self._on_loose_avatars)
+        self._launch(self._avatars)
+
+    def _on_loose_avatars(self, found: int) -> None:
+        if found and self._view_kind == RECOMMENDED:
+            self.reload()
 
     @Slot(int)
     def selectGroup(self, group_id: int) -> None:
@@ -1132,6 +1166,16 @@ class Bridge(QObject):
             return
         self._set_view(CHANNEL, -1, channel_key)
         found = self._db.channel(channel_key)
+        if not found:
+            # Reached from a card in the suggestions, the history or a search,
+            # where the channel is a stranger and has no row yet. One is kept
+            # for it, not followed, so the page has somewhere to put the name
+            # and the picture the lookup below is about to bring back.
+            ext_id = channel_key.split(":", 1)[-1]
+            if not ids.CHANNEL_ID.match(ext_id):
+                return
+            self._db.remember_channel(channel_key, "youtube", ext_id)
+            found = self._db.channel(channel_key)
         if found and found["platform"] == "youtube" and \
                 self._db.channel_details_are_stale(channel_key):
             self._fetch_channel_details(channel_key, found["ext_id"])
@@ -1174,10 +1218,28 @@ class Bridge(QObject):
 
     @Slot(int, str)
     def addToBox(self, box_id: int, video_key: str) -> None:
-        self._db.add_to_box(box_id, video_key)
+        """Put a video in a box, storing it first if it was only ever borrowed.
+
+        A suggestion, a history entry and a search result are all snapshots
+        that get replaced, so putting one in a box keeps it for good. The
+        channel it brings along is kept as well, for its name and its picture,
+        and is not followed by this.
+        """
+        if not self._db.add_to_box(box_id, video_key, self._loose_row(video_key)):
+            self._set_status("that video could not be stored")
+            return
         self.boxesChanged.emit()
         if self._view_kind == BOX:
             self.reload()
+
+    def _loose_row(self, video_key: str) -> dict | None:
+        """The row behind a video that is only held in memory.
+
+        Results from YouTube are the one list with nowhere to be read back
+        from, so the row goes to the database with the request to store it.
+        Everything else is already in a table and is found there.
+        """
+        return next((row for row in self._web_results if row["key"] == video_key), None)
 
     @Slot(int, str)
     def removeFromBox(self, box_id: int, video_key: str) -> None:

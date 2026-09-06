@@ -535,7 +535,15 @@ class Recommendations(DatabaseCase):
     def test_a_suggestion_from_a_stranger_keeps_the_bare_name(self):
         self.db.replace_recommended(self.rows("aaaaaaaaaaa"))
         row = self.db.recommended()[0]
-        self.assertEqual((row["channel_title"], row["channel_key"]), ("Someone", ""))
+        self.assertEqual(row["channel_title"], "Someone")
+        self.assertIsNone(row["avatar_url"])
+
+    def test_and_still_has_a_key_to_address_that_channel_by(self):
+        # Worked out from the channel id rather than read off a row, since
+        # there is no row. Without it a suggestion's channel could not be put
+        # in a group, because the menu has nothing but this key to go on.
+        self.db.replace_recommended(self.rows("aaaaaaaaaaa"))
+        self.assertEqual(self.db.recommended()[0]["channel_key"], "yt:UC9")
 
     def test_watched_is_carried_across(self):
         self.db.add_channel("yt:UC9", "youtube", "UC9", "Real name")

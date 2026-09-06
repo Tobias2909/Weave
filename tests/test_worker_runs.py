@@ -138,6 +138,15 @@ class WorkerRuns(unittest.TestCase):
         self.run_worker(poller.ChannelDetailsFetcher(self.db, self.cfg, "yt:UC1", "UC1"))
         self.assertEqual(self.db.channel("yt:UC1")["banner_url"], "b.jpg")
 
+    def test_channel_avatars_fetcher(self):
+        self.db.remember_channel("yt:UC2", "youtube", "UC2", "A stranger")
+        self.patch(poller.channel_source, "fetch",
+                   lambda ext_id, *a, **k: ChannelDetails(None, f"{ext_id}.jpg", None, None))
+        said = self.run_worker(
+            poller.ChannelAvatarsFetcher(self.db, self.cfg, ["yt:UC2"]))
+        self.assertEqual(self.db.channel("yt:UC2")["avatar_url"], "UC2.jpg")
+        self.assertFalse(said)
+
     def test_history_importer(self):
         self.patch(poller.history_source, "fetch",
                    lambda *a, **k: [poller.flatlist.FlatVideo("aaaaaaaaaaa", "Watched"),
@@ -375,7 +384,7 @@ class WorkerRuns(unittest.TestCase):
         run_here = {"FeedPoller", "SubsImporter", "ChannelDetailsFetcher",
                     "HistoryImporter", "RecommendationsFetcher", "PlaylistsFetcher",
                     "PlaylistItemsFetcher", "SearchFetcher", "LiveWatcher",
-                    "DetailFetcher"}
+                    "DetailFetcher", "ChannelAvatarsFetcher"}
         # The checkup runs the doctor, which counts its own requests.
         run_here.add("Checkup")
         source = Path("weave/poller.py").read_text()

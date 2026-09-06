@@ -19,10 +19,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
+
+# The channel a video points at when nothing knows which channel it came from.
+# A history row carries no channel whatsoever, measured, and a video row has to
+# name one, so those all point here. The key is the empty string because that
+# is already what every list reports for "no channel", so the grid and the
+# menus treat such a video exactly as they treated it before it was stored.
+NO_CHANNEL = ""
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -264,6 +271,12 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # than a date. It is what every other client shows for these.
     ("cached_videos", "published_at", "INTEGER"),
     ("playlist_items", "published_at", "INTEGER"),
+    # Whether this is a channel that is followed. A video saved out of the
+    # suggestions, the history or a search brings its channel along so the
+    # card has a name and a picture, but that channel is not something to
+    # poll, to count, or to pour into the feed. Existing rows default to
+    # followed, since everything stored before this was added by hand.
+    ("channels", "tracked", "INTEGER NOT NULL DEFAULT 1"),
 )
 
 
@@ -358,31 +371,126 @@ class Database:
 
     def add_channel(self, key: str, platform: str, ext_id: str, title: str | None = None,
                     avatar_url: str | None = None) -> bool:
-        """Add or update a channel. Returns whether it was new.
+        """Follow a channel. Returns whether it was newly followed.
 
         COALESCE keeps a known title or avatar when the caller has none, so a
         source that carries less detail than an earlier one cannot erase it.
+
+        A channel that was only carried along by a saved video becomes a
+        followed one here, so a row that already existed but was not followed
+        still counts as new.
         """
         with self.conn as conn:
-            existed = conn.execute("SELECT 1 FROM channels WHERE key=?", (key,)).fetchone()
+            existed = conn.execute(
+                "SELECT tracked FROM channels WHERE key=?", (key,)).fetchone()
             conn.execute(
-                "INSERT INTO channels(key, platform, ext_id, title, avatar_url, added_at) "
-                "VALUES(?,?,?,?,?,?) "
+                "INSERT INTO channels(key, platform, ext_id, title, avatar_url, added_at, "
+                "  tracked) "
+                "VALUES(?,?,?,?,?,?,1) "
+                "ON CONFLICT(key) DO UPDATE SET "
+                "  title=COALESCE(excluded.title, channels.title), "
+                "  avatar_url=COALESCE(excluded.avatar_url, channels.avatar_url), "
+                "  tracked=1",
+                (key, platform, ext_id, title, avatar_url, int(time.time())),
+            )
+            return existed is None or not existed["tracked"]
+
+    def remember_channel(self, key: str, platform: str, ext_id: str,
+                         title: str | None = None, avatar_url: str | None = None) -> None:
+        """Keep a channel without following it.
+
+        This is what a video saved out of the suggestions, the history or a
+        search brings with it. The row exists so the card has a name and
+        somewhere for a picture to live, and for nothing else: it is never
+        polled, never counted among the channels followed, and its videos
+        never reach the feed. A channel already followed stays followed, since
+        the conflict clause leaves the flag alone.
+
+        With no title given, one is looked for in the lists this channel was
+        seen in, the same way following it by key alone does.
+        """
+        title = title or self._name_from_lists(ext_id)
+        with self.conn as conn:
+            conn.execute(
+                "INSERT INTO channels(key, platform, ext_id, title, avatar_url, added_at, "
+                "  tracked) "
+                "VALUES(?,?,?,?,?,?,0) "
                 "ON CONFLICT(key) DO UPDATE SET "
                 "  title=COALESCE(excluded.title, channels.title), "
                 "  avatar_url=COALESCE(excluded.avatar_url, channels.avatar_url)",
                 (key, platform, ext_id, title, avatar_url, int(time.time())),
             )
-            return existed is None
+
+    def track_channel(self, key: str, title: str | None = None,
+                      avatar_url: str | None = None) -> bool:
+        """Follow a channel named only by its key.
+
+        Reached from putting a channel in a group, where all that is on hand
+        is the key off a video card. A name is looked for in the lists that
+        card came from, so a channel followed this way is not left unnamed
+        until something else fetches its details.
+        """
+        prefix, sep, ext_id = key.partition(":")
+        if not sep or not ext_id:
+            return False
+        platform = "youtube" if prefix == "yt" else "twitch"
+        return self.add_channel(key, platform, ext_id,
+                                title or self._name_from_lists(ext_id), avatar_url)
+
+    def _name_from_lists(self, ext_id: str) -> str | None:
+        """What the lists that come from YouTube call this channel, if any of
+        them named it. The history names none of them, measured."""
+        row = self.conn.execute(
+            "SELECT channel_name FROM ("
+            "  SELECT channel_name FROM cached_videos WHERE channel_ext_id=? "
+            "  UNION ALL "
+            "  SELECT channel_name FROM playlist_items WHERE channel_ext_id=?"
+            ") WHERE channel_name IS NOT NULL LIMIT 1",
+            (ext_id, ext_id)).fetchone()
+        return row["channel_name"] if row else None
 
     def channels_missing_avatar(self, platform: str = "twitch") -> list[str]:
         return [row["ext_id"] for row in self.conn.execute(
-            "SELECT ext_id FROM channels WHERE platform=? AND "
+            "SELECT ext_id FROM channels WHERE platform=? AND tracked=1 AND "
             "(avatar_url IS NULL OR avatar_url = '')", (platform,))]
+
+    def channels_named_in(self, kind: str) -> list[str]:
+        """Every channel behind a cached list, with a bare row kept for each
+        so a picture that arrives later has somewhere to land.
+
+        A suggestion names its channel but yt-dlp's flat listing of them
+        never carries a picture, only a channel's own page does, which is
+        why this is the list a picture fetch works its way through. The
+        history is exactly the list left out here: measured, it names no
+        channel at all.
+        """
+        rows = self.conn.execute(
+            "SELECT DISTINCT channel_ext_id, channel_name FROM cached_videos "
+            "WHERE kind=? AND channel_ext_id IS NOT NULL", (kind,))
+        keys = []
+        for row in rows:
+            key = f"yt:{row['channel_ext_id']}"
+            self.remember_channel(key, "youtube", row["channel_ext_id"], row["channel_name"])
+            keys.append(key)
+        return keys
+
+    def channels_missing_picture(self, keys: list[str]) -> list[str]:
+        """Which of these channels still have no picture to show."""
+        if not keys:
+            return []
+        marks = ",".join("?" * len(keys))
+        have = {row["key"] for row in self.conn.execute(
+            f"SELECT key FROM channels WHERE key IN ({marks}) "
+            f"AND avatar_url IS NOT NULL AND avatar_url != ''", keys)}
+        return [key for key in keys if key not in have]
 
     def channels_due(self, tiers: FeedTiers, platform: str = "youtube",
                      limit: int | None = None, force: bool = False) -> list[sqlite3.Row]:
         """Channels that are past their own interval, most overdue first.
+
+        Only channels that are followed. One carried along by a video saved
+        out of the suggestions is here for its name and its picture, and
+        asking after it would spend a request on something never chosen.
 
         Each channel carries its own interval, derived from when it last
         published rather than stored, so it can never go stale against the
@@ -422,7 +530,7 @@ class Database:
                 LEFT JOIN (SELECT channel_key, MAX(published_at) AS published
                              FROM videos GROUP BY channel_key) l
                        ON l.channel_key = c.key
-                WHERE c.platform = :platform
+                WHERE c.platform = :platform AND c.tracked = 1
             )
             WHERE :force = 1
                OR COALESCE(last_polled_at, 0) <= :now - interval_s
@@ -445,7 +553,8 @@ class Database:
         with self.conn as conn:
             before = conn.total_changes
             conn.executemany(
-                "UPDATE channels SET last_polled_at=0 WHERE key=? AND last_polled_at IS NOT 0",
+                "UPDATE channels SET last_polled_at=0 "
+                "WHERE key=? AND tracked=1 AND last_polled_at IS NOT 0",
                 [(key,) for key in keys],
             )
             return conn.total_changes - before
@@ -459,20 +568,28 @@ class Database:
         ones it can answer for. Most channels have never streamed and asking
         them would double the request count for nothing."""
         return {row[0] for row in self.conn.execute(
-            "SELECT DISTINCT channel_key FROM videos "
-            "WHERE platform=? AND live_status IS NOT NULL", (platform,))}
+            "SELECT DISTINCT v.channel_key FROM videos v "
+            "JOIN channels c ON c.key = v.channel_key AND c.tracked = 1 "
+            "WHERE v.platform=? AND v.live_status IS NOT NULL", (platform,))}
 
     def remove_channel(self, key: str) -> None:
         with self.conn as conn:
             conn.execute("DELETE FROM channels WHERE key=?", (key,))
 
-    def channels(self, platform: str | None = None) -> list[sqlite3.Row]:
-        sql = "SELECT * FROM channels"
+    def channels(self, platform: str | None = None,
+                 include_untracked: bool = False) -> list[sqlite3.Row]:
+        """The channels followed. This is the answer to how many there are, so
+        the ones carried along by a saved video are left out unless asked
+        for."""
+        where = [] if include_untracked else ["tracked=1"]
         args: Sequence[Any] = ()
         if platform:
-            sql += " WHERE platform=?"
+            where.append("platform=?")
             args = (platform,)
-        return list(self.conn.execute(sql + " ORDER BY title IS NULL, title COLLATE NOCASE", args))
+        clause = (" WHERE " + " AND ".join(where)) if where else ""
+        return list(self.conn.execute(
+            "SELECT * FROM channels" + clause
+            + " ORDER BY title IS NULL, title COLLATE NOCASE", args))
 
     def channel_has_videos(self, key: str) -> bool:
         return self.conn.execute(
@@ -610,7 +727,9 @@ class Database:
         row = self.conn.execute(
             """
             SELECT 'yt:' || r.ext_id AS key, 'youtube' AS platform, r.ext_id AS ext_id,
-                   COALESCE(c.key, '') AS channel_key, r.title AS title,
+                   COALESCE(c.key, IIF(r.channel_ext_id IS NULL, '',
+                                       'yt:' || r.channel_ext_id)) AS channel_key,
+                   r.title AS title,
                    r.published_at AS published_at, r.thumbnail_url AS thumbnail_url,
                    r.duration_s AS duration_s, r.views AS views,
                    NULL AS likes, NULL AS dislikes, NULL AS live_status,
@@ -624,7 +743,8 @@ class Database:
             WHERE r.ext_id = ?
             UNION ALL
             SELECT 'yt:' || i.ext_id, 'youtube', i.ext_id,
-                   COALESCE(c.key, ''), i.title,
+                   COALESCE(c.key, IIF(i.channel_ext_id IS NULL, '',
+                                       'yt:' || i.channel_ext_id)), i.title,
                    i.published_at, i.thumbnail_url, i.duration_s, i.views,
                    NULL, NULL, NULL, NULL,
                    COALESCE(c.title, i.channel_name), c.avatar_url,
@@ -754,11 +874,22 @@ class Database:
             conn.executemany("UPDATE groups SET position=? WHERE id=?",
                              list(enumerate(ordered_ids)))
 
-    def add_to_group(self, group_id: int, channel_key: str) -> None:
+    def add_to_group(self, group_id: int, channel_key: str) -> bool:
+        """Put a channel in a group, following it if it was not followed yet.
+
+        This is the difference between a group and a box. A box holds the one
+        video that was put in it, so the channel behind it stays a stranger. A
+        group holds a whole channel and fills itself from what that channel
+        posts, so a group of channels nothing ever asks after would sit empty
+        for good.
+        """
+        if not self.track_channel(channel_key) and not self.channel(channel_key):
+            return False
         with self.conn as conn:
             conn.execute(
                 "INSERT INTO group_members(group_id, channel_key) VALUES(?,?) "
                 "ON CONFLICT DO NOTHING", (group_id, channel_key))
+        return True
 
     def remove_from_group(self, group_id: int, channel_key: str) -> None:
         with self.conn as conn:
@@ -840,15 +971,21 @@ class Database:
         with self.conn as conn:
             conn.executemany("UPDATE boxes SET position=? WHERE id=?", list(enumerate(ordered_ids)))
 
-    def add_to_box(self, box_id: int, video_key: str) -> bool:
+    def add_to_box(self, box_id: int, video_key: str, row: dict | None = None) -> bool:
         """Newest addition goes last, so a box keeps the order things were put
         in rather than the order they were published.
 
-        Returns whether it went in. A box can only hold a video that is
-        actually stored, which the foreign key enforces, so an unknown key is
-        reported rather than raised. That is reachable from the command line,
+        A box can only hold a video that is stored, which the foreign key
+        enforces, so anything picked out of the suggestions, the history or a
+        search is stored on the way in. `row` is for the one list that lives
+        nowhere: a search result, which is only ever held in memory.
+
+        Returns whether it went in. A key nothing knows anything about is
+        reported rather than raised, which is reachable from the command line
         where a URL can name a video this install has never seen.
         """
+        if not self.remember_video(video_key, row):
+            return False
         try:
             with self.conn as conn:
                 position = conn.execute(
@@ -861,6 +998,63 @@ class Database:
         except sqlite3.IntegrityError:
             return False
         return True
+
+    def remember_video(self, video_key: str, row: dict | None = None) -> bool:
+        """Store a video that came from a list rather than from a channel
+        followed, so that something can hold on to it.
+
+        The suggestions, the history and a search are all snapshots that get
+        thrown away and fetched again, so a video picked out of one has to be
+        copied somewhere that lasts before a box can point at it. Its channel
+        comes along as a row that is not followed, which is where the name and
+        the picture live; a history entry names no channel at all, measured,
+        so those point at the one row that stands for none.
+
+        Returns whether the video is stored afterwards. Already having it is
+        success, and knowing nothing about the key is not.
+        """
+        if self.conn.execute("SELECT 1 FROM videos WHERE key=?", (video_key,)).fetchone():
+            return True
+        found = row if row is not None else self._loose_source(video_key)
+        if not found or not found.get("ext_id"):
+            return False
+        channel_ext_id = found.get("channel_ext_id") or ""
+        channel_key = f"yt:{channel_ext_id}" if channel_ext_id else NO_CHANNEL
+        self.remember_channel(channel_key, "youtube", channel_ext_id,
+                              found.get("channel_name") or found.get("channel_title"))
+        self.upsert_videos([VideoRow(
+            platform="youtube",
+            ext_id=found["ext_id"],
+            channel_key=channel_key,
+            title=found.get("title") or found["ext_id"],
+            published_at=found.get("published_at"),
+            thumbnail_url=found.get("thumbnail_url"),
+            duration_s=found.get("duration_s"),
+            views=found.get("views"),
+        )])
+        return True
+
+    def _loose_source(self, video_key: str) -> dict | None:
+        """The row behind a video key in the lists that come from YouTube.
+
+        Ordered so the suggestions and the history win over a playlist, since
+        those carry a publish date and a view count and a playlist entry may
+        not.
+        """
+        ext_id = video_key.split(":", 1)[-1]
+        row = self.conn.execute(
+            """
+            SELECT ext_id, title, channel_name, channel_ext_id, duration_s,
+                   thumbnail_url, views, published_at
+            FROM cached_videos WHERE ext_id = ?
+            UNION ALL
+            SELECT ext_id, title, channel_name, channel_ext_id, duration_s,
+                   thumbnail_url, views, published_at
+            FROM playlist_items WHERE ext_id = ?
+            LIMIT 1
+            """,
+            (ext_id, ext_id)).fetchone()
+        return dict(row) if row else None
 
     def remove_from_box(self, box_id: int, video_key: str) -> None:
         with self.conn as conn:
@@ -942,17 +1136,19 @@ class Database:
     def cached(self, kind: str, limit: int = 400) -> list[sqlite3.Row]:
         """Shaped like a feed row so the same grid can draw it.
 
-        The channel is joined in when it happens to be one that is tracked,
-        which is how one of these from a channel already followed gets its
-        icon, and left as whatever the source said otherwise. The history says
-        nothing at all about the channel, measured, so those come out blank.
+        The channel is joined in when it happens to be one that is known
+        here, which is how one of these gets its icon, and left as whatever
+        the source said otherwise. The key is worked out from the channel id
+        even when there is no row, because that key is what putting the
+        channel in a group is addressed to. The history says nothing at all
+        about the channel, measured, so those come out blank.
         """
         return list(self.conn.execute(
             """
             SELECT 'yt:' || r.ext_id           AS key,
                    'youtube'                   AS platform,
                    r.ext_id                    AS ext_id,
-                   COALESCE(c.key, '')         AS channel_key,
+                   COALESCE(c.key, IIF(r.channel_ext_id IS NULL, '', 'yt:' || r.channel_ext_id)) AS channel_key,
                    r.title                     AS title,
                    r.published_at              AS published_at,
                    r.thumbnail_url             AS thumbnail_url,
@@ -1000,9 +1196,13 @@ class Database:
         """Turn flat rows from a source into the shape the grid draws.
 
         Search results are not stored anywhere, so they are joined to what is
-        known in memory instead: the channel, when it happens to be one that is
-        tracked, and whether the video has been watched. Two queries whatever
-        the number of rows.
+        known here instead: the channel, when there is a row for it, and
+        whether the video has been watched. Two queries whatever the number of
+        rows.
+
+        The channel id and the name YouTube gave come along untouched, because
+        a result put in a box is stored from this row and there is nowhere
+        else left to read them from.
         """
         if not rows:
             return []
@@ -1022,10 +1222,14 @@ class Database:
         for row in rows:
             channel = known.get(row.get("channel_ext_id") or "")
             key = f"yt:{row['ext_id']}"
+            channel_ext_id = row.get("channel_ext_id") or ""
             out.append({
                 "key": key, "platform": "youtube", "ext_id": row["ext_id"],
-                "channel_key": channel["key"] if channel else "",
-                "title": row["title"], "published_at": None,
+                "channel_key": channel["key"] if channel
+                               else (f"yt:{channel_ext_id}" if channel_ext_id else ""),
+                "channel_ext_id": channel_ext_id or None,
+                "channel_name": row.get("channel_name"),
+                "title": row["title"], "published_at": row.get("published_at"),
                 "thumbnail_url": row.get("thumbnail_url"),
                 "duration_s": row.get("duration_s"),
                 "views": row.get("views"), "likes": None, "live_status": None,
@@ -1142,7 +1346,7 @@ class Database:
             SELECT 'yt:' || i.ext_id           AS key,
                    'youtube'                   AS platform,
                    i.ext_id                    AS ext_id,
-                   COALESCE(c.key, '')         AS channel_key,
+                   COALESCE(c.key, IIF(i.channel_ext_id IS NULL, '', 'yt:' || i.channel_ext_id)) AS channel_key,
                    i.title                     AS title,
                    i.published_at              AS published_at,
                    i.thumbnail_url             AS thumbnail_url,
@@ -1269,8 +1473,12 @@ class Database:
             "ORDER BY position, id")]
 
     def unwatched_total(self) -> int:
+        """What the All row counts. Only videos from channels followed, since
+        those are the only ones All shows."""
         return int(self.conn.execute(
-            "SELECT COUNT(*) FROM videos v LEFT JOIN watched w ON w.video_key = v.key "
+            "SELECT COUNT(*) FROM videos v "
+            "JOIN channels c ON c.key = v.channel_key AND c.tracked = 1 "
+            "LEFT JOIN watched w ON w.video_key = v.key "
             "WHERE w.video_key IS NULL AND (v.is_short IS NULL OR v.is_short = 0)"
         ).fetchone()[0])
 
@@ -1289,6 +1497,13 @@ class Database:
         umlauted word matches the case it was typed in and not the other. That
         is a known limit rather than an oversight, and fixing it means shipping
         a collation.
+
+        The list with nothing named is the feed itself, and it shows only the
+        channels followed. A video saved out of the suggestions or the history
+        is stored the same way as any other, so without this the channel it
+        brought with it would pour into All, which is exactly what saving one
+        video must not do. Naming a box, a group, a channel or a search asks
+        for something particular and answers with it whatever the channel is.
         """
         # An unclassified video still shows. It is hidden only once a channel
         # listing or the redirect test has proven it is a Short.
@@ -1297,6 +1512,8 @@ class Database:
         join = ""
         order = "v.published_at DESC NULLS LAST, v.first_seen_at DESC"
 
+        if group_id is None and box_id is None and channel_key is None and not query:
+            where.append("c.tracked = 1")
         if hide_watched:
             where.append("w.video_key IS NULL")
         if group_id is not None:
@@ -1391,7 +1608,8 @@ class Database:
 
     def counts(self) -> dict[str, int]:
         row = self.conn.execute(
-            "SELECT (SELECT COUNT(*) FROM channels) AS channels,"
+            "SELECT (SELECT COUNT(*) FROM channels WHERE tracked=1) AS channels,"
+            "       (SELECT COUNT(*) FROM channels WHERE tracked=0) AS loose,"
             "       (SELECT COUNT(*) FROM videos)   AS videos,"
             "       (SELECT COUNT(*) FROM watched)  AS watched"
         ).fetchone()
