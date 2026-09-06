@@ -175,12 +175,14 @@ Right click a card for the same sort of menu, which plays it, opens its channel,
 marks it watched or puts it in a box. Deleting a group keeps its channels and
 deleting a box keeps its videos.
 
-Twitch wants an application of your own, which takes a minute and is done once.
-At `dev.twitch.tv` create one, set its client type to public, and copy the client
-id into `~/.config/weave/config.toml`. A client id is public by design and there
-is no client secret anywhere in this. Then press **Connect Twitch** in the live
-bar and approve the page it opens, which already has the code filled in. Every
-channel you follow is tracked from that moment.
+For Twitch, press **Connect Twitch** in the live bar and approve the page it
+opens, which already has the code filled in, so there is nothing to type and
+nothing to register. Every channel you follow is tracked from that moment. Weave
+comes with its own Twitch application, because a client id is public by design
+and the login used here has no client secret anywhere in it. If you would rather
+the authorisation sat under an application of your own, register one at
+`dev.twitch.tv` with its client type set to public and put its client id in
+`~/.config/weave/config.toml`.
 
 There is a command behind most of it as well, for a script or for setting a
 machine up over ssh, and it can list itself.
@@ -205,9 +207,15 @@ name and a socket path, both of which you can change.
 That wrapper comes from the `mpv` setup Weave was built beside, which is at
 [`Tobias2909/mpv-config`](https://github.com/Tobias2909/mpv-config) together with
 the upscaling shaders, the live chat overlay, subtitle translation and the rest
-of it. Weave needs none of it. With plain `mpv` on your path everything here
-works, and what you gain by running that setup is a nicer player on the other
-end of the handoff.
+of it. Weave needs none of it, and with plain `mpv` on your path everything here
+works.
+
+One part of that setup is worth copying even if you take nothing else. It hands
+`yt-dlp` the `mark-watched` option, which sends the playback ping that puts a
+video into your own YouTube history. Weave itself never writes to your account,
+so without something doing that, Google is told nothing about what you watched
+and the suggestions it makes you go stale over time. That ping is your player
+reporting your own viewing, exactly as the site would have.
 
 ## How often it asks
 
