@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Draw the Weave icon, and cut it to the sizes a panel asks for.
 
-The mark is a play triangle woven from four horizontal ribbons, alternate
-bands pushed sideways so the shape reads as cloth up close and as a play
-button at sixteen pixels. The two middle bands share an offset on purpose,
-because the apex sits exactly on their seam and opposite offsets fork the tip.
+The mark is a play triangle woven from four horizontal ribbons, each pushed
+sideways by a different amount so the shape reads as cloth up close and as a
+play button at sixteen pixels. The offsets are deliberately uneven, because
+four ribbons mirrored about the middle look machined rather than woven.
+
+The apex sits exactly on the seam between the two middle ribbons, so those two
+have to be pushed the same way. Opposite ways splits the point in half. Pushed
+the same way by different amounts, which is what happens here, the point steps
+by the difference, which reads as one ribbon lying over the other.
 
 Each band is worked out as its own polygon rather than cut out of one triangle
 with a clip. A clip would hide the outline along the horizontal cuts, since a
@@ -53,7 +58,7 @@ OUTLINE_WIDTH = 0.75
 # are the band edges, the offsets are how far each band slides sideways.
 LEFT, RIGHT, TOP, BOTTOM = 32.0, 102.0, 21.0, 107.0
 SEAMS = (42.5, 64.0, 85.5)
-OFFSETS = (-4.0, 4.0, 4.0, -4.0)
+OFFSETS = (-7.0, 2.0, 5.0, -3.0)
 GAP = 4.0
 
 
