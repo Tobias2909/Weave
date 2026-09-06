@@ -6,6 +6,11 @@ bands pushed sideways so the shape reads as cloth up close and as a play
 button at sixteen pixels. The two middle bands share an offset on purpose,
 because the apex sits exactly on their seam and opposite offsets fork the tip.
 
+Each band is worked out as its own polygon rather than cut out of one triangle
+with a clip. A clip would hide the outline along the horizontal cuts, since a
+clipped edge is not part of the shape being stroked, and the ribbons would be
+outlined on their slanted sides only.
+
 The whole drawing is scaled inside its square rather than drawn smaller,
 because a task bar gives every icon the same box. A tile that fills its box
 edge to edge looks bigger than the icons beside it, which almost all carry
@@ -36,6 +41,14 @@ CORNER = 28.0                    # corner radius before scaling
 MARK = "#ffeef0"                 # the theme's own text colour
 STOPS = (("0", "#ffa250"), ("0.5", "#ff7a3d"), ("1", "#b03a6b"))
 
+# White on orange separates by brightness alone, which a small icon renders as
+# a smear. A dark edge gives the ribbons a boundary that survives the shrink.
+# The weight is a compromise measured at every shipped size. Below about 0.5 it
+# stops reaching the rasteriser at all, and by 1.5 it starts greying the white
+# at sixteen pixels, where each ribbon is only a couple of pixels wide.
+OUTLINE = "#170d14"              # the theme's own background colour
+OUTLINE_WIDTH = 0.75
+
 # The triangle before scaling, and the horizontal cuts through it. The seams
 # are the band edges, the offsets are how far each band slides sideways.
 LEFT, RIGHT, TOP, BOTTOM = 32.0, 102.0, 21.0, 107.0
@@ -49,24 +62,44 @@ def scaled(value: float) -> float:
     return round(BOX / 2 + (value - BOX / 2) * FILL, 2)
 
 
-def draw() -> str:
+def right_edge(y: float) -> float:
+    """How far the triangle reaches at that height.
+
+    The two slanted sides meet at the apex, so the reach grows to the middle
+    and falls away again, which is what the distance from the middle measures.
+    """
+    middle = (TOP + BOTTOM) / 2
+    reach = 1 - abs(y - middle) / ((BOTTOM - TOP) / 2)
+    return LEFT + (RIGHT - LEFT) * reach
+
+
+def band(index: int) -> str:
+    """One ribbon, as a closed shape that can carry an outline.
+
+    The first and the last band end in a point, because their far edge is a
+    corner of the triangle rather than a cut across it.
+    """
     edges = [TOP, *SEAMS, BOTTOM]
-    triangle = (f"M {scaled(LEFT)} {scaled(TOP)} "
-                f"L {scaled(LEFT)} {scaled(BOTTOM)} "
-                f"L {scaled(RIGHT)} {scaled(BOTTOM - (BOTTOM - TOP) / 2)} Z")
+    first, last = index == 0, index == len(OFFSETS) - 1
+    top = edges[index] + (0 if first else GAP / 2)
+    bottom = edges[index + 1] - (0 if last else GAP / 2)
+    slide = round(OFFSETS[index] * FILL, 2)
 
-    clips, bands = [], []
-    for index, offset in enumerate(OFFSETS):
-        first, last = index == 0, index == len(OFFSETS) - 1
-        top = 0.0 if first else scaled(edges[index] + GAP / 2)
-        bottom = BOX if last else scaled(edges[index + 1] - GAP / 2)
-        clips.append(f'<clipPath id="b{index}">'
-                     f'<rect x="0" y="{top}" width="{BOX:.0f}" height="{round(bottom - top, 2)}"/>'
-                     f'</clipPath>')
-        bands.append(f'<g clip-path="url(#b{index})">'
-                     f'<path d="{triangle}" transform="translate({round(offset * FILL, 2)},0)"/>'
-                     f'</g>')
+    def point(x: float, y: float) -> str:
+        return f"{round(scaled(x) + slide, 2)} {scaled(y)}"
 
+    if first:
+        corners = [point(LEFT, top), point(right_edge(bottom), bottom), point(LEFT, bottom)]
+    elif last:
+        corners = [point(LEFT, top), point(right_edge(top), top), point(LEFT, bottom)]
+    else:
+        corners = [point(LEFT, top), point(right_edge(top), top),
+                   point(right_edge(bottom), bottom), point(LEFT, bottom)]
+    return "M " + " L ".join(corners) + " Z"
+
+
+def draw() -> str:
+    bands = "".join(f'<path d="{band(index)}"/>' for index in range(len(OFFSETS)))
     tile = scaled(0.0)
     side = round(BOX * FILL, 2)
     gradient = "".join(f'<stop offset="{at}" stop-color="{colour}"/>' for at, colour in STOPS)
@@ -74,11 +107,11 @@ def draw() -> str:
             f'width="{BOX:.0f}" height="{BOX:.0f}">\n'
             f'  <defs>\n'
             f'    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">{gradient}</linearGradient>\n'
-            f'    {"".join(clips)}\n'
             f'  </defs>\n'
             f'  <rect x="{tile}" y="{tile}" width="{side}" height="{side}" '
             f'rx="{round(CORNER * FILL, 2)}" fill="url(#tile)"/>\n'
-            f'  <g fill="{MARK}">{"".join(bands)}</g>\n'
+            f'  <g fill="{MARK}" stroke="{OUTLINE}" stroke-width="{OUTLINE_WIDTH}" '
+            f'stroke-linejoin="round">{bands}</g>\n'
             f'</svg>\n')
 
 
