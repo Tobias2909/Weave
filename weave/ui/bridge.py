@@ -142,9 +142,12 @@ class Bridge(QObject):
         self._threads: set = set()
         self._details: ChannelDetailsFetcher | None = None
         self._live: LiveWatcher | None = None
-        # Raised while a live check is in flight. The bar reads it so the
-        # first check after start says it is working instead of sitting empty.
+        # Raised while a live check is in flight.
         self._live_checking = False
+        # Nothing is shown in the live bar until the first check has answered.
+        # Twitch takes a few seconds while YouTube is there at once, and a bar
+        # that appears and then grows again a moment later looks broken.
+        self._live_ready = False
         self._twitch: TwitchLogin | None = None
         self._twitch_status = ""
         self._twitch_needs_login = False
@@ -445,6 +448,11 @@ class Bridge(QObject):
 
     liveCollapsed = Property(bool, _get_live_collapsed, notify=liveChanged)
     liveChecking = Property(bool, _get_live_checking, notify=liveChanged)
+
+    def _get_live_ready(self) -> bool:
+        return self._live_ready
+
+    liveReady = Property(bool, _get_live_ready, notify=liveChanged)
 
     def _video_for_detail(self, key: str):
         """The video the panel is showing, from wherever it is known.
@@ -1992,10 +2000,30 @@ class Bridge(QObject):
     def _on_comments(self, key: str, threads: list, details: dict | None = None) -> None:
         if details:
             self._detail_extra = (key, dict(details))
+            self._keep_details(key, details)
         self._detail_loading = False
         if key == self._detail_key:
             self._detail_comments = threads
         self.detailChanged.emit()
+
+    def _keep_details(self, key: str, details: dict) -> None:
+        """Write what the panel learned back onto the stored row.
+
+        A card in the suggestions, the history or a playlist is drawn from a
+        listing that carries almost nothing, while opening the same video
+        fetches its metadata anyway. Keeping it means the card catches up
+        instead of staying the poorer view of the same thing, and it costs no
+        request of its own.
+        """
+        if not key.startswith("yt:"):
+            return
+        touched = self._db.fill_in_details(
+            key.split(":", 1)[1],
+            views=details.get("views"),
+            published_at=details.get("published_at"),
+            duration_s=details.get("duration_s"))
+        if touched and self._view_kind in (RECOMMENDED, HISTORY, PLAYLIST):
+            self.reload()
 
     def _on_detail_failed(self, source: str, message: str) -> None:
         self._detail_loading = False
@@ -2048,6 +2076,12 @@ class Bridge(QObject):
         """
         self._set_live_checking(True)
         QTimer.singleShot(15000, self._live_check_gave_up)
+
+    def _live_is_ready(self) -> None:
+        """The first answer has landed, so the bar may show itself."""
+        if not self._live_ready:
+            self._live_ready = True
+            self.liveChanged.emit()
 
     def _live_check_gave_up(self) -> None:
         """Nothing may leave the bar saying it is working for ever."""
@@ -2282,10 +2316,15 @@ class Bridge(QObject):
     def _on_live(self, count: int) -> None:
         self._twitch_needs_login = False
         self._live_checking = False
+        self._live_ready = True
         self.liveChanged.emit()
         self.twitchChanged.emit()
 
     def _on_live_failed(self, message: str) -> None:
+        # A check that failed has still answered as far as the bar is
+        # concerned. Waiting for a success that may never come would keep
+        # whatever is live hidden for the rest of the evening.
+        self._live_is_ready()
         self._set_live_checking(False)
         self._set_status(f"could not check Twitch, {message}")
 
@@ -2300,6 +2339,9 @@ class Bridge(QObject):
         worker = self.sender()
         if worker is not None and self._live is not None and self._live is not worker:
             return
+        # Cancelled or finished with nothing to say, the bar has still waited
+        # long enough. Anything else leaves it folded away for good.
+        self._live_is_ready()
         self._set_live_checking(False)
 
     def _on_watched(self, key: str, progress: float) -> None:

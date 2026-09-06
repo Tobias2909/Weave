@@ -416,6 +416,7 @@ class WorkerRuns(unittest.TestCase):
         bridge = Bridge.__new__(Bridge)
         bridge._live = None
         bridge._live_checking = False
+        bridge._live_ready = False
         bridge.liveChanged = Recorder()
 
         Bridge.expectLiveCheck(bridge)
@@ -498,6 +499,7 @@ class WorkerRuns(unittest.TestCase):
             bridge._cfg = self.cfg
             bridge._live = None
             bridge._live_checking = False
+            bridge._live_ready = False
             bridge._twitch_needs_login = False
             bridge._status = ""
             bridge._stopping = False
@@ -558,6 +560,7 @@ class WorkerRuns(unittest.TestCase):
 
         bridge = Bridge.__new__(Bridge)
         bridge._live_checking = True
+        bridge._live_ready = False
         bridge.liveChanged = Recorder()
         older, newer = object(), object()
         bridge._live = newer

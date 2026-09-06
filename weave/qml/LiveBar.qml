@@ -10,31 +10,30 @@ Rectangle {
 
     readonly property bool hasStreams: App.liveStreams.length > 0
 
-    // Only while the bar would otherwise be blank. On the repeat checks there
-    // are already cards up, and swapping them for a line about checking would
-    // make the bar flicker every ninety seconds for no gain.
-    //
-    // A check can answer in a fraction of a second, which put the line on
-    // screen for too short a time to read, so once it appears it stays for a
-    // moment even if the answer has already arrived.
-    property bool held: false
-    readonly property bool working: App.liveChecking && !hasStreams
-                                    && !App.twitchNeedsLogin
-    readonly property bool checking: (working || held) && !hasStreams
-                                     && !App.twitchNeedsLogin
-
-    onWorkingChanged: if (working) { bar.held = true; holdOn.restart() }
-
-    Timer {
-        id: holdOn
-        interval: 1500
-        onTriggered: bar.held = false
-    }
-    readonly property bool showing: hasStreams || App.twitchNeedsLogin || checking
+    // Nothing is shown until the first check has answered. Twitch takes a
+    // few seconds and YouTube is instant, so revealing on the first thing to
+    // arrive made the bar appear, then grow again a moment later. One reveal,
+    // once everything is in, and only when there is something to reveal.
+    readonly property bool showing: App.twitchNeedsLogin
+                                    || (App.liveReady && hasStreams)
     readonly property bool expanded: !App.liveCollapsed
 
-    visible: showing
+    // Folded away rather than switched off, so the first stream of the
+    // evening unrolls the bar and the last one to end rolls it back up.
+    // Height is what the views below anchor to, so animating it moves them
+    // with it instead of leaving a gap.
+    visible: height > 0
+    clip: true
     height: showing ? (expanded && hasStreams ? 116 : 34) : 0
+
+    Behavior on height {
+        NumberAnimation { duration: 260; easing.type: Easing.InOutCubic }
+    }
+
+    opacity: showing ? 1.0 : 0.0
+    Behavior on opacity {
+        NumberAnimation { duration: 200; easing.type: Easing.InOutQuad }
+    }
     color: Qt.rgba(Theme.colors.surface.r, Theme.colors.surface.g,
                    Theme.colors.surface.b, Theme.washed ? 0.62 : 1.0)
 
@@ -65,10 +64,11 @@ Rectangle {
 
         Label {
             objectName: "liveHeading"
+            // The bar is only up when there is something live or when Twitch
+            // wants a login, so there is no third thing left to say.
             text: bar.hasStreams
                   ? "Live now  ·  " + App.liveStreams.length
-                  : (bar.checking ? "Checking who is live"
-                                  : "Twitch is not connected")
+                  : "Twitch is not connected"
             color: Theme.colors.textMuted
             font.pixelSize: 11
             font.letterSpacing: 1.1

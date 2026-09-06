@@ -1163,6 +1163,29 @@ class Database:
                 ).rowcount
             return written
 
+    def fill_in_details(self, ext_id: str, views: int | None = None,
+                        published_at: int | None = None,
+                        duration_s: int | None = None) -> int:
+        """Keep what was learned about a video that is only cached.
+
+        A suggestion, a history entry and a playlist entry come from listings
+        that carry almost nothing, but opening one fetches its metadata for
+        the panel anyway. Writing that back means the card stops being the
+        poorer of the two views of the same video. Nothing is overwritten with
+        nothing, so a field the listing did have survives.
+        """
+        touched = 0
+        with self.conn as conn:
+            for table in ("cached_videos", "playlist_items"):
+                touched += conn.execute(
+                    f"UPDATE {table} SET "
+                    "  views = COALESCE(?, views), "
+                    "  published_at = COALESCE(?, published_at), "
+                    "  duration_s = COALESCE(?, duration_s) "
+                    "WHERE ext_id = ?",
+                    (views, published_at, duration_s, ext_id)).rowcount
+        return touched
+
     def music_history(self, limit: int = 400) -> list[sqlite3.Row]:
         """Shaped like a feed row, so the same grid draws it.
 
