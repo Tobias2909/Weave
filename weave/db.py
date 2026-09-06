@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -277,6 +277,14 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # poll, to count, or to pour into the feed. Existing rows default to
     # followed, since everything stored before this was added by hand.
     ("channels", "tracked", "INTEGER NOT NULL DEFAULT 1"),
+    # When an announced stream or premiere is due to begin. Such a video sits
+    # in a listing like any other and cannot be played yet, so the time is kept
+    # to say so on the card rather than letting a press reach the player.
+    ("videos", "scheduled_at", "INTEGER"),
+    # How many entries of a playlist could not be shown because they are
+    # private or gone. Counted rather than guessed, so the foot of the list can
+    # say what is missing instead of the list quietly being short.
+    ("playlists", "skipped", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 
