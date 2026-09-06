@@ -1,0 +1,27 @@
+name = "Frost"
+
+[colors]
+background = "#eef3f7"
+surface = "#dee8f0"
+surfaceRaised = "#d1dee9"
+border = "#bacedf"
+text = "#080e12"
+textMuted = "#696e72"
+accent = "#0f8f8f"
+accentHover = "#0b6565"
+progress = "#0c7373"
+watchedDim = "#a5aaae"
+badgeText = "#ffffff"
+live = "#ff4d4f"
+twitch = "#9146ff"
+youtube = "#ff3d3d"
+error = "#ffb020"
+badgeBackground = "#80000000"
+
+[gradient]
+angle = 45
+stops = [
+  { position = 0.0, color = "#cde9f0" },
+  { position = 0.55, color = "#d9f2f5" },
+  { position = 1.0, color = "#eef3f7" },
+]

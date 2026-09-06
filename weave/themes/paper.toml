@@ -1,0 +1,27 @@
+name = "Paper"
+
+[colors]
+background = "#f4f2ee"
+surface = "#ebe7e0"
+surfaceRaised = "#e3ded4"
+border = "#d6cec0"
+text = "#0e0c09"
+textMuted = "#6f6d69"
+accent = "#2f6df0"
+accentHover = "#1053e1"
+progress = "#1259ee"
+watchedDim = "#aba9a5"
+badgeText = "#ffffff"
+live = "#ff4d4f"
+twitch = "#9146ff"
+youtube = "#ff3d3d"
+error = "#ffb020"
+badgeBackground = "#80000000"
+
+[gradient]
+angle = 45
+stops = [
+  { position = 0.0, color = "#dbe2f2" },
+  { position = 0.55, color = "#eaebef" },
+  { position = 1.0, color = "#f4f2ee" },
+]

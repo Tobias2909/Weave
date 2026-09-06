@@ -1,0 +1,27 @@
+name = "Linen"
+
+[colors]
+background = "#f6f1e7"
+surface = "#f0e7d6"
+surfaceRaised = "#eadfc7"
+border = "#e1d1af"
+text = "#0d0a05"
+textMuted = "#6f6b64"
+accent = "#c2571f"
+accentHover = "#9a4519"
+progress = "#a84b1b"
+watchedDim = "#aca79f"
+badgeText = "#ffffff"
+live = "#ff4d4f"
+twitch = "#9146ff"
+youtube = "#ff3d3d"
+error = "#ffb020"
+badgeBackground = "#80000000"
+
+[gradient]
+angle = 45
+stops = [
+  { position = 0.0, color = "#f1dfc6" },
+  { position = 0.55, color = "#f4e7da" },
+  { position = 1.0, color = "#f6f1e7" },
+]

@@ -1,0 +1,27 @@
+name = "Blossom"
+
+[colors]
+background = "#f9f0f3"
+surface = "#f2e0e6"
+surfaceRaised = "#edd1da"
+border = "#e3b9c7"
+text = "#15090d"
+textMuted = "#756a6e"
+accent = "#c2185b"
+accentHover = "#991348"
+progress = "#a7154e"
+watchedDim = "#b0a6aa"
+badgeText = "#ffffff"
+live = "#ff4d4f"
+twitch = "#9146ff"
+youtube = "#ff3d3d"
+error = "#ffb020"
+badgeBackground = "#80000000"
+
+[gradient]
+angle = 45
+stops = [
+  { position = 0.0, color = "#f7d0dd" },
+  { position = 0.55, color = "#f8e1e9" },
+  { position = 1.0, color = "#f9f0f3" },
+]

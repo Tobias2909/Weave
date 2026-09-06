@@ -181,8 +181,12 @@ def from_dots(ground: str, accent: str, second: str | None = None) -> dict:
         corner = mix(ground, second, 0.55)
         middle = mix(ground, accent_seen, 0.14)
     else:
-        corner = mix(ground, lift(second, 0.28), 0.22)
-        middle = mix(ground, lift(accent_seen, 0.28), 0.07)
+        # Measured against the ground it sits on: lifting the colour as far
+        # as a quarter leaves a corner that cannot be told from the ground at
+        # all, which is a gradient nobody can see. This much is a tint rather
+        # than a slab, and a bar over it still carries text at fifteen to one.
+        corner = mix(ground, lift(second, 0.10), 0.34)
+        middle = mix(ground, lift(accent_seen, 0.20), 0.10)
     gradient = {
         "angle": 45,
         "stops": [
