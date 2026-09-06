@@ -32,7 +32,7 @@ streaming along the top, and a line under a card showing where you stopped.*
   tab and Weave asks for the long form one
 * An announced premiere is badged with when it starts and is refused by the
   player rather than handed over to fail
-* Search everything stored as you type, or press return to search YouTube itself
+* Search everything stored as you type, or press enter to search YouTube itself
 * What YouTube suggests, the history it keeps and your own playlists, each in its
   own place and never poured into the feed
 * A detail panel that follows what `mpv` is playing, with views, likes, an
@@ -42,8 +42,6 @@ streaming along the top, and a line under a card showing where you stopped.*
 * Themes are files, fourteen come with it, and there is an editor with a colour
   wheel that derives a whole palette from two dots
 * Its own window frame, mouse back and forward buttons, and a remembered shape
-* One page and one command that say whether every part of it is working, because
-  a scraper that has stopped exits cleanly and returns nothing
 
 ## What is playing
 
@@ -163,48 +161,33 @@ always this program, and why `python -m weave` always works.
 
 ## Use
 
-Import everything you already subscribe to, or track channels one at a time.
+Everything is done in the window. Start it, and the first thing worth doing is
+**Import subscriptions** on the settings page, which reads your subscription list
+and tracks every channel in it. The box in the toolbar adds one by hand and takes
+a handle, a channel id, a channel address or a `twitch.tv` address. A bare word
+with no `@` and no URL around it is refused on purpose, because it could be a
+Twitch login or a YouTube name, and guessing would turn a typo into a tracked
+channel.
 
-```sh
-python -m weave import
-python -m weave add @somechannel
-python -m weave add https://www.youtube.com/@somechannel
-python -m weave add UCabcdefghijklmnopqrstuv
-python -m weave add https://twitch.tv/somechannel
-python -m weave poll
-python -m weave
-```
+The plus beside **Channels** makes a group, the plus beside **Boxes** makes a
+box, and either can be renamed, moved or deleted by right clicking its row.
+Right click a card for the same sort of menu, which plays it, opens its channel,
+marks it watched or puts it in a box. Deleting a group keeps its channels and
+deleting a box keeps its videos.
 
-Every YouTube channel is looked up as it is added, which takes about half a
-second and catches a mistyped id there and then. A bare word with no `@` and no
-URL around it is refused on purpose, because it could be a Twitch login or a
-YouTube name and guessing would turn a typo into a tracked channel.
-
-Groups and boxes are made in the window, with the plus beside a heading and a
-right click on a row, and from the command line as well.
-
-```sh
-python -m weave group create Gaming
-python -m weave group add Gaming yt:UCabcdefghijklmnopqrstuv twitch:somechannel
-python -m weave box create "Watch tonight"
-python -m weave box add "Watch tonight" https://www.youtube.com/watch?v=dQw4w9WgXcQ
-```
-
-Deleting a group keeps its channels and deleting a box keeps its videos.
-
-Twitch needs an application of your own, which takes a minute and is done once.
+Twitch wants an application of your own, which takes a minute and is done once.
 At `dev.twitch.tv` create one, set its client type to public, and copy the client
 id into `~/.config/weave/config.toml`. A client id is public by design and there
-is no client secret anywhere in this.
+is no client secret anywhere in this. Then press **Connect Twitch** in the live
+bar and approve the page it opens, which already has the code filled in. Every
+channel you follow is tracked from that moment.
+
+There is a command behind most of it as well, for a script or for setting a
+machine up over ssh, and it can list itself.
 
 ```sh
-python -m weave twitch login
-python -m weave live
+python -m weave --help
 ```
-
-The login opens a Twitch page with the code already filled in, so there is
-nothing to type, and every channel you follow is tracked from that moment. There
-is a Connect button in the live bar for the same thing.
 
 ## How playback works
 
@@ -218,6 +201,13 @@ playlists and reuses one instance. Without it Weave falls back to plain `mpv` an
 everything still works, minus those extras. Nothing is added to your `mpv`
 configuration, no Lua script and no config edit. The only coupling is a command
 name and a socket path, both of which you can change.
+
+That wrapper comes from the `mpv` setup Weave was built beside, which is at
+[`Tobias2909/mpv-config`](https://github.com/Tobias2909/mpv-config) together with
+the upscaling shaders, the live chat overlay, subtitle translation and the rest
+of it. Weave needs none of it. With plain `mpv` on your path everything here
+works, and what you gain by running that setup is a nicer player on the other
+end of the handoff.
 
 ## How often it asks
 
@@ -303,6 +293,12 @@ The second one takes the pictures in this file. Every name, title, number and
 thumbnail in them is invented in that script, and each is taken in a scratch home
 of its own with the network stubbed out, so a picture of the application never
 carries anybody's account.
+
+## Not an official anything
+
+Weave is one person's own program. It is not made by, endorsed by or connected to
+YouTube, Google or Twitch in any way, and it names those services only to say
+which one a video came from.
 
 ## A note on how this talks to YouTube
 
