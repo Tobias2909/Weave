@@ -29,9 +29,12 @@ Rectangle {
     color: hover.hovered ? Theme.colors.surfaceRaised : Theme.colors.surface
     border.width: 1
     border.color: hover.hovered ? Theme.colors.accent : Theme.colors.border
-    // Dimmed the same amount as something already watched. It cannot be
-    // played yet either, so it should not read as fully available.
-    opacity: (watched || isUpcoming) ? 0.55 : 1.0
+    // An announced stream is dimmed the same amount as something already
+    // watched, since it cannot be played yet either. Enough to tell the two
+    // states apart at a glance without making the card hard to read, which
+    // matters because the views that ignore the hide watched toggle draw a
+    // great many of them.
+    opacity: (watched || isUpcoming) ? 0.75 : 1.0
 
     HoverHandler { id: hover }
 
