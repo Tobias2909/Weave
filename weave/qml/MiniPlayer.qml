@@ -8,8 +8,10 @@ Rectangle {
     id: bar
     visible: Audio.hasQueue
     height: visible ? 64 : 0
-    color: Qt.rgba(Theme.colors.surface.r, Theme.colors.surface.g,
-                   Theme.colors.surface.b, Theme.washed ? 0.72 : 1.0)
+    // Read through Qt.color, since a theme colour is a string and asking a
+    // string for r, g or b gives undefined, which Qt.rgba renders as black.
+    readonly property color panel: Qt.color(Theme.colors.surface)
+    color: Qt.rgba(panel.r, panel.g, panel.b, Theme.washed ? 0.72 : 1.0)
 
     function clock(seconds) {
         if (!seconds || seconds < 0)

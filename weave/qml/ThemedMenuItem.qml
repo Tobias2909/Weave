@@ -7,6 +7,12 @@ import QtQuick.Controls
 MenuItem {
     id: item
 
+    // A theme colour arrives as a string, and a string has no r, g or b. Read
+    // one straight off Theme.colors and every channel is undefined, which
+    // Qt.rgba turns into black without a word, so the band under the pointer
+    // was a dark smudge rather than a tint of the accent.
+    readonly property color accent: Qt.color(Theme.colors.accent)
+
     implicitHeight: 32
     leftPadding: 12
     rightPadding: 12
@@ -31,11 +37,9 @@ MenuItem {
         anchors.leftMargin: 4
         anchors.rightMargin: 4
         radius: 7
-        color: item.hovered ? Qt.rgba(Theme.colors.accent.r, Theme.colors.accent.g,
-                                      Theme.colors.accent.b, 0.22)
+        color: item.hovered ? Qt.rgba(item.accent.r, item.accent.g, item.accent.b, 0.22)
                             : "transparent"
         border.width: item.hovered ? 1 : 0
-        border.color: Qt.rgba(Theme.colors.accent.r, Theme.colors.accent.g,
-                              Theme.colors.accent.b, 0.45)
+        border.color: Qt.rgba(item.accent.r, item.accent.g, item.accent.b, 0.45)
     }
 }

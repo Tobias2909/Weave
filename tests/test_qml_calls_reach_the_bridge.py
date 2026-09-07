@@ -16,6 +16,11 @@ CALL = re.compile(r"\bApp\.([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 READ = re.compile(r"\bApp\.([A-Za-z_][A-Za-z0-9_]*)\b")
 AUDIO_CALL = re.compile(r"\bAudio\.([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 AUDIO_READ = re.compile(r"\bAudio\.([A-Za-z_][A-Za-z0-9_]*)\b")
+# A theme colour is a string, so asking one for a channel gives undefined and
+# Qt.rgba renders that as black. Measured: Qt.rgba(Theme.colors.accent.r, ...,
+# 0.22) comes out #000000 while the accent is #7c5cff.
+CHANNEL = re.compile(r"\bTheme\.colors\.[A-Za-z_][A-Za-z0-9_]*\.(?:r|g|b|a|hsv[A-Za-z]+"
+                     r"|hsl[A-Za-z]+)\b")
 
 
 def names_of(cls):
@@ -77,6 +82,15 @@ class TheWindowCanReachWhatItCalls(unittest.TestCase):
                     if name not in properties and name not in methods:
                         missing.append(f"{path.name}:{line_no} Audio.{name}")
         self.assertEqual(missing, [], "not reachable from the window")
+
+    def test_no_theme_colour_is_asked_for_a_channel(self) -> None:
+        """The one that cost the most, twice. Qt.color it first."""
+        found = []
+        for path in self.files:
+            for number, line in enumerate(path.read_text().splitlines(), start=1):
+                if CHANNEL.search(line):
+                    found.append(f"{path.name}:{number}: {line.strip()}")
+        self.assertEqual(found, [], "\n".join(found))
 
     def test_the_check_would_notice_a_lost_decorator(self) -> None:
         """A method that is not a slot must not pass as one."""
