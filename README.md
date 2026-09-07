@@ -161,9 +161,14 @@ always this program, and why `python -m weave` always works.
 
 ## Use
 
-Everything is done in the window. Start it, and the first thing worth doing is
-**Import subscriptions** on the settings page, which reads your subscription list
-and tracks every channel in it. The box in the toolbar adds one by hand and takes
+Everything is done in the window. The first start opens a few pages that walk you
+through it, one to import your subscriptions, one to connect Twitch and one that
+says how the rest is used. They stop appearing once both of those are done, the
+box in their corner stops them sooner, and **Getting started** on the settings
+page opens them again whenever you want.
+
+**Import subscriptions** lives on that page as well. It reads your subscription
+list and tracks every channel in it. The box in the toolbar adds one by hand and takes
 a handle, a channel id, a channel address or a `twitch.tv` address. A bare word
 with no `@` and no URL around it is refused on purpose, because it could be a
 Twitch login or a YouTube name, and guessing would turn a typo into a tracked

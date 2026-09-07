@@ -117,6 +117,10 @@ KEEP_MUSIC = object()
 # is worth exactly one request.
 UPDATE_INTERVAL_S = 24 * 60 * 60
 
+# The pages of the walk through, counted from the welcome one, which is 0 of 3
+# so the number reads as how far there is to go rather than as a page number.
+WIZARD_LAST = 3
+
 
 class Bridge(QObject):
     statusChanged = Signal()
@@ -133,6 +137,8 @@ class Bridge(QObject):
     cacheChanged = Signal()
     startingChanged = Signal()
     updateChanged = Signal()
+    wizardChanged = Signal()
+    importChanged = Signal()
     boxesChanged = Signal()
     viewChanged = Signal()
     liveChanged = Signal()
@@ -257,6 +263,13 @@ class Bridge(QObject):
         self._update_tag = self._db.get_state("update_tag") or ""
         self._update_address = self._db.get_state("update_address") or ""
         self._update: UpdateCheck | None = None
+        # The pages a fresh install is walked through, and how the import on
+        # one of them is going, since that is the step that fails and the page
+        # has to be able to say why.
+        self._wizard_open = False
+        self._wizard_step = 0
+        self._import_state = ""
+        self._import_message = ""
         self._starting_timer = QTimer(self)
         self._starting_timer.setSingleShot(True)
         self._starting_timer.timeout.connect(lambda: self._set_starting(""))
@@ -467,6 +480,13 @@ class Bridge(QObject):
     latestVersion = Property(str, lambda self: release_source.numbers_text(self._update_tag),
                              notify=updateChanged)
     hasRelease = Property(bool, lambda self: bool(self._update_address), notify=updateChanged)
+    wizardOpen = Property(bool, lambda self: self._wizard_open, notify=wizardChanged)
+    wizardStep = Property(int, lambda self: self._wizard_step, notify=wizardChanged)
+    wizardHidden = Property(bool, lambda self: self._db.get_state("wizard_hidden") == "1",
+                            notify=wizardChanged)
+    # "" before anything was asked, then working, done or failed.
+    importState = Property(str, lambda self: self._import_state, notify=importChanged)
+    importMessage = Property(str, lambda self: self._import_message, notify=importChanged)
     cacheCeiling = Property(int, lambda self: self._ceiling_mb(), notify=cacheChanged)
     cacheCeilingText = Property(str, lambda self: imagecache.ceiling_label(self._ceiling_mb()),
                                 notify=cacheChanged)
@@ -1346,6 +1366,46 @@ class Bridge(QObject):
 
         if self._update_address:
             QDesktopServices.openUrl(QUrl(self._update_address))
+
+    # ---- the pages a fresh install is walked through ---------------------
+
+    def _wizard_is_needed(self) -> bool:
+        """Whether there is anything left for those pages to offer.
+
+        Two ways out of them. The box, which is his own answer to never
+        seeing them again, and simply being set up, since a copy that already
+        has channels and a Twitch connection has nothing to be walked through
+        and being asked every launch would be nagging.
+        """
+        if self._db.get_state("wizard_hidden") == "1":
+            return False
+        return not (self._db.channels() and self._get_twitch_connected())
+
+    @Slot()
+    def showWizardIfNeeded(self) -> None:
+        if self._wizard_is_needed():
+            self.openWizard()
+
+    @Slot()
+    def openWizard(self) -> None:
+        self._wizard_step = 0
+        self._wizard_open = True
+        self.wizardChanged.emit()
+
+    @Slot()
+    def closeWizard(self) -> None:
+        self._wizard_open = False
+        self.wizardChanged.emit()
+
+    @Slot(int)
+    def stepWizard(self, by: int) -> None:
+        self._wizard_step = max(0, min(WIZARD_LAST, self._wizard_step + by))
+        self.wizardChanged.emit()
+
+    @Slot(bool)
+    def setWizardHidden(self, hidden: bool) -> None:
+        self._db.set_state("wizard_hidden", "1" if hidden else "0")
+        self.wizardChanged.emit()
 
     def _ceiling_mb(self) -> int:
         """The ceiling in force. The config holds the default and the choice
@@ -2753,6 +2813,7 @@ class Bridge(QObject):
     def importSubscriptions(self) -> None:
         if self._importer is not None and self._importer.isRunning():
             return
+        self._set_import("working", "reading the subscription list from YouTube")
         self._set_status("importing the subscription list")
         self._importer = SubsImporter(self._db, self._cfg, self)
         self._importer.imported.connect(self._on_imported)
@@ -2952,13 +3013,20 @@ class Bridge(QObject):
                 return str(row["name"])
         return "the group"
 
+    def _set_import(self, state: str, message: str) -> None:
+        self._import_state = state
+        self._import_message = message
+        self.importChanged.emit()
+
     def _on_imported(self, found: int, added: int) -> None:
+        self._set_import("done", f"{found} subscriptions found, {added} newly tracked")
         self._set_status(f"{found} subscriptions found, {added} newly tracked")
         self.reload()
         if added:
             self.refresh()
 
     def _on_import_failed(self, message: str) -> None:
+        self._set_import("failed", message)
         self._problems.append(f"subscription import, {message}")
         self.problemsChanged.emit()
         self._set_status(f"could not import the subscriptions, {message}")

@@ -178,6 +178,9 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
     # Last of the three, and the least important. One request a day, and the
     # answer from the last time is already on screen before it is made.
     QTimer.singleShot(1500, bridge.checkForUpdate)
+    # After the window has drawn once, so the pages open over a window that
+    # already looks like something rather than over an empty one.
+    QTimer.singleShot(900, bridge.showWizardIfNeeded)
 
     def shutdown() -> None:
         feed_timer.stop()

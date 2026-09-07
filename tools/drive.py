@@ -392,6 +392,54 @@ class Smoke:
         self.check("a failure takes the chip away", read(bridge, "startingKey") == "",
                    str(read(bridge, "startingKey")))
 
+    def wizard(self, bridge, window) -> None:
+        """The pages a fresh install is walked through.
+
+        Opened by hand here. Whether they open by themselves is a rule about
+        channels and Twitch, and this walk has both of those in whatever state
+        the steps before it left them.
+        """
+        root = window.contentItem()
+        bridge.openWizard()
+        settle(0.5)
+        # The popup itself is not a visual item, so what is looked for is what
+        # it draws.
+        self.check("the getting started pages open",
+                   read(bridge, "wizardOpen") and item_named(root, "wizardTitle") is not None)
+        self.check("they begin at the welcome",
+                   str(read(item_named(root, "wizardTitle"), "text")) == "Welcome to Weave",
+                   str(read(item_named(root, "wizardTitle"), "text")))
+        self.check("with nothing to go back to", not read(item_named(root, "wizardBack"), "enabled"))
+
+        titles = []
+        for _ in range(3):
+            bridge.stepWizard(1)
+            settle(0.3)
+            titles.append(str(read(item_named(root, "wizardTitle"), "text")))
+        self.check("and walk through the rest", len(titles) == 3 and all(titles),
+                   ", ".join(titles))
+        self.check("the last one finishes rather than going on",
+                   str(read(item_named(root, "wizardNext"), "text")) == "Done",
+                   str(read(item_named(root, "wizardNext"), "text")))
+        if self.shot:
+            self.check("wizard written", screenshot(window, shot_beside(self.shot, "wizard")))
+
+        # The import page has to be able to say why it failed, since that is
+        # the step that fails and the reason is never obvious.
+        bridge.stepWizard(-2)
+        bridge._on_import_failed("yt-dlp said: Sign in to confirm you are not a bot")
+        settle(0.4)
+        said = str(read(item_named(root, "wizardImportState"), "text"))
+        self.check("a failed import says what went wrong", "Sign in" in said, said)
+
+        bridge.setWizardHidden(True)
+        settle(0.2)
+        self.check("the box is remembered", read(bridge, "wizardHidden"))
+        bridge.setWizardHidden(False)
+        bridge.closeWizard()
+        settle(0.3)
+        self.check("and they close again", not read(bridge, "wizardOpen"))
+
     def updates(self, bridge, window) -> None:
         """News of a newer release, at the foot of the panel.
 
@@ -479,6 +527,13 @@ class Smoke:
     def run(self, engine, bridge, window) -> None:
         self.warnings = Warnings(engine)
         settle(1.2)
+        # A scratch home has channels seeded and no Twitch, which is exactly
+        # what the getting started pages are for, so they are already open and
+        # everything below is behind them until they are put away.
+        self.check("the getting started pages open themselves on a fresh copy",
+                   read(bridge, "wizardOpen"))
+        bridge.closeWizard()
+        settle(0.3)
         grid = find(window, "grid")
         self.check("grid has the seeded videos", read(grid, "count") == 6,
                    f"count {read(grid, 'count')}")
@@ -683,6 +738,7 @@ class Smoke:
 
         self.starting(bridge, window)
         self.updates(bridge, window)
+        self.wizard(bridge, window)
         self.scrolling(bridge, window)
 
         if self.shot:

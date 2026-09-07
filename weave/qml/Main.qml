@@ -1354,6 +1354,12 @@ ApplicationWindow {
         id: manageGroup
     }
 
+    // Shown on a fresh install and never again once there is something to
+    // show. Last of the popups, so it is drawn over the rest of them.
+    Wizard {
+        id: wizard
+    }
+
     // A checklist rather than a menu, because a menu of a hundred playlists is
     // not something anyone can find anything in.
     Popup {

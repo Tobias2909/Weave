@@ -254,6 +254,12 @@ Item {
                                 text: "Playlist settings"
                                 onClicked: view.playlistsRequested()
                             }
+
+                            FlatButton {
+                                objectName: "settingsWizard"
+                                text: "Getting started"
+                                onClicked: App.openWizard()
+                            }
                         }
 
                         Label {
