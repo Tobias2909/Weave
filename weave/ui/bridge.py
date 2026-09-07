@@ -14,12 +14,12 @@ from __future__ import annotations
 import json
 import random
 import time
-
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Property, QObject, Qt, QTimer, QUrl, Signal, Slot
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QDesktopServices, QGuiApplication
 
 from .. import __version__
 from .. import format as fmt
@@ -323,7 +323,7 @@ class Bridge(QObject):
 
         self._hide_watched = self._db.get_state("hide_watched", "1") == "1"
         self._live_collapsed = self._db.get_state("live_collapsed", "0") == "1"
-        self._panel_width = int(self._db.get_state("panel_width", "380") or 380)
+        self._panel_width = self._db.get_int("panel_width", 380)
 
         self._player.watched.connect(self._on_watched)
         self._player.nowPlaying.connect(self._on_now_playing)
@@ -440,9 +440,9 @@ class Bridge(QObject):
             return ("This group has no channels in it yet.\n"
                     "Right click the group and manage it, or right click a video.")
         if not len(self._db.channels(platform="youtube")):
-            return ("Only Twitch channels are tracked so far.\n"
-                    "Twitch appears in the live bar, which is not built yet, so it "
-                    "produces no rows here.\nAdd a YouTube channel to fill the feed.")
+            return ("Only Twitch channels are followed so far.\n"
+                    "A Twitch channel shows in the live bar while it streams and "
+                    "puts no rows here.\nFollow a YouTube channel to fill the feed.")
         if not counts["videos"]:
             return "No videos stored yet.\nPress Refresh to fetch them."
         return "Everything here is watched.\nTurn off Hide watched to see it again."
@@ -645,7 +645,6 @@ class Bridge(QObject):
         since = None
         if started:
             try:
-                from datetime import datetime
                 since = int(datetime.fromisoformat(
                     started.replace("Z", "+00:00")).timestamp())
             except ValueError:
@@ -1386,7 +1385,7 @@ class Bridge(QObject):
         """
         if self._update is not None and self._update.isRunning():
             return
-        asked = int(self._db.get_state("update_checked_at") or 0)
+        asked = self._db.get_int("update_checked_at", 0)
         if time.time() - asked < UPDATE_INTERVAL_S:
             return
         self._update = UpdateCheck(self._cfg, self)
@@ -1404,8 +1403,6 @@ class Bridge(QObject):
     @Slot()
     def openRelease(self) -> None:
         """The release page, in the browser. Nothing is downloaded here."""
-        from PySide6.QtGui import QDesktopServices
-
         if self._update_address:
             QDesktopServices.openUrl(QUrl(self._update_address))
 
@@ -1696,9 +1693,12 @@ class Bridge(QObject):
 
     @Slot(int, str)
     def renameBox(self, box_id: int, name: str) -> None:
-        if not (name or "").strip():
+        name = (name or "").strip()
+        if not name:
             return
-        self._db.rename_box(box_id, name)
+        if not self._db.rename_box(box_id, name):
+            self._set_notice(f"A box called {name} already exists", clear_after_s=5)
+            return
         self.boxesChanged.emit()
         self.viewChanged.emit()
 
@@ -1762,9 +1762,12 @@ class Bridge(QObject):
 
     @Slot(int, str)
     def renameGroup(self, group_id: int, name: str) -> None:
-        if not (name or "").strip():
+        name = (name or "").strip()
+        if not name:
             return
-        self._db.rename_group(group_id, name)
+        if not self._db.rename_group(group_id, name):
+            self._set_notice(f"A group called {name} already exists", clear_after_s=5)
+            return
         self.groupsChanged.emit()
         self.viewChanged.emit()
 
@@ -2220,8 +2223,7 @@ class Bridge(QObject):
             if remembered:
                 self._shelves = remembered
                 self.musicChanged.emit()
-                stamp = self._db.get_state("music_shelves_at", "0") or "0"
-                self._shelves_age = int(stamp) if stamp.isdigit() else 0
+                self._shelves_age = self._db.get_int("music_shelves_at", 0)
                 if not force and time.time() - self._shelves_age < SHELF_LIFETIME_S:
                     return
         if self._home is not None and self._home.isRunning():
@@ -3053,8 +3055,58 @@ class Bridge(QObject):
             return False
         self._threads.add(thread)
         thread.finished.connect(self._reap, Qt.ConnectionType.QueuedConnection)
+        # A worker that died on an exception nobody expected says so through
+        # this, and the flag that was raised for it is put down again. The
+        # worker itself is captured rather than read off sender(), since this
+        # runs before the reaper has cleared the attribute that holds it.
+        crashed = getattr(thread, "crashed", None)
+        if crashed is not None:
+            crashed.connect(lambda message, worker=thread:
+                            self._on_worker_crashed(worker, message))
         thread.start()
         return True
+
+    def _on_worker_crashed(self, worker, message: str) -> None:
+        """A worker stopped on an exception it never expected.
+
+        Every worker raises some flag in here while it runs, and every one of
+        them used to lower it only on its own success or failure signal. An
+        exception that escaped emitted neither, so the window sat saying
+        "working" for the rest of the evening with nothing working. This is
+        the one place that knows which flag belongs to which worker, and it
+        lowers the right one before saying what happened.
+        """
+        name = type(worker).__name__
+        line = f"{name} stopped on an error, {message}"
+        if worker is self._poller:
+            self._set_busy(False)
+        elif worker is self._importer:
+            self._set_import("failed", line)
+        elif worker is self._adder:
+            self._on_channel_failed(message)
+            return
+        elif worker is self._details:
+            self._next_details()
+        elif worker in (self._searcher, self._recommended, self._history):
+            self._loading_more = False
+            self._set_notice("")
+        elif worker in (self._search, self._tracks, self._station):
+            self._searching = False
+            self.musicChanged.emit()
+        elif worker is self._detail:
+            self._detail_loading = False
+            self.detailChanged.emit()
+        elif worker is self._cache_job:
+            self._cache_working = False
+            self.cacheChanged.emit()
+        elif worker is self._twitch:
+            self._twitch_status = f"Twitch login failed, {message}"
+            self.twitchChanged.emit()
+        elif worker in (self._checkup, self._playlists, self._playlist_items):
+            self._set_notice("")
+        self._problems.append(line)
+        self.problemsChanged.emit()
+        self._set_status(line)
 
     @Slot()
     def _reap(self) -> None:
@@ -3170,9 +3222,6 @@ class Bridge(QObject):
     def _on_twitch_code(self, user_code: str, address: str) -> None:
         """The address already contains the code, so the browser lands on a
         page with nothing to type."""
-        from PySide6.QtCore import QUrl
-        from PySide6.QtGui import QDesktopServices
-
         self._twitch_status = f"approve {user_code} in the browser"
         self.twitchChanged.emit()
         QDesktopServices.openUrl(QUrl(address))

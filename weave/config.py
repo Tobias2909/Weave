@@ -114,6 +114,11 @@ class Config:
     # and the doctor says so, because a file that is silently ignored looks
     # exactly like a file that is being read.
     problem: str | None = None
+    # Values the file carried that could not be used, one line each. A key
+    # that is not a setting, or a number written as a word. The rest of the
+    # file still applies, and the doctor lists these, since a typo that is
+    # quietly ignored looks exactly like a setting that took effect.
+    warnings: tuple[str, ...] = ()
 
     def get(self, section: str, key: str) -> Any:
         try:
@@ -230,6 +235,54 @@ class Config:
 
 
 
+def _fits(default: Any, value: Any) -> bool:
+    """Whether a value from the file can stand in for the default.
+
+    Read by type rather than converted, because `int("sixty")` raising deep
+    inside a property is how a typo in the config used to stop the window
+    from opening at all. A whole number may stand in for a float and a float
+    for a whole number, since the accessors round as they read. A number may
+    stand in for a piece of text, since an identity is digits and is easily
+    written without quotes. A bool stands in for nothing but a bool.
+    """
+    if isinstance(default, bool):
+        return isinstance(value, bool)
+    if isinstance(value, bool):
+        return False
+    if isinstance(default, (int, float)):
+        return isinstance(value, (int, float))
+    return isinstance(value, (str, int))
+
+
+def check(loaded: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """The usable part of a parsed file, and a line for everything left out."""
+    kept: dict[str, dict[str, Any]] = {}
+    warnings: list[str] = []
+    for section, values in loaded.items():
+        if section not in DEFAULTS:
+            warnings.append(f"[{section}] is not a section this program reads")
+            continue
+        for key, value in values.items():
+            if key not in DEFAULTS[section]:
+                warnings.append(f"{section}.{key} is not a setting")
+                continue
+            default = DEFAULTS[section][key]
+            if not _fits(default, value):
+                warnings.append(f"{section}.{key} = {value!r} is not "
+                                f"{_kind(default)}, the default {default!r} applies")
+                continue
+            kept.setdefault(section, {})[key] = value
+    return kept, warnings
+
+
+def _kind(default: Any) -> str:
+    if isinstance(default, bool):
+        return "true or false"
+    if isinstance(default, (int, float)):
+        return "a number"
+    return "text"
+
+
 def load(path: Path | None = None) -> Config:
     """Read the config file. A missing or unreadable file yields defaults, so a
     fresh install and a broken edit both still start."""
@@ -246,4 +299,5 @@ def load(path: Path | None = None) -> Config:
         return Config(raw={}, problem=f"{target} could not be read, {exc}")
     if not all(isinstance(section, dict) for section in loaded.values()):
         return Config(raw={}, problem=f"{target} has a value outside any section")
-    return Config(raw=loaded)
+    kept, warnings = check(loaded)
+    return Config(raw=kept, warnings=tuple(warnings))

@@ -75,6 +75,34 @@ class Offline(unittest.TestCase):
         self.assertEqual(self.db.requests_in_window("feeds", 900), (0, 0))
 
 
+class ToolVersions(unittest.TestCase):
+    def test_a_tool_that_says_nothing_is_still_installed(self):
+        # A wrapper that exits cleanly and prints nothing used to be an
+        # IndexError out of the middle of the report.
+        import subprocess
+        from unittest import mock
+
+        done = subprocess.CompletedProcess(["x"], 0, stdout="", stderr="")
+        with mock.patch.object(doctor.subprocess, "run", return_value=done):
+            self.assertEqual(doctor._version(["x", "--version"]), "installed")
+
+    def test_the_first_line_is_the_version(self):
+        import subprocess
+        from unittest import mock
+
+        done = subprocess.CompletedProcess(["x"], 0, stdout="2026.09.01\nmore\n", stderr="")
+        with mock.patch.object(doctor.subprocess, "run", return_value=done):
+            self.assertEqual(doctor._version(["x", "--version"]), "2026.09.01")
+
+    def test_a_failing_tool_is_not_installed(self):
+        import subprocess
+        from unittest import mock
+
+        done = subprocess.CompletedProcess(["x"], 1, stdout="", stderr="broken")
+        with mock.patch.object(doctor.subprocess, "run", return_value=done):
+            self.assertIsNone(doctor._version(["x", "--version"]))
+
+
 class Schedule(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()

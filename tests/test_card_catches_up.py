@@ -6,11 +6,9 @@ so keeping that costs no request and stops the card being the poorer view of
 the same video.
 """
 
-import tempfile
 import unittest
-from pathlib import Path
 
-from weave.db import Database
+from tests.support import scratch_db
 
 
 def listing_row(ext_id="aaaaaaaaaaa", **over):
@@ -23,7 +21,7 @@ def listing_row(ext_id="aaaaaaaaaaa", **over):
 
 class KeepingWhatWasLearned(unittest.TestCase):
     def setUp(self) -> None:
-        self.db = Database(Path(tempfile.mkdtemp()) / "weave.db")
+        self.db = scratch_db(self)
 
     def test_a_suggestion_gains_its_numbers(self) -> None:
         self.db.replace_cached(self.db.RECOMMENDED, [listing_row()])
@@ -80,7 +78,7 @@ class TheBridgeKeepsThem(unittest.TestCase):
     def test_details_from_the_panel_reach_the_row(self) -> None:
         from weave.ui.bridge import Bridge
 
-        db = Database(Path(tempfile.mkdtemp()) / "weave.db")
+        db = scratch_db(self)
         db.replace_cached(db.RECOMMENDED, [listing_row()])
 
         bridge = Bridge.__new__(Bridge)
@@ -97,7 +95,7 @@ class TheBridgeKeepsThem(unittest.TestCase):
     def test_a_twitch_key_is_left_alone(self) -> None:
         from weave.ui.bridge import Bridge
 
-        db = Database(Path(tempfile.mkdtemp()) / "weave.db")
+        db = scratch_db(self)
         bridge = Bridge.__new__(Bridge)
         bridge._db = db
         bridge._view_kind = "all"
@@ -106,7 +104,7 @@ class TheBridgeKeepsThem(unittest.TestCase):
     def test_the_open_view_is_drawn_again_so_the_card_changes(self) -> None:
         from weave.ui.bridge import Bridge
 
-        db = Database(Path(tempfile.mkdtemp()) / "weave.db")
+        db = scratch_db(self)
         db.replace_cached(db.RECOMMENDED, [listing_row()])
         bridge = Bridge.__new__(Bridge)
         bridge._db = db
@@ -131,7 +129,7 @@ class WalkingPastAViewWithNoGrid(unittest.TestCase):
     def bridge(self, kind: str):
         from weave.ui.bridge import Bridge
 
-        db = Database(Path(tempfile.mkdtemp()) / "weave.db")
+        db = scratch_db(self)
 
         class Model:
             def __init__(self):

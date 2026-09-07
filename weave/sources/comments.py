@@ -151,7 +151,7 @@ def fetch(cfg: Config, url: str, threads: int = 5,
             raise ytdlp.blame(result, CommentsError, "fetching the comments")
         info = json.loads(found[0].read_text())
         return parse(info), parse_details(info)
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         raise CommentsError("the comment file could not be read") from exc
     finally:
         shutil.rmtree(workspace, ignore_errors=True)

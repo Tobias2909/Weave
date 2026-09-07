@@ -327,6 +327,11 @@ class Player(QObject):
         except PlayerNotFound as exc:
             self._error = str(exc)
 
+        # Every mpv this handed a video to and has not yet seen exit. mpv is
+        # started detached and is meant to outlive this window, so nothing
+        # waits on it, but a child nobody ever polls stays a zombie in the
+        # process table once it does exit. Polled on the next handoff.
+        self._children: list[subprocess.Popen] = []
         self._watcher = _IpcWatcher(resolve_socket(cfg), cfg.watched_threshold, self)
         self._watcher.nowPlaying.connect(self.nowPlaying)
         self._watcher.watched.connect(self.watched)
@@ -347,6 +352,11 @@ class Player(QObject):
     def stop(self) -> None:
         self._watcher.stop()
         self._watcher.wait(3000)
+        self._sweep_children()
+
+    def _sweep_children(self) -> None:
+        """Collect the players that have exited since the last look."""
+        self._children = [child for child in self._children if child.poll() is None]
 
     def play(self, url: str, twitch_login: str | None = None, live: bool = False) -> bool:
         if not self._command:
@@ -354,13 +364,15 @@ class Player(QObject):
             return False
         self._watcher.set_twitch_hint(twitch_login)
         self._watcher.set_live_hint(live)
+        self._sweep_children()
         try:
-            subprocess.Popen(
+            self._children.append(subprocess.Popen(
                 [*self._command, url],
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
-            )
+            ))
             return True
         except OSError as exc:
             self.failed.emit(f"could not start the player: {exc}")

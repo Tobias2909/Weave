@@ -459,6 +459,20 @@ class Database:
         row = self.conn.execute("SELECT value FROM meta WHERE key=?", (f"state.{key}",)).fetchone()
         return row["value"] if row else default
 
+    def get_int(self, key: str, default: int = 0) -> int:
+        """A stored number, or the default when nothing usable is stored.
+
+        State is written as text, and a value that is not a whole number is
+        a row this program never wrote, or wrote in a version that spelt it
+        differently. Either way it is worth the default and not a crash on
+        the way into the window.
+        """
+        raw = self.get_state(key)
+        try:
+            return int(float(raw))
+        except (TypeError, ValueError):
+            return default
+
     def image_max_mb(self, default: int) -> int:
         """The ceiling for the picture cache, in megabytes.
 
@@ -1148,9 +1162,15 @@ class Database:
         with self.conn as conn:
             conn.execute("DELETE FROM groups WHERE id=?", (group_id,))
 
-    def rename_group(self, group_id: int, name: str) -> None:
-        with self.conn as conn:
-            conn.execute("UPDATE groups SET name=? WHERE id=?", (name, group_id))
+    def rename_group(self, group_id: int, name: str) -> bool:
+        """Give a group a new name. False when another group has it already,
+        since a name is what tells the rows in the sidebar apart."""
+        try:
+            with self.conn as conn:
+                conn.execute("UPDATE groups SET name=? WHERE id=?", (name.strip(), group_id))
+        except sqlite3.IntegrityError:
+            return False
+        return True
 
     def set_group_order(self, ordered_ids: list[int]) -> None:
         with self.conn as conn:
@@ -1261,11 +1281,6 @@ class Database:
         ).fetchone()
         return dict(row) if row else None
 
-    def group_members(self, group_id: int) -> list[sqlite3.Row]:
-        return list(self.conn.execute(
-            "SELECT c.* FROM channels c JOIN group_members m ON m.channel_key = c.key "
-            "WHERE m.group_id=? ORDER BY c.title COLLATE NOCASE", (group_id,)))
-
     # ---- boxes -----------------------------------------------------------
 
     def create_box(self, name: str) -> int:
@@ -1279,9 +1294,14 @@ class Database:
             )
             return int(cursor.fetchone()[0])
 
-    def rename_box(self, box_id: int, name: str) -> None:
-        with self.conn as conn:
-            conn.execute("UPDATE boxes SET name=? WHERE id=?", (name.strip(), box_id))
+    def rename_box(self, box_id: int, name: str) -> bool:
+        """Give a box a new name. False when another box has it already."""
+        try:
+            with self.conn as conn:
+                conn.execute("UPDATE boxes SET name=? WHERE id=?", (name.strip(), box_id))
+        except sqlite3.IntegrityError:
+            return False
+        return True
 
     def delete_box(self, box_id: int) -> None:
         with self.conn as conn:
@@ -1694,8 +1714,8 @@ class Database:
         ))
 
     def cached_age_s(self, kind: str) -> int | None:
-        stamp = self.get_state(f"{kind}_at")
-        return None if not stamp else int(time.time()) - int(stamp)
+        stamp = self.get_int(f"{kind}_at", 0)
+        return None if not stamp else int(time.time()) - stamp
 
     # The recommendations under their own names, since that is what the rest
     # of the application calls them.
@@ -1911,10 +1931,6 @@ class Database:
             (playlist_id, limit),
         ))
 
-    def playlists_age_s(self) -> int | None:
-        stamp = self.get_state("playlists_at")
-        return None if not stamp else int(time.time()) - int(stamp)
-
     # ---- who is live -----------------------------------------------------
 
     def replace_live(self, platform: str, rows: list[dict]) -> int:
@@ -1984,10 +2000,6 @@ class Database:
             "FROM live_streams l LEFT JOIN channels c ON c.key = l.channel_key "
             "WHERE l.channel_key = ? AND l.seen_at >= ?", (channel_key, fresh)).fetchone()
         return dict(row) if row else None
-
-    def live_keys(self) -> set[str]:
-        return {row["channel_key"] for row in
-                self.conn.execute("SELECT channel_key FROM live_streams")}
 
     # ---- saved audio sources ---------------------------------------------
 

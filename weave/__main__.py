@@ -8,6 +8,7 @@ the poller testable.
 from __future__ import annotations
 
 import argparse
+import sqlite3
 import sys
 import time
 
@@ -46,8 +47,8 @@ def _cmd_add(args) -> int:
         twitch_added = twitch_added or result.platform == "twitch"
 
     if twitch_added:
-        print("Twitch channels appear in the live bar, which is not built yet, "
-              "so they add no rows to the feed.")
+        print("Twitch channels show in the live bar while they stream and add no "
+              "rows to the feed.")
     if added:
         print("Run `weave poll` or press Refresh in the window to fetch videos.")
     return 0 if added else 1
@@ -355,7 +356,7 @@ def _cmd_group(args) -> int:
         for row in rows:
             print(f"{row['id']:>3}  {row['name']:<28} {row['members']} channels, "
                   f"{row['unwatched']} unwatched")
-            for member in db.group_members(row["id"]):
+            for member in db.group_channels(row["id"]):
                 print(f"       {member['key']:<32} {member['title'] or '(unnamed)'}")
         return 0
 
@@ -370,7 +371,9 @@ def _cmd_group(args) -> int:
         return 1
 
     if args.action == "rename":
-        db.rename_group(group_id, args.new_name)
+        if not db.rename_group(group_id, args.new_name):
+            print(f"a group called {args.new_name!r} already exists", file=sys.stderr)
+            return 1
         print(f"group {args.name} is now {args.new_name}")
         return 0
 
@@ -429,7 +432,9 @@ def _cmd_box(args) -> int:
     box_id = found["id"]
 
     if args.action == "rename":
-        db.rename_box(box_id, args.new_name)
+        if not db.rename_box(box_id, args.new_name):
+            print(f"a box called {args.new_name!r} already exists", file=sys.stderr)
+            return 1
         print(f"renamed to {args.new_name}")
         return 0
 
@@ -637,7 +642,11 @@ def _cmd_themes(args) -> int:
         if target.exists():
             print(f"{target} already exists, so nothing was written", file=sys.stderr)
             return 1
-        target.write_text(source.source.read_text())
+        try:
+            target.write_text(source.source.read_text())
+        except OSError as exc:
+            print(f"could not write {target}, {exc}", file=sys.stderr)
+            return 1
         print(f"copied to {target}")
         print("edit it and the running window repaints as you save")
         return 0
@@ -841,8 +850,20 @@ def main() -> int:
 
     parser.set_defaults(func=_cmd_gui)
     args = parser.parse_args()
-    paths.ensure_dirs()
-    return args.func(args)
+    try:
+        paths.ensure_dirs()
+        return args.func(args)
+    except sqlite3.DatabaseError as exc:
+        # Every subcommand opens the database, and a file that is not one, or
+        # one that is locked by something that never let go, used to be a
+        # traceback. The path is the one thing worth knowing about it.
+        print(f"the database at {paths.DB_FILE} could not be opened, {exc}. "
+              f"Move it aside to start fresh, or wait for whatever holds it.",
+              file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print(file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":

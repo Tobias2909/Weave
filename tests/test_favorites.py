@@ -5,16 +5,14 @@ rather than a copy of it in a second table. Copying is how the two of them
 come apart when a title or a picture changes on one side only.
 """
 
-import tempfile
 import unittest
-from pathlib import Path
 
-from weave.db import Database
+from tests.support import scratch_db
 
 
 class KeepingASong(unittest.TestCase):
     def setUp(self) -> None:
-        self.db = Database(Path(tempfile.mkdtemp()) / "weave.db")
+        self.db = scratch_db(self)
 
     def test_a_song_never_played_here_can_still_be_kept(self) -> None:
         self.db.set_music_favorite("aaaaaaaaaaa", True, "A song", "An artist",
@@ -74,7 +72,7 @@ class TheBridgeMarksThem(unittest.TestCase):
     def bridge(self):
         from weave.ui.bridge import Bridge
 
-        db = Database(Path(tempfile.mkdtemp()) / "weave.db")
+        db = scratch_db(self)
 
         class Quiet:
             def emit(self, *_a):
@@ -175,7 +173,7 @@ class FromAnOpenedList(unittest.TestCase):
                 pass
 
         bridge = Bridge.__new__(Bridge)
-        bridge._db = Database(Path(tempfile.mkdtemp()) / "weave.db")
+        bridge._db = scratch_db(self)
         bridge._results = rows
         bridge._music_list = None
         bridge.notices = []
@@ -282,7 +280,7 @@ class WithNothingKept(unittest.TestCase):
     def bridge(self):
         from weave.ui.bridge import Bridge
 
-        db = Database(Path(tempfile.mkdtemp()) / "weave.db")
+        db = scratch_db(self)
 
         class Quiet:
             def emit(self, *_a):
@@ -391,7 +389,7 @@ class ThePicture(unittest.TestCase):
     """
 
     def setUp(self) -> None:
-        self.db = Database(Path(tempfile.mkdtemp()) / "weave.db")
+        self.db = scratch_db(self)
 
     def test_wrapping_a_wrapped_address_gives_nothing(self) -> None:
         from weave.imagecache import plain_source, qml_source

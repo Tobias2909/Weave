@@ -36,11 +36,10 @@ from PySide6.QtCore import QBuffer, QIODevice, QRunnable, Qt, QThreadPool
 from PySide6.QtGui import QImage, QImageReader
 from PySide6.QtQuick import QQuickAsyncImageProvider, QQuickImageResponse, QQuickTextureFactory
 
-from . import __version__
+from .net import USER_AGENT
 
 PROVIDER_ID = "cached"
 SECONDS_PER_DAY = 86400
-USER_AGENT = f"Weave/{__version__} (+https://github.com/Tobias2909/Weave)"
 
 # Pictures come from an image CDN rather than an endpoint that rate limits, so
 # they do not go through the request throttle. This cap is about not opening

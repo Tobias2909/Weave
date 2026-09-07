@@ -196,7 +196,7 @@ class AudioPlayer(QObject):
         self._idle = True
         self._buffering = False
 
-        stored = int(db.get_state("music_volume", "70") or 70) if db else 70
+        stored = db.get_int("music_volume", 70) if db else 70
         self._level = max(0.0, min(1.0, stored / 100))
         self._output = self._level          # what mpv has been told, fades included
         self._engine.set_volume(self._level * 100)
@@ -214,9 +214,7 @@ class AudioPlayer(QObject):
         # Off, the whole queue, or the one track. A queue that repeats and a
         # track that repeats are different wants, and one switch cannot say
         # which, so it cycles through all three.
-        stored_repeat = (db.get_state("music_repeat", "0") if db else "0") or "0"
-        self._repeat_mode = int(stored_repeat) if stored_repeat.isdigit() else 0
-        self._repeat_mode = max(0, min(2, self._repeat_mode))
+        self._repeat_mode = max(0, min(2, db.get_int("music_repeat", 0) if db else 0))
 
         # Volume is faded rather than cut, so a video starting does not chop
         # the music off mid note.

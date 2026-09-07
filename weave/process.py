@@ -37,7 +37,9 @@ class Result:
 def run(command: list[str], cancel: threading.Event | None = None,
         timeout: float = 300.0) -> Result:
     """Run to completion, or raise Cancelled if asked to stop first."""
-    process = subprocess.Popen(command, stdout=subprocess.PIPE,
+    # No stdin. A child that asks a question would otherwise wait on a
+    # terminal nobody is watching, for as long as the timeout allows.
+    process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, text=True)
     waited = 0.0
     while True:

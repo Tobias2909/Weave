@@ -24,7 +24,9 @@ def load(path: Path | None = None) -> Tokens | None:
     target = path or TOKEN_FILE
     try:
         return Tokens.from_dict(json.loads(target.read_text()))
-    except (OSError, ValueError):
+    except (OSError, ValueError, TypeError, AttributeError):
+        # Missing, unreadable, or not the shape that was written. Each one
+        # is simply not a login, and the login is done again.
         return None
 
 
@@ -40,7 +42,8 @@ def save(tokens: Tokens, path: Path | None = None) -> None:
         with os.fdopen(handle, "w") as sink:
             json.dump(tokens.as_dict(), sink)
         os.replace(temporary, target)
-    except OSError:
+    except Exception:
+        # Whatever went wrong, the half written file must not stay behind.
         try:
             os.unlink(temporary)
         except OSError:

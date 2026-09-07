@@ -40,6 +40,10 @@ def run(command: list[str], error: type[Exception], what: str,
         raise
     except FileNotFoundError as exc:
         raise error("yt-dlp is not installed") from exc
+    except OSError as exc:
+        # Present but not runnable, which a permission or a broken shim can
+        # manage. Named apart from missing, since the fix is different.
+        raise error(f"yt-dlp could not be started, {exc}") from exc
     except Timeout as exc:
         raise error(f"{what} timed out") from exc
 

@@ -95,6 +95,41 @@ class Worker(QThread):
         """A throttle sized for one worker, with the configured gap."""
         return Throttle(slots, cfg.min_request_interval_s)
 
+    # The work stopped on an exception nobody expected. Carries the
+    # exception's name and message, so the window can say what happened and
+    # put down whatever flag it raised while it waited.
+    crashed = Signal(str)
+
+    def run(self) -> None:
+        """Do the work, and never let an exception leave the thread.
+
+        An exception that escapes a QThread's run ends the thread quietly.
+        No signal the worker promised is emitted, so a flag the window raised
+        while it waited stays raised for the rest of the session, and the
+        only trace is a traceback on a terminal nobody is watching. A poll
+        died that way once and the window never refreshed again. So every
+        worker does its work in `work`, and this is the one place an
+        unexpected exception is caught, printed, and turned into a signal.
+
+        A cancel is not a failure and says nothing. The database connection
+        this thread opened belongs to this thread, so it is closed here on
+        every way out rather than by each worker on each of its exits.
+        """
+        try:
+            self.work()
+        except (FetchCancelled, ProcessCancelled):
+            pass
+        except Exception as exc:
+            traceback.print_exc()
+            self.crashed.emit(f"{type(exc).__name__}: {exc}")
+        finally:
+            db = getattr(self, "_db", None)
+            if db is not None:
+                db.close()
+
+    def work(self) -> None:
+        raise NotImplementedError(f"{type(self).__name__} defines no work")
+
 
 # How many channels whose streams tab has never been asked get asked in one
 # tick. A round of 15 channels a minute spends 225 feed requests in a fifteen
@@ -130,7 +165,7 @@ class FeedPoller(Worker):
         # again once the feeds have run, see _phase_details_again.
         self._late_details: list[tuple[str, int | None, str | None, int | None]] = []
 
-    def run(self) -> None:
+    def work(self) -> None:
         fetcher = Fetcher(self._throttle, cancel=self._cancel)
         budget = Budget(self._db, self._cfg.budget_limits, self._cfg.budget_window_s)
         polled = touched = failures = 0
@@ -155,7 +190,6 @@ class FeedPoller(Worker):
             self.failure.emit("feeds", f"the refresh stopped, {type(exc).__name__}: {exc}")
         finally:
             fetcher.close()
-            self._db.close()
         self.finished_poll.emit(polled, touched, failures)
 
     def _budget_notice(self, endpoint: str, allowance) -> None:
@@ -165,7 +199,7 @@ class FeedPoller(Worker):
         indistinguishable from the app being broken. Repeating it once a
         minute would be almost as bad.
         """
-        stamp = int(self._db.get_state(f"budget_notice.{endpoint}") or 0)
+        stamp = self._db.get_int(f"budget_notice.{endpoint}", 0)
         now = int(time.time())
         if now - stamp < 300:
             return
@@ -183,7 +217,7 @@ class FeedPoller(Worker):
         if not self._cfg.sweep_limit:
             return 0
         interval = self._cfg.sweep_interval_s
-        last = int(self._db.get_state("sweep_at") or 0)
+        last = self._db.get_int("sweep_at", 0)
         if not self._force_all and interval and time.time() - last < interval:
             return 0
         allowance = budget.allowance(BROWSE, 1)
@@ -418,7 +452,7 @@ class ChannelAdder(Worker):
         self._ref = ref
         self._throttle = self._throttle_for(cfg)
 
-    def run(self) -> None:
+    def work(self) -> None:
         from .sources.resolve import ResolveError, resolve
 
         try:
@@ -443,7 +477,7 @@ class SubsImporter(Worker):
         self._cfg = cfg
         self._throttle = self._throttle_for(cfg)
 
-    def run(self) -> None:
+    def work(self) -> None:
         _spend(self._db, self._cfg, BROWSE)
         try:
             channels = subs.fetch(self._cfg, self._throttle, cancel=self._cancel)
@@ -458,7 +492,6 @@ class SubsImporter(Worker):
             if self._db.add_channel(channel.key, "youtube", channel.ext_id,
                                     channel.title, channel.avatar_url):
                 added += 1
-        self._db.close()
         self.imported.emit(len(channels), added)
 
 
@@ -485,7 +518,7 @@ class HistoryImporter(Worker):
         self._append = append
         self._throttle = self._throttle_for(cfg)
 
-    def run(self) -> None:
+    def work(self) -> None:
         _spend(self._db, self._cfg, BROWSE)
         try:
             found = history_source.fetch(self._cfg, self._limit, self._throttle,
@@ -501,7 +534,6 @@ class HistoryImporter(Worker):
         added = (self._db.append_cached(kind, rows) if self._append
                  else self._db.replace_cached(kind, rows))
         marked, _ = self._db.mark_watched_many(history_source.keys_of(found), "youtube")
-        self._db.close()
         self.imported.emit(added, marked)
 
 
@@ -526,7 +558,7 @@ class RecommendationsFetcher(Worker):
         self._append = append
         self._throttle = self._throttle_for(cfg)
 
-    def run(self) -> None:
+    def work(self) -> None:
         _spend(self._db, self._cfg, BROWSE)
         try:
             found = recommended_source.fetch(self._cfg, self._limit, self._throttle,
@@ -540,7 +572,6 @@ class RecommendationsFetcher(Worker):
         rows = [flatlist.as_row(item) for item in found]
         count = (self._db.append_recommended(rows) if self._append
                  else self._db.replace_recommended(rows))
-        self._db.close()
         self.ready.emit(count)
 
 
@@ -560,7 +591,7 @@ class PlaylistsFetcher(Worker):
         self._cfg = cfg
         self._throttle = self._throttle_for(cfg)
 
-    def run(self) -> None:
+    def work(self) -> None:
         _spend(self._db, self._cfg, BROWSE)
         try:
             found = playlist_source.fetch_list(self._cfg, throttle=self._throttle,
@@ -573,7 +604,6 @@ class PlaylistsFetcher(Worker):
             return
         count = self._db.replace_playlists(
             [{"ext_id": item.ext_id, "title": item.title} for item in found])
-        self._db.close()
         self.ready.emit(count)
 
 
@@ -591,7 +621,7 @@ class PlaylistItemsFetcher(Worker):
         self._playlist_id = playlist_id
         self._throttle = self._throttle_for(cfg)
 
-    def run(self) -> None:
+    def work(self) -> None:
         _spend(self._db, self._cfg, BROWSE)
         try:
             items, skipped = playlist_source.fetch_items(self._cfg, self._playlist_id,
@@ -605,7 +635,6 @@ class PlaylistItemsFetcher(Worker):
             return
         count = self._db.replace_playlist_items(
             self._playlist_id, [flatlist.as_row(item) for item in items], skipped)
-        self._db.close()
         self.ready.emit(self._playlist_id, count)
 
 
@@ -630,7 +659,7 @@ class SearchFetcher(Worker):
         self._count = count
         self._throttle = self._throttle_for(cfg)
 
-    def run(self) -> None:
+    def work(self) -> None:
         _spend(self._db, self._cfg, BROWSE)
         try:
             found = search_source.fetch(self._cfg, self._query, self._start, self._count,
@@ -641,7 +670,6 @@ class SearchFetcher(Worker):
             _spend(self._db, self._cfg, BROWSE, count=0, refused=1)
             self.failed.emit(str(exc))
             return
-        self._db.close()
         self.results.emit(self._query, self._start,
                           [flatlist.as_row(item) | {"views": item.views} for item in found])
 
@@ -662,11 +690,10 @@ class Checkup(Worker):
         self._cfg = cfg
         self._network = network
 
-    def run(self) -> None:
+    def work(self) -> None:
         from . import doctor
 
         report = doctor.run(self._cfg, self._db, network=self._network)
-        self._db.close()
         self.ready.emit([{"name": check.name, "state": check.state,
                           "detail": check.detail, "fix": check.fix}
                          for check in report.checks])
@@ -689,7 +716,7 @@ class UpdateCheck(Worker):
         self._cfg = cfg
         self._throttle = self._throttle_for(cfg, 1)
 
-    def run(self) -> None:
+    def work(self) -> None:
         fetcher = Fetcher(self._throttle, cancel=self._cancel)
         try:
             tag, address = release_source.fetch(fetcher)
@@ -728,7 +755,7 @@ class ImageCacheJob(Worker):
         self._ttl = ttl_seconds
         self._max_bytes = max_bytes
 
-    def run(self) -> None:
+    def work(self) -> None:
         dropped = 0
         if self._what == self.CLEAR:
             # Everything is past its window when the window is nothing, so
@@ -757,7 +784,7 @@ class ChannelDetailsFetcher(Worker):
         self._ext_id = ext_id
         self._throttle = self._throttle_for(cfg)
 
-    def run(self) -> None:
+    def work(self) -> None:
         _spend(self._db, self._cfg, BROWSE)
         try:
             details = channel_source.fetch(self._ext_id, self._throttle, self._cancel)
@@ -769,7 +796,6 @@ class ChannelDetailsFetcher(Worker):
             return
         self._db.set_channel_details(self._key, details.title, details.avatar_url,
                                      details.banner_url, details.follower_count)
-        self._db.close()
         self.fetched.emit(self._key)
 
 
@@ -797,12 +823,11 @@ class ChannelFeedFetcher(Worker):
         self._ext_id = ext_id
         self._throttle = self._throttle_for(cfg, 1)
 
-    def run(self) -> None:
+    def work(self) -> None:
         fetcher = Fetcher(self._throttle, cancel=self._cancel)
         budget = Budget(self._db, self._cfg.budget_limits, self._cfg.budget_window_s)
         if budget.allowance(FEEDS, 1).empty:
             fetcher.close()
-            self._db.close()
             self.failed.emit(self._key, "asked as much as it should for now")
             return
         variant = self._db.channel(self._key)
@@ -820,12 +845,10 @@ class ChannelFeedFetcher(Worker):
                 self._db.set_feed_variant(self._key, rss.CHANNEL)
         except (FetchCancelled, ProcessCancelled):
             fetcher.close()
-            self._db.close()
             return
         except Exception as exc:
             budget.spend(FEEDS, count=0, refused=1)
             fetcher.close()
-            self._db.close()
             self.failed.emit(self._key, f"{type(exc).__name__}: {exc}")
             return
         touched = self._db.upsert_videos(result.videos)
@@ -835,7 +858,6 @@ class ChannelFeedFetcher(Worker):
             self._db.remember_channel(self._key, "youtube", self._ext_id, result.channel_title)
         self._db.mark_polled(self._key, None)
         fetcher.close()
-        self._db.close()
         self.fetched.emit(self._key, touched)
 
 
@@ -855,7 +877,7 @@ class TwitchLogin(Worker):
         self._db = db
         self._cfg = cfg
 
-    def run(self) -> None:
+    def work(self) -> None:
         client_id = self._cfg.twitch_client_id
         if not client_id:
             self.failed.emit("no Twitch client id is configured")
@@ -878,7 +900,14 @@ class TwitchLogin(Worker):
             except twitch.TwitchError as exc:
                 self.failed.emit(str(exc))
                 return
-            tokens.save(got)
+            try:
+                tokens.save(got)
+            except OSError as exc:
+                # The login worked and the file did not. Said as what it is,
+                # since a login that has to be done again next launch looks
+                # like Twitch refusing rather than a disk refusing.
+                self.failed.emit(f"the login could not be stored, {exc}")
+                return
             self.finished_login.emit(self._import_follows(client_id, got))
             return
         if not self._cancel.is_set():
@@ -896,7 +925,6 @@ class TwitchLogin(Worker):
         for login, display in follows:
             if self._db.add_channel(f"twitch:{login}", "twitch", login, display):
                 added += 1
-        self._db.close()
         return added
 
 
@@ -914,7 +942,7 @@ class LiveWatcher(Worker):
         self._cfg = cfg
         self._throttle = self._throttle_for(cfg, 2)
 
-    def run(self) -> None:
+    def work(self) -> None:
         client_id = self._cfg.twitch_client_id
         stored = tokens.load()
         if not client_id or stored is None:
@@ -947,11 +975,13 @@ class LiveWatcher(Worker):
             return
 
         # A stream says nothing about what its broadcaster looks like, so the
-        # icons are fetched once per channel and stored alongside it.
+        # icons are fetched once per channel and stored alongside it. A
+        # picture that cannot be fetched is not a reason to lose the streams
+        # that were, so this failing is said and then set aside.
         try:
             self._fetch_missing_avatars(client)
-        except twitch.TwitchError:
-            pass
+        except Exception as exc:
+            self.failed.emit(f"channel pictures, {type(exc).__name__}: {exc}")
 
         known = {row["key"] for row in self._db.channels(platform="twitch")}
         rows = [{
@@ -969,7 +999,6 @@ class LiveWatcher(Worker):
             # reported, so the Twitch results never reached the bar either.
             self.failed.emit(f"{type(exc).__name__}: {exc}")
             youtube = 0
-        self._db.close()
         self.updated.emit(len(rows) + youtube)
 
     def _settle_streams(self, budget: Budget) -> None:
@@ -1095,7 +1124,7 @@ class DetailFetcher(Worker):
         self._threads = threads
         self._throttle = self._throttle_for(cfg, 2)
 
-    def run(self) -> None:
+    def work(self) -> None:
         fetcher = Fetcher(self._throttle, cancel=self._cancel)
         try:
             if not self._cancel.is_set():
@@ -1104,7 +1133,6 @@ class DetailFetcher(Worker):
                 self._fetch_comments()
         finally:
             fetcher.close()
-            self._db.close()
 
     def _fetch_votes(self, fetcher: Fetcher) -> None:
         _spend(self._db, self._cfg, DISLIKES)
@@ -1164,7 +1192,7 @@ class MusicSearch(Worker):
         self._cfg = cfg
         self._query = query
 
-    def run(self) -> None:
+    def work(self) -> None:
         from .sources import ytmusic
 
         try:
@@ -1190,7 +1218,7 @@ class MusicHome(Worker):
         super().__init__(parent)
         self._cfg = cfg
 
-    def run(self) -> None:
+    def work(self) -> None:
         from .sources import ytmusic
 
         try:
@@ -1272,7 +1300,7 @@ class MusicHistoryReader(Worker):
         self._db = db
         self._cfg = cfg
 
-    def run(self) -> None:
+    def work(self) -> None:
         # Imported here like every other use of it in this file, so a machine
         # without the music library still runs everything else.
         from .sources import ytmusic
@@ -1306,7 +1334,7 @@ class TrackList(Worker):
         self._playlist_id = playlist_id
         self._label = label
 
-    def run(self) -> None:
+    def work(self) -> None:
         if self._what == self.LIKED:
             self._liked()
         elif self._what == self.RADIO:
@@ -1368,7 +1396,7 @@ class SourceDetails(Worker):
         self._cfg = cfg
         self._url = url
 
-    def run(self) -> None:
+    def work(self) -> None:
         from .cookies import args as cookie_args
 
         command = ["yt-dlp", "--no-warnings", "--simulate", *cookie_args(self._cfg),
@@ -1382,7 +1410,6 @@ class SourceDetails(Worker):
         title = parts[0].strip() if parts and parts[0] != "NA" else None
         picture = parts[1].strip() if len(parts) > 1 and parts[1] != "NA" else None
         self._db.set_source_details(self._url, title, picture)
-        self._db.close()
         self.done.emit()
 
 
@@ -1410,7 +1437,7 @@ class ChannelAvatarsFetcher(Worker):
         self._keys = channel_keys
         self._throttle = self._throttle_for(cfg, cfg.max_concurrency)
 
-    def run(self) -> None:
+    def work(self) -> None:
         budget = Budget(self._db, self._cfg.budget_limits, self._cfg.budget_window_s)
         allowance = budget.allowance(BROWSE, len(self._keys))
         keys = self._keys[:allowance.granted]
@@ -1438,5 +1465,4 @@ class ChannelAvatarsFetcher(Worker):
                     if details.avatar_url:
                         found += 1
         budget.spend(BROWSE, spent, refused=refused)
-        self._db.close()
         self.ready.emit(found)

@@ -77,6 +77,12 @@ _NS = {
 }
 
 
+class FeedUnreadable(RuntimeError):
+    """The endpoint answered, and not with a feed. It does this under load
+    with an error page, and the parser's own complaint about a stray `<`
+    at line one says nothing anybody can act on."""
+
+
 @dataclass(frozen=True)
 class FeedResult:
     channel_id: str
@@ -122,7 +128,11 @@ def _author_channel_id(root: ET.Element) -> str:
 def parse(xml: bytes, kind: str = VIDEOS) -> FeedResult:
     """Parse a feed. Tolerates missing fields rather than raising, because a
     single odd entry must not cost the whole channel."""
-    root = ET.fromstring(xml)
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError as exc:
+        raise FeedUnreadable("the feed endpoint answered with something that is "
+                             "not a feed") from exc
     feed_channel = _author_channel_id(root)
     feed_title = root.findtext("atom:author/atom:name", namespaces=_NS)
     is_short = _IS_SHORT.get(kind)

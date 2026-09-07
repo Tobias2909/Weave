@@ -204,5 +204,47 @@ class Rule(unittest.TestCase):
         self.assertEqual(self.watcher._max_pos, 80.0)
 
 
+class TheChildrenHandedAVideo(unittest.TestCase):
+    """mpv is started detached and outlives the window on purpose, so nothing
+    waits on it. A child nobody ever polls is a zombie in the process table
+    from the moment it exits until this program does, one per video watched
+    in an evening, so the ones that have gone are collected on each handoff."""
+
+    def player(self):
+        import sys
+
+        from weave.config import Config
+        from weave.player.mpv import Player
+
+        cfg = Config(raw={"player": {"command": f"{sys.executable} -c pass"}})
+        return Player(cfg)
+
+    def test_a_started_player_is_kept_until_it_has_exited(self):
+        import time
+
+        player = self.player()
+        self.assertTrue(player.play("https://example/one"))
+        self.assertEqual(len(player._children), 1)
+        child = player._children[0]
+        deadline = time.monotonic() + 5
+        while child.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertIsNotNone(child.poll(), "the stand in never exited")
+        # The next handoff sweeps it, so the list never grows with the evening.
+        self.assertTrue(player.play("https://example/two"))
+        self.assertEqual(len(player._children), 1)
+        player._sweep_children()
+        player.stop()
+
+    def test_a_player_that_cannot_start_leaves_nothing_behind(self):
+        player = self.player()
+        player._command = ["/nonexistent/binary"]
+        said = []
+        player.failed.connect(said.append)
+        self.assertFalse(player.play("https://example/one"))
+        self.assertEqual(player._children, [])
+        self.assertTrue(said and "could not start" in said[0])
+
+
 if __name__ == "__main__":
     unittest.main()

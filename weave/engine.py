@@ -163,10 +163,7 @@ class MusicEngine(QObject):
             ipc.stop()
             ipc.wait(2000)
         if process is not None:
-            try:
-                process.wait(timeout=2.0)
-            except subprocess.TimeoutExpired:
-                process.kill()
+            _reap(process)
         try:
             os.unlink(self._socket_path)
         except OSError:
@@ -259,8 +256,38 @@ class MusicEngine(QObject):
     def _on_lost(self, why: str) -> None:
         if self._ipc is not None:
             self._ipc = None
-            self._process = None
+            process, self._process = self._process, None
+            if process is not None:
+                # The socket went first. A player that is somehow still there
+                # with no socket is of no use, and one that has already gone
+                # is a zombie until somebody waits on it, so it is collected
+                # here rather than dropped.
+                _reap(process)
             self.gone.emit(why)
+
+
+def _reap(process: subprocess.Popen, grace_s: float = 2.0) -> None:
+    """Wait for a player that is going, ending it if it will not go by itself.
+
+    Every path that lets go of the process passes through here, so none of
+    them can leave a child unwaited for. A child nobody waits on stays in the
+    process table as a zombie until this program exits, and the interpreter
+    complains about it when the handle is collected.
+    """
+    try:
+        process.wait(timeout=grace_s)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    process.terminate()
+    try:
+        process.wait(timeout=grace_s)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        try:
+            process.wait(timeout=grace_s)
+        except subprocess.TimeoutExpired:
+            pass
 
 
 class _Ipc(QThread):

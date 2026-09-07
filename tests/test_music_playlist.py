@@ -1,15 +1,13 @@
 """A playlist can be marked as music, and then it is listened to."""
 
-import tempfile
 import unittest
-from pathlib import Path
 
-from weave.db import Database
+from tests.support import scratch_db
 
 
 class MarkingAPlaylist(unittest.TestCase):
     def setUp(self) -> None:
-        self.db = Database(Path(tempfile.mkdtemp()) / "weave.db")
+        self.db = scratch_db(self)
         self.db.replace_playlists([{"ext_id": "PL1", "title": "A list"},
                                    {"ext_id": "PL2", "title": "Another"}])
 
@@ -85,7 +83,7 @@ class PressingAVideoInAMusicPlaylist(unittest.TestCase):
         return bridge
 
     def setUp(self) -> None:
-        self.db = Database(Path(tempfile.mkdtemp()) / "weave.db")
+        self.db = scratch_db(self)
         self.db.replace_playlists([{"ext_id": "PL1", "title": "A list"}])
 
     def test_a_marked_playlist_listens_instead_of_watching(self) -> None:

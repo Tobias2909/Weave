@@ -12,6 +12,7 @@ the network, and they can be left out.
 
 from __future__ import annotations
 
+import contextlib
 import shutil
 import sqlite3
 import subprocess
@@ -65,7 +66,9 @@ def _version(command: list[str]) -> str | None:
         done = subprocess.run(command, capture_output=True, text=True, timeout=20)
     except (OSError, subprocess.SubprocessError):
         return None
-    return (done.stdout or done.stderr).strip().splitlines()[0] if done.returncode == 0 else None
+    lines = (done.stdout or done.stderr).strip().splitlines()
+    # A tool that exits cleanly and says nothing is still installed.
+    return (lines[0] if lines else "installed") if done.returncode == 0 else None
 
 
 def _weave(db: Database, report: Report) -> None:
@@ -115,6 +118,13 @@ def _config(cfg: Config, report: Report) -> None:
     yields the defaults and nothing else says so."""
     if cfg.problem:
         report.add("config file", FAIL, cfg.problem, "Fix the file, the defaults apply until then")
+    elif cfg.warnings:
+        # The file was read and most of it applies. What did not is listed,
+        # because a misspelt key is a setting somebody believes is in force.
+        shown = "; ".join(cfg.warnings[:3])
+        more = f", and {len(cfg.warnings) - 3} more" if len(cfg.warnings) > 3 else ""
+        report.add("config file", WARN, f"{shown}{more}",
+                   "Those lines are ignored, the rest of the file applies")
     elif cfg.raw:
         report.add("config file", OK, str(paths.CONFIG_FILE))
     else:
@@ -148,8 +158,11 @@ def _cookies(cfg: Config, report: Report) -> None:
         copy.parent.mkdir(parents=True, exist_ok=True)
         copy.write_bytes(jar.read_bytes())
         try:
-            names = {row[0] for row in sqlite3.connect(copy).execute(
-                "SELECT name FROM moz_cookies WHERE host LIKE '%youtube.com'")}
+            # Closed before the copy is removed, or the connection lingers on
+            # a file that is gone and says so on the console at shutdown.
+            with contextlib.closing(sqlite3.connect(copy)) as jar_copy:
+                names = {row[0] for row in jar_copy.execute(
+                    "SELECT name FROM moz_cookies WHERE host LIKE '%youtube.com'")}
         finally:
             copy.unlink(missing_ok=True)
     except Exception as exc:
@@ -231,10 +244,15 @@ def _cache(report: Report) -> None:
     size = sum(f.stat().st_size for f in pictures) / 1_048_576
     report.add("image cache", OK, f"{len(pictures)} files, {size:.0f} MB")
     problems = paths.IMAGE_CACHE / "failures.log"
-    if problems.exists() and problems.stat().st_size:
-        lines = problems.read_text(errors="replace").strip().splitlines()
-        report.add("pictures that failed", WARN if lines else OK,
-                   f"{len(lines)} recorded", "Run weave cache --problems to see them")
+    try:
+        lines = (problems.read_text(errors="replace").strip().splitlines()
+                 if problems.exists() and problems.stat().st_size else [])
+    except OSError as exc:
+        report.add("pictures that failed", WARN, f"the log could not be read, {exc}")
+        return
+    if lines:
+        report.add("pictures that failed", WARN, f"{len(lines)} recorded",
+                   "Run weave cache --problems to see them")
 
 
 def _twitch(cfg: Config, report: Report, network: bool) -> None:

@@ -378,7 +378,7 @@ class Groups(DatabaseCase):
     def test_a_group_can_mix_platforms(self):
         self.db.add_to_group(self.group, "yt:UC1")
         self.db.add_to_group(self.group, "twitch:someone")
-        self.assertEqual(len(self.db.group_members(self.group)), 2)
+        self.assertEqual(len(self.db.group_channels(self.group)), 2)
 
     def test_a_channel_can_be_in_several_groups(self):
         other = self.db.create_group("Tech")
@@ -441,6 +441,15 @@ class Groups(DatabaseCase):
 
     def test_lookup_by_name_ignores_case(self):
         self.assertEqual(self.db.group_by_name("gaming")["id"], self.group)
+
+    def test_renaming_onto_another_group_is_refused_not_raised(self):
+        other = self.db.create_group("Music")
+        self.assertFalse(self.db.rename_group(other, "Gaming"))
+        self.assertEqual(self.db.group_by_name("Music")["id"], other)
+
+    def test_renaming_to_a_free_name_works(self):
+        self.assertTrue(self.db.rename_group(self.group, "Games"))
+        self.assertEqual(self.db.group_by_name("Games")["id"], self.group)
         self.assertIsNone(self.db.group_by_name("nope"))
 
     def test_order_is_settable(self):
@@ -949,6 +958,24 @@ class LiveFreshness(DatabaseCase):
 
 
 class AppState(DatabaseCase):
+    def test_a_stored_number_reads_back_as_one(self):
+        self.db.set_state("panel_width", "412")
+        self.assertEqual(self.db.get_int("panel_width", 380), 412)
+
+    def test_nothing_stored_is_the_default(self):
+        self.assertEqual(self.db.get_int("panel_width", 380), 380)
+
+    def test_a_row_that_is_not_a_number_is_the_default_rather_than_a_crash(self):
+        # A row this program never wrote, or wrote in another spelling once.
+        for text in ("wide", "", "12px", "nan"):
+            with self.subTest(text=text):
+                self.db.set_state("panel_width", text)
+                self.assertEqual(self.db.get_int("panel_width", 380), 380)
+
+    def test_a_number_written_as_a_float_is_read_whole(self):
+        self.db.set_state("panel_width", "412.0")
+        self.assertEqual(self.db.get_int("panel_width", 380), 412)
+
     def test_round_trip_with_a_default(self):
         self.assertEqual(self.db.get_state("missing", "fallback"), "fallback")
         self.db.set_state("panel_width", "380")

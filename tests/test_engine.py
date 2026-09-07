@@ -54,6 +54,41 @@ class TheCommand(unittest.TestCase):
         self.assertIn("--input-ipc-server=/run/x.sock", command)
 
 
+class Reaping(unittest.TestCase):
+    """Every way of letting go of the player waits on it, so a player that
+    dies, or is quit, never sits in the process table as a zombie."""
+
+    def child(self, seconds: float):
+        import subprocess
+        import sys
+
+        return subprocess.Popen([sys.executable, "-c", f"import time; time.sleep({seconds})"])
+
+    def test_one_that_has_gone_is_collected(self):
+        from weave.engine import _reap
+
+        child = self.child(0)
+        _reap(child)
+        self.assertIsNotNone(child.returncode)
+
+    def test_one_that_will_not_go_is_ended(self):
+        from weave.engine import _reap
+
+        child = self.child(60)
+        _reap(child, grace_s=0.2)
+        self.assertIsNotNone(child.returncode)
+
+    def test_losing_the_socket_collects_the_process(self):
+        engine = MusicEngine()
+        engine._ipc = object()
+        engine._process = self.child(60)
+        gone = []
+        engine.gone.connect(gone.append)
+        engine._on_lost("mpv went away")
+        self.assertEqual(gone, ["mpv went away"])
+        self.assertIsNone(engine._process)
+
+
 @unittest.skipUnless(shutil.which("mpv"), "mpv is not installed")
 class Playing(unittest.TestCase):
     def setUp(self):
@@ -157,18 +192,25 @@ class Playing(unittest.TestCase):
             f"engine.load({self.a!r})\n"
             "print(engine._process.pid, flush=True)\n"
             "time.sleep(30)\n")
-        child = subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE, text=True,
-                                 cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        mpv_pid = int(child.stdout.readline().strip())
-        self.assertTrue(os.path.exists(f"/proc/{mpv_pid}"))
-        child.kill()
-        child.wait()
+        with subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE,
+                              text=True, cwd=os.path.dirname(os.path.dirname(
+                                  os.path.abspath(__file__)))) as child:
+            mpv_pid = int(child.stdout.readline().strip())
+            self.assertTrue(os.path.exists(f"/proc/{mpv_pid}"))
+            child.kill()
+            child.wait()
+
+        def running() -> bool:
+            try:
+                with open(f"/proc/{mpv_pid}/status") as status:
+                    return "zombie" not in status.read()
+            except OSError:
+                return False
+
         deadline = time.monotonic() + 3
-        while time.monotonic() < deadline and os.path.exists(f"/proc/{mpv_pid}") \
-                and "zombie" not in open(f"/proc/{mpv_pid}/status").read():
+        while time.monotonic() < deadline and running():
             time.sleep(0.05)
-        alive = os.path.exists(f"/proc/{mpv_pid}") and \
-            "zombie" not in open(f"/proc/{mpv_pid}/status").read()
+        alive = running()
         if alive:
             os.kill(mpv_pid, signal.SIGKILL)
         self.assertFalse(alive, "mpv outlived the process that started it")

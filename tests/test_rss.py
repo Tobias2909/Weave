@@ -237,5 +237,20 @@ class Malformed(unittest.TestCase):
         self.assertEqual(rss.parse(xml).videos, [])
 
 
+class SomethingThatIsNotAFeed(unittest.TestCase):
+    """The endpoint answers a burst with an error page. The parser's own
+    complaint about it is a line and column, which says nothing anybody
+    could act on, so it is named for what it is."""
+
+    def test_an_error_page_is_named_rather_than_a_parse_error(self):
+        with self.assertRaises(rss.FeedUnreadable) as caught:
+            rss.parse(b"<html><body>Too many requests</body>")
+        self.assertIn("not a feed", str(caught.exception))
+
+    def test_an_empty_answer_is_the_same(self):
+        with self.assertRaises(rss.FeedUnreadable):
+            rss.parse(b"")
+
+
 if __name__ == "__main__":
     unittest.main()

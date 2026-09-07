@@ -7,13 +7,12 @@ was reached from somewhere else, and an announced premiere could be handed to
 a player that has nothing to open yet.
 """
 
-import tempfile
 import time
 import unittest
-from pathlib import Path
 
-from weave.db import Database
 from weave.ui.feed_model import FeedModel
+
+from tests.support import scratch_db
 
 
 def listing_row(ext_id="aaaaaaaaaaa", **over):
@@ -27,7 +26,7 @@ def listing_row(ext_id="aaaaaaaaaaa", **over):
 
 class StoredWithTheSuggestions(unittest.TestCase):
     def setUp(self) -> None:
-        self.db = Database(Path(tempfile.mkdtemp()) / "weave.db")
+        self.db = scratch_db(self)
 
     def cards(self, kind):
         return [FeedModel._build(row) for row in self.db.cached(kind)]
@@ -71,7 +70,7 @@ class ResultsThatAreNotStored(unittest.TestCase):
     """A search result lives in memory and is joined to what is known here."""
 
     def setUp(self) -> None:
-        self.db = Database(Path(tempfile.mkdtemp()) / "weave.db")
+        self.db = scratch_db(self)
 
     def test_a_live_result_reaches_the_card(self) -> None:
         row = self.db.decorate([listing_row(live_status="is_live")])[0]

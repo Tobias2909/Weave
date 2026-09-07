@@ -24,7 +24,7 @@ from typing import Any
 
 import requests
 
-from .. import __version__
+from ..net import USER_AGENT
 
 DEVICE_URL = "https://id.twitch.tv/oauth2/device"
 TOKEN_URL = "https://id.twitch.tv/oauth2/token"
@@ -33,7 +33,6 @@ HELIX = "https://api.twitch.tv/helix"
 
 DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 SCOPES = "user:read:follows"
-USER_AGENT = f"Weave/{__version__} (+https://github.com/Tobias2909/Weave)"
 
 # Helix takes a hundred logins or ids per request.
 BATCH = 100
@@ -73,6 +72,8 @@ class Tokens:
 
     @classmethod
     def from_dict(cls, data: dict) -> Tokens | None:
+        if not isinstance(data, dict):
+            return None
         access = str(data.get("access_token") or "")
         refresh = str(data.get("refresh_token") or "")
         if not access or not refresh:
@@ -101,19 +102,49 @@ def _session() -> requests.Session:
     return session
 
 
+def _post(session: requests.Session, url: str, data: dict, what: str) -> requests.Response:
+    """One request, with the network's own failures turned into this module's.
+
+    A connection that is refused or times out used to escape as the requests
+    library's exception, which nothing above here catches by name, so a
+    login attempted while offline took the whole worker down with it.
+    """
+    try:
+        return session.post(url, timeout=TIMEOUT_S, data=data)
+    except requests.RequestException as exc:
+        raise TwitchError(f"could not reach Twitch while {what}, "
+                          f"{type(exc).__name__}") from exc
+
+
+def _json(response: requests.Response, what: str) -> dict:
+    """The body as a map, or an error that names the call rather than a
+    KeyError from deep inside a reader."""
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise TwitchError(f"Twitch answered {what} with something unreadable") from exc
+    if not isinstance(body, dict):
+        raise TwitchError(f"Twitch answered {what} with something unreadable")
+    return body
+
+
 # ---- logging in ---------------------------------------------------------
 
 def start_login(client_id: str, session: requests.Session | None = None) -> DeviceLogin:
     session = session or _session()
-    response = session.post(DEVICE_URL, timeout=TIMEOUT_S,
-                            data={"client_id": client_id, "scopes": SCOPES})
+    response = _post(session, DEVICE_URL, {"client_id": client_id, "scopes": SCOPES},
+                     "starting the login")
     if response.status_code != 200:
         raise TwitchError(_message(response, "could not start the login"))
-    body = response.json()
+    body = _json(response, "the login request")
+    device_code = str(body.get("device_code") or "")
+    address = str(body.get("verification_uri") or "")
+    if not device_code or not address:
+        raise TwitchError("the login answer carried no code to approve")
     return DeviceLogin(
-        device_code=body["device_code"],
-        user_code=body["user_code"],
-        verification_uri=body["verification_uri"],
+        device_code=device_code,
+        user_code=str(body.get("user_code") or ""),
+        verification_uri=address,
         interval=int(body.get("interval") or 5),
         expires_in=int(body.get("expires_in") or 1800),
     )
@@ -123,12 +154,11 @@ def poll_login(client_id: str, device_code: str,
                session: requests.Session | None = None) -> Tokens:
     """One attempt. Raises AuthPending until the browser approval happens."""
     session = session or _session()
-    response = session.post(TOKEN_URL, timeout=TIMEOUT_S, data={
+    response = _post(session, TOKEN_URL, {
         "client_id": client_id, "device_code": device_code,
-        "grant_type": DEVICE_GRANT, "scopes": SCOPES})
+        "grant_type": DEVICE_GRANT, "scopes": SCOPES}, "waiting for the approval")
     if response.status_code == 200:
-        body = response.json()
-        return Tokens(body["access_token"], body.get("refresh_token", ""))
+        return _tokens_from(_json(response, "the approval"), "")
     message = _message(response, "")
     # Twitch answers every unfinished or failed poll with a 400, so the message
     # is what tells waiting apart from a refusal. Treating any 400 as waiting
@@ -141,24 +171,34 @@ def poll_login(client_id: str, device_code: str,
 def refresh(client_id: str, refresh_token: str,
             session: requests.Session | None = None) -> Tokens:
     session = session or _session()
-    response = session.post(TOKEN_URL, timeout=TIMEOUT_S, data={
+    response = _post(session, TOKEN_URL, {
         "client_id": client_id, "refresh_token": refresh_token,
-        "grant_type": "refresh_token"})
+        "grant_type": "refresh_token"}, "renewing the login")
     if response.status_code != 200:
         raise NeedsLogin(_message(response, "the stored login is no longer valid"))
-    body = response.json()
-    return Tokens(body["access_token"], body.get("refresh_token", refresh_token))
+    return _tokens_from(_json(response, "the renewal"), refresh_token)
+
+
+def _tokens_from(body: dict, fallback_refresh: str) -> Tokens:
+    access = str(body.get("access_token") or "")
+    if not access:
+        raise TwitchError("the answer carried no access token")
+    return Tokens(access, str(body.get("refresh_token") or fallback_refresh))
 
 
 def validate(access_token: str, session: requests.Session | None = None) -> dict:
     """Who the token belongs to. Also the cheapest way to find the account id,
     which the followed streams call needs."""
     session = session or _session()
-    response = session.get(VALIDATE_URL, timeout=TIMEOUT_S,
-                           headers={"Authorization": f"OAuth {access_token}"})
+    try:
+        response = session.get(VALIDATE_URL, timeout=TIMEOUT_S,
+                               headers={"Authorization": f"OAuth {access_token}"})
+    except requests.RequestException as exc:
+        raise TwitchError(f"could not reach Twitch while checking the login, "
+                          f"{type(exc).__name__}") from exc
     if response.status_code != 200:
         raise NeedsLogin(_message(response, "the stored login is no longer valid"))
-    return response.json()
+    return _json(response, "the login check")
 
 
 def _message(response: requests.Response, fallback: str) -> str:
@@ -214,10 +254,13 @@ class Client:
 
     def _get(self, path: str, params: list[tuple[str, Any]]) -> dict:
         for attempt in (0, 1):
-            response = self._session.get(f"{HELIX}/{path}", params=params,
-                                         headers=self._headers(), timeout=TIMEOUT_S)
+            try:
+                response = self._session.get(f"{HELIX}/{path}", params=params,
+                                             headers=self._headers(), timeout=TIMEOUT_S)
+            except requests.RequestException as exc:
+                raise TwitchError(f"could not reach Twitch, {type(exc).__name__}") from exc
             if response.status_code == 200:
-                return response.json()
+                return _json(response, path)
             # An expired token is the one failure worth retrying, and only once.
             if response.status_code == 401 and attempt == 0:
                 self._refresh_now()

@@ -37,6 +37,15 @@ class Storage(unittest.TestCase):
         self.path.write_text("{ this is not json")
         self.assertIsNone(tokens.load(self.path))
 
+    def test_a_file_holding_the_wrong_shape_is_not_a_login(self):
+        # Valid JSON that is not the map this module writes.
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        for text in ('["access", "refresh"]', '"a string"', '42', 'null',
+                     '{"access_token": "a", "refresh_token": "r", "obtained_at": "never"}'):
+            with self.subTest(text=text):
+                self.path.write_text(text)
+                self.assertIsNone(tokens.load(self.path))
+
     def test_a_file_missing_half_the_login_is_not_a_login(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text('{"access_token": "a"}')

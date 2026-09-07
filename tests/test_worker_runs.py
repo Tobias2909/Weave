@@ -103,7 +103,9 @@ class WorkerRuns(unittest.TestCase):
         escape into Qt rather than into the test.
         """
         said = []
-        for signal in ("failed", "failure"):
+        # crashed is the base's own report of an exception nobody expected,
+        # which is exactly the kind of mistake this file exists to catch.
+        for signal in ("failed", "failure", "crashed"):
             if hasattr(worker, signal):
                 getattr(worker, signal).connect(
                     lambda *args: said.append(" ".join(str(a) for a in args)))
@@ -600,6 +602,183 @@ class WorkerRuns(unittest.TestCase):
                   if issubclass(cls, QThread) and cls not in (QThread, poller.Worker)
                   and not issubclass(cls, poller.Worker)]
         self.assertEqual(strays, [])
+
+    def test_every_worker_does_its_work_in_work_and_leaves_run_alone(self):
+        """run belongs to the base. It is the one place an exception that
+        escaped the work is caught and said, and a worker that overrides it
+        has stepped out from under that net without anyone noticing."""
+        import inspect
+
+        for name, cls in inspect.getmembers(poller, inspect.isclass):
+            if cls is poller.Worker or not issubclass(cls, poller.Worker):
+                continue
+            with self.subTest(worker=name):
+                self.assertIn("work", vars(cls), f"{name} defines no work")
+                self.assertNotIn("run", vars(cls), f"{name} overrides run")
+
+    def test_an_exception_nobody_expected_is_said_rather_than_swallowed(self):
+        """The bug class behind two evenings of a window that said working
+        and did nothing. An exception leaving run ends the thread with no
+        signal at all, so the base catches it and turns it into one."""
+        import io
+        from contextlib import redirect_stderr
+
+        class Closing:
+            closed = False
+
+            def close(self):
+                self.closed = True
+
+        class Dies(poller.Worker):
+            def __init__(self):
+                super().__init__()
+                self._db = Closing()
+
+            def work(self):
+                raise RuntimeError("boom")
+
+        worker = Dies()
+        said = []
+        worker.crashed.connect(said.append)
+        with redirect_stderr(io.StringIO()):
+            worker.run()
+        self.assertEqual(said, ["RuntimeError: boom"])
+        # The connection this thread opened is closed on the way out, whatever
+        # the way out was.
+        self.assertTrue(worker._db.closed)
+
+    def test_a_cancel_is_not_a_crash(self):
+        class Leaves(poller.Worker):
+            def work(self):
+                raise poller.ProcessCancelled("cancelled")
+
+        worker = Leaves()
+        said = []
+        worker.crashed.connect(said.append)
+        worker.run()
+        self.assertEqual(said, [])
+
+    def test_the_bridge_puts_down_the_flag_a_crashed_worker_left_up(self):
+        """Every worker raises some flag in the bridge while it runs, and each
+        one used to be lowered only by that worker's own success or failure
+        signal. A crash emitted neither, so the flag stayed up for good."""
+        from weave.ui.bridge import Bridge
+
+        class Recorder:
+            def __init__(self):
+                self.count = 0
+
+            def emit(self, *_a):
+                self.count += 1
+
+        class Timer:
+            def stop(self):
+                pass
+
+            def start(self, *_a):
+                pass
+
+        holders = ("_poller", "_importer", "_adder", "_details", "_searcher", "_recommended",
+                   "_history", "_search", "_tracks", "_station", "_detail", "_cache_job",
+                   "_twitch", "_checkup", "_playlists", "_playlist_items")
+
+        def make(held: str):
+            bridge = Bridge.__new__(Bridge)
+            for name in holders:
+                setattr(bridge, name, None)
+            worker = object()
+            setattr(bridge, held, worker)
+            bridge._problems = []
+            bridge._status = ""
+            bridge._notice = "Working"
+            bridge._notice_timer = Timer()
+            bridge._busy = True
+            bridge._import_state = "working"
+            bridge._import_message = ""
+            bridge._add_state = "working"
+            bridge._add_message = ""
+            bridge._add_queue = []
+            bridge._adding = 3
+            bridge._details_queue = []
+            bridge._loading_more = True
+            bridge._searching = True
+            bridge._detail_loading = True
+            bridge._cache_working = True
+            bridge._twitch_status = "asking Twitch for a code"
+            for signal in ("problemsChanged", "statusChanged", "noticeChanged", "busyChanged",
+                           "importChanged", "addChanged", "musicChanged", "detailChanged",
+                           "cacheChanged", "twitchChanged"):
+                setattr(bridge, signal, Recorder())
+            return bridge, worker
+
+        bridge, worker = make("_poller")
+        Bridge._on_worker_crashed(bridge, worker, "RuntimeError: boom")
+        self.assertFalse(bridge._busy, "a dead poll left the window busy for good")
+        self.assertTrue(bridge._problems and "boom" in bridge._problems[0])
+        self.assertIn("boom", bridge._status)
+
+        bridge, worker = make("_importer")
+        Bridge._on_worker_crashed(bridge, worker, "OSError: disk")
+        self.assertEqual(bridge._import_state, "failed")
+        self.assertIn("disk", bridge._import_message)
+
+        bridge, worker = make("_adder")
+        Bridge._on_worker_crashed(bridge, worker, "ValueError: odd")
+        self.assertEqual(bridge._add_state, "failed")
+        self.assertEqual(bridge._adding, -1)
+
+        for held in ("_searcher", "_recommended", "_history"):
+            bridge, worker = make(held)
+            Bridge._on_worker_crashed(bridge, worker, "x")
+            self.assertFalse(bridge._loading_more, held)
+            self.assertEqual(bridge._notice, "", held)
+
+        for held in ("_search", "_tracks", "_station"):
+            bridge, worker = make(held)
+            Bridge._on_worker_crashed(bridge, worker, "x")
+            self.assertFalse(bridge._searching, held)
+
+        bridge, worker = make("_detail")
+        Bridge._on_worker_crashed(bridge, worker, "x")
+        self.assertFalse(bridge._detail_loading)
+
+        bridge, worker = make("_cache_job")
+        Bridge._on_worker_crashed(bridge, worker, "x")
+        self.assertFalse(bridge._cache_working)
+
+        bridge, worker = make("_twitch")
+        Bridge._on_worker_crashed(bridge, worker, "x")
+        self.assertIn("failed", bridge._twitch_status)
+
+        # A worker the bridge holds nowhere in particular is still reported.
+        bridge, worker = make("_checkup")
+        Bridge._on_worker_crashed(bridge, object(), "y")
+        self.assertEqual(len(bridge._problems), 1)
+
+    def test_launching_connects_the_crash_report(self):
+        from weave.ui.bridge import Bridge
+
+        class Wire:
+            def __init__(self):
+                self.slots = []
+
+            def connect(self, slot, *_a):
+                self.slots.append(slot)
+
+        class Crashes:
+            def __init__(self):
+                self.finished = Wire()
+                self.crashed = Wire()
+
+            def start(self):
+                pass
+
+        bridge = Bridge.__new__(Bridge)
+        bridge._stopping = False
+        bridge._threads = set()
+        worker = Crashes()
+        self.assertTrue(Bridge._launch(bridge, worker))
+        self.assertEqual(len(worker.crashed.slots), 1)
 
 
 if __name__ == "__main__":

@@ -5,18 +5,16 @@ exactly when that was, while the music service remembers older listening and
 offers only a phrase for when it happened. A song in both is ours.
 """
 
-import tempfile
 import unittest
-from pathlib import Path
 
 from PySide6.QtCore import QObject
 
-from weave.db import Database
+from tests.support import scratch_db
 
 
 class Recording(unittest.TestCase):
     def setUp(self) -> None:
-        self.db = Database(Path(tempfile.mkdtemp()) / "weave.db")
+        self.db = scratch_db(self)
 
     def test_a_song_is_remembered_as_it_plays(self) -> None:
         self.db.remember_played("aaaaaaaaaaa", "A song", "An artist", "https://x/t.jpg", 203)
@@ -83,7 +81,7 @@ class PlayingRecordsIt(unittest.TestCase):
     """The player writes the row itself, as the song starts."""
 
     def setUp(self) -> None:
-        self.db = Database(Path(tempfile.mkdtemp()) / "weave.db")
+        self.db = scratch_db(self)
 
     def player(self):
         from weave.audio import AudioPlayer
@@ -121,7 +119,7 @@ class TheHistoryView(unittest.TestCase):
     def bridge(self, music: bool):
         from weave.ui.bridge import Bridge
 
-        db = Database(Path(tempfile.mkdtemp()) / "weave.db")
+        db = scratch_db(self)
         db.remember_played("aaaaaaaaaaa", "A song", "An artist", None)
 
         class Model:

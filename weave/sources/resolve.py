@@ -92,6 +92,8 @@ def resolve(ref: ChannelRef, throttle: Throttle | None = None,
         raise
     except FileNotFoundError as exc:
         return _unverified(ref, "yt-dlp is not installed", exc)
+    except OSError as exc:
+        return _unverified(ref, f"yt-dlp could not be started, {exc}", exc)
     except Timeout as exc:
         return _unverified(ref, "the lookup timed out", exc)
 

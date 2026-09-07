@@ -159,6 +159,95 @@ class ExpiredAccessToken(unittest.TestCase):
             client.account_id()
 
 
+class _Refusing:
+    """A session with no network behind it."""
+
+    def __init__(self, exc):
+        self._exc = exc
+
+    def get(self, *_a, **_k):
+        raise self._exc
+
+    def post(self, *_a, **_k):
+        raise self._exc
+
+
+class _Garbled(_Response):
+    def json(self):
+        raise ValueError("not json")
+
+
+class WhenTheNetworkIsAway(unittest.TestCase):
+    """A connection that is refused or that times out used to escape as the
+    requests library's own exception, which nothing above here catches by
+    name, so a login attempted while offline took the whole worker with it.
+    Every call names its failure as this module's own now."""
+
+    def setUp(self):
+        import requests
+
+        self.gone = _Refusing(requests.ConnectionError("no route"))
+
+    def test_starting_the_login(self):
+        with self.assertRaises(twitch.TwitchError) as caught:
+            twitch.start_login("cid", session=self.gone)
+        self.assertIn("could not reach Twitch", str(caught.exception))
+
+    def test_waiting_for_the_approval(self):
+        with self.assertRaises(twitch.TwitchError):
+            twitch.poll_login("cid", "code", session=self.gone)
+
+    def test_renewing(self):
+        with self.assertRaises(twitch.TwitchError):
+            twitch.refresh("cid", "refresh", session=self.gone)
+
+    def test_checking_the_login(self):
+        with self.assertRaises(twitch.TwitchError):
+            twitch.validate("token", session=self.gone)
+
+    def test_a_helix_call(self):
+        client = twitch.Client("cid", twitch.Tokens("a", "r"), session=self.gone)
+        with self.assertRaises(twitch.TwitchError):
+            client.followed_streams("1")
+
+    def test_but_it_is_never_mistaken_for_a_lost_login(self):
+        # Offline is not logged out. Asking to log in again would throw away a
+        # login that is perfectly good the moment the network is back.
+        client = twitch.Client("cid", twitch.Tokens("a", "r"), session=self.gone)
+        with self.assertRaises(twitch.TwitchError) as caught:
+            client.account_id()
+        self.assertNotIsInstance(caught.exception, twitch.NeedsLogin)
+
+
+class WhenTwitchAnswersNonsense(unittest.TestCase):
+    def test_a_body_that_is_not_json(self):
+        session = _Session({"device": [_Garbled(200)]})
+        with self.assertRaises(twitch.TwitchError):
+            twitch.start_login("cid", session=session)
+
+    def test_a_login_answer_with_no_code_in_it(self):
+        session = _Session({"device": [_Response(200, {"interval": 5})]})
+        with self.assertRaises(twitch.TwitchError) as caught:
+            twitch.start_login("cid", session=session)
+        self.assertNotIsInstance(caught.exception, KeyError)
+
+    def test_an_approval_with_no_token_in_it(self):
+        session = _Session({"oauth2/token": [_Response(200, {"scope": []})]})
+        with self.assertRaises(twitch.TwitchError):
+            twitch.poll_login("cid", "code", session=session)
+
+    def test_a_body_that_is_a_list(self):
+        session = _Session({"validate": [_Response(200, ["not", "a", "map"])]})
+        with self.assertRaises(twitch.TwitchError):
+            twitch.validate("token", session=session)
+
+    def test_a_good_answer_still_goes_through(self):
+        session = _Session({"device": [_Response(200, {
+            "device_code": "d", "user_code": "U", "verification_uri": "https://t/x"})]})
+        login = twitch.start_login("cid", session=session)
+        self.assertEqual((login.device_code, login.user_code), ("d", "U"))
+
+
 class Scopes(unittest.TestCase):
     def test_only_what_is_needed(self):
         # Reading the follow list is the only thing Weave asks permission for.

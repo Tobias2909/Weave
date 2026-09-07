@@ -241,7 +241,7 @@ class PuttingTheChannelInAGroup(LooseCase):
 
     def test_a_stranger_can_be_put_in_one_before_anything_else_knows_it(self):
         self.assertTrue(self.db.add_to_group(self.group, STRANGER_KEY))
-        self.assertEqual([row["key"] for row in self.db.group_members(self.group)],
+        self.assertEqual([row["key"] for row in self.db.group_channels(self.group)],
                          [STRANGER_KEY])
         self.assertEqual(self.db.groups_holding(STRANGER_KEY), [self.group])
 
@@ -272,7 +272,7 @@ class PuttingTheChannelInAGroup(LooseCase):
 
     def test_the_row_that_stands_for_no_channel_cannot_be_put_in_one(self):
         self.assertFalse(self.db.add_to_group(self.group, ""))
-        self.assertEqual(self.db.group_members(self.group), [])
+        self.assertEqual(self.db.group_channels(self.group), [])
 
     def test_following_a_channel_by_hand_reports_it_as_newly_followed(self):
         self.db.remember_channel(STRANGER_KEY, "youtube", STRANGER, "A stranger")
