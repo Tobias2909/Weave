@@ -125,7 +125,10 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
     engine = QQmlApplicationEngine()
     # Installed before anything loads, so the very first images already go
     # through it.
-    imagecache.install(engine, paths.IMAGE_CACHE, cfg.image_max_mb, cfg.image_days)
+    # The ceiling is the one from the settings page when one was chosen there,
+    # and the config's otherwise.
+    imagecache.install(engine, paths.IMAGE_CACHE, db.image_max_mb(cfg.image_max_mb),
+                       cfg.image_days)
     context = engine.rootContext()
     context.setContextProperty("App", bridge)
     context.setContextProperty("Theme", theme)

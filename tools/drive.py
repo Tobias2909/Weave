@@ -490,6 +490,32 @@ class Smoke:
             self.check("and the one it was on chosen again", str(read(current, "text")) == was,
                        str(read(current, "text")))
 
+        # The ceiling for the pictures. Its entries live in a menu, whose
+        # items are not visual children of anything reachable here, so the
+        # choice is made through the same slot the menu calls and the button
+        # is read to prove the binding followed.
+        ceiling = find(window, "cacheCeiling")
+        offered = [row["megabytes"] for row in read(bridge, "cacheChoices")]
+        self.check("the settings page offers a ceiling for the pictures",
+                   read(bridge, "cacheCeiling") in offered,
+                   f"{read(bridge, 'cacheCeilingText')} of " + ", ".join(str(m) for m in offered))
+        self.check("the button says which one is in force",
+                   read(bridge, "cacheCeilingText") in str(read(ceiling, "text")),
+                   str(read(ceiling, "text")))
+        was = read(bridge, "cacheCeiling")
+        other = next(m for m in offered if m != was)
+        bridge.setCacheCeiling(other)
+        settle(0.4)
+        self.check("a different one can be chosen", read(bridge, "cacheCeiling") == other,
+                   f"{was} to {read(bridge, 'cacheCeiling')}")
+        self.check("and the line under the buttons says so",
+                   read(bridge, "cacheCeilingText") in str(read(find(window, "cacheSize"), "text")),
+                   str(read(find(window, "cacheSize"), "text")))
+        bridge.setCacheCeiling(was)
+        settle(0.4)
+        self.check("and the one it was on chosen again",
+                   read(bridge, "cacheCeiling") == was, str(read(ceiling, "text")))
+
         # What the page says about the cache and the connections, which is
         # read rather than acted on, so an empty one is a binding that failed.
         for name in ("cacheSize", "cookieSource", "musicIdentity", "twitchState"):

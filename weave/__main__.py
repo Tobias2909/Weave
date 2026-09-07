@@ -460,13 +460,18 @@ def _cmd_box(args) -> int:
 def _cmd_cache(args) -> int:
     cfg = config.load()
     directory = paths.IMAGE_CACHE
+    # The window writes the chosen ceiling to the database, so reading only the
+    # config here would report and enforce a different number than the app.
+    db = Database(paths.DB_FILE)
+    ceiling_mb = db.image_max_mb(cfg.image_max_mb)
+    db.close()
     if args.clear:
         removed, freed = imagecache.prune(directory, 0)
         print(f"cleared {removed} files, {freed / 1024 / 1024:.1f} MB")
         return 0
     if args.prune:
         aged, freed = imagecache.prune(directory, cfg.image_days * 86400)
-        spilled, more = imagecache.enforce_ceiling(directory, cfg.image_max_mb * 1024 * 1024)
+        spilled, more = imagecache.enforce_ceiling(directory, ceiling_mb * 1024 * 1024)
         print(f"removed {aged} files older than {cfg.image_days} days and {spilled} "
               f"over the ceiling, {(freed + more) / 1024 / 1024:.1f} MB")
         return 0
@@ -492,7 +497,8 @@ def _cmd_cache(args) -> int:
     total = imagecache.size_bytes(directory)
     files = sum(1 for path in directory.rglob("*") if path.is_file()) if directory.exists() else 0
     print(f"image cache at {directory}")
-    print(f"  {files} files, {total / 1024 / 1024:.1f} MB of a {cfg.image_max_mb} MB ceiling")
+    print(f"  {files} files, {total / 1024 / 1024:.1f} MB of a "
+          f"{imagecache.ceiling_label(ceiling_mb)} ceiling")
     print(f"  images are kept for {cfg.image_days} days")
     return 0
 

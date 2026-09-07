@@ -92,8 +92,10 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         # which would mean going back to the network on nearly every visit, so
         # the stored copy is kept for this instead.
         "image_days": 7,
-        # Ceiling for the image cache. Measured, a thumbnail averages 17.5 KB,
-        # so several thousand videos plus avatars and banners fit in this.
+        # Ceiling for the image cache, and the default for the picker on the
+        # settings page, which writes its own choice to the database and
+        # overrides this. Measured, a thumbnail averages 17.5 KB, so several
+        # thousand videos plus avatars and banners fit in this.
         "image_max_mb": 300,
     },
     "ui": {

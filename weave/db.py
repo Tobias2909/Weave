@@ -449,6 +449,25 @@ class Database:
         row = self.conn.execute("SELECT value FROM meta WHERE key=?", (f"state.{key}",)).fetchone()
         return row["value"] if row else default
 
+    def image_max_mb(self, default: int) -> int:
+        """The ceiling for the picture cache, in megabytes.
+
+        The config carries the default and the settings page writes a choice
+        here, because config.toml stays a file a person wrote and can still
+        read. Only sanity is checked, not which sizes the window offers: the
+        list belongs to the window, and a number typed in by hand is still a
+        number this has to honour.
+        """
+        raw = self.get_state("image_max_mb")
+        try:
+            chosen = int(raw)
+        except (TypeError, ValueError):
+            return default
+        return max(16, chosen)
+
+    def set_image_max_mb(self, megabytes: int) -> None:
+        self.set_state("image_max_mb", str(max(16, int(megabytes))))
+
     def set_state(self, key: str, value: str) -> None:
         with self.conn as conn:
             conn.execute(

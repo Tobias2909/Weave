@@ -291,6 +291,53 @@ Item {
                         Row {
                             spacing: 8
 
+                            Label {
+                                width: view.wordWidth
+                                height: 28
+                                text: "Ceiling"
+                                color: Theme.colors.textMuted
+                                font.pixelSize: 12
+                                verticalAlignment: Text.AlignVCenter
+                            }
+
+                            FlatButton {
+                                id: ceilingButton
+                                objectName: "cacheCeiling"
+                                text: App.cacheCeilingText + "  \u25be"
+                                enabled: !App.cacheWorking
+                                onClicked: ceilingMenu.popup(ceilingButton, 0,
+                                                             ceilingButton.height + 2)
+
+                                ThemedMenu {
+                                    id: ceilingMenu
+                                    objectName: "cacheCeilingMenu"
+                                    implicitWidth: 160
+
+                                    Repeater {
+                                        model: App.cacheChoices
+
+                                        ThemedMenuItem {
+                                            required property var modelData
+
+                                            // The tick marks the one in force. A menu here
+                                            // draws its own entries, so a checkable item
+                                            // would need an indicator of its own.
+                                            text: modelData.megabytes === App.cacheCeiling
+                                                  ? modelData.label + "   \u2713"
+                                                  : modelData.label
+                                            onTriggered: {
+                                                App.setCacheCeiling(modelData.megabytes)
+                                                ceilingMenu.dismiss()
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Row {
+                            spacing: 8
+
                             FlatButton {
                                 objectName: "pruneImages"
                                 text: "Drop what has aged out"

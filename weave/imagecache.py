@@ -67,6 +67,21 @@ RETRY_AFTER_S = 1.5
 # 2048 is above the widest thing Weave draws, which is a channel banner.
 MAX_EDGE = 2048
 
+# What the settings page offers as a ceiling, in megabytes. The default is in
+# the config, since it is a number a person may want to read there; these are
+# the sizes it can be moved to from the window. The low end is about what a
+# full subscription list needs, and the high end is for a machine with room to
+# spare that would rather never fetch a picture twice.
+CEILING_STEPS_MB: tuple[int, ...] = (200, 300, 500, 1024, 2048, 5120, 10240)
+
+
+def ceiling_label(megabytes: int) -> str:
+    """A size as it is offered and reported. Whole thousands of megabytes read
+    as gigabytes, because 10240 MB is not how anybody says ten gigabytes."""
+    if megabytes >= 1024 and megabytes % 1024 == 0:
+        return f"{megabytes // 1024} GB"
+    return f"{megabytes} MB"
+
 
 def _read(reader: QImageReader) -> QImage:
     """Decode, shrinking anything bigger than Weave has any use for."""

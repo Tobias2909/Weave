@@ -22,6 +22,7 @@ from PySide6.QtCore import Property, QObject, Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QGuiApplication
 
 from .. import format as fmt
+from .. import imagecache
 from .. import palette, themes
 from .. import ids
 from .. import paths, tokens
@@ -235,6 +236,9 @@ class Bridge(QObject):
         self._checkup: Checkup | None = None
         self._checks: list = []
         self._cache_job: ImageCacheJob | None = None
+        # What the last measurement found, so lowering the ceiling knows
+        # whether anything actually has to be dropped.
+        self._cache_held = 0
         # What the picture cache holds, as the line the settings page shows.
         # Empty until it has been measured, because walking the whole cache
         # directory is not free and nothing else needs the answer.
@@ -430,6 +434,12 @@ class Bridge(QObject):
     checks = Property("QVariantList", lambda self: list(self._checks), notify=checksChanged)
     cacheText = Property(str, _get_cache_text, notify=cacheChanged)
     cacheWorking = Property(bool, lambda self: self._cache_working, notify=cacheChanged)
+    cacheCeiling = Property(int, lambda self: self._ceiling_mb(), notify=cacheChanged)
+    cacheCeilingText = Property(str, lambda self: imagecache.ceiling_label(self._ceiling_mb()),
+                                notify=cacheChanged)
+    cacheChoices = Property("QVariantList", lambda _self: [
+        {"megabytes": step, "label": imagecache.ceiling_label(step)}
+        for step in imagecache.CEILING_STEPS_MB], notify=cacheChanged)
     schedule = Property("QVariantList", lambda self: self._get_schedule(),
                         notify=checksChanged)
     playlists = Property("QVariantList", _get_playlists, notify=playlistsChanged)
@@ -1245,6 +1255,29 @@ class Bridge(QObject):
         looked at, so this costs time rather than anything else."""
         self._run_cache_job(ImageCacheJob.CLEAR)
 
+    def _ceiling_mb(self) -> int:
+        """The ceiling in force. The config holds the default and the choice
+        made here overrides it."""
+        return self._db.image_max_mb(self._cfg.image_max_mb)
+
+    @Slot(int)
+    def setCacheCeiling(self, megabytes: int) -> None:
+        """Choose how much room the pictures may take.
+
+        Lowering it drops the oldest at once rather than waiting for the next
+        launch, since the point of choosing a smaller number is usually that
+        the room is wanted now. Raising it deletes nothing and only measures,
+        so the line under the buttons is right either way.
+        """
+        megabytes = int(megabytes)
+        if megabytes not in imagecache.CEILING_STEPS_MB or megabytes == self._ceiling_mb():
+            return
+        held = self._cache_held
+        self._db.set_image_max_mb(megabytes)
+        self.cacheChanged.emit()
+        self._run_cache_job(ImageCacheJob.PRUNE if held > megabytes * 1024 * 1024
+                            else ImageCacheJob.MEASURE)
+
     def _run_cache_job(self, what: str) -> None:
         if self._cache_job is not None and self._cache_job.isRunning():
             return
@@ -1252,7 +1285,7 @@ class Bridge(QObject):
         self.cacheChanged.emit()
         self._cache_job = ImageCacheJob(paths.IMAGE_CACHE, what,
                                         self._cfg.image_days * SECONDS_PER_DAY,
-                                        self._cfg.image_max_mb * 1024 * 1024, self)
+                                        self._ceiling_mb() * 1024 * 1024, self)
         self._cache_job.done.connect(self._on_cache_job)
         if not self._launch(self._cache_job):
             self._cache_working = False
@@ -1260,7 +1293,9 @@ class Bridge(QObject):
 
     def _on_cache_job(self, what: str, held: int, dropped: int) -> None:
         self._cache_working = False
-        self._cache_line = (f"{held / 1024 / 1024:.1f} MB of a {self._cfg.image_max_mb} MB "
+        self._cache_held = held
+        self._cache_line = (f"{held / 1024 / 1024:.1f} MB of a "
+                            f"{imagecache.ceiling_label(self._ceiling_mb())} "
                             f"ceiling, kept for {self._cfg.image_days} days")
         self.cacheChanged.emit()
         if what != ImageCacheJob.MEASURE:
