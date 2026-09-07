@@ -1817,6 +1817,12 @@ class Bridge(QObject):
         picture or a follower count. One page fetch each fills that in, queued
         so they go one at a time.
         """
+        if group_id < 0:
+            # All is every channel followed, which here is several hundred of
+            # them, each already named and pictured by the subscription
+            # import. The only thing a page fetch would add is a follower
+            # count, and it is not worth one request per channel.
+            return
         for row in self._members_of(group_id):
             found = dict(row)
             if found.get("platform") != "youtube":

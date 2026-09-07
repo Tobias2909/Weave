@@ -820,6 +820,36 @@ class Smoke:
         menu.close()
         settle(0.2)
 
+        # All, which for him is several hundred channels, so it is searched
+        # rather than read through, and a reload arriving while somebody is
+        # scrolling must not throw them back to the top.
+        from weave import paths
+        from weave.db import Database
+
+        many = Database(paths.DB_FILE)
+        for number in range(20):
+            many.add_channel(f"yt:UCdrive{number:018d}", "youtube",
+                             f"UCdrive{number:018d}", f"Channel {number:02d}")
+        many.close()
+        manage = find(window, "manageGroup")
+        write(manage, "groupId", -1)
+        manage.open()
+        settle(0.6)
+        rows = find(window, "manageGroupList")
+        self.check("All can be managed like a group",
+                   read(manage, "everyone").__len__() > 0,
+                   f"{len(read(manage, 'everyone'))} channels")
+        search = find(window, "manageSearchField")
+        self.check("with a search when there are many", search is not None)
+        write(rows, "contentY", 40.0)
+        settle(0.2)
+        bridge.groupsChanged.emit()
+        settle(0.4)
+        self.check("and a reload does not throw the list back to the top",
+                   abs(read(rows, "contentY") - 40.0) < 1, f"{read(rows, 'contentY'):.0f}")
+        manage.close()
+        settle(0.3)
+
         manage = find(window, "manageGroup")
         write(manage, "groupId", group_id)
         write(manage, "groupName", "Smoke group")

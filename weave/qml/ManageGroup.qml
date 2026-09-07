@@ -26,7 +26,9 @@ Popup {
     // Fitted to what it holds rather than fixed. A group of three channels in
     // a window sized for a dozen reads as a window that failed to load them.
     // The room for four keeps it from jumping about as one is taken out.
-    height: Math.min(Math.max(4, root.members.length) * 46 + 194,
+    // Sized by how many there are rather than by how many a search is showing,
+    // or the window would shrink and grow under the hand that is typing.
+    height: Math.min(Math.max(4, root.everyone.length) * 46 + 194,
                      (parent ? parent.height : 600) - 80)
     padding: 16
     modal: true
@@ -42,19 +44,50 @@ Popup {
     // A snapshot, not a live binding. A list that rebuilds itself sends the
     // rows back to the top under the hand that just pressed one, which is the
     // same trap the playlist chooser documents.
+    property var everyone: []
     property var members: []
+    property string filter: ""
+
+    function apply() {
+        var wanted = root.filter.trim().toLowerCase()
+        if (wanted === "") {
+            members = root.everyone
+            return
+        }
+        var out = []
+        for (var i = 0; i < root.everyone.length; i++) {
+            var one = root.everyone[i]
+            if (String(one.title).toLowerCase().indexOf(wanted) !== -1)
+                out.push(one)
+        }
+        members = out
+    }
 
     function reload() {
+        // Assigning the model sends the view back to the top, and a reload can
+        // arrive at any moment: every channel page that comes back announces
+        // itself this way. Four hundred rows in and a jump to the top every
+        // half second is what that felt like, so the place is kept.
+        var was = memberList.contentY
         // Negative is All, which is asked for the same way. It is not a row in
         // the groups table, so the bridge answers it with a query instead.
-        members = App.groupChannels(root.groupId)
+        everyone = App.groupChannels(root.groupId)
+        apply()
+        memberList.contentY = Math.max(0, Math.min(was, memberList.contentHeight
+                                                        - memberList.height))
     }
 
     onOpened: {
+        filter = ""
+        searchField.text = ""
         reload()
         // Names and pictures arrive from the channel's own page. One put in a
-        // group off a video card usually has neither yet.
-        App.fillGroupDetails(root.groupId)
+        // group off a video card usually has neither yet. Not for All, where
+        // every channel came from the subscription list with a name and a
+        // picture already and the only thing missing is a follower count,
+        // which is not worth a page fetch each for several hundred of them.
+        if (!root.isAll)
+            App.fillGroupDetails(root.groupId)
         addToGroupField.text = ""
         addToGroupField.forceActiveFocus()
     }
@@ -114,6 +147,32 @@ Popup {
             onAccepted: {
                 if (App.addChannelToGroupByRef(root.groupId, text))
                     text = ""
+            }
+        }
+
+        // Four hundred and sixty six channels is not a list anybody reads
+        // through, so it is searched instead. Only the names, since that is
+        // what somebody looking for one of them has.
+        TextField {
+            id: searchField
+            objectName: "manageSearchField"
+            visible: root.everyone.length > 8
+            width: parent.width
+            height: visible ? implicitHeight : 0
+            placeholderText: "Search these channels"
+            color: Theme.colors.text
+            placeholderTextColor: Theme.colors.textMuted
+            background: Rectangle {
+                radius: 6
+                color: Theme.colors.background
+                border.width: 1
+                border.color: searchField.activeFocus ? Theme.colors.accent
+                                                      : Theme.colors.border
+            }
+            onTextChanged: {
+                root.filter = text
+                root.apply()
+                memberList.contentY = 0
             }
         }
 
@@ -185,7 +244,8 @@ Popup {
                                 parts.push("also in All")
                             if (parts.length === 0)
                                 parts.push(memberRow.modelData.platform === "twitch"
-                                           ? "Twitch" : "reading its page")
+                                           ? "Twitch"
+                                           : (root.isAll ? "" : "reading its page"))
                             return parts.join("  ·  ")
                         }
                         color: Theme.colors.textMuted
@@ -212,8 +272,10 @@ Popup {
 
             Label {
                 anchors.verticalCenter: parent.verticalCenter
-                text: root.members.length === 1 ? "1 channel"
-                                                : root.members.length + " channels"
+                text: root.filter.trim() !== ""
+                      ? root.members.length + " of " + root.everyone.length
+                      : (root.everyone.length === 1 ? "1 channel"
+                                                    : root.everyone.length + " channels")
                 color: Theme.colors.textMuted
                 font.pixelSize: 11
             }
