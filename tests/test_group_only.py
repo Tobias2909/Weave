@@ -6,8 +6,10 @@ what was asked for, so being put in a group follows a channel without adding it
 to All. Following one by name is the other door and that one does add it, and
 it also brings back a channel a group had been keeping on its own.
 
-The flag is only ever raised, never lowered, so no order of adding can take a
-channel out of All behind the back of the person who put it there.
+The flag is only ever raised, never lowered by any of that, so no order of
+adding can take a channel out of All behind the back of the person who put it
+there. Taking one out by hand is the single exception and lives in
+test_leaving_all, along with what must not undo it.
 """
 
 from __future__ import annotations

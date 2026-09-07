@@ -1761,16 +1761,30 @@ class Bridge(QObject):
         if not channel_key:
             return
         found = self._db.channel(channel_key)
-        dropped = self._db.remove_from_group(group_id, channel_key)
+        # All is managed the same way a group is, and taking a channel out of
+        # it is remembered, so the next subscription import cannot put it back.
+        dropped = (self._db.remove_from_all(channel_key) if group_id < 0
+                   else self._db.remove_from_group(group_id, channel_key))
         if dropped:
             # Worth saying. The channel was only ever followed because a group
             # asked for it, so taking it out of the last one stops it being
             # polled, and nothing on screen would otherwise show that.
             name = (found or {}).get("title") or channel_key.split(":", 1)[-1]
-            self._set_status(f"{name} is no longer followed, it was in this group only")
+            self._set_status(f"{name} is no longer followed, nothing was left to show it in")
         self.groupsChanged.emit()
-        if self._view_kind == GROUP:
+        if self._view_kind in (GROUP, ALL):
             self.reload()
+
+    def _members_of(self, group_id: int) -> list:
+        """Who is in a group, or in All, which is managed the same way.
+
+        All is not a row in the groups table and never will be: it is every
+        channel followed on its own account, which is a query rather than a
+        list somebody keeps.
+        """
+        if group_id < 0:
+            return self._db.channels(platform="youtube", in_all_only=True)
+        return self._db.group_channels(group_id)
 
     @Slot(int, result="QVariantList")
     def groupChannels(self, group_id: int) -> list:
@@ -1781,7 +1795,7 @@ class Bridge(QObject):
         known yet rather than shown as a confident zero.
         """
         rows = []
-        for row in self._db.group_channels(group_id):
+        for row in self._members_of(group_id):
             found = dict(row)
             followers = found.get("follower_count")
             rows.append({
@@ -1803,7 +1817,7 @@ class Bridge(QObject):
         picture or a follower count. One page fetch each fills that in, queued
         so they go one at a time.
         """
-        for row in self._db.group_channels(group_id):
+        for row in self._members_of(group_id):
             found = dict(row)
             if found.get("platform") != "youtube":
                 continue
@@ -2914,8 +2928,8 @@ class Bridge(QObject):
         followed keeps its place in All, since being asked for by a group
         never takes one out.
         """
-        if group_id < 0:
-            return False
+        # A negative id is All, where a reference means the same thing the
+        # toolbar box means: follow it, and show it in All.
         return self._queue_channel(text, group_id)
 
     def _queue_channel(self, text: str, group_id: int) -> bool:
@@ -3026,6 +3040,11 @@ class Bridge(QObject):
         # toolbar is a plain follow and goes into All, which also brings a
         # channel back that a group had been keeping on its own.
         self._db.add_channel(key, platform, ext_id, title or None, in_all=group_id < 0)
+        if group_id < 0:
+            # Following by name is the one thing that undoes having taken a
+            # channel out of All, and it should, since it is the same person
+            # asking for it back in the same words they first used.
+            self._db.restore_to_all(key)
         label = title or ext_id
         if group_id >= 0:
             self._db.add_to_group(group_id, key)

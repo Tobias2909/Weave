@@ -15,6 +15,12 @@ Popup {
     property int groupId: -1
     property string groupName: ""
 
+    // All is managed here too. It is not a group and never will be, since it
+    // is every channel followed on its own account rather than a list somebody
+    // keeps, but taking a channel out of it and putting one back are the same
+    // two things this window already does.
+    readonly property bool isAll: groupId < 0
+
     anchors.centerIn: parent
     width: 460
     // Fitted to what it holds rather than fixed. A group of three channels in
@@ -39,7 +45,9 @@ Popup {
     property var members: []
 
     function reload() {
-        members = root.groupId >= 0 ? App.groupChannels(root.groupId) : []
+        // Negative is All, which is asked for the same way. It is not a row in
+        // the groups table, so the bridge answers it with a query instead.
+        members = App.groupChannels(root.groupId)
     }
 
     onOpened: {
@@ -67,7 +75,8 @@ Popup {
         spacing: 10
 
         Label {
-            text: root.groupName === "" ? "Manage the group" : root.groupName
+            text: root.isAll ? "All"
+                             : (root.groupName === "" ? "Manage the group" : root.groupName)
             color: Theme.colors.text
             font.pixelSize: 14
             font.weight: Font.DemiBold
@@ -75,7 +84,12 @@ Popup {
 
         Label {
             width: parent.width
-            text: "Channels added here are followed for this group only and stay out of All."
+            text: root.isAll
+                  ? "Every channel you follow is here. Taking one out keeps the channel and "
+                    + "its videos, they simply stop arriving in All, and an import cannot "
+                    + "put it back. A channel that is in no group either is not asked after "
+                    + "at all until it is added somewhere again."
+                  : "Channels added here are followed for this group only and stay out of All."
             color: Theme.colors.textMuted
             font.pixelSize: 11
             wrapMode: Text.WordWrap
@@ -164,7 +178,10 @@ Popup {
                             var parts = []
                             if (memberRow.modelData.followersText !== "")
                                 parts.push(memberRow.modelData.followersText + " following")
-                            if (memberRow.modelData.inAll)
+                            // Only worth saying inside a group, where it
+                            // answers whether this channel shows anywhere
+                            // else. In All itself it says nothing.
+                            if (memberRow.modelData.inAll && !root.isAll)
                                 parts.push("also in All")
                             if (parts.length === 0)
                                 parts.push(memberRow.modelData.platform === "twitch"

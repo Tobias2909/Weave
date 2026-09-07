@@ -652,8 +652,6 @@ ApplicationWindow {
                         // All is not a group anyone made, so it cannot be
                         // renamed, moved or deleted.
                         onContextRequested: {
-                            if (modelData.id < 0)
-                                return
                             groupMenu.groupId = modelData.id
                             groupMenu.groupName = modelData.name
                             groupMenu.popup()
@@ -1351,8 +1349,13 @@ ApplicationWindow {
         objectName: "groupMenu"
         property int groupId: -1
         property string groupName: ""
+        readonly property bool isAll: groupId < 0
 
+        // All is not a group anybody made. It cannot be renamed, moved or
+        // deleted, and the one thing it shares with a group is who is in it.
         ThemedMenuItem {
+            visible: !groupMenu.isAll
+            height: visible ? implicitHeight : 0
             text: "Rename"
             onTriggered: {
                 var id = groupMenu.groupId, name = groupMenu.groupName
@@ -1361,15 +1364,19 @@ ApplicationWindow {
             }
         }
         ThemedMenuItem {
+            visible: !groupMenu.isAll
+            height: visible ? implicitHeight : 0
             text: "Move up"
             onTriggered: { App.moveGroup(groupMenu.groupId, -1); groupMenu.dismiss() }
         }
         ThemedMenuItem {
+            visible: !groupMenu.isAll
+            height: visible ? implicitHeight : 0
             text: "Move down"
             onTriggered: { App.moveGroup(groupMenu.groupId, 1); groupMenu.dismiss() }
         }
         ThemedMenuItem {
-            text: "Manage the group"
+            text: groupMenu.isAll ? "Manage All" : "Manage the group"
             onTriggered: {
                 var id = groupMenu.groupId, name = groupMenu.groupName
                 groupMenu.dismiss()
@@ -1381,6 +1388,8 @@ ApplicationWindow {
         ThemedMenuItem {
             // The channels themselves are untouched, as with a box and its
             // videos.
+            visible: !groupMenu.isAll
+            height: visible ? implicitHeight : 0
             text: "Delete the group"
             onTriggered: {
                 var id = groupMenu.groupId, name = groupMenu.groupName

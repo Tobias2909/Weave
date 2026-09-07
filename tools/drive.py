@@ -808,6 +808,18 @@ class Smoke:
                    not read(confirm, "visible")
                    and any(row["id"] == group_id for row in read(bridge, "groups")))
 
+        # All is managed through the same window, and taking a channel out of
+        # it is a decision the next import must not undo.
+        write(menu, "groupId", -1)
+        menu.open()
+        settle(0.3)
+        all_entries = [text.strip() for text, item in menu_entries(menu)
+                       if read(item, "visible")]
+        self.check("All offers only what it can do", all_entries == ["Manage All"],
+                   ", ".join(all_entries))
+        menu.close()
+        settle(0.2)
+
         manage = find(window, "manageGroup")
         write(manage, "groupId", group_id)
         write(manage, "groupName", "Smoke group")

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 28
+SCHEMA_VERSION = 29
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -281,6 +281,11 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # is the default; a channel with no long form tab falls back to the mixed
     # channel feed and is remembered so the discovery is not repeated.
     ("channels", "feed_variant", "TEXT"),
+    # Taken out of All by hand, which is a decision rather than a state. Every
+    # other way in_all is written raises it, and without this the next
+    # subscription import would quietly put back exactly the channels somebody
+    # had just taken out.
+    ("channels", "left_all", "INTEGER NOT NULL DEFAULT 0"),
     # A long playlist list buries everything under it, so each one can be put
     # out of the way without being forgotten.
     ("playlists", "hidden", "INTEGER NOT NULL DEFAULT 0"),
@@ -505,7 +510,12 @@ class Database:
                 "  title=COALESCE(excluded.title, channels.title), "
                 "  avatar_url=COALESCE(excluded.avatar_url, channels.avatar_url), "
                 "  tracked=1, "
-                "  in_all=MAX(channels.in_all, excluded.in_all)",
+                # Raised, as it always was, except where somebody has taken
+                # this channel out of All themselves. Following it by name
+                # again is what undoes that, through restore_to_all, and it is
+                # the one thing that should.
+                "  in_all=MAX(channels.in_all, "
+                "            excluded.in_all * (1 - channels.left_all))",
                 (key, platform, ext_id, title, avatar_url, int(time.time()), int(in_all)),
             )
             return existed is None or not existed["tracked"]
@@ -552,6 +562,34 @@ class Database:
         return self.add_channel(key, platform, ext_id,
                                 title or self._name_from_lists(ext_id), avatar_url,
                                 in_all=in_all)
+
+    def remove_from_all(self, key: str) -> bool:
+        """Take a channel out of All and remember that it was taken out.
+
+        Says whether that also stopped it being polled, which it does when no
+        group holds it either. A channel with nowhere for its videos to appear
+        is a channel there is no reason to ask about, and asking anyway is
+        what the request budget is for.
+        """
+        with self.conn as conn:
+            conn.execute("UPDATE channels SET in_all=0, left_all=1 WHERE key=?", (key,))
+            held = conn.execute(
+                "SELECT 1 FROM group_members WHERE channel_key=? LIMIT 1", (key,)).fetchone()
+            if held is not None:
+                return False
+            conn.execute("UPDATE channels SET tracked=0 WHERE key=?", (key,))
+            return True
+
+    def restore_to_all(self, key: str) -> None:
+        """Put a channel back in All, and forget that it was ever taken out.
+
+        Following a channel by name is the way back in, so it also clears the
+        decision. Nothing else does, which is what keeps an import from
+        undoing it.
+        """
+        with self.conn as conn:
+            conn.execute(
+                "UPDATE channels SET in_all=1, left_all=0, tracked=1 WHERE key=?", (key,))
 
     def _name_from_lists(self, ext_id: str) -> str | None:
         """What the lists that come from YouTube call this channel, if any of
