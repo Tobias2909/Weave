@@ -175,6 +175,31 @@ Rectangle {
                     source: modelData.thumbnail
                 }
 
+                // Handed to mpv and not yet on screen. A tile carries a
+                // channel rather than a video, which is what the window
+                // matches against here.
+                Rectangle {
+                    id: startingWash
+                    visible: App.startingKey === streamCard.channelKeyOf
+                    anchors.fill: parent
+                    radius: 6
+                    color: Qt.rgba(0, 0, 0, 0.55)
+
+                    Rectangle {
+                        anchors.centerIn: parent
+                        width: 12
+                        height: 12
+                        radius: 2
+                        color: Theme.colors.accent
+                        RotationAnimator on rotation {
+                            running: startingWash.visible
+                            loops: Animation.Infinite
+                            from: 0
+                            to: 360
+                            duration: 1400
+                        }
+                    }
+                }
             }
 
             // A thin edge in the platform's colour. Enough to tell them apart

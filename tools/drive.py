@@ -347,6 +347,51 @@ class Smoke:
         bridge.selectGroup(-1)
         settle(0.3)
 
+    def starting(self, bridge, window) -> None:
+        """A press has to say something before mpv has a window.
+
+        It is said on the thumbnail that was pressed, so the answer is where
+        the eye already is, and the bottom of the window says nothing about
+        playing any more.
+        """
+        # Back on the feed, since the walk arrives here from the settings page
+        # and a hidden grid lays out no cards at all.
+        bridge.selectGroup(-1)
+        settle(0.4)
+        # Emptied so the check below is about this press and not about whatever
+        # an earlier step left behind.
+        bridge._set_notice("")
+        grid = find(window, "grid")
+        key = read(bridge, "startingKey")
+        self.check("nothing is starting to begin with", key == "", key)
+        cards = visible_children(read(grid, "contentItem"))
+        wash = next((found for found in (item_named(card, "startingWash") for card in cards)
+                     if found is not None), None)
+        self.check("a card carries the mpv chip", wash is not None)
+        self.check("and it is not drawn while nothing starts",
+                   wash is not None and not read(wash, "visible"))
+
+        bridge.play("yt:smokevid005")
+        settle(0.4)
+        self.check("pressing a card marks it as starting",
+                   read(bridge, "startingKey") == "yt:smokevid005",
+                   str(read(bridge, "startingKey")))
+        washes = [found for found in
+                  (item_named(card, "startingWash")
+                   for card in visible_children(read(grid, "contentItem")))
+                  if found is not None and read(found, "visible")]
+        self.check("the chip is drawn on exactly one card", len(washes) == 1, f"{len(washes)} of them")
+        self.check("and the bottom of the window says nothing",
+                   read(bridge, "notice") == "", str(read(bridge, "notice")))
+        if self.shot:
+            self.check("starting written", screenshot(window, shot_beside(self.shot, "starting")))
+
+        # mpv never arriving must not leave it there.
+        bridge._on_player_failed("mpv is not installed")
+        settle(0.3)
+        self.check("a failure takes the chip away", read(bridge, "startingKey") == "",
+                   str(read(bridge, "startingKey")))
+
     def scrolling(self, bridge, window) -> None:
         """A refresh landing while somebody is reading must not move the page.
 
@@ -576,6 +621,7 @@ class Smoke:
             self.check(f"the page states the {name}", str(read(find(window, name), "text")) != "",
                        str(read(find(window, name), "text")))
 
+        self.starting(bridge, window)
         self.scrolling(bridge, window)
 
         if self.shot:

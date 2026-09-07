@@ -155,6 +155,9 @@ class TheHistoryView(unittest.TestCase):
         bridge._history_music = music
         bridge._set_status = lambda *a, **k: None
         bridge._set_notice = lambda *a, **k: None
+        # The chip a pressed card shows while mpv starts. Stubbed like the
+        # notice, since the timer behind it belongs to a real bridge.
+        bridge._set_starting = lambda *a, **k: None
         bridge.listened = []
         bridge.playAudio = bridge.listened.append
         return bridge

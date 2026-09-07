@@ -122,6 +122,7 @@ class Bridge(QObject):
     searchEnded = Signal()
     checksChanged = Signal()
     cacheChanged = Signal()
+    startingChanged = Signal()
     boxesChanged = Signal()
     viewChanged = Signal()
     liveChanged = Signal()
@@ -236,6 +237,13 @@ class Bridge(QObject):
         self._checkup: Checkup | None = None
         self._checks: list = []
         self._cache_job: ImageCacheJob | None = None
+        # What was last handed to mpv, so the thing that was pressed can say
+        # so itself. Cleared when mpv reports back, on a failure, and by a
+        # timer, because a chip that never leaves is worse than none.
+        self._starting_key = ""
+        self._starting_timer = QTimer(self)
+        self._starting_timer.setSingleShot(True)
+        self._starting_timer.timeout.connect(lambda: self._set_starting(""))
         # What the last measurement found, so lowering the ceiling knows
         # whether anything actually has to be dropped.
         self._cache_held = 0
@@ -434,6 +442,7 @@ class Bridge(QObject):
     checks = Property("QVariantList", lambda self: list(self._checks), notify=checksChanged)
     cacheText = Property(str, _get_cache_text, notify=cacheChanged)
     cacheWorking = Property(bool, lambda self: self._cache_working, notify=cacheChanged)
+    startingKey = Property(str, lambda self: self._starting_key, notify=startingChanged)
     cacheCeiling = Property(int, lambda self: self._ceiling_mb(), notify=cacheChanged)
     cacheCeilingText = Property(str, lambda self: imagecache.ceiling_label(self._ceiling_mb()),
                                 notify=cacheChanged)
@@ -803,6 +812,21 @@ class Bridge(QObject):
         self.emptyHintChanged.emit()
         self.groupsChanged.emit()
         self.boxesChanged.emit()
+
+    def _set_starting(self, key: str, clear_after_s: float = 30.0) -> None:
+        """Say which item is on its way to mpv.
+
+        Handing a URL over takes a few seconds, and until mpv has a window
+        there is nothing on screen to say the press landed. It is said on the
+        thing that was pressed rather than in a corner, so the answer is where
+        the eye already is.
+        """
+        self._starting_timer.stop()
+        if self._starting_key != key:
+            self._starting_key = key
+            self.startingChanged.emit()
+        if key and clear_after_s > 0:
+            self._starting_timer.start(int(clear_after_s * 1000))
 
     def _set_notice(self, text: str, clear_after_s: float = 0) -> None:
         """Say what is happening, and stop saying it when it stops.
@@ -1691,9 +1715,7 @@ class Bridge(QObject):
             url = ids.playlist_watch_url(row["key"].split(":", 1)[1], self._view_playlist)
         if self._player.play(url, twitch_login=login, live=live):
             self._set_status(f"playing {row['title']}")
-            # Handing a URL to mpv takes a few seconds, and until it reports
-            # back there is nothing on screen to say anything happened.
-            self._set_notice("Starting in mpv", clear_after_s=30)
+            self._set_starting(row["key"])
 
     def _get_press_is_music(self) -> bool:
         """Whether a plain press in the open view already means listening.
@@ -2571,10 +2593,10 @@ class Bridge(QObject):
     def _on_now_playing(self, key: str, _title: str) -> None:
         """The panel follows mpv, so whatever starts playing is what it shows,
         including a track mpv moved to on its own."""
-        # mpv reports the file before its window is up, so the line stays a
-        # moment longer rather than going as the screen is still empty.
-        if self._notice:
-            self._set_notice(self._notice, clear_after_s=3)
+        # mpv reports the file before its window is up, so the chip stays a
+        # moment longer rather than going while the screen is still empty.
+        if self._starting_key:
+            self._set_starting(self._starting_key, clear_after_s=3)
         self.openDetail(key)
 
     # ---- twitch ----------------------------------------------------------
@@ -2649,10 +2671,14 @@ class Bridge(QObject):
             return
         if row["platform"] == "twitch":
             url = ids.watch_url("twitch", row["login"])
-            self._player.play(url, twitch_login=row["login"], live=True)
+            started = self._player.play(url, twitch_login=row["login"], live=True)
         else:
-            self._player.play(ids.watch_url("youtube", row["login"]), live=True)
+            started = self._player.play(ids.watch_url("youtube", row["login"]), live=True)
         self._set_status(f"playing {row['name']}")
+        if started:
+            # A live tile carries its channel rather than a video, so that is
+            # what the chip is matched against there.
+            self._set_starting(channel_key)
 
     @Slot()
     def importSubscriptions(self) -> None:
@@ -2935,6 +2961,9 @@ class Bridge(QObject):
         self._set_status(f"marked watched at {int(progress * 100)} percent")
 
     def _on_player_failed(self, message: str) -> None:
+        # Nothing is starting after all, so the chip goes at once instead of
+        # sitting on the card for half a minute.
+        self._set_starting("")
         self._problems.append(message)
         self.problemsChanged.emit()
         self._set_status(message)

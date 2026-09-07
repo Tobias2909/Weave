@@ -24,6 +24,9 @@ Rectangle {
     // announcement up and answers nothing anybody asked.
     property string startsText: ""
     property real progress: 0
+    // On its way to mpv. Said here rather than in a corner of the window,
+    // since this is where the press happened and where the eye already is.
+    property bool starting: false
 
     signal playRequested()
     signal channelRequested()
@@ -99,6 +102,59 @@ Rectangle {
                         width: parent.width * Math.min(1, card.progress)
                         color: Theme.colors.progress
                         bottomLeftRadius: thumbnailFrame.radius
+                    }
+                }
+            }
+
+            // Handed to mpv and not yet on screen. Over the picture and
+            // inside the same frame, so it covers the duration and the
+            // progress bar rather than fighting them for the corner.
+            Rectangle {
+                id: startingWash
+                objectName: "startingWash"
+                visible: card.starting
+                anchors.fill: thumbnailFrame
+                radius: thumbnailFrame.radius
+                color: Qt.rgba(0, 0, 0, 0.55)
+                z: 3
+
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: Math.min(parent.width - 12, startingRow.implicitWidth + 20)
+                    height: 26
+                    radius: 13
+                    color: Theme.colors.surfaceRaised
+                    border.width: 1
+                    border.color: Theme.colors.border
+
+                    Row {
+                        id: startingRow
+                        anchors.centerIn: parent
+                        spacing: 6
+
+                        // The same turning mark the window used to show at the
+                        // bottom, so the two read as one thing moved.
+                        Rectangle {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 9
+                            height: 9
+                            radius: 2
+                            color: Theme.colors.accent
+                            RotationAnimator on rotation {
+                                running: startingWash.visible
+                                loops: Animation.Infinite
+                                from: 0
+                                to: 360
+                                duration: 1400
+                            }
+                        }
+
+                        Label {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: "Starting in mpv"
+                            color: Theme.colors.text
+                            font.pixelSize: 11
+                        }
                     }
                 }
             }

@@ -963,6 +963,7 @@ ApplicationWindow {
                 // Where a press already listens, the headphone offers nothing.
                 canListen: !App.pressIsMusic
                 progress: model.progress
+                starting: App.startingKey === model.key
                 onPlayRequested: App.play(model.key)
                 onListenRequested: App.playAudio(model.key)
                 onChannelRequested: App.openChannel(model.channelKey)

@@ -49,6 +49,10 @@ def make_bridge(rows):
     bridge._view_playlist = ""
     bridge._set_status = lambda *_a, **_k: None
     bridge._set_notice = lambda *_a, **_k: None
+    # What the card that was pressed is told to say. Stubbed like the notice,
+    # since the timer behind it belongs to a real bridge.
+    bridge.started = []
+    bridge._set_starting = lambda key, **_k: bridge.started.append(key)
     bridge.opened = []
     bridge.openDetail = bridge.opened.append
     return bridge
@@ -77,6 +81,20 @@ class PlayRefusesAnAnnouncedVideo(unittest.TestCase):
         Bridge.play(bridge, "yt:bbbbbbbbbbb")
         self.assertEqual(bridge._player.calls, [("https://example/watch", None, False)])
         self.assertEqual(bridge.opened, [])
+
+    def test_the_card_that_was_pressed_says_it_is_starting(self):
+        from weave.ui.bridge import Bridge
+
+        bridge = make_bridge([ordinary_row()])
+        Bridge.play(bridge, "yt:bbbbbbbbbbb")
+        self.assertEqual(bridge.started, ["yt:bbbbbbbbbbb"])
+
+    def test_an_announced_one_says_nothing_since_nothing_starts(self):
+        from weave.ui.bridge import Bridge
+
+        bridge = make_bridge([upcoming_row()])
+        Bridge.play(bridge, "yt:aaaaaaaaaaa")
+        self.assertEqual(bridge.started, [])
 
     def test_an_unknown_key_does_nothing(self):
         from weave.ui.bridge import Bridge
