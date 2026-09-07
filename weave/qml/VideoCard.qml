@@ -266,14 +266,42 @@ Rectangle {
             height: 44
             spacing: 8
 
-            RoundedImage {
+            // A picture only exists for a channel whose own page has been
+            // read, which a search result's channel usually has not: it would
+            // be one page fetch per channel on the page, against a ceiling the
+            // sweep already spends most of. So a card with no picture draws
+            // this instead, which costs nothing and, more to the point, is
+            // something to press. Without it the only way through to the
+            // channel was a thin line of text.
+            Item {
                 id: avatar
                 anchors.verticalCenter: parent.verticalCenter
                 width: 44
                 height: 44
-                circle: true
-                visible: card.channelAvatar !== ""
-                source: card.channelAvatar
+
+                RoundedImage {
+                    anchors.fill: parent
+                    circle: true
+                    visible: card.channelAvatar !== ""
+                    source: card.channelAvatar
+                }
+
+                Rectangle {
+                    objectName: "channelInitial"
+                    anchors.fill: parent
+                    visible: card.channelAvatar === ""
+                    radius: width / 2
+                    color: Theme.colors.surfaceRaised
+                    border.width: 1
+                    border.color: Theme.colors.border
+
+                    Label {
+                        anchors.centerIn: parent
+                        text: card.channelTitle === "" ? "" : card.channelTitle.charAt(0).toUpperCase()
+                        color: Theme.colors.textMuted
+                        font.pixelSize: 18
+                    }
+                }
 
                 HoverHandler { id: avatarHover }
                 TapHandler {
@@ -284,11 +312,11 @@ Rectangle {
 
             Column {
                 anchors.verticalCenter: parent.verticalCenter
-                width: channelRow.width
-                       - (card.channelAvatar !== "" ? avatar.width + channelRow.spacing : 0)
+                width: channelRow.width - avatar.width - channelRow.spacing
                 spacing: 3
 
                 Text {
+                    id: channelName
                     width: parent.width
                     text: card.channelTitle
                     color: (channelHover.hovered || avatarHover.hovered)
@@ -297,8 +325,15 @@ Rectangle {
                     font.underline: channelHover.hovered || avatarHover.hovered
                     elide: Text.ElideRight
 
-                    HoverHandler { id: channelHover }
+                    // The whole line, not only the glyphs. A name is one row
+                    // of twelve pixel text in a band of forty four, and
+                    // hitting it was a game of its own.
+                    HoverHandler {
+                        id: channelHover
+                        margin: 8
+                    }
                     TapHandler {
+                        margin: 8
                         gesturePolicy: TapHandler.ReleaseWithinBounds
                         onTapped: card.channelRequested()
                     }

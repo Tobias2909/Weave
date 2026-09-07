@@ -493,6 +493,42 @@ class Smoke:
                    item_named(root, "recommendedRefresh") is None
                    or not read(item_named(root, "recommendedRefresh"), "visible"))
 
+    def strangers(self, bridge, window) -> None:
+        """A result from a channel nothing is stored about.
+
+        Its picture would be a page fetch per channel on the page, against a
+        ceiling the sweep already spends most of, so there is none. What there
+        has to be is a way through to the channel, and before this the only
+        one was a line of twelve pixel text.
+        """
+        root = window.contentItem()
+        bridge.search("probe")
+        settle(0.4)
+        bridge._search_scope = "youtube"
+        bridge._on_web_results("probe", 1, [{
+            "ext_id": "strangervid", "title": "From a stranger",
+            "channel_name": "A Stranger", "channel_ext_id": "UCstrangerstrangerstra",
+            "duration_s": 300, "views": 10, "published_at": 1_700_000_000,
+            "thumbnail_url": None, "live_status": None, "scheduled_at": None,
+        }])
+        settle(0.6)
+        row = bridge._model.row_at(0)
+        self.check("a result names the channel behind it",
+                   row["channelKey"] == "yt:UCstrangerstrangerstra" and row["channelTitle"] != "",
+                   f"{row['channelKey']} {row['channelTitle']}")
+        self.check("and has no picture for it, which costs nothing",
+                   row["channelAvatar"] == "")
+        mark = item_named(root, "channelInitial")
+        self.check("so the card draws a letter to press instead",
+                   mark is not None and read(mark, "visible") and read(mark, "width") == 44,
+                   f"{read(mark, 'width') if mark else 'missing'} px")
+        bridge.openChannel(row["channelKey"])
+        settle(0.5)
+        self.check("and pressing it reaches that channel",
+                   read(bridge, "viewKind") == "channel", read(bridge, "viewKind"))
+        bridge.selectGroup(-1)
+        settle(0.3)
+
     def bar(self, bridge, window) -> None:
         """The line in the bar has to say all of what it says.
 
@@ -1064,6 +1100,7 @@ class Smoke:
         self.updates(bridge, window)
         self.announcements(bridge, window)
         self.suggestions(bridge, window)
+        self.strangers(bridge, window)
         self.bar(bridge, window)
         self.following(bridge, window)
         self.boxes(bridge, window)
