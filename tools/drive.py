@@ -645,6 +645,26 @@ class Smoke:
         self.check("and the one it was on chosen again",
                    read(bridge, "cacheCeiling") == was, str(read(ceiling, "text")))
 
+        # Which copy this is, so the version can be read without a terminal.
+        self.check("the page states the version running",
+                   str(read(find(window, "runningVersion"), "text")) == read(bridge, "version"),
+                   str(read(find(window, "runningVersion"), "text")))
+        newest = find(window, "newestVersion")
+        self.check("and what the newest one is",
+                   str(read(newest, "text")) != "", str(read(newest, "text")))
+        self.check("the release page cannot be opened before one is known",
+                   not read(find(window, "openRelease"), "enabled"))
+        bridge._on_update_found("v99.0.0", "https://example.invalid/releases/99.0.0")
+        settle(0.3)
+        self.check("a newer one is named here too",
+                   "99.0.0" in str(read(newest, "text")), str(read(newest, "text")))
+        self.check("and then the release page can be opened",
+                   read(find(window, "openRelease"), "enabled"))
+        bridge._on_update_found("v" + str(read(bridge, "version")), "")
+        settle(0.3)
+        self.check("with nothing newer it says so without alarm",
+                   "this one" in str(read(newest, "text")), str(read(newest, "text")))
+
         # What the page says about the cache and the connections, which is
         # read rather than acted on, so an empty one is a binding that failed.
         for name in ("cacheSize", "cookieSource", "musicIdentity", "twitchState"):

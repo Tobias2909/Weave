@@ -136,6 +136,24 @@ class WhatTheWindowIsTold(unittest.TestCase):
         self.assertEqual(self.db.get_state("update_address"), "https://example.invalid/r")
         self.assertNotEqual(self.db.get_state("update_checked_at"), None)
 
+    def test_the_settings_page_is_told_the_newest_either_way(self):
+        # The banner only speaks when there is something newer. The page
+        # states the newest whatever it is, which is how somebody checks the
+        # version they are running without a terminal.
+        self.assertEqual(Bridge.latestVersion.fget(self.bridge), "")
+        Bridge._on_update_found(self.bridge, f"v{__version__}", "https://example.invalid/r")
+        self.assertEqual(Bridge.latestVersion.fget(self.bridge), __version__)
+        self.assertEqual(self.newer(), "")
+
+    def test_the_release_page_is_offered_only_once_there_is_one(self):
+        self.assertFalse(Bridge.hasRelease.fget(self.bridge))
+        Bridge._on_update_found(self.bridge, "v99.0.0", "https://example.invalid/r")
+        self.assertTrue(Bridge.hasRelease.fget(self.bridge))
+
+    def test_a_release_with_no_page_offers_nothing_to_open(self):
+        Bridge._on_update_found(self.bridge, "v99.0.0", "")
+        self.assertFalse(Bridge.hasRelease.fget(self.bridge))
+
     def test_it_asks_when_it_has_never_asked(self):
         Bridge.checkForUpdate(self.bridge)
         self.assertEqual(len(self.launched), 1)

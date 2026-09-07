@@ -468,6 +468,99 @@ Item {
                         }
                     }
                 }
+
+                // ---- which copy this is ------------------------------------
+                Rectangle {
+                    width: body.width
+                    height: about.height + 28
+                    radius: 6
+                    color: Theme.colors.surface
+                    border.width: 1
+                    border.color: Theme.colors.border
+
+                    Column {
+                        id: about
+                        x: 14
+                        y: 14
+                        width: parent.width - 28
+                        spacing: 10
+
+                        Label {
+                            text: "This copy"
+                            color: Theme.colors.text
+                            font.pixelSize: 15
+                            font.weight: Font.DemiBold
+                        }
+
+                        Row {
+                            spacing: 8
+
+                            Label {
+                                width: view.wordWidth
+                                height: 20
+                                text: "Running"
+                                color: Theme.colors.textMuted
+                                font.pixelSize: 12
+                                verticalAlignment: Text.AlignVCenter
+                            }
+
+                            Label {
+                                objectName: "runningVersion"
+                                height: 20
+                                text: App.version
+                                color: Theme.colors.text
+                                font.pixelSize: 12
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                        }
+
+                        Row {
+                            spacing: 8
+
+                            Label {
+                                width: view.wordWidth
+                                height: 28
+                                text: "Newest"
+                                color: Theme.colors.textMuted
+                                font.pixelSize: 12
+                                verticalAlignment: Text.AlignVCenter
+                            }
+
+                            Label {
+                                objectName: "newestVersion"
+                                height: 28
+                                // Three answers, and the third is the one a
+                                // fresh start shows for a second or two.
+                                text: App.updateVersion !== ""
+                                      ? App.updateVersion + ", newer than this one"
+                                      : (App.latestVersion !== ""
+                                         ? App.latestVersion + ", which is this one"
+                                         : "not asked yet")
+                                color: App.updateVersion !== "" ? Theme.colors.accent
+                                                                : Theme.colors.text
+                                font.pixelSize: 12
+                                verticalAlignment: Text.AlignVCenter
+                            }
+
+                            FlatButton {
+                                objectName: "openRelease"
+                                text: "The release page"
+                                enabled: App.hasRelease
+                                onClicked: App.openRelease()
+                            }
+                        }
+
+                        Label {
+                            width: parent.width
+                            text: "The repository is asked once a day whether a newer release has "
+                                  + "been published. Nothing is downloaded and nothing is sent but "
+                                  + "the question."
+                            color: Theme.colors.textMuted
+                            font.pixelSize: 11
+                            wrapMode: Text.Wrap
+                        }
+                    }
+                }
             }
         }
     }

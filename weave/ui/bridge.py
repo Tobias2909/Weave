@@ -462,6 +462,11 @@ class Bridge(QObject):
     updateVersion = Property(str, lambda self: self._newer_version(), notify=updateChanged)
     # What is running, for the line that says a newer one exists.
     version = Property(str, lambda _self: __version__, constant=True)
+    # The newest release the check has heard of, whether or not it is above
+    # this one, so the settings page can state it either way.
+    latestVersion = Property(str, lambda self: release_source.numbers_text(self._update_tag),
+                             notify=updateChanged)
+    hasRelease = Property(bool, lambda self: bool(self._update_address), notify=updateChanged)
     cacheCeiling = Property(int, lambda self: self._ceiling_mb(), notify=cacheChanged)
     cacheCeilingText = Property(str, lambda self: imagecache.ceiling_label(self._ceiling_mb()),
                                 notify=cacheChanged)
