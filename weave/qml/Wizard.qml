@@ -19,17 +19,23 @@ Popup {
 
     anchors.centerIn: parent
     width: Math.min(560, (parent ? parent.width : 600) - 80)
-    // Fitted to the page rather than to the longest of them. A card two
-    // thirds empty reads as something that failed to load, and the pages are
-    // close enough in length that following one with another does not jump.
-    height: Math.min((parent ? parent.height : 500) - 80,
-                     page.implicitHeight + footer.height + 34 + root.padding * 2)
+    // One size for all four, so the buttons stay under the hand from page to
+    // page instead of moving with the length of the words. Tall enough for the
+    // longest of them, which is the subscription page once an import has
+    // failed and the card has to explain why.
+    // 370 measured against the longest page, which needs 278 of the 296 this
+    // leaves it. Anything less clips the explanation of a failed import.
+    height: Math.min((parent ? parent.height : 500) - 60, 370)
     padding: 20
-    modal: true
     focus: true
-    // Escape and a press outside both leave it. It is an offer rather than a
-    // gate, and one that cannot be dismissed reads as a fault.
-    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+    // Not modal, and dimmed by a rectangle of the window's own rather than by
+    // the overlay a modal popup brings. A modal overlay swallows every press
+    // that is not on the card, which in a window with no frame of its own
+    // means the window can no longer be moved or resized while these are open.
+    // The cross closes them, so nothing here is a trap.
+    modal: false
+    dim: false
+    closePolicy: Popup.CloseOnEscape
 
     // A Popup owns its own visible, so binding that to the window's answer is
     // a binding loop, and a loop here left the card drawn over everything at
@@ -58,13 +64,28 @@ Popup {
     Item {
         anchors.fill: parent
 
+        // The way out for somebody who wants none of this. A press outside no
+        // longer closes them, so there has to be one.
+        FlatButton {
+            id: closeMark
+            objectName: "wizardClose"
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.topMargin: -6
+            anchors.rightMargin: -6
+            width: 28
+            text: "\u2715"
+            onClicked: root.close()
+        }
+
         Label {
             id: counter
-            anchors.right: parent.right
+            anchors.right: closeMark.left
+            anchors.rightMargin: 10
             anchors.top: parent.top
             text: root.step + " of " + root.last
             color: Theme.colors.textMuted
-            font.pixelSize: 11
+            font.pixelSize: 12
         }
 
         Column {
@@ -87,7 +108,7 @@ Popup {
                     "How it is used",
                 ][root.step]
                 color: Theme.colors.text
-                font.pixelSize: 17
+                font.pixelSize: 20
                 font.weight: Font.DemiBold
                 wrapMode: Text.Wrap
             }
@@ -99,8 +120,9 @@ Popup {
                     "This is your subscriptions and nothing else. No front page, no "
                         + "recommendations you did not ask for, and every video opens in mpv "
                         + "rather than in a page. These few pages set up the two things it "
-                        + "cannot work without. It takes about a minute, and everything here "
-                        + "can be done later from the settings page instead.",
+                        + "cannot work without. It takes about a minute, and none of it is "
+                        + "final. Getting started on the settings page opens these pages "
+                        + "again whenever you want them.",
                     "Weave builds its feed from each channel's own feed, so it has to know "
                         + "which channels are yours. Importing reads that list from YouTube "
                         + "once and follows every channel in it. Nothing is written back to "
@@ -115,8 +137,18 @@ Popup {
                         + "for everything else, and the settings page holds the rest.",
                 ][root.step]
                 color: Theme.colors.textMuted
-                font.pixelSize: 12
-                lineHeight: 1.25
+                font.pixelSize: 14
+                lineHeight: 1.3
+                wrapMode: Text.Wrap
+            }
+
+            Label {
+                objectName: "wizardFarewell"
+                visible: root.step === root.last
+                width: parent.width
+                text: "That is all of it. Have fun with Weave."
+                color: Theme.colors.accent
+                font.pixelSize: 14
                 wrapMode: Text.Wrap
             }
 
@@ -141,7 +173,7 @@ Popup {
                     width: Math.max(0, page.width - importButton.width - 8)
                     text: App.importMessage
                     color: App.importState === "failed" ? Theme.colors.error : Theme.colors.text
-                    font.pixelSize: 12
+                    font.pixelSize: 13
                     elide: Text.ElideRight
                 }
             }
@@ -160,8 +192,8 @@ Popup {
                         + "again."
                       : "Read with the cookies of " + App.cookieSource
                 color: App.importState === "failed" ? Theme.colors.text : Theme.colors.textMuted
-                font.pixelSize: 11
-                lineHeight: 1.25
+                font.pixelSize: 12
+                lineHeight: 1.3
                 wrapMode: Text.Wrap
             }
 
@@ -184,7 +216,7 @@ Popup {
                                                   : (App.twitchConnected ? "connected"
                                                                          : "not connected")
                     color: Theme.colors.text
-                    font.pixelSize: 12
+                    font.pixelSize: 13
                 }
             }
         }
@@ -241,7 +273,7 @@ Popup {
                     anchors.verticalCenter: parent.verticalCenter
                     text: "Do not show this again"
                     color: Theme.colors.textMuted
-                    font.pixelSize: 12
+                    font.pixelSize: 13
 
                     // The words are as much of the control as the box is.
                     TapHandler { onTapped: App.setWizardHidden(!App.wizardHidden) }

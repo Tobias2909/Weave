@@ -1354,6 +1354,20 @@ ApplicationWindow {
         id: manageGroup
     }
 
+    // The ground behind the getting started pages. Drawn here rather than by
+    // the popup, because the overlay a modal popup brings swallows every press
+    // that misses the card, and this window has no frame of its own, so that
+    // would take away moving and resizing it while the pages are open. A plain
+    // rectangle with no handler on it accepts nothing and lets all of that
+    // through.
+    Rectangle {
+        objectName: "wizardDim"
+        anchors.fill: parent
+        visible: App.wizardOpen
+        color: Qt.rgba(0, 0, 0, 0.45)
+        z: 60
+    }
+
     // Shown on a fresh install and never again once there is something to
     // show. Last of the popups, so it is drawn over the rest of them.
     Wizard {

@@ -436,9 +436,21 @@ class Smoke:
         settle(0.2)
         self.check("the box is remembered", read(bridge, "wizardHidden"))
         bridge.setWizardHidden(False)
-        bridge.closeWizard()
-        settle(0.3)
-        self.check("and they close again", not read(bridge, "wizardOpen"))
+
+        # Not modal on purpose. The overlay a modal popup brings swallows every
+        # press that misses the card, and this window has no frame of its own,
+        # so that would take away moving and resizing it while these are open.
+        # The ground behind is a rectangle with no handler on it instead.
+        popup = find(window, "wizard")
+        self.check("they do not take the window hostage",
+                   popup is not None and not read(popup, "modal") and not read(popup, "dim"))
+        dim = find(window, "wizardDim")
+        self.check("but the window behind is dimmed", dim is not None and read(dim, "visible"))
+
+        call(item_named(root, "wizardClose"), "click")
+        settle(0.4)
+        self.check("the cross closes them", not read(bridge, "wizardOpen"))
+        self.check("and the ground behind goes with them", not read(dim, "visible"))
 
     def updates(self, bridge, window) -> None:
         """News of a newer release, at the foot of the panel.
