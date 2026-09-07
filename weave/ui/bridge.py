@@ -2594,9 +2594,10 @@ class Bridge(QObject):
         """The panel follows mpv, so whatever starts playing is what it shows,
         including a track mpv moved to on its own."""
         # mpv reports the file before its window is up, so the chip stays a
-        # moment longer rather than going while the screen is still empty.
+        # while longer rather than going while the screen is still empty. Six
+        # seconds, which is his answer to watching it happen.
         if self._starting_key:
-            self._set_starting(self._starting_key, clear_after_s=3)
+            self._set_starting(self._starting_key, clear_after_s=6)
         self.openDetail(key)
 
     # ---- twitch ----------------------------------------------------------
