@@ -493,6 +493,37 @@ class Smoke:
                    item_named(root, "recommendedRefresh") is None
                    or not read(item_named(root, "recommendedRefresh"), "visible"))
 
+    def following(self, bridge, window) -> None:
+        """Following a channel by name, which the plus above the list offers.
+
+        It was a box in the toolbar beside the search box, which asked people
+        to know the difference between the two before they had used either.
+        """
+        root = window.contentItem()
+        self.check("the toolbar holds one box, not two", find(window, "addField") is None)
+        menu = find(window, "channelsMenu")
+        menu.open()
+        settle(0.3)
+        entries = [text.strip() for text, _ in menu_entries(menu)]
+        self.check("the plus offers both things it could mean",
+                   entries == ["Follow a channel", "New group"], ", ".join(entries))
+        menu.close()
+        settle(0.2)
+
+        popup = find(window, "followChannel")
+        popup.open()
+        settle(0.4)
+        self.check("following one opens its own box",
+                   item_named(root, "followField") is not None)
+        bridge.addChannel("definitely not a channel")
+        settle(0.4)
+        answer = item_named(root, "followAnswer")
+        self.check("and it says when a reference is not one",
+                   answer is not None and read(answer, "visible"),
+                   str(read(answer, "text")) if answer is not None else "missing")
+        popup.close()
+        settle(0.3)
+
     def boxes(self, bridge, window) -> None:
         """A box is ordered by hand the way a group is."""
         first = bridge.createBox("Alpha")
@@ -1006,6 +1037,7 @@ class Smoke:
         self.updates(bridge, window)
         self.announcements(bridge, window)
         self.suggestions(bridge, window)
+        self.following(bridge, window)
         self.boxes(bridge, window)
         self.wizard(bridge, window)
         self.scrolling(bridge, window)

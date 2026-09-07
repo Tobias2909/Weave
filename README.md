@@ -169,11 +169,12 @@ stops them sooner, and the **Getting started** button on the settings page opens
 them again whenever you want.
 
 **Import subscriptions** lives on that page as well. It reads your subscription
-list and tracks every channel in it. The box in the toolbar adds one by hand and takes
-a handle, a channel id, a channel address or a `twitch.tv` address. A bare word
-with no `@` and no URL around it is refused on purpose, because it could be a
-Twitch login or a YouTube name, and guessing would turn a typo into a tracked
-channel.
+list and tracks every channel in it. One at a time goes through the plus beside
+**Channels** in the panel, which offers **Follow a channel** and **New group**,
+and a channel takes a handle, a channel id, a channel address or a `twitch.tv`
+address. A bare word with no `@` and no URL around it is refused on purpose,
+because it could be a Twitch login or a YouTube name, and guessing would turn a
+typo into a tracked channel.
 
 The plus beside **Channels** makes a group, the plus beside **Boxes** makes a
 box, and either can be renamed, moved or deleted by right clicking its row.

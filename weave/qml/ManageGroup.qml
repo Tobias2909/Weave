@@ -7,7 +7,7 @@ import QtQuick.Layouts
 //
 // A channel added here is followed for this group and nowhere else, which is
 // the whole reason the window exists. Following a channel by name is what the
-// toolbar box does, and that one goes into All.
+// plus above the list does, and that one goes into All.
 Popup {
     id: root
     objectName: "manageGroup"

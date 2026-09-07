@@ -427,7 +427,8 @@ class Bridge(QObject):
             return "No videos stored for this channel yet.\nPress Refresh."
         counts = self._db.counts()
         if not counts["channels"]:
-            return "Nothing here yet.\nAdd a channel above, then press Refresh."
+            return ("Nothing here yet.\nFollow a channel with the plus beside Channels, "
+                    "then press Refresh.")
         if self._view_kind == GROUP:
             return ("This group has no channels in it yet.\n"
                     "Right click the group and manage it, or right click a video.")

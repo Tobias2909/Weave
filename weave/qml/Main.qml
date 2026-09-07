@@ -306,51 +306,11 @@ ApplicationWindow {
                 }
 
                 TextField {
-                    id: addField
-                    objectName: "addField"
-                    // Fourth to go, and narrower than it asks for well before
-                    // that. Never reached by dragging: the window cannot be
-                    // made narrower than 760.
-                    visible: root.width >= 710
-                    // A cell is pinned to the width it asks for unless it is
-                    // told to fill, so this says so and then caps itself, and
-                    // the cap is what keeps it from growing into the room the
-                    // spacer holds.
-                    Layout.fillWidth: true
-                    Layout.preferredWidth: 260
-                    Layout.maximumWidth: 260
-                    Layout.minimumWidth: 170
-                    placeholderText: "Add a channel, a handle or a twitch.tv link"
-                    color: Theme.colors.text
-                    placeholderTextColor: Theme.colors.textMuted
-                    background: Rectangle {
-                        radius: 6
-                        color: Theme.colors.background
-                        // The edge answers, since there is no room in this row
-                        // for a sentence. Red for a reference that came back
-                        // with nothing, accent while one is being looked for
-                        // and once it has been added. What it says is in the
-                        // status line beside it.
-                        border.width: App.addState === "" ? 1 : 2
-                        border.color: App.addState === "failed"
-                                      ? Theme.colors.error
-                                      : (App.addState !== "" || addField.activeFocus
-                                         ? Theme.colors.accent : Theme.colors.border)
-                    }
-                    onTextEdited: App.clearAddState()
-                    onAccepted: {
-                        // Keep the text when it was not even understood, so a typo
-                        // can be corrected rather than retyped.
-                        if (App.addChannel(text))
-                            text = ""
-                    }
-                }
-
-                TextField {
                     id: searchField
                     objectName: "searchField"
                     // Last of the row to go, and long past the narrowest
-                    // window anyone can drag to.
+                    // window anyone can drag to. The only box in the bar now,
+                    // so it needs no telling apart from anything.
                     visible: root.width >= 400
                     Layout.fillWidth: true
                     Layout.preferredWidth: 220
@@ -422,7 +382,7 @@ ApplicationWindow {
                 // the middle of the bar.
                 FlatButton {
                     objectName: "viewAction"
-                    // Fifth to go, and only below the narrowest window
+                    // Fourth to go, and only below the narrowest window
                     // anyone can drag to.
                     visible: root.viewActionText !== "" && root.width >= 530
                     text: root.viewActionText
@@ -642,9 +602,14 @@ ApplicationWindow {
                 spacing: 2
 
                 SidebarHeading {
+                    id: channelsHeading
                     text: "Channels"
                     actionText: "+"
-                    onAction: root.askForName("group", -1, "", "")
+                    // Both of the things it could mean, since it sits above a
+                    // list of groups that begins with All. Following a channel
+                    // was a box in the toolbar until it turned out to read as
+                    // a second search box.
+                    onAction: channelsMenu.popup(channelsHeading, 0, channelsHeading.height)
                 }
 
                 Repeater {
@@ -1354,6 +1319,21 @@ ApplicationWindow {
     }
 
     ThemedMenu {
+        id: channelsMenu
+        objectName: "channelsMenu"
+        implicitWidth: 190
+
+        ThemedMenuItem {
+            text: "Follow a channel"
+            onTriggered: { channelsMenu.dismiss(); followChannel.open() }
+        }
+        ThemedMenuItem {
+            text: "New group"
+            onTriggered: { channelsMenu.dismiss(); root.askForName("group", -1, "", "") }
+        }
+    }
+
+    ThemedMenu {
         id: groupMenu
         objectName: "groupMenu"
         property int groupId: -1
@@ -1448,6 +1428,10 @@ ApplicationWindow {
 
     ConfirmDelete {
         id: confirmDelete
+    }
+
+    FollowChannel {
+        id: followChannel
     }
 
     // The ground behind the getting started pages. Drawn here rather than by
