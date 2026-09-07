@@ -23,6 +23,51 @@ class DatabaseCase(unittest.TestCase):
         return VideoRow("youtube", ext_id, channel, kwargs.pop("title", ext_id), **kwargs)
 
 
+class AVideoWhoseChannelIsUnknown(DatabaseCase):
+    """A video always brings a channel row with it.
+
+    A feed hands over entries owned by channels other than the one it belongs
+    to. Refusing those on the foreign key threw out the whole batch, and the
+    exception travelled far enough to stop the poll for good, so the missing
+    channel is created instead.
+    """
+
+    def test_the_channel_is_created(self):
+        self.db.upsert_videos([VideoRow("youtube", "aaaaaaaaaaa", "yt:UCnew", "A video",
+                                        channel_title="A stranger")])
+        row = self.db.channel("yt:UCnew")
+        self.assertEqual((row["title"], row["ext_id"]), ("A stranger", "UCnew"))
+
+    def test_it_is_neither_polled_nor_in_all(self):
+        self.db.upsert_videos([VideoRow("youtube", "aaaaaaaaaaa", "yt:UCnew", "A video")])
+        row = self.db.channel("yt:UCnew")
+        self.assertEqual((row["tracked"], row["in_all"]), (0, 0))
+        self.assertEqual(self.db.channels(), [])
+        self.assertEqual(self.db.feed(), [])
+
+    def test_a_nameless_stranger_is_still_stored(self):
+        self.db.upsert_videos([VideoRow("youtube", "aaaaaaaaaaa", "yt:UCnew", "A video")])
+        self.assertIsNone(self.db.channel("yt:UCnew")["title"])
+        self.assertTrue(self.db.channel_has_videos("yt:UCnew"))
+
+    def test_a_channel_already_followed_is_left_exactly_as_it_was(self):
+        # The dangerous direction. Writing a channel row here on every poll
+        # could demote a followed channel or rename it after a feed entry.
+        self.db.add_channel("yt:UC1", "youtube", "UC1", "One", "https://a/av.jpg")
+        self.db.upsert_videos([VideoRow("youtube", "aaaaaaaaaaa", "yt:UC1", "A video",
+                                        channel_title="Something else")])
+        row = self.db.channel("yt:UC1")
+        self.assertEqual((row["title"], row["avatar_url"], row["tracked"], row["in_all"]),
+                         ("One", "https://a/av.jpg", 1, 1))
+
+    def test_the_count_of_rows_touched_still_counts_videos_only(self):
+        touched = self.db.upsert_videos([
+            VideoRow("youtube", "aaaaaaaaaaa", "yt:UCnew", "A video"),
+            VideoRow("youtube", "bbbbbbbbbbb", "yt:UCother", "Another"),
+        ])
+        self.assertEqual(touched, 2)
+
+
 class Channels(DatabaseCase):
     def test_add_reports_whether_it_was_new(self):
         self.assertTrue(self.db.add_channel("yt:UC1", "youtube", "UC1", "One"))

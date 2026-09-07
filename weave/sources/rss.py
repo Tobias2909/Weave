@@ -138,6 +138,11 @@ def parse(xml: bytes, kind: str = VIDEOS) -> FeedResult:
         owner = (entry.findtext("yt:channelId", namespaces=_NS) or feed_channel).strip()
         if not owner:
             continue
+        # An entry does not have to belong to the channel whose feed this is.
+        # An artist channel's auto playlists carry the linked label channel's
+        # uploads and streams, so the owner is read per entry and its name is
+        # carried with it, since that channel can be a stranger to us.
+        owner_name = (entry.findtext("atom:author/atom:name", namespaces=_NS) or "").strip()
 
         # starRating and statistics sit inside media:group/media:community, so
         # search by descendant rather than by exact path.
@@ -149,6 +154,7 @@ def parse(xml: bytes, kind: str = VIDEOS) -> FeedResult:
             platform="youtube",
             ext_id=ext_id,
             channel_key=channel_key(owner),
+            channel_title=owner_name or (feed_title if owner == feed_channel else None),
             title=title,
             published_at=_epoch(entry.findtext("atom:published", namespaces=_NS)),
             thumbnail_url=thumbnail.get("url") if thumbnail is not None else None,

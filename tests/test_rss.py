@@ -177,6 +177,60 @@ class Parse(unittest.TestCase):
         self.assertEqual(self.result.videos[1].channel_key, "yt:UCabcdefghijklmnopqrstuv")
 
 
+# An artist channel's auto playlist, which carries the linked label channel's
+# work as well as its own. Measured against the live endpoint: the live streams
+# playlist of one such channel held a single entry owned by the label, and the
+# stranger it names had no channels row, which made the foreign key refuse the
+# whole write.
+BORROWED_FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015"
+      xmlns:media="http://search.yahoo.com/mrss/"
+      xmlns="http://www.w3.org/2005/Atom">
+  <yt:playlistId>UULVabcdefghijklmnopqrstuv</yt:playlistId>
+  <yt:channelId>UCabcdefghijklmnopqrstuv</yt:channelId>
+  <title>Live streams</title>
+  <author>
+    <name>Example Channel</name>
+    <uri>https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv</uri>
+  </author>
+  <entry>
+    <yt:videoId>eeeeeeeeeee</yt:videoId>
+    <yt:channelId>UCstrangerhijklmnopqrstu</yt:channelId>
+    <title>Example ChannelVEVO Live Stream</title>
+    <author>
+      <name>ExampleChannelVEVO</name>
+      <uri>https://www.youtube.com/channel/UCstrangerhijklmnopqrstu</uri>
+    </author>
+    <published>2020-01-02T03:04:05+00:00</published>
+  </entry>
+</feed>
+"""
+
+
+class ABorrowedEntry(unittest.TestCase):
+    """An entry in one channel's feed can belong to another channel."""
+
+    def setUp(self):
+        self.result = rss.parse(BORROWED_FEED, rss.LIVE)
+
+    def test_the_feed_still_belongs_to_the_channel_asked_about(self):
+        self.assertEqual(self.result.channel_id, "UCabcdefghijklmnopqrstuv")
+        self.assertEqual(self.result.channel_title, "Example Channel")
+
+    def test_the_entry_keeps_its_own_owner(self):
+        video = self.result.videos[0]
+        self.assertEqual(video.channel_key, "yt:UCstrangerhijklmnopqrstu")
+
+    def test_the_owner_name_comes_with_it(self):
+        # Without this the stranger's row would have no name at all, since
+        # nothing else in Weave has ever heard of that channel.
+        self.assertEqual(self.result.videos[0].channel_title, "ExampleChannelVEVO")
+
+    def test_an_ordinary_entry_is_named_after_the_feed(self):
+        video = rss.parse(FEED).videos[1]
+        self.assertEqual(video.channel_title, "Example Channel")
+
+
 class Malformed(unittest.TestCase):
     def test_empty_feed_yields_nothing(self):
         xml = b'<feed xmlns="http://www.w3.org/2005/Atom"><title>x</title></feed>'

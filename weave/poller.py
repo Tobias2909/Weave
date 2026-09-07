@@ -29,6 +29,7 @@ from __future__ import annotations
 import random
 import threading
 import time
+import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -114,6 +115,9 @@ class FeedPoller(Worker):
         self._cfg = cfg
         self._force_all = force_all
         self._throttle = self._throttle_for(cfg, cfg.max_concurrency)
+        # What the sweep learned about videos that were not stored yet. Applied
+        # again once the feeds have run, see _phase_details_again.
+        self._late_details: list[tuple[str, int | None, str | None, int | None]] = []
 
     def run(self) -> None:
         fetcher = Fetcher(self._throttle, cancel=self._cancel)
@@ -126,8 +130,18 @@ class FeedPoller(Worker):
             if not self._cancel.is_set():
                 polled, rss_touched, failures = self._phase_rss(fetcher, budget)
                 touched += rss_touched
+            touched += self._phase_details_again()
         except (FetchCancelled, ProcessCancelled):
             pass
+        except Exception as exc:
+            # Nothing may escape here. The interface holds a flag while a poll
+            # is in flight and clears it on finished_poll, so a poll that dies
+            # on the way out leaves that flag raised and nothing refreshes
+            # again for the rest of the session. One that says what happened
+            # and then finishes is recoverable; a dead thread is not.
+            traceback.print_exc()
+            failures += 1
+            self.failure.emit("feeds", f"the refresh stopped, {type(exc).__name__}: {exc}")
         finally:
             fetcher.close()
             self._db.close()
@@ -185,6 +199,10 @@ class FeedPoller(Worker):
             [(v.key, v.duration_s, v.live_status, v.scheduled_at) for v in videos])
 
         unknown = self._db.unknown_video_keys([v.key for v in videos])
+        # fill_details is an update, so what it was told about a video the
+        # feeds have not stored yet went nowhere. Kept for after the feeds.
+        self._late_details = [(v.key, v.duration_s, v.live_status, v.scheduled_at)
+                              for v in videos if v.key in unknown]
         if unknown:
             owners = {channel_key(v.channel_id) for v in videos
                       if v.key in unknown and v.channel_id}
@@ -193,6 +211,19 @@ class FeedPoller(Worker):
                 self.progress.emit("new", promoted, promoted)
         self.progress.emit("durations", 1, 1)
         return filled
+
+    def _phase_details_again(self) -> int:
+        """Apply the sweep's durations and live flags a second time.
+
+        The sweep runs first, so anything it named that the feeds went on to
+        store in the same round was not there to be updated when it spoke.
+        A stream is the case that matters: RSS carries no live flag at all, so
+        without this the badge and the live bar wait for the next sweep, which
+        is a quarter of an hour away. It costs no request, since this is the
+        answer the sweep already gave.
+        """
+        late, self._late_details = self._late_details, []
+        return self._db.fill_details(late) if late else 0
 
     # ---- phase 2 ---------------------------------------------------------
 

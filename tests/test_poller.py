@@ -5,6 +5,8 @@ runs, and a worker only runs against the network. One such mistake stopped the
 whole live check and took the results that had already been gathered with it.
 """
 
+import contextlib
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,7 +16,7 @@ from PySide6.QtCore import QCoreApplication
 from weave import poller
 from weave.budget import Budget
 from weave.config import Config
-from weave.db import Database, VideoRow
+from weave.db import Database, FeedTiers, VideoRow
 from weave.ids import ChannelRef
 from weave.net import HttpError
 from weave.sources import rss
@@ -323,6 +325,144 @@ class BudgetedRound(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AFeedThatNamesAStranger(unittest.TestCase):
+    """A feed entry can belong to a channel Weave has never heard of.
+
+    An artist channel's own live streams playlist carries the linked label
+    channel's streams, and a video cannot be stored without its channel, so
+    the write was refused by the foreign key. That exception escaped the
+    thread, which left the interface waiting for a poll that was already dead
+    and stopped every later refresh for the rest of the session.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self._tmp.name) / "t.db")
+        self.cfg = Config(raw={})
+        self.db.add_channel("yt:UC1", "youtube", "UC1", "One")
+        self.poller = poller.FeedPoller(self.db, self.cfg)
+        self._real = poller.rss.fetch
+        self.addCleanup(setattr, poller.rss, "fetch", self._real)
+        borrowed = VideoRow("youtube", "eeeeeeeeeee", "yt:UCstranger", "A label stream",
+                            channel_title="OneVEVO")
+        mine = VideoRow("youtube", "aaaaaaaaaaa", "yt:UC1", "My own video")
+        poller.rss.fetch = lambda fetcher, ext_id, kind=rss.VIDEOS: (
+            rss.FeedResult("UC1", "One", [mine], rss.VIDEOS) if kind != rss.LIVE
+            else rss.FeedResult("UC1", "One", [borrowed], rss.LIVE))
+        budget = Budget(self.db, self.cfg.budget_limits, self.cfg.budget_window_s)
+        self.polled, self.touched, self.failures = self.poller._phase_rss(None, budget)
+
+    def tearDown(self):
+        self.db.close()
+        self._tmp.cleanup()
+
+    def test_the_round_finishes(self):
+        self.assertEqual(self.failures, 0)
+        self.assertEqual(self.polled, 1)
+
+    def test_both_videos_are_stored(self):
+        keys = {row["key"] for row in self.db.feed(limit=50)}
+        self.assertIn("yt:aaaaaaaaaaa", keys)
+        stored = self.db.conn.execute(
+            "SELECT channel_key FROM videos WHERE key='yt:eeeeeeeeeee'").fetchone()
+        self.assertEqual(stored["channel_key"], "yt:UCstranger")
+
+    def test_the_stranger_is_kept_but_not_followed(self):
+        row = self.db.channel("yt:UCstranger")
+        self.assertEqual(row["title"], "OneVEVO")
+        self.assertEqual((row["tracked"], row["in_all"]), (0, 0))
+        self.assertNotIn("yt:UCstranger", {c["key"] for c in self.db.channels()})
+
+    def test_the_stranger_is_never_polled(self):
+        due = {row["key"] for row in self.db.channels_due(FeedTiers(), force=True)}
+        self.assertNotIn("yt:UCstranger", due)
+
+
+class APollThatDiesStillReportsItself(unittest.TestCase):
+    """finished_poll has to be emitted whatever happens.
+
+    The interface raises a flag while a poll is in flight and lowers it there.
+    An exception that escapes run leaves that flag raised, and then nothing
+    refreshes again until the app is restarted, which is far worse than the
+    fault that caused it.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self._tmp.name) / "t.db"
+        self.db = Database(self.path)
+        self.cfg = Config(raw={})
+        self.worker = poller.FeedPoller(self.db, self.cfg)
+        self.worker._phase_sweep = lambda budget: 0
+        def boom(fetcher, budget):
+            raise RuntimeError("FOREIGN KEY constraint failed")
+        self.worker._phase_rss = boom
+        self.finished = []
+        self.failures = []
+        self.worker.finished_poll.connect(lambda *a: self.finished.append(a))
+        self.worker.failure.connect(lambda *a: self.failures.append(a))
+        # The traceback is printed on purpose, so a real fault is still
+        # readable in the terminal. Swallowed here to keep the run tidy.
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.worker.run()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_it_finishes(self):
+        self.assertEqual(len(self.finished), 1)
+
+    def test_it_says_what_went_wrong(self):
+        self.assertEqual(len(self.failures), 1)
+        self.assertIn("RuntimeError", self.failures[0][1])
+        self.assertIn("FOREIGN KEY", self.failures[0][1])
+
+    def test_the_failure_is_counted(self):
+        self.assertEqual(self.finished[0][2], 1)
+
+
+class TheSweepsFlagReachesAVideoStoredAfterIt(unittest.TestCase):
+    """A stream that starts between two sweeps.
+
+    The sweep runs before the feeds and is the only thing that knows a video
+    is live, but it can only update rows that already exist. A stream the
+    feeds store in the same round was not there when the sweep spoke, so
+    without a second pass its live flag waited for the next sweep a quarter of
+    an hour later, and the badge and the live bar waited with it.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self._tmp.name) / "t.db"
+        self.db = Database(self.path)
+        self.cfg = Config(raw={})
+        self.db.add_channel("yt:UC1", "youtube", "UC1", "One")
+        self.worker = poller.FeedPoller(self.db, self.cfg)
+        self._real_sweep, self._real_rss = poller.sweep.fetch, poller.rss.fetch
+        self.addCleanup(setattr, poller.sweep, "fetch", self._real_sweep)
+        self.addCleanup(setattr, poller.rss, "fetch", self._real_rss)
+        poller.sweep.fetch = lambda *a, **k: [
+            SweptVideo("aaaaaaaaaaa", None, "is_live", "UC1")]
+        fresh = VideoRow("youtube", "aaaaaaaaaaa", "yt:UC1", "Starting now")
+        poller.rss.fetch = lambda fetcher, ext_id, kind=rss.VIDEOS: rss.FeedResult(
+            "UC1", "One", [fresh], kind)
+        self.worker.run()
+        self.after = Database(self.path)
+        self.addCleanup(self.after.close)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_the_video_is_live(self):
+        row = self.after.conn.execute(
+            "SELECT live_status FROM videos WHERE key='yt:aaaaaaaaaaa'").fetchone()
+        self.assertEqual(row["live_status"], "is_live")
+
+    def test_it_reaches_the_live_bar(self):
+        self.assertEqual([row["ext_id"] for row in self.after.live_youtube()],
+                         ["aaaaaaaaaaa"])
 
 
 class DecidingWhetherAChannelStreams(unittest.TestCase):

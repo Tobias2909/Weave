@@ -255,6 +255,10 @@ class VideoRow:
     # Known at insert time now that each tab has its own feed. None means the
     # source could not say, which only happens on the mixed channel feed.
     is_short: bool | None = None
+    # The name of the channel that posted it, when the source happened to say.
+    # Only used to name a channel Weave has never heard of, which a feed can
+    # hand over, so it is never written over a name already stored.
+    channel_title: str | None = None
 
     @property
     def key(self) -> str:
@@ -767,6 +771,7 @@ class Database:
         channel edits a title later.
         """
         now = int(time.time())
+        rows = list(rows)
         payload = [
             (
                 r.key, r.platform, r.ext_id, r.channel_key, r.title, r.published_at,
@@ -777,7 +782,26 @@ class Database:
         ]
         if not payload:
             return 0
+        # A video cannot be stored without its channel, and the channel a feed
+        # names is not always one Weave knows. An artist channel's own live
+        # streams playlist carries a stream owned by the linked label channel,
+        # and the foreign key turned that into an exception that took the whole
+        # poll down with it. So a stranger gets the same untracked row a video
+        # saved out of a search brings with it: it has a name and somewhere
+        # for a picture, it is never polled and it never reaches All. IGNORE
+        # rather than a conflict clause, so a channel already followed keeps
+        # every flag it has.
+        strangers: dict[str, tuple[str, str | None]] = {}
+        for r in rows:
+            platform, title = strangers.get(r.channel_key, (r.platform, None))
+            strangers[r.channel_key] = (platform, title or r.channel_title)
         with self.conn as conn:
+            conn.executemany(
+                "INSERT OR IGNORE INTO channels(key, platform, ext_id, title, added_at, "
+                "  tracked, in_all) VALUES(?,?,?,?,?,0,0)",
+                [(key, platform, key.split(":", 1)[-1], title, now)
+                 for key, (platform, title) in strangers.items()],
+            )
             before = conn.total_changes
             conn.executemany(
                 """
