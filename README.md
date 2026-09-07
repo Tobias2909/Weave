@@ -165,8 +165,8 @@ Everything is done in the window. The first start opens a few pages that walk yo
 through it, one to import your subscriptions, one to connect Twitch, one to try
 the themes on and one that says how the rest is used. They stop appearing once
 the subscriptions are imported and Twitch is connected, the box in their corner
-stops them sooner, and **Getting started** on the settings page opens them again
-whenever you want.
+stops them sooner, and the **Getting started** button on the settings page opens
+them again whenever you want.
 
 **Import subscriptions** lives on that page as well. It reads your subscription
 list and tracks every channel in it. The box in the toolbar adds one by hand and takes

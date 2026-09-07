@@ -1327,7 +1327,11 @@ ApplicationWindow {
             // The channels themselves are untouched, as with a box and its
             // videos.
             text: "Delete the group"
-            onTriggered: { App.deleteGroup(groupMenu.groupId); groupMenu.dismiss() }
+            onTriggered: {
+                var id = groupMenu.groupId, name = groupMenu.groupName
+                groupMenu.dismiss()
+                confirmDelete.ask("group", id, name)
+            }
         }
     }
 
@@ -1357,12 +1361,20 @@ ApplicationWindow {
             // The videos themselves are untouched, as with a group and its
             // channels.
             text: "Delete the box"
-            onTriggered: { App.deleteBox(boxMenu.boxId); boxMenu.dismiss() }
+            onTriggered: {
+                var id = boxMenu.boxId, name = boxMenu.boxName
+                boxMenu.dismiss()
+                confirmDelete.ask("box", id, name)
+            }
         }
     }
 
     ManageGroup {
         id: manageGroup
+    }
+
+    ConfirmDelete {
+        id: confirmDelete
     }
 
     // The ground behind the getting started pages. Drawn here rather than by

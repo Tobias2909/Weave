@@ -1711,6 +1711,14 @@ class Bridge(QObject):
         if self._db.move_box(box_id, delta):
             self.boxesChanged.emit()
 
+    @Slot(int, result="QVariantList")
+    def boxVideos(self, box_id: int) -> list:
+        """What one box holds, by title, for the window that asks before it is
+        deleted. The videos themselves are kept, so this is a reminder of what
+        the box was rather than a warning about losing anything."""
+        return [{"key": row["key"], "title": row["title"] or row["key"]}
+                for row in self._db.feed(limit=200, hide_watched=False, box_id=box_id)]
+
     @Slot(int, str)
     def addChannelToGroup(self, group_id: int, channel_key: str) -> None:
         if not channel_key:

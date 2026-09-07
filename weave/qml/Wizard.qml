@@ -118,13 +118,14 @@ Popup {
                 objectName: "wizardBody"
                 width: parent.width
                 text: [
-                    "This is your subscriptions and nothing else. No front page, no "
-                        + "recommendations you did not ask for, and every video opens in mpv "
-                        + "rather than in a page. These few pages are only the parts worth "
-                        + "knowing before you start. There is a good deal more in here than "
-                        + "they cover, and the rest is worth finding as you go. It takes "
-                        + "about a minute, none of it is final, and Getting started on the "
-                        + "settings page opens these again whenever you want them.",
+                    "This is your subscriptions first. Nothing is put in front of them, "
+                        + "what YouTube suggests waits on a page of its own until you go "
+                        + "looking for it, and every video opens in mpv rather than in a "
+                        + "page. These few pages are only the parts worth knowing before you "
+                        + "start. There is a good deal more in here than they cover, and the "
+                        + "rest is worth finding as you go. None of it is final either, and "
+                        + "the Getting started button on the settings page opens these pages "
+                        + "again whenever you want them.",
                     "Weave builds its feed from each channel's own feed, so it has to know "
                         + "which channels are yours. Importing reads that list from YouTube "
                         + "once and follows every channel in it. Nothing is written back to "

@@ -434,7 +434,21 @@ class Smoke:
         settle(0.3)
         back = [box["name"] for box in read(bridge, "boxes")]
         self.check("and down again", back == names, ", ".join(back))
-        bridge.deleteBox(first)
+        # The same question for a box, which lists its videos.
+        bridge.addToBox(first, "yt:smokevid001")
+        settle(0.3)
+        confirm = find(window, "confirmDelete")
+        confirm.ask("box", first, "Alpha")
+        settle(0.4)
+        self.check("deleting a box asks first too", read(confirm, "visible"))
+        self.check("and lists the videos in it",
+                   read(find(window, "confirmMembers"), "count") == 1,
+                   f"count {read(find(window, 'confirmMembers'), 'count')}")
+        call(find(window, "confirmDeleteButton"), "click")
+        settle(0.4)
+        self.check("and the button on it does the deleting",
+                   not any(box["id"] == first for box in read(bridge, "boxes")))
+
         bridge.deleteBox(second)
         settle(0.3)
 
@@ -683,6 +697,23 @@ class Smoke:
                               "Delete the group"], ", ".join(labels))
         menu.close()
         settle(0.2)
+
+        # Deleting asks first, and shows what is inside so the right one goes.
+        confirm = find(window, "confirmDelete")
+        confirm.ask("group", group_id, "Smoke group")
+        settle(0.4)
+        self.check("deleting a group asks first", read(confirm, "visible"))
+        self.check("and says which one",
+                   str(read(find(window, "confirmName"), "text")) == "Smoke group",
+                   str(read(find(window, "confirmName"), "text")))
+        self.check("and lists what is in it",
+                   read(find(window, "confirmMembers"), "count") == 1,
+                   f"count {read(find(window, 'confirmMembers'), 'count')}")
+        call(find(window, "confirmCancel"), "click")
+        settle(0.3)
+        self.check("and keeping it changes nothing",
+                   not read(confirm, "visible")
+                   and any(row["id"] == group_id for row in read(bridge, "groups")))
 
         manage = find(window, "manageGroup")
         write(manage, "groupId", group_id)
