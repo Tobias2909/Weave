@@ -645,6 +645,16 @@ class Smoke:
         self.check("and the one it was on chosen again",
                    read(bridge, "cacheCeiling") == was, str(read(ceiling, "text")))
 
+        # And the same fact in the check list, which is what a report of what
+        # went wrong is made from. Read off the property the page draws.
+        bridge.runChecks(False)
+        settle(1.2)
+        checks = read(bridge, "checks")
+        first = checks[0] if checks else {}
+        self.check("the check list leads with which Weave this is",
+                   first.get("name") == "Weave" and read(bridge, "version") in first.get("detail", ""),
+                   f"{first.get('name')}: {first.get('detail')}")
+
         # Which copy this is, so the version can be read without a terminal.
         self.check("the page states the version running",
                    str(read(find(window, "runningVersion"), "text")) == read(bridge, "version"),

@@ -15,6 +15,7 @@ from PySide6.QtCore import QCoreApplication, QObject
 from weave import __version__, poller
 from weave.config import Config
 from weave.db import Database
+from weave import doctor
 from weave.sources import release
 from weave.ui.bridge import UPDATE_INTERVAL_S, Bridge
 
@@ -94,6 +95,53 @@ class TheWorker(unittest.TestCase):
 
     def test_even_an_unexpected_failure_is_silent(self):
         self.assertEqual(self.run_it(RuntimeError("something else entirely")), [])
+
+
+class WhatTheDoctorSays(unittest.TestCase):
+    """The versions of every other tool are in that report, so this one has to
+    be too, or a report from that page cannot say what produced it."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self._tmp.name) / "t.db")
+
+    def tearDown(self):
+        self.db.close()
+        self._tmp.cleanup()
+
+    def line(self):
+        report = doctor.Report()
+        doctor._weave(self.db, report)
+        return report.checks[0]
+
+    def test_it_names_the_running_version(self):
+        self.assertEqual(self.line().name, "Weave")
+        self.assertIn(__version__, self.line().detail)
+
+    def test_before_the_first_check_it_says_so(self):
+        self.assertIn("not asked yet", self.line().detail)
+
+    def test_a_newer_release_is_named_with_where_to_go(self):
+        self.db.set_state("update_tag", "v99.0.0")
+        self.assertIn("newest 99.0.0", self.line().detail)
+        self.assertIn("newer release", self.line().fix)
+
+    def test_being_current_is_stated_plainly(self):
+        self.db.set_state("update_tag", f"v{__version__}")
+        self.assertIn("the newest", self.line().detail)
+        self.assertEqual(self.line().fix, "")
+
+    def test_it_is_never_a_warning(self):
+        # Being a version behind is not a fault, and the foot of the panel
+        # already says so where it can be acted on.
+        for tag in ("", "v99.0.0", f"v{__version__}", "nonsense"):
+            with self.subTest(tag=tag):
+                self.db.set_state("update_tag", tag)
+                self.assertEqual(self.line().state, doctor.OK)
+
+    def test_the_report_leads_with_it(self):
+        report = doctor.run(Config(raw={}), self.db, network=False)
+        self.assertEqual(report.checks[0].name, "Weave")
 
 
 class WhatTheWindowIsTold(unittest.TestCase):

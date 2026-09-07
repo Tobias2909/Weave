@@ -19,11 +19,12 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import paths
+from . import __version__, paths
 from .budget import FEEDS
 from .config import Config
 from .cookies import browser_spec
 from .db import Database
+from .sources import release as release_source
 
 OK = "ok"
 WARN = "warn"
@@ -65,6 +66,25 @@ def _version(command: list[str]) -> str | None:
     except (OSError, subprocess.SubprocessError):
         return None
     return (done.stdout or done.stderr).strip().splitlines()[0] if done.returncode == 0 else None
+
+
+def _weave(db: Database, report: Report) -> None:
+    """Which copy this is, and whether a newer one has been published.
+
+    The versions of everything else are already here, so leaving this one out
+    meant a report from this page could not say what produced it. Never a
+    warning: being a version behind is not a fault, and the foot of the panel
+    already says so where it can be acted on.
+    """
+    tag = db.get_state("update_tag") or ""
+    newest = release_source.numbers_text(tag)
+    if not newest:
+        report.add("Weave", OK, f"{__version__}, newest not asked yet")
+    elif release_source.is_newer(tag, __version__):
+        report.add("Weave", OK, f"{__version__}, newest {newest}",
+                   "A newer release is out, see the foot of the panel or the settings page")
+    else:
+        report.add("Weave", OK, f"{__version__}, the newest there is")
 
 
 def _tools(report: Report) -> None:
@@ -271,6 +291,7 @@ def _endpoints(cfg: Config, db: Database, report: Report) -> None:
 def run(cfg: Config, db: Database, network: bool = True) -> Report:
     """Everything, in the order a person would ask it."""
     report = Report()
+    _weave(db, report)
     _config(cfg, report)
     _tools(report)
     _cookies(cfg, report)
