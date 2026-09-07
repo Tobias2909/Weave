@@ -175,6 +175,9 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
     # the moment the request goes out a breath later.
     bridge.expectLiveCheck()
     QTimer.singleShot(600, bridge.refreshLive)
+    # Last of the three, and the least important. One request a day, and the
+    # answer from the last time is already on screen before it is made.
+    QTimer.singleShot(1500, bridge.checkForUpdate)
 
     def shutdown() -> None:
         feed_timer.stop()

@@ -21,6 +21,7 @@ from typing import Any
 from PySide6.QtCore import Property, QObject, Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QGuiApplication
 
+from .. import __version__
 from .. import format as fmt
 from .. import imagecache
 from .. import palette, themes
@@ -30,6 +31,7 @@ from ..config import Config
 from ..cookies import browser_spec
 from ..db import Database
 from ..imagecache import SECONDS_PER_DAY, plain_source, qml_source
+from ..sources import release as release_source
 from ..player.mpv import Player
 from ..poller import (
     ChannelAdder,
@@ -52,6 +54,7 @@ from ..poller import (
     SubsImporter,
     TrackList,
     TwitchLogin,
+    UpdateCheck,
 )
 from .feed_model import FeedModel
 from .navigation import History, MusicList, TrackCache
@@ -109,6 +112,12 @@ FAVORITES = "Favorites"
 KEEP_MUSIC = object()
 
 
+# How long an answer about the newest release is kept before asking again. A
+# day, because a release is not published twice in an afternoon and the check
+# is worth exactly one request.
+UPDATE_INTERVAL_S = 24 * 60 * 60
+
+
 class Bridge(QObject):
     statusChanged = Signal()
     busyChanged = Signal()
@@ -123,6 +132,7 @@ class Bridge(QObject):
     checksChanged = Signal()
     cacheChanged = Signal()
     startingChanged = Signal()
+    updateChanged = Signal()
     boxesChanged = Signal()
     viewChanged = Signal()
     liveChanged = Signal()
@@ -241,6 +251,12 @@ class Bridge(QObject):
         # so itself. Cleared when mpv reports back, on a failure, and by a
         # timer, because a chip that never leaves is worse than none.
         self._starting_key = ""
+        # A newer release than this one, remembered from the last time the
+        # question was asked so the foot of the panel can say so before any
+        # request is made.
+        self._update_tag = self._db.get_state("update_tag") or ""
+        self._update_address = self._db.get_state("update_address") or ""
+        self._update: UpdateCheck | None = None
         self._starting_timer = QTimer(self)
         self._starting_timer.setSingleShot(True)
         self._starting_timer.timeout.connect(lambda: self._set_starting(""))
@@ -443,6 +459,9 @@ class Bridge(QObject):
     cacheText = Property(str, _get_cache_text, notify=cacheChanged)
     cacheWorking = Property(bool, lambda self: self._cache_working, notify=cacheChanged)
     startingKey = Property(str, lambda self: self._starting_key, notify=startingChanged)
+    updateVersion = Property(str, lambda self: self._newer_version(), notify=updateChanged)
+    # What is running, for the line that says a newer one exists.
+    version = Property(str, lambda _self: __version__, constant=True)
     cacheCeiling = Property(int, lambda self: self._ceiling_mb(), notify=cacheChanged)
     cacheCeilingText = Property(str, lambda self: imagecache.ceiling_label(self._ceiling_mb()),
                                 notify=cacheChanged)
@@ -1278,6 +1297,50 @@ class Bridge(QObject):
         """Drop the lot. Every picture is fetched again the next time it is
         looked at, so this costs time rather than anything else."""
         self._run_cache_job(ImageCacheJob.CLEAR)
+
+    def _newer_version(self) -> str:
+        """The version worth telling him about, or nothing.
+
+        Compared here rather than when the answer arrives, so a release that
+        was newer once stops being announced the moment a copy of it is
+        running, with no second request and nothing to clear by hand.
+        """
+        if release_source.is_newer(self._update_tag, __version__):
+            return release_source.numbers_text(self._update_tag)
+        return ""
+
+    @Slot()
+    def checkForUpdate(self) -> None:
+        """Ask once a day whether there is a newer release.
+
+        One request to the repository, no account and nothing sent but the
+        request. Held to a day by a stamp in the database rather than by the
+        process, or restarting the program would ask every time.
+        """
+        if self._update is not None and self._update.isRunning():
+            return
+        asked = int(self._db.get_state("update_checked_at") or 0)
+        if time.time() - asked < UPDATE_INTERVAL_S:
+            return
+        self._update = UpdateCheck(self._cfg, self)
+        self._update.found.connect(self._on_update_found)
+        self._launch(self._update)
+
+    def _on_update_found(self, tag: str, address: str) -> None:
+        self._update_tag = tag
+        self._update_address = address
+        self._db.set_state("update_tag", tag)
+        self._db.set_state("update_address", address)
+        self._db.set_state("update_checked_at", str(int(time.time())))
+        self.updateChanged.emit()
+
+    @Slot()
+    def openRelease(self) -> None:
+        """The release page, in the browser. Nothing is downloaded here."""
+        from PySide6.QtGui import QDesktopServices
+
+        if self._update_address:
+            QDesktopServices.openUrl(QUrl(self._update_address))
 
     def _ceiling_mb(self) -> int:
         """The ceiling in force. The config holds the default and the choice

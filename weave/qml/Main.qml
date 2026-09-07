@@ -516,7 +516,10 @@ ApplicationWindow {
             width: parent.width
             y: Math.min(parent.height,
                         sidebarFlick.y + sidebarColumn.height - sidebarFlick.contentY)
-            height: Math.max(0, parent.height - y)
+            // Stops above the update line, so pressing that opens the release
+            // page rather than taking hold of the window.
+            height: Math.max(0, parent.height - y
+                                - (updateLine.visible ? updateLine.height : 0))
             acceptedButtons: Qt.LeftButton
 
             // The compositor does the moving, exactly as it does from the
@@ -558,11 +561,64 @@ ApplicationWindow {
             }
         }
 
+        // A newer release than the one running. At the foot of the panel
+        // rather than in the toolbar, since it is news rather than a control,
+        // and it is drawn only while there is something to say.
+        Rectangle {
+            id: updateLine
+            objectName: "updateLine"
+            visible: App.updateVersion !== ""
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: visible ? updateColumn.height + 16 : 0
+            color: updateHover.hovered ? Theme.colors.surfaceRaised : "transparent"
+            z: 2
+
+            HoverHandler { id: updateHover }
+            TapHandler { onTapped: App.openRelease() }
+
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: 1
+                color: Theme.colors.border
+            }
+
+            Column {
+                id: updateColumn
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: 14
+                anchors.rightMargin: 14
+                spacing: 2
+
+                Label {
+                    objectName: "updateHeadline"
+                    width: parent.width
+                    text: "A new version is available"
+                    color: Theme.colors.accent
+                    font.pixelSize: 12
+                    elide: Text.ElideRight
+                }
+
+                Label {
+                    width: parent.width
+                    text: App.updateVersion + ", this one is " + App.version
+                    color: Theme.colors.textMuted
+                    font.pixelSize: 11
+                    elide: Text.ElideRight
+                }
+            }
+        }
+
         Flickable {
             id: sidebarFlick
             anchors.fill: parent
             anchors.topMargin: 8
-            anchors.bottomMargin: 8
+            anchors.bottomMargin: 8 + (updateLine.visible ? updateLine.height : 0)
             contentHeight: sidebarColumn.height
             clip: true
             interactive: false

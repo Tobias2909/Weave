@@ -392,6 +392,36 @@ class Smoke:
         self.check("a failure takes the chip away", read(bridge, "startingKey") == "",
                    str(read(bridge, "startingKey")))
 
+    def updates(self, bridge, window) -> None:
+        """News of a newer release, at the foot of the panel.
+
+        Fed by hand here. The real answer comes from one request a day, which
+        an offline walk must not make and could not rely on anyway.
+        """
+        line = find(window, "updateLine")
+        self.check("nothing is said while there is no newer release",
+                   not read(line, "visible"))
+        bridge._on_update_found("v99.0.0", "https://example.invalid/releases/99.0.0")
+        settle(0.4)
+        self.check("a newer release shows at the foot of the panel", read(line, "visible"))
+        self.check("and it says which one", read(bridge, "updateVersion") == "99.0.0",
+                   str(read(bridge, "updateVersion")))
+        self.check("in words rather than a number alone",
+                   str(read(find(window, "updateHeadline"), "text")) == "A new version is available",
+                   str(read(find(window, "updateHeadline"), "text")))
+        self.check("and the list keeps clear of it",
+                   read(find(window, "sidebarDrag"), "height") >= 0
+                   and read(line, "height") > 0, f"{read(line, 'height'):.0f} px")
+        if self.shot:
+            self.check("update written", screenshot(window, shot_beside(self.shot, "update")))
+
+        # The case that matters after an update has been installed.
+        bridge._on_update_found("v" + str(read(bridge, "version")), "")
+        settle(0.3)
+        self.check("the version already running is never announced",
+                   not read(line, "visible") and read(bridge, "updateVersion") == "",
+                   str(read(bridge, "updateVersion")))
+
     def scrolling(self, bridge, window) -> None:
         """A refresh landing while somebody is reading must not move the page.
 
@@ -622,6 +652,7 @@ class Smoke:
                        str(read(find(window, name), "text")))
 
         self.starting(bridge, window)
+        self.updates(bridge, window)
         self.scrolling(bridge, window)
 
         if self.shot:

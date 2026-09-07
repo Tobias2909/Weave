@@ -52,6 +52,7 @@ from .sources import flatlist, livecheck, rss, subs, sweep, twitch
 from .sources import history as history_source
 from .sources import playlists as playlist_source
 from .sources import recommended as recommended_source
+from .sources import release as release_source
 from .sources import search as search_source
 
 
@@ -643,6 +644,38 @@ class Checkup(Worker):
         self.ready.emit([{"name": check.name, "state": check.state,
                           "detail": check.detail, "fix": check.fix}
                          for check in report.checks])
+
+
+class UpdateCheck(Worker):
+    """Whether a newer release than this one has been published.
+
+    One request, at most once a day, and the answer is remembered so a
+    restart does not ask again. The stamp is written only when the answer
+    arrives, so being offline at launch means asking again next time rather
+    than going quiet for a day.
+    """
+
+    # tag, address of the release page
+    found = Signal(str, str)
+
+    def __init__(self, cfg: Config, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._cfg = cfg
+        self._throttle = self._throttle_for(cfg, 1)
+
+    def run(self) -> None:
+        fetcher = Fetcher(self._throttle, cancel=self._cancel)
+        try:
+            tag, address = release_source.fetch(fetcher)
+        except Exception:
+            # Nothing is said and nothing is remembered. A version check is
+            # the least important thing here and not worth a line in the
+            # problems list when the network is unhappy, and the day only
+            # begins counting once an answer has actually arrived.
+            return
+        finally:
+            fetcher.close()
+        self.found.emit(tag, address)
 
 
 class ImageCacheJob(Worker):
