@@ -41,7 +41,11 @@ Rectangle {
     // watched, since it cannot be played yet either. On this palette a card
     // sits close to the colour behind it, so raising this reads as almost no
     // change at all and the separation was measured away at 0.75.
-    opacity: (watched || isUpcoming) ? 0.55 : 1.0
+    // Only what has been watched. An announcement was dimmed too, on the
+    // reasoning that it cannot be played yet, but a stream somebody is waiting
+    // for is the opposite of something already dealt with and it read as a
+    // fault in the picture rather than as a state.
+    opacity: watched ? 0.55 : 1.0
 
     HoverHandler { id: hover }
 

@@ -138,6 +138,7 @@ class Bridge(QObject):
     startingChanged = Signal()
     updateChanged = Signal()
     wizardChanged = Signal()
+    recommendedChanged = Signal()
     importChanged = Signal()
     boxesChanged = Signal()
     viewChanged = Signal()
@@ -487,7 +488,8 @@ class Bridge(QObject):
     # "" before anything was asked, then working, done or failed.
     importState = Property(str, lambda self: self._import_state, notify=importChanged)
     importMessage = Property(str, lambda self: self._import_message, notify=importChanged)
-    recommendedText = Property(str, lambda self: self._recommended_line(), notify=viewChanged)
+    recommendedText = Property(str, lambda self: self._recommended_line(),
+                               notify=recommendedChanged)
     cacheCeiling = Property(int, lambda self: self._ceiling_mb(), notify=cacheChanged)
     cacheCeilingText = Property(str, lambda self: imagecache.ceiling_label(self._ceiling_mb()),
                                 notify=cacheChanged)
@@ -587,6 +589,10 @@ class Bridge(QObject):
             "dislikesText": fmt.count_text(self._dislikes_for(row)),
             "watched": bool(row["watched"]),
             "isLive": row["live_status"] == "is_live",
+            "isUpcoming": row["live_status"] == "is_upcoming",
+            # The panel is where somebody deciding whether to be there looks,
+            # so it says the hour rather than how long there is to wait.
+            "startsText": fmt.start_time_text(self._extra(row, "scheduled_at")),
         }
 
     def _extra(self, row, name: str):
@@ -926,6 +932,9 @@ class Bridge(QObject):
             # away from.
             self.searchEnded.emit()
         self.viewChanged.emit()
+        # The line above the suggestions is about that page, and arriving on it
+        # is one of the two moments it can be wrong.
+        self.recommendedChanged.emit()
         self.reload()
         # Work a view needs on entry happens here, so every way of reaching it
         # behaves the same. It used to hang off the sidebar row, and the wheel
@@ -1518,6 +1527,10 @@ class Bridge(QObject):
         self._launch(self._recommended)
 
     def _on_recommended(self, count: int) -> None:
+        # The row above the cards says how old they are, so it has to hear
+        # about this. It used to be told only when the view changed, which
+        # meant leaving the page and coming back to see the answer move.
+        self.recommendedChanged.emit()
         self._loading_more = False
         self._set_notice("")
         # Nothing new means the feed has been walked to its end for now.

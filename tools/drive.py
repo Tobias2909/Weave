@@ -100,6 +100,21 @@ def settle(seconds: float) -> None:
         time.sleep(0.005)
 
 
+def wait_until(answer, seconds: float = 3.0) -> bool:
+    """Let the loop run until something is true, or give up.
+
+    A fixed settle is a guess about how long a view takes to build, and the
+    software renderer takes longer than this one, so a guess that holds here
+    fails in the suite.
+    """
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if answer():
+            return True
+        settle(0.1)
+    return answer()
+
+
 def screenshot(window, path: str) -> bool:
     image = window.grabWindow()
     return bool(image.save(path))
@@ -408,6 +423,36 @@ class Smoke:
         self.check("a failure takes the chip away", read(bridge, "startingKey") == "",
                    str(read(bridge, "startingKey")))
 
+    def announcements(self, bridge, window) -> None:
+        """A stream that has not begun says when it will, in the panel as well.
+
+        The badge on the card says how long there is to wait, which answers a
+        different question from the one somebody deciding whether to be there
+        asks.
+        """
+        import time as clock
+
+        from weave import paths
+        from weave.db import Database
+
+        db = Database(paths.DB_FILE)
+        with db.conn as conn:
+            conn.execute("UPDATE videos SET live_status='is_upcoming', scheduled_at=? "
+                         "WHERE key='yt:smokevid005'", (int(clock.time()) + 5 * 3600,))
+        db.close()
+        bridge.selectGroup(-1)
+        bridge.reload()
+        settle(0.5)
+        bridge.openDetail("yt:smokevid005")
+        settle(0.6)
+        says = read(bridge, "detail").get("startsText", "")
+        self.check("the panel says when an announced stream begins", says != "", says)
+        row = bridge._model.row_for_key("yt:smokevid005")
+        self.check("and the card is not dimmed for being one",
+                   row is not None and row.get("isUpcoming") is True)
+        bridge.closeDetail()
+        settle(0.3)
+
     def suggestions(self, bridge, window) -> None:
         """The suggestions page says how old it is and carries its own button.
 
@@ -428,6 +473,20 @@ class Smoke:
         self.check("the bar no longer offers the same thing twice",
                    str(read(find(window, "viewAction"), "text")) == "",
                    str(read(find(window, "viewAction"), "text")))
+        # It sits outside the grid, so scrolling cannot take it away. That is
+        # what it did as the grid's own header, which builds and drops it as
+        # the view moves.
+        grid = find(window, "grid")
+        write(grid, "contentY", 600.0)
+        settle(0.4)
+        write(grid, "contentY", 0.0)
+        settle(0.5)
+        bar = item_named(root, "recommendedHeader")
+        self.check("and scrolling does not take the row away",
+                   bar is not None and read(bar, "visible")
+                   and read(item_named(root, "gridHeader"), "height") > 0,
+                   f"height {read(item_named(root, 'gridHeader'), 'height')}")
+
         bridge.selectGroup(-1)
         settle(0.4)
         self.check("and none of it follows the feed home",
@@ -615,8 +674,16 @@ class Smoke:
         bridge.reload()
         settle(0.4)
         grid = find(window, "grid")
+        # The rows reach the model at once and the view lays them out when it
+        # next draws, which offscreen it may not hurry to do. Measured with the
+        # count already at forty six and the content still the height of two
+        # rows, so the layout is asked for rather than waited on.
+        wait_until(lambda: read(grid, "count") > 40, 4.0)
+        call(grid, "forceLayout")
+        settle(0.2)
         room = read(grid, "contentHeight") - read(grid, "height")
-        self.check("the feed is long enough to scroll", room > 0, f"{room:.0f} px of room")
+        self.check("the feed is long enough to scroll", room > 0,
+                   f"{room:.0f} px of room, {read(grid, 'count')} cards")
         QQmlProperty.write(grid, "contentY", 300.0)
         settle(0.3)
         was = read(grid, "contentY")
@@ -881,6 +948,7 @@ class Smoke:
 
         self.starting(bridge, window)
         self.updates(bridge, window)
+        self.announcements(bridge, window)
         self.suggestions(bridge, window)
         self.boxes(bridge, window)
         self.wizard(bridge, window)

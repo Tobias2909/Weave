@@ -144,6 +144,51 @@ class WhatTheDoctorSays(unittest.TestCase):
         self.assertEqual(report.checks[0].name, "Weave")
 
 
+class TheLineAboveTheSuggestions(unittest.TestCase):
+    """It said how old they were and then kept saying it.
+
+    The property hung off the view changing, so pressing the button under it
+    changed the cards and not the words, and only leaving the page and coming
+    back moved them.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self._tmp.name) / "t.db")
+        self.bridge = Bridge.__new__(Bridge)
+        QObject.__init__(self.bridge)
+        self.bridge._db = self.db
+
+    def tearDown(self):
+        self.db.close()
+        self._tmp.cleanup()
+
+    def line(self):
+        return Bridge.recommendedText.fget(self.bridge)
+
+    def test_an_empty_page_says_so(self):
+        self.assertEqual(self.line(), "Nothing read yet")
+
+    def test_it_counts_what_is_there_and_how_old_it_is(self):
+        self.db.replace_cached(self.db.RECOMMENDED, [{
+            "key": "yt:aaaaaaaaaaa", "ext_id": "aaaaaaaaaaa", "title": "One",
+            "channel_name": "Someone", "channel_ext_id": "UC1", "duration_s": 60,
+            "thumbnail_url": None, "views": 1, "published_at": 1,
+            "live_status": None, "scheduled_at": None,
+        }])
+        line = self.line()
+        self.assertIn("1 suggestions", line)
+        self.assertTrue(line.startswith("Read "), line)
+
+    def test_the_property_is_told_when_the_page_is_read(self):
+        # Not by the view changing, which is the whole bug. Read off the meta
+        # object, since that is what QML binds against.
+        meta = Bridge.staticMetaObject
+        prop = meta.property(meta.indexOfProperty("recommendedText"))
+        self.assertTrue(prop.hasNotifySignal())
+        self.assertEqual(bytes(prop.notifySignal().name()).decode(), "recommendedChanged")
+
+
 class WhatTheWindowIsTold(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()

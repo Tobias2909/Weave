@@ -912,7 +912,11 @@ class Database:
                    r.title AS title,
                    r.published_at AS published_at, r.thumbnail_url AS thumbnail_url,
                    r.duration_s AS duration_s, r.views AS views,
-                   NULL AS likes, NULL AS dislikes, NULL AS live_status,
+                   NULL AS likes, NULL AS dislikes,
+                   -- A suggestion or a history entry can be a stream that has
+                   -- not begun, and the panel says when it does, so these two
+                   -- are read rather than left empty the way the rest are.
+                   r.live_status AS live_status, r.scheduled_at AS scheduled_at,
                    NULL AS is_short,
                    COALESCE(c.title, r.channel_name) AS channel_title,
                    c.avatar_url AS avatar_url,
@@ -926,7 +930,8 @@ class Database:
                    COALESCE(c.key, IIF(i.channel_ext_id IS NULL, '',
                                        'yt:' || i.channel_ext_id)), i.title,
                    i.published_at, i.thumbnail_url, i.duration_s, i.views,
-                   NULL, NULL, NULL, NULL,
+                   -- A playlist entry carries neither of them.
+                   NULL, NULL, NULL, NULL, NULL,
                    COALESCE(c.title, i.channel_name), c.avatar_url,
                    w.video_key IS NOT NULL
             FROM playlist_items i

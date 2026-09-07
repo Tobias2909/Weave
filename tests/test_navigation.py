@@ -108,6 +108,9 @@ def make_bridge():
     bridge.statusChanged = Recorder()
     bridge.searchEnded = Recorder()
     bridge.navChanged = Recorder()
+    # The row above the suggestions is told on the way onto that page, since
+    # how long ago they were read keeps growing while nothing else changes.
+    bridge.recommendedChanged = Recorder()
     bridge.musicChanged = Recorder()
     bridge.reload = lambda: None
     bridge._fetch_recommended = lambda *a, **k: None

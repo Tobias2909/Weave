@@ -876,6 +876,88 @@ ApplicationWindow {
         onPlaylistsRequested: playlistChooser.open()
     }
 
+    // The row above the cards, for the two views that have one. Outside the
+    // grid rather than its header: a view builds and drops its header as it
+    // scrolls, and a header whose height is decided by a binding comes back
+    // measured at nothing, which is how it went missing on the way back up.
+    // Out here it is also simply always there, which is what it is for.
+    Item {
+        id: viewBar
+        objectName: "gridHeader"
+        readonly property bool onHistory: App.viewKind === "history"
+        readonly property bool onSuggestions: App.viewKind === "recommended"
+
+        visible: grid.visible && (onHistory || onSuggestions)
+        height: visible ? 42 : 0
+        anchors.left: grid.left
+        anchors.right: grid.right
+        anchors.top: channelHeader.visible ? channelHeader.bottom
+                                           : (liveBar.visible ? liveBar.bottom : parent.top)
+        anchors.topMargin: channelHeader.visible ? 8
+                                                 : (liveBar.visible ? 10 : banner.height + 10)
+
+        Row {
+            objectName: "historyHeader"
+            visible: viewBar.onHistory
+            anchors.left: parent.left
+            anchors.leftMargin: 6
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 8
+
+            FlatButton {
+                objectName: "historyVideos"
+                text: "Videos"
+                accent: !App.historyShowsMusic
+                onClicked: App.showMusicInHistory(false)
+            }
+            FlatButton {
+                objectName: "historyMusic"
+                text: "Music"
+                accent: App.historyShowsMusic
+                onClicked: App.showMusicInHistory(true)
+            }
+        }
+
+        // The suggestions say where they came from and how old they
+        // are, and the one thing that can be done about that sits
+        // beside them rather than in the bar.
+        Item {
+            objectName: "recommendedHeader"
+            visible: viewBar.onSuggestions
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.leftMargin: 6
+            anchors.rightMargin: 6
+            anchors.verticalCenter: parent.verticalCenter
+            height: 28
+
+            Label {
+                objectName: "recommendedState"
+                anchors.left: parent.left
+                anchors.right: askAgain.left
+                anchors.rightMargin: 10
+                anchors.verticalCenter: parent.verticalCenter
+                text: App.recommendedText
+                color: Theme.colors.textMuted
+                font.pixelSize: 12
+                elide: Text.ElideRight
+            }
+
+            FlatButton {
+                id: askAgain
+                objectName: "recommendedRefresh"
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                text: "Fresh recommendations"
+                // Not tied to App.busy. That flag belongs to the feed
+                // poll, which has nothing to do with this page, and a
+                // button that greys out once a minute for no visible
+                // reason reads as broken.
+                onClicked: App.refreshRecommended()
+            }
+        }
+    }
+
     GridView {
         id: grid
         objectName: "grid"
@@ -883,11 +965,11 @@ ApplicationWindow {
                  && App.viewKind !== "settings"
         anchors.left: sidebar.right
         anchors.right: detailPanel.visible ? detailPanel.left : parent.right
-        anchors.top: channelHeader.visible ? channelHeader.bottom
-                                          : (liveBar.visible ? liveBar.bottom : parent.top)
+        // Under the row above, which holds the place the grid used to take
+        // even when it has nothing to show, so nothing moves when it does.
+        anchors.top: viewBar.bottom
         anchors.bottom: miniPlayer.top
-        anchors.topMargin: channelHeader.visible ? 8
-                                                 : (liveBar.visible ? 10 : banner.height + 10)
+        anchors.topMargin: viewBar.visible ? 8 : 0
         anchors.leftMargin: 10
         anchors.rightMargin: 10
         clip: true
@@ -911,78 +993,6 @@ ApplicationWindow {
         // one it is answering and lets the other be asked. It rides above the
         // first row rather than sitting in the toolbar, which is already full
         // and has nothing to do with this view.
-        header: Component {
-            Item {
-                objectName: "gridHeader"
-                width: grid.width
-                readonly property bool onHistory: App.viewKind === "history"
-                readonly property bool onSuggestions: App.viewKind === "recommended"
-                height: onHistory || onSuggestions ? 42 : 0
-                visible: height > 0
-
-                Row {
-                    objectName: "historyHeader"
-                    visible: parent.onHistory
-                    anchors.left: parent.left
-                    anchors.leftMargin: 6
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: 8
-
-                    FlatButton {
-                        objectName: "historyVideos"
-                        text: "Videos"
-                        accent: !App.historyShowsMusic
-                        onClicked: App.showMusicInHistory(false)
-                    }
-                    FlatButton {
-                        objectName: "historyMusic"
-                        text: "Music"
-                        accent: App.historyShowsMusic
-                        onClicked: App.showMusicInHistory(true)
-                    }
-                }
-
-                // The suggestions say where they came from and how old they
-                // are, and the one thing that can be done about that sits
-                // beside them rather than in the bar.
-                Item {
-                    objectName: "recommendedHeader"
-                    visible: parent.onSuggestions
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.leftMargin: 6
-                    anchors.rightMargin: 6
-                    anchors.verticalCenter: parent.verticalCenter
-                    height: 28
-
-                    Label {
-                        objectName: "recommendedState"
-                        anchors.left: parent.left
-                        anchors.right: askAgain.left
-                        anchors.rightMargin: 10
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: App.recommendedText
-                        color: Theme.colors.textMuted
-                        font.pixelSize: 12
-                        elide: Text.ElideRight
-                    }
-
-                    FlatButton {
-                        id: askAgain
-                        objectName: "recommendedRefresh"
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: "Fresh recommendations"
-                        // Not tied to App.busy. That flag belongs to the feed
-                        // poll, which has nothing to do with this page, and a
-                        // button that greys out once a minute for no visible
-                        // reason reads as broken.
-                        onClicked: App.refreshRecommended()
-                    }
-                }
-            }
-        }
-
         footer: Component {
             Item {
                 width: grid.width
