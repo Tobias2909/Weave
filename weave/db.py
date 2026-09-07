@@ -1858,8 +1858,17 @@ class Database:
         Positions are rewritten from the resulting order rather than swapped,
         so a list left with gaps by a deletion comes out consecutive either
         way. Hidden ones move with the rest, since they are only out of sight.
+
+        Inside its own list. Yours and the ones kept off a channel page are
+        drawn as two sections and numbered apart, so a move is a move among
+        the ones it is drawn beside.
         """
-        order = [row["ext_id"] for row in self.playlists(include_hidden=True)]
+        found = self.conn.execute(
+            "SELECT origin FROM playlists WHERE ext_id=?", (playlist_id,)).fetchone()
+        if found is None:
+            return False
+        order = [row["ext_id"] for row
+                 in self.playlists(include_hidden=True, origin=found["origin"])]
         if playlist_id not in order:
             return False
         was = order.index(playlist_id)

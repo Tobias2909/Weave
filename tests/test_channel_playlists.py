@@ -156,5 +156,46 @@ class TheWayBack(unittest.TestCase):
         self.assertIsNone(self.db.playlist_source(ONE))
 
 
+class TheirOwnSection(unittest.TestCase):
+    """The kept ones are a list of their own in the sidebar, so they are
+    ordered among themselves and not among yours."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self._tmp.name) / "t.db")
+        self.db.add_channel(CHANNEL, "youtube", "UCaaaaaaaaaaaaaaaaaaaaaa", "One")
+        self.db.replace_playlists([{"ext_id": "PLmine1", "title": "Mine one"},
+                                   {"ext_id": "PLmine2", "title": "Mine two"}])
+        for ext_id, title in ((ONE, "Theirs one"), (TWO, "Theirs two")):
+            self.db.open_channel_playlist(ext_id, title)
+            self.db.keep_playlist(ext_id)
+
+    def tearDown(self):
+        self.db.close()
+        self._tmp.cleanup()
+
+    def kept(self):
+        return [row["ext_id"] for row in self.db.playlists(origin="channel")]
+
+    def mine(self):
+        return [row["ext_id"] for row in self.db.playlists()]
+
+    def test_a_kept_one_can_be_moved(self):
+        self.assertTrue(self.db.move_playlist(TWO, -1))
+        self.assertEqual(self.kept(), [TWO, ONE])
+
+    def test_and_moving_it_leaves_your_own_order_alone(self):
+        self.db.move_playlist(TWO, -1)
+        self.assertEqual(self.mine(), ["PLmine1", "PLmine2"])
+
+    def test_it_cannot_be_pushed_out_of_its_own_list(self):
+        self.assertFalse(self.db.move_playlist(ONE, -1))
+        self.assertEqual(self.kept(), [ONE, TWO])
+
+    def test_and_one_of_yours_cannot_be_pushed_into_it(self):
+        self.assertFalse(self.db.move_playlist("PLmine2", 1))
+        self.assertEqual(self.mine(), ["PLmine1", "PLmine2"])
+
+
 if __name__ == "__main__":
     unittest.main()

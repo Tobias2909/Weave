@@ -787,9 +787,15 @@ ApplicationWindow {
                 // from your own, because they are not yours and are not in
                 // the feed that reads yours.
                 SidebarHeading {
+                    id: keptHeading
                     visible: App.keptPlaylists.length > 0
                     height: visible ? implicitHeight : 0
                     text: "Linked playlists"
+                    // The same one action as your own list above, and for the
+                    // same reason: a list is ordered and pruned somewhere
+                    // other than in a menu of every entry.
+                    actionText: "\u22ef"
+                    onAction: keptChooser.open()
                 }
 
                 Repeater {
@@ -1860,6 +1866,176 @@ ApplicationWindow {
                     text: "Done"
                     accent: true
                     onClicked: playlistChooser.close()
+                }
+            }
+        }
+    }
+
+    // The same shape as the chooser above, for the playlists kept off somebody
+    // else's channel. Without the tick that hides one: these are here because
+    // they were kept, and the thing to do with one you no longer want is to
+    // let it go rather than to hide it.
+    Popup {
+        id: keptChooser
+        objectName: "keptChooser"
+        anchors.centerIn: parent
+        width: Math.min(560, root.width - 80)
+        height: Math.min(480, root.height - 80)
+        padding: 16
+        modal: true
+        focus: true
+        onOpened: reload()
+        background: Rectangle {
+            radius: 8
+            color: Theme.colors.surfaceRaised
+            border.width: 1
+            border.color: Theme.colors.border
+        }
+
+        // A snapshot, like the other one. A live model rebuilds itself under
+        // the hand that just pressed an arrow and sends the list to the top.
+        property var all: []
+
+        function reload() { all = App.keptPlaylists }
+
+        Column {
+            anchors.fill: parent
+            spacing: 10
+
+            Label {
+                text: "Linked playlists"
+                color: Theme.colors.text
+                font.pixelSize: 14
+                font.weight: Font.DemiBold
+            }
+
+            Label {
+                width: parent.width
+                text: "Playlists you kept from somebody else's channel."
+                color: Theme.colors.textMuted
+                font.pixelSize: 11
+                wrapMode: Text.Wrap
+            }
+
+            ListView {
+                id: keptList
+                objectName: "keptList"
+                width: parent.width
+                height: parent.height - y - keptCloseRow.height - 20
+                clip: true
+                model: keptChooser.all
+                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                delegate: Item {
+                    id: keptEntry
+                    required property var modelData
+                    width: keptList.width
+                    height: 34
+
+                    Label {
+                        id: keptName
+                        anchors.left: parent.left
+                        anchors.leftMargin: 4
+                        anchors.right: keptCount.left
+                        anchors.rightMargin: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: keptEntry.modelData.title
+                        color: Theme.colors.text
+                        font.pixelSize: 12
+                        elide: Text.ElideRight
+                    }
+
+                    Label {
+                        id: keptCount
+                        anchors.right: keptMusicLabel.left
+                        anchors.rightMargin: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: keptEntry.modelData.items ? keptEntry.modelData.items + " videos" : ""
+                        color: Theme.colors.textMuted
+                        font.pixelSize: 11
+                    }
+
+                    Label {
+                        id: keptMusicLabel
+                        anchors.right: keptMusicBox.left
+                        anchors.rightMargin: 2
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Music"
+                        color: keptMusicBox.checked ? Theme.colors.accent : Theme.colors.textMuted
+                        font.pixelSize: 11
+                    }
+
+                    CheckBox {
+                        id: keptMusicBox
+                        objectName: "keptMusicBox"
+                        anchors.right: keptOrder.left
+                        anchors.rightMargin: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        checked: keptEntry.modelData.is_music === 1
+                        onToggled: {
+                            App.setPlaylistMusic(keptEntry.modelData.ext_id, checked)
+                            keptChooser.reload()
+                        }
+                    }
+
+                    Row {
+                        id: keptOrder
+                        anchors.right: keptDrop.left
+                        anchors.rightMargin: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 2
+
+                        FlatButton {
+                            objectName: "keptUp"
+                            text: "\u25b2"
+                            onClicked: {
+                                App.movePlaylist(keptEntry.modelData.ext_id, -1)
+                                keptChooser.reload()
+                            }
+                        }
+                        FlatButton {
+                            objectName: "keptDown"
+                            text: "\u25bc"
+                            onClicked: {
+                                App.movePlaylist(keptEntry.modelData.ext_id, 1)
+                                keptChooser.reload()
+                            }
+                        }
+                    }
+
+                    FlatButton {
+                        id: keptDrop
+                        objectName: "keptDrop"
+                        anchors.right: parent.right
+                        anchors.rightMargin: 2
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Let it go"
+                        onClicked: {
+                            App.keepPlaylist(keptEntry.modelData.ext_id, false)
+                            keptChooser.reload()
+                        }
+                    }
+                }
+            }
+
+            Label {
+                visible: keptChooser.all.length === 0
+                width: parent.width
+                text: "Nothing kept. A playlist on a channel page has a Keep button."
+                color: Theme.colors.textMuted
+                font.pixelSize: 12
+                wrapMode: Text.Wrap
+            }
+
+            Row {
+                id: keptCloseRow
+                spacing: 8
+                anchors.right: parent.right
+
+                FlatButton {
+                    text: "Done"
+                    accent: true
+                    onClicked: keptChooser.close()
                 }
             }
         }

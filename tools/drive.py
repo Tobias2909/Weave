@@ -608,10 +608,37 @@ class Smoke:
         self.check("keeping it gives it a place of its own",
                    [row["ext_id"] for row in read(bridge, "keptPlaylists")] == [tiles[0]["key"]],
                    ", ".join(str(row["title"]) for row in read(bridge, "keptPlaylists")))
-        bridge.keepPlaylist(tiles[0]["key"], False)
+
+        # The wheel over the sidebar walks the selection rather than scrolling,
+        # so a section it does not know about cannot be reached with a wheel at
+        # all. The kept ones were drawn below the last entry it walked.
+        bridge.keepPlaylist(tiles[0]["key"], True)
+        settle(0.4)
+        bridge.selectGroup(-1)
         settle(0.3)
-        self.check("and letting it go takes it back out",
+        reached = False
+        for _ in range(40):
+            bridge.stepSelection(1)
+            if read(bridge, "viewPlaylist") == tiles[0]["key"]:
+                reached = True
+                break
+        settle(0.3)
+        self.check("the wheel reaches the kept ones at the foot of the sidebar", reached,
+                   f"{read(bridge, 'viewKind')} {read(bridge, 'viewPlaylist')}")
+
+        chooser = find(window, "keptChooser")
+        call(chooser, "open")
+        settle(0.4)
+        self.check("they have a settings window of their own",
+                   read(chooser, "opened") is True)
+        rows = items_named_like(root, "keptDrop")
+        self.check("with a way to let one go", len(rows) == 1, f"{len(rows)} rows")
+        call(rows[0], "clicked")
+        settle(0.4)
+        self.check("which takes it out of the section",
                    read(bridge, "keptPlaylists") == [])
+        call(chooser, "close")
+        settle(0.3)
         bridge.selectGroup(-1)
         settle(0.3)
 

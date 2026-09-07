@@ -1082,6 +1082,16 @@ class Bridge(QObject):
             self._nav_replaying = False
         self.navChanged.emit()
 
+    def _sidebar_playlists(self) -> list[dict]:
+        """Both playlist lists as one, in the order the sidebar draws them.
+
+        The wheel walks positions rather than ids, since the ids are long
+        strings and the walk is about order, so the ones kept off a channel
+        page have to be counted here or the wheel stops at the last of yours
+        and never reaches them.
+        """
+        return self._db.playlists() + self._db.playlists(origin="channel")
+
     def _selectable(self) -> list[tuple[str, int]]:
         """Everything the sidebar offers, in the order it is drawn.
 
@@ -1099,7 +1109,7 @@ class Bridge(QObject):
         entries.append((DEBUG, -1))
         entries.append((SETTINGS, -1))
         entries.extend((BOX, int(row["id"])) for row in self._db.boxes())
-        entries.extend((PLAYLIST, index) for index, _ in enumerate(self._db.playlists()))
+        entries.extend((PLAYLIST, index) for index, _ in enumerate(self._sidebar_playlists()))
         return entries
 
     @Slot(int)
@@ -1111,7 +1121,7 @@ class Bridge(QObject):
         if not entries:
             return
         if self._view_kind == PLAYLIST:
-            found = [row["ext_id"] for row in self._db.playlists()]
+            found = [row["ext_id"] for row in self._sidebar_playlists()]
             position = found.index(self._view_playlist) if self._view_playlist in found else 0
             current = (PLAYLIST, position)
         else:
@@ -1126,7 +1136,7 @@ class Bridge(QObject):
         if kind == PLAYLIST:
             # The walk carries a position rather than an id, since the ids are
             # long strings and the walk is about order.
-            found = self._db.playlists()
+            found = self._sidebar_playlists()
             if 0 <= view_id < len(found):
                 self._set_view(PLAYLIST, -1, "", found[view_id]["ext_id"])
             return
