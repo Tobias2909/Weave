@@ -117,9 +117,9 @@ KEEP_MUSIC = object()
 # is worth exactly one request.
 UPDATE_INTERVAL_S = 24 * 60 * 60
 
-# The pages of the walk through, counted from the welcome one, which is 0 of 3
-# so the number reads as how far there is to go rather than as a page number.
-WIZARD_LAST = 3
+# The pages of the walk through, counted from the welcome one, so the number
+# reads as how far there is to go rather than as a page number.
+WIZARD_LAST = 4
 
 
 class Bridge(QObject):

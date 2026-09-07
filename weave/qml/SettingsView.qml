@@ -244,6 +244,12 @@ Item {
                             spacing: 8
 
                             FlatButton {
+                                objectName: "settingsWizard"
+                                text: "Getting started"
+                                onClicked: App.openWizard()
+                            }
+
+                            FlatButton {
                                 objectName: "settingsImport"
                                 text: "Import subscriptions"
                                 onClicked: App.importSubscriptions()
@@ -253,12 +259,6 @@ Item {
                                 objectName: "settingsPlaylists"
                                 text: "Playlist settings"
                                 onClicked: view.playlistsRequested()
-                            }
-
-                            FlatButton {
-                                objectName: "settingsWizard"
-                                text: "Getting started"
-                                onClicked: App.openWizard()
                             }
                         }
 

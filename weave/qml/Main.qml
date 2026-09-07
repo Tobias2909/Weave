@@ -1356,16 +1356,32 @@ ApplicationWindow {
 
     // The ground behind the getting started pages. Drawn here rather than by
     // the popup, because the overlay a modal popup brings swallows every press
-    // that misses the card, and this window has no frame of its own, so that
-    // would take away moving and resizing it while the pages are open. A plain
-    // rectangle with no handler on it accepts nothing and lets all of that
-    // through.
+    // in the window, and this window has no frame of its own, so that takes
+    // away moving and resizing it while the pages are open.
+    //
+    // So the dimming is a plain rectangle, which accepts nothing, and an area
+    // inside it swallows what would otherwise reach a card. Both live in the
+    // window's content, which is what makes this work: the toolbar is the
+    // window's header and the resize grips are in the overlay, so neither is
+    // covered by either of them. The bar can still be taken hold of, the
+    // window buttons still work, the edges still resize, and a press anywhere
+    // else stops here instead of playing something behind the pages.
     Rectangle {
         objectName: "wizardDim"
         anchors.fill: parent
         visible: App.wizardOpen
         color: Qt.rgba(0, 0, 0, 0.45)
         z: 60
+
+        MouseArea {
+            objectName: "wizardShield"
+            anchors.fill: parent
+            acceptedButtons: Qt.AllButtons
+            hoverEnabled: true
+            // Nothing at all. The point is that the press stops here rather
+            // than reaching a card and playing something behind the pages.
+            onWheel: function (event) { event.accepted = true }
+        }
     }
 
     // Shown on a fresh install and never again once there is something to

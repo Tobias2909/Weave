@@ -123,6 +123,22 @@ def item_named(root, name: str):
     return None
 
 
+def items_named_like(root, prefix: str) -> list:
+    """Every named item below this one whose name begins with the prefix.
+
+    The visual tree again, since these are delegates, and more than one of
+    them, which is what item_named cannot answer.
+    """
+    found = []
+    if root is None:
+        return found
+    for child in root.childItems():
+        if str(QQmlProperty.read(child, "objectName") or "").startswith(prefix):
+            found.append(child)
+        found.extend(items_named_like(child, prefix))
+    return found
+
+
 def visible_children(item) -> list:
     """What a positioner has actually laid out, which is where a Repeater puts
     its delegates. The Repeater itself is a child with no size, and is left out
@@ -400,6 +416,9 @@ class Smoke:
         the steps before it left them.
         """
         root = window.contentItem()
+        # The settings page says which theme is in use, and it is built whether
+        # or not it is the view showing, so it answers from here too.
+        current = find(window, "currentTheme")
         bridge.openWizard()
         settle(0.5)
         # The popup itself is not a visual item, so what is looked for is what
@@ -412,21 +431,45 @@ class Smoke:
         self.check("with nothing to go back to", not read(item_named(root, "wizardBack"), "enabled"))
 
         titles = []
-        for _ in range(3):
+        while str(read(item_named(root, "wizardNext"), "text")) != "Done":
             bridge.stepWizard(1)
             settle(0.3)
             titles.append(str(read(item_named(root, "wizardTitle"), "text")))
-        self.check("and walk through the rest", len(titles) == 3 and all(titles),
+            if len(titles) > 8:
+                break
+        self.check("and walk through the rest", len(titles) >= 3 and all(titles),
                    ", ".join(titles))
+
         self.check("the last one finishes rather than going on",
                    str(read(item_named(root, "wizardNext"), "text")) == "Done",
                    str(read(item_named(root, "wizardNext"), "text")))
         if self.shot:
             self.check("wizard written", screenshot(window, shot_beside(self.shot, "wizard")))
 
+        # The themes are tried here rather than described, so the buttons have
+        # to be the real ones and pressing one has to change the window.
+        # Back onto the page that holds them, since the walk above ended on the
+        # last one.
+        bridge.stepWizard(-1)
+        settle(0.4)
+        was = str(read(current, "text"))
+        buttons = items_named_like(item_named(root, "wizardThemes"), "wizardTheme")
+        self.check("the themes can be tried from the pages", len(buttons) > 3,
+                   f"{len(buttons)} of them")
+        other = next(item for item in buttons if str(read(item, "text")) != was)
+        call(other, "click")
+        settle(0.4)
+        self.check("and pressing one changes the window",
+                   str(read(current, "text")) == str(read(other, "text")),
+                   f"{was} to {read(current, 'text')}")
+        call(next(item for item in buttons if str(read(item, "text")) == was), "click")
+        settle(0.3)
+        self.check("and the one it was on can be taken back",
+                   str(read(current, "text")) == was, str(read(current, "text")))
+
         # The import page has to be able to say why it failed, since that is
         # the step that fails and the reason is never obvious.
-        bridge.stepWizard(-2)
+        bridge.stepWizard(-3)
         bridge._on_import_failed("yt-dlp said: Sign in to confirm you are not a bot")
         settle(0.4)
         said = str(read(item_named(root, "wizardImportState"), "text"))

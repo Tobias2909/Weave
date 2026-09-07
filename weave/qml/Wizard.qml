@@ -14,7 +14,7 @@ Popup {
     id: root
     objectName: "wizard"
 
-    readonly property int last: 3
+    readonly property int last: 4
     readonly property int step: App.wizardStep
 
     anchors.centerIn: parent
@@ -105,6 +105,7 @@ Popup {
                     "Welcome to Weave",
                     "Your subscriptions",
                     "Twitch",
+                    "How it looks",
                     "How it is used",
                 ][root.step]
                 color: Theme.colors.text
@@ -119,10 +120,11 @@ Popup {
                 text: [
                     "This is your subscriptions and nothing else. No front page, no "
                         + "recommendations you did not ask for, and every video opens in mpv "
-                        + "rather than in a page. These few pages set up the two things it "
-                        + "cannot work without. It takes about a minute, and none of it is "
-                        + "final. Getting started on the settings page opens these pages "
-                        + "again whenever you want them.",
+                        + "rather than in a page. These few pages are only the parts worth "
+                        + "knowing before you start, and there is a good deal more on the "
+                        + "settings page once you want it. It takes about a minute, none of "
+                        + "it is final, and Getting started on that page opens these again "
+                        + "whenever you want them.",
                     "Weave builds its feed from each channel's own feed, so it has to know "
                         + "which channels are yours. Importing reads that list from YouTube "
                         + "once and follows every channel in it. Nothing is written back to "
@@ -131,6 +133,10 @@ Popup {
                         + "the YouTube streams. It asks for no password: a page opens in your "
                         + "browser with a code already filled in, and you approve it there. "
                         + "This one is optional, and skipping it costs you only the live bar.",
+                    "Press one and the whole window changes at once, so try them until "
+                        + "one of them looks right. Whichever is on when you leave this page "
+                        + "is the one you keep. The settings page can also make one of your "
+                        + "own from a colour wheel.",
                     "Press a card to watch it in mpv. The headphone on a card listens without "
                         + "a window. A group holds channels you pick, a box holds videos you "
                         + "pick, and both live in the panel on the left. Right click a card "
@@ -195,6 +201,42 @@ Popup {
                 font.pixelSize: 12
                 lineHeight: 1.3
                 wrapMode: Text.Wrap
+            }
+
+            // ---- page 3, the themes, tried rather than described
+            // Bounded and scrolling, because this list is as long as the
+            // themes directory and a card of one size cannot grow with it.
+            Flickable {
+                objectName: "wizardThemes"
+                visible: root.step === 3
+                width: parent.width
+                height: Math.min(themeFlow.implicitHeight, 140)
+                contentHeight: themeFlow.implicitHeight
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                interactive: contentHeight > height
+
+                Flow {
+                    id: themeFlow
+                    width: parent.width
+                    spacing: 6
+
+                    Repeater {
+                        model: Theme.names
+
+                        FlatButton {
+                            required property int index
+                            required property var modelData
+
+                            objectName: "wizardTheme" + index
+                            text: modelData
+                            accent: modelData === Theme.current
+                            // Nothing is remembered here beyond what the
+                            // window already does. Choosing one is choosing it.
+                            onClicked: Theme.select(modelData)
+                        }
+                    }
+                }
             }
 
             // ---- page 2, Twitch
