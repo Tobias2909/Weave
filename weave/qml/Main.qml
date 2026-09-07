@@ -903,8 +903,12 @@ ApplicationWindow {
         readonly property bool onHistory: App.viewKind === "history"
         readonly property bool onSuggestions: App.viewKind === "recommended"
         readonly property bool onChannel: App.viewKind === "channel"
+        // Only a playlist opened off a channel page. Your own were not opened
+        // from anywhere and have nowhere to go back to.
+        readonly property bool onPlaylist: App.viewKind === "playlist"
+                                           && App.playlistView.channel_key !== undefined
 
-        visible: onHistory || onSuggestions || onChannel
+        visible: onHistory || onSuggestions || onChannel || onPlaylist
         height: visible ? 42 : 0
         anchors.left: grid.left
         anchors.right: grid.right
@@ -956,6 +960,53 @@ ApplicationWindow {
                 text: "Playlists"
                 accent: App.channelTab === "playlists"
                 onClicked: App.showChannelTab("playlists")
+            }
+        }
+
+        // Somebody else's playlist, which was reached from their page and can
+        // be kept or left. The mouse has a button for going back and not
+        // every mouse does, so the way back is on the screen as well.
+        Item {
+            objectName: "playlistHeader"
+            visible: viewBar.onPlaylist
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.leftMargin: 6
+            anchors.rightMargin: 6
+            anchors.verticalCenter: parent.verticalCenter
+            height: 28
+
+            FlatButton {
+                id: backToChannel
+                objectName: "playlistBack"
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                text: "\u2190 " + (App.playlistView.channel_title || "channel")
+                onClicked: App.openChannelPlaylists(App.playlistView.channel_key)
+            }
+
+            Label {
+                objectName: "playlistHeaderTitle"
+                anchors.left: backToChannel.right
+                anchors.leftMargin: 12
+                anchors.right: keepThis.left
+                anchors.rightMargin: 10
+                anchors.verticalCenter: parent.verticalCenter
+                text: App.playlistView.title || ""
+                color: Theme.colors.text
+                font.pixelSize: 13
+                elide: Text.ElideRight
+            }
+
+            FlatButton {
+                id: keepThis
+                objectName: "playlistKeep"
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                text: App.playlistView.kept ? "Kept" : "Keep"
+                accent: App.playlistView.kept === true
+                onClicked: App.keepPlaylist(App.playlistView.ext_id,
+                                            !App.playlistView.kept)
             }
         }
 

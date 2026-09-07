@@ -1932,6 +1932,23 @@ class Database:
         stamp = row["playlists_at"] if row else None
         return None if not stamp else int(time.time()) - int(stamp)
 
+    def playlist_source(self, ext_id: str) -> dict | None:
+        """Which channel a playlist was opened off, if it was opened off one.
+
+        The bar above such a playlist offers the way back to the tab it came
+        from, so it needs the channel and not only the playlist. One of your
+        own has no channel behind it and answers nothing.
+        """
+        row = self.conn.execute(
+            "SELECT p.ext_id, p.title, p.origin, cp.channel_key, "
+            "       ch.title AS channel_title "
+            "FROM playlists p "
+            "JOIN channel_playlists cp ON cp.ext_id = p.ext_id "
+            "JOIN channels ch ON ch.key = cp.channel_key "
+            "WHERE p.ext_id = ? AND p.origin != 'mine' "
+            "ORDER BY cp.position LIMIT 1", (ext_id,)).fetchone()
+        return dict(row) if row else None
+
     def open_channel_playlist(self, ext_id: str, title: str) -> None:
         """Give a playlist somewhere to hang its contents.
 

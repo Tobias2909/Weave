@@ -122,5 +122,39 @@ class LookingAtOne(unittest.TestCase):
         self.assertEqual(self.db.channel_playlists(CHANNEL)[0]["origin"], "channel")
 
 
+class TheWayBack(unittest.TestCase):
+    """A playlist opened off a channel says which channel, so the bar above it
+    can offer the way back to the tab it came from."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self._tmp.name) / "t.db")
+        self.db.add_channel(CHANNEL, "youtube", "UCaaaaaaaaaaaaaaaaaaaaaa", "One")
+        self.db.replace_channel_playlists(CHANNEL, [Playlist(ONE, "Theirs")])
+
+    def tearDown(self):
+        self.db.close()
+        self._tmp.cleanup()
+
+    def test_it_names_the_channel_it_was_opened_from(self):
+        self.db.open_channel_playlist(ONE, "Theirs")
+        found = self.db.playlist_source(ONE)
+        self.assertEqual(found["channel_key"], CHANNEL)
+        self.assertEqual(found["channel_title"], "One")
+        self.assertEqual(found["origin"], "temp")
+
+    def test_a_kept_one_still_names_it(self):
+        self.db.open_channel_playlist(ONE, "Theirs")
+        self.db.keep_playlist(ONE)
+        self.assertEqual(self.db.playlist_source(ONE)["origin"], "channel")
+
+    def test_one_of_your_own_has_nowhere_to_go_back_to(self):
+        self.db.replace_playlists([{"ext_id": TWO, "title": "Yours"}])
+        self.assertIsNone(self.db.playlist_source(TWO))
+
+    def test_and_neither_does_one_that_was_never_opened(self):
+        self.assertIsNone(self.db.playlist_source(ONE))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -151,6 +151,7 @@ class Bridge(QObject):
     wizardChanged = Signal()
     recommendedChanged = Signal()
     channelTabChanged = Signal()
+    playlistViewChanged = Signal()
     addChanged = Signal()
     importChanged = Signal()
     boxesChanged = Signal()
@@ -382,6 +383,25 @@ class Bridge(QObject):
         listed apart from your own for that reason."""
         return self._db.playlists(origin="channel")
 
+    def _get_playlist_view(self) -> dict:
+        """What the bar above a playlist has to say, when one is showing that
+        came off a channel page.
+
+        Empty for your own playlists, which were not opened from anywhere and
+        need no way back."""
+        if self._view_kind != PLAYLIST or not self._view_playlist:
+            return {}
+        found = self._db.playlist_source(self._view_playlist)
+        if not found:
+            return {}
+        return {
+            "ext_id": found["ext_id"],
+            "title": found["title"],
+            "kept": found["origin"] == "channel",
+            "channel_key": found["channel_key"],
+            "channel_title": found["channel_title"],
+        }
+
     def _get_all_playlists(self) -> list:
         """Every playlist including the hidden ones, for the chooser. Hiding
         is not forgetting, so the chooser has to show what is hidden too."""
@@ -533,6 +553,7 @@ class Bridge(QObject):
                         notify=checksChanged)
     playlists = Property("QVariantList", _get_playlists, notify=playlistsChanged)
     keptPlaylists = Property("QVariantList", _get_kept_playlists, notify=playlistsChanged)
+    playlistView = Property("QVariantMap", _get_playlist_view, notify=playlistViewChanged)
     allPlaylists = Property("QVariantList", _get_all_playlists, notify=playlistsChanged)
     viewKind = Property(str, _get_view_kind, notify=viewChanged)
     viewId = Property(int, _get_view_id, notify=viewChanged)
@@ -968,6 +989,9 @@ class Bridge(QObject):
         # The line above the suggestions is about that page, and arriving on it
         # is one of the two moments it can be wrong.
         self.recommendedChanged.emit()
+        # The bar above a playlist is about which playlist, so it is wrong the
+        # moment the view moves and right again here.
+        self.playlistViewChanged.emit()
         self.reload()
         # Work a view needs on entry happens here, so every way of reaching it
         # behaves the same. It used to hang off the sidebar row, and the wheel
@@ -1701,6 +1725,18 @@ class Bridge(QObject):
         self.playlistsChanged.emit()
         self.selectPlaylist(playlist_id)
 
+    @Slot(str)
+    def openChannelPlaylists(self, channel_key: str) -> None:
+        """A channel's page, opened on its playlists rather than its videos.
+
+        The way back out of a playlist that was opened from there, which is
+        otherwise the mouse button not everybody has.
+        """
+        if not channel_key:
+            return
+        self.openChannel(channel_key)
+        self.showChannelTab("playlists")
+
     @Slot(str, bool)
     def keepPlaylist(self, playlist_id: str, keep: bool = True) -> None:
         if not playlist_id:
@@ -1708,6 +1744,7 @@ class Bridge(QObject):
         self._db.keep_playlist(playlist_id, keep)
         self.playlistsChanged.emit()
         self.channelTabChanged.emit()
+        self.playlistViewChanged.emit()
         self._set_status("playlist kept" if keep else "playlist let go")
 
     def _fetch_channel_feed(self, channel_key: str, ext_id: str) -> None:

@@ -111,6 +111,8 @@ def make_bridge():
     # The row above the suggestions is told on the way onto that page, since
     # how long ago they were read keeps growing while nothing else changes.
     bridge.recommendedChanged = Recorder()
+    # And so is the bar above a playlist, which says which playlist.
+    bridge.playlistViewChanged = Recorder()
     bridge.musicChanged = Recorder()
     bridge.reload = lambda: None
     bridge._fetch_recommended = lambda *a, **k: None

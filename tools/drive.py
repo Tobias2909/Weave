@@ -577,6 +577,32 @@ class Smoke:
         self.check("and it stays out of your own playlists",
                    not any(row["ext_id"] == tiles[0]["key"] for row in read(bridge, "playlists")))
 
+        bar = item_named(root, "playlistHeader")
+        self.check("a bar above it says where it came from",
+                   bar is not None and read(bar, "visible") is True)
+        back = item_named(root, "playlistBack")
+        self.check("with the channel named on the way back",
+                   back is not None and "Smoke" in str(read(back, "text")),
+                   str(read(back, "text")) if back else "no button")
+        call(back, "clicked")
+        settle(0.5)
+        self.check("and pressing it lands on the playlists half again",
+                   read(bridge, "viewKind") == "channel"
+                   and read(bridge, "channelTab") == "playlists",
+                   f"{read(bridge, 'viewKind')} {read(bridge, 'channelTab')}")
+
+        bridge.openChannelPlaylist(tiles[0]["key"], tiles[0]["title"])
+        settle(0.5)
+        keep = item_named(root, "playlistKeep")
+        self.check("the bar offers keeping it", read(keep, "text") == "Keep",
+                   str(read(keep, "text")))
+        call(keep, "clicked")
+        settle(0.4)
+        self.check("and says so once it is kept", read(keep, "text") == "Kept",
+                   str(read(keep, "text")))
+        bridge.keepPlaylist(tiles[0]["key"], False)
+        settle(0.3)
+
         bridge.keepPlaylist(tiles[0]["key"], True)
         settle(0.4)
         self.check("keeping it gives it a place of its own",
@@ -1212,6 +1238,17 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="report as one JSON line")
     parser.add_argument("--no-seed", action="store_true", help="do not add sample videos")
     args = parser.parse_args()
+
+    if not os.environ.get("XDG_STATE_HOME"):
+        # This walk writes. It seeds channels and videos, follows one, keeps a
+        # playlist and overwrites the music shelves, and against a real
+        # collection all of that lands in it. The test harness points every
+        # XDG directory at a scratch copy, and running the walk by hand has to
+        # do the same rather than be trusted to remember.
+        print("refusing to walk the real collection: set XDG_STATE_HOME "
+              "(and XDG_CONFIG_HOME, XDG_CACHE_HOME) to a scratch directory",
+              file=sys.stderr)
+        return 2
 
     if args.offline:
         go_offline()
