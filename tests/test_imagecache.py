@@ -1,12 +1,134 @@
 """Image cache tests. Pure functions and the on disk layout, no network."""
 
 import os
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
 
+from PySide6.QtCore import QBuffer, QIODevice
+from PySide6.QtGui import QImage, QImageReader
+
 from weave import imagecache
+
+
+def encoded(width: int, height: int) -> bytes:
+    """A real PNG of that size, so a reader has something to measure."""
+    image = QImage(width, height, QImage.Format.Format_RGB32)
+    image.fill(0x336699)
+    buffer = QBuffer()
+    buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+    image.save(buffer, "PNG")
+    return bytes(buffer.data().data())
+
+
+def read_bytes(payload: bytes) -> QImage:
+    buffer = QBuffer()
+    buffer.setData(payload)
+    buffer.open(QIODevice.OpenModeFlag.ReadOnly)
+    return imagecache._read(QImageReader(buffer))
+
+
+class ABigPicture(unittest.TestCase):
+    """Anything bigger than Weave draws is decoded smaller, not refused.
+
+    Qt will not decode a picture whose pixels come to more than 256 MB, and it
+    says so on the console once per attempt. A channel avatar asked for at its
+    original size reached 8334 square, which is 265 MB, so it was refused,
+    never cached, and fetched again on every visit to the view. The ceiling
+    here is lowered rather than the picture made enormous, since the point is
+    the arithmetic and not the allocation.
+    """
+
+    def setUp(self):
+        self.real = imagecache.MAX_EDGE
+        imagecache.MAX_EDGE = 8
+        self.addCleanup(setattr, imagecache, "MAX_EDGE", self.real)
+
+    def test_the_ceiling_is_above_anything_weave_draws(self):
+        # A channel banner is the widest of them at 2560.
+        self.assertGreaterEqual(self.real, 2048)
+
+    def test_it_is_read_and_shrunk_to_the_ceiling(self):
+        image = read_bytes(encoded(64, 32))
+        self.assertFalse(image.isNull())
+        self.assertEqual((image.width(), image.height()), (8, 4))
+
+    def test_the_shape_is_kept(self):
+        image = read_bytes(encoded(30, 60))
+        self.assertEqual((image.width(), image.height()), (4, 8))
+
+    def test_one_that_fits_is_untouched(self):
+        image = read_bytes(encoded(8, 6))
+        self.assertEqual((image.width(), image.height()), (8, 6))
+
+    def test_the_same_holds_for_one_already_cached(self):
+        # Both ways in have to be guarded. Only the download was, at first,
+        # and then the picture came back off disk and was refused there.
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "big.png"
+            path.write_bytes(encoded(64, 64))
+            image = imagecache._read(QImageReader(str(path)))
+            self.assertEqual((image.width(), image.height()), (8, 8))
+
+    def test_something_that_is_not_a_picture_is_still_nothing(self):
+        self.assertTrue(read_bytes(b"this is not a picture").isNull())
+
+
+# Driving a response needs a QGuiApplication, and the rest of the suite holds a
+# QCoreApplication, so this runs in its own process the way the window test
+# does. What it is here to prove is the part the decode tests cannot: that a
+# picture too big to read plainly is written to the cache. Before, it was
+# refused, nothing was stored, and every visit to the view fetched the same
+# 646 KB again and printed another line about it.
+SERVED = """
+import os, sys, tempfile
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+from pathlib import Path
+from PySide6.QtCore import QBuffer, QIODevice
+from PySide6.QtGui import QGuiApplication, QImage
+app = QGuiApplication([])
+from weave import imagecache
+
+image = QImage(64, 64, QImage.Format.Format_RGB32)
+image.fill(0x336699)
+sink = QBuffer()
+sink.open(QIODevice.OpenModeFlag.WriteOnly)
+image.save(sink, "PNG")
+payload = bytes(sink.data().data())
+
+
+class Answer:
+    status_code = 200
+    content = payload
+
+
+imagecache.requests.get = lambda *a, **k: Answer()
+imagecache.MAX_EDGE = 8
+url = "https://example.invalid/big.png"
+with tempfile.TemporaryDirectory() as folder:
+    root = Path(folder) / "images"
+    served = imagecache._Response(url, root, 3600)
+    served.run()
+    stored = imagecache.path_for(root, url)
+    print("decoded", served._image.width(), served._image.height())
+    print("cached", stored.exists() and stored.stat().st_size == len(payload))
+    print("failures", len(imagecache.failures(root)))
+"""
+
+
+class ABigPictureIsServedAndKept(unittest.TestCase):
+    def test_it_is_shrunk_stored_and_not_logged_as_a_failure(self):
+        done = subprocess.run([sys.executable, "-c", SERVED],
+                              cwd=Path(__file__).resolve().parent.parent,
+                              capture_output=True, text=True, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stderr[-2000:])
+        report = dict(line.split(" ", 1) for line in done.stdout.splitlines() if " " in line)
+        self.assertEqual(report.get("decoded"), "8 8", done.stdout)
+        self.assertEqual(report.get("cached"), "True", done.stdout)
+        self.assertEqual(report.get("failures"), "0", done.stdout)
 
 
 class QmlSource(unittest.TestCase):

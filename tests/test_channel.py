@@ -8,7 +8,7 @@ returned.
 
 import unittest
 
-from weave.sources.channel import parse_output, pick_images
+from weave.sources.channel import parse_output, pick_images, sized
 
 # The shape a live channel actually returns, measured. Six crops of the banner
 # as displayed, the raw artwork with no dimensions at all, a square avatar and
@@ -17,9 +17,9 @@ REAL = [
     {"id": "0", "width": 1060, "height": 175, "url": "crop/1060"},
     {"id": "2", "width": 1707, "height": 283, "url": "crop/1707"},
     {"id": "5", "width": 2560, "height": 424, "url": "crop/2560"},
-    {"id": "banner_uncropped", "url": "artwork/s0"},
+    {"id": "banner_uncropped", "url": "artwork=s0"},
     {"id": "7", "width": 900, "height": 900, "url": "avatar/900"},
-    {"id": "avatar_uncropped", "url": "avatar/s0"},
+    {"id": "avatar_uncropped", "url": "avatar=s0"},
 ]
 
 
@@ -33,11 +33,11 @@ class PickImages(unittest.TestCase):
 
     def test_the_avatar_is_the_uncropped_one(self):
         # Square either way, so the one without crop parameters is fine.
-        self.assertEqual(pick_images(REAL)[0], "avatar/s0")
+        self.assertEqual(pick_images(REAL)[0], "avatar=s512")
 
     def test_the_artwork_is_the_fallback_when_there_are_no_crops(self):
         self.assertEqual(
-            pick_images([{"id": "banner_uncropped", "url": "artwork/s0"}])[1], "artwork/s0")
+            pick_images([{"id": "banner_uncropped", "url": "artwork=s0"}])[1], "artwork=s0")
 
     def test_a_landscape_picture_is_not_a_banner(self):
         # Sixteen to nine is some other image. A banner is about six to one.
@@ -51,6 +51,32 @@ class PickImages(unittest.TestCase):
 
     def test_nothing_at_all_is_not_an_error(self):
         self.assertEqual(pick_images([]), (None, None))
+
+
+class TheAvatarSize(unittest.TestCase):
+    """A =s0 on the end means the original, whatever the owner uploaded.
+
+    One measured 8334 square and 646 KB, for a picture drawn 44 across, and
+    Qt refuses to decode anything whose pixels come to more than 256 MB. The
+    CDN resizes on request, so a size is asked for.
+    """
+
+    def test_the_original_is_never_asked_for(self):
+        self.assertEqual(sized("https://yt3.googleusercontent.com/AbC=s0"),
+                         "https://yt3.googleusercontent.com/AbC=s512")
+
+    def test_a_size_already_asked_for_is_left_alone(self):
+        # This is the shape the subscription list hands over, and it is
+        # already small.
+        url = "https://yt3.googleusercontent.com/AbC=s176-c-k-c0x00ffffff-no-rj-mo"
+        self.assertEqual(sized(url), url)
+
+    def test_a_banner_crop_is_left_alone(self):
+        url = "https://yt3.googleusercontent.com/AbC=w2560-fcrop64=1,00005a57ffffa5a8-k"
+        self.assertEqual(sized(url), url)
+
+    def test_nothing_is_still_nothing(self):
+        self.assertIsNone(sized(None))
 
 
 class ParseOutput(unittest.TestCase):

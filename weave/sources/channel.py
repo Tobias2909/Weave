@@ -36,6 +36,16 @@ _COMMAND = [
 ]
 
 AVATAR_ID = "avatar_uncropped"
+
+# The uncropped avatar is served at whatever the channel owner uploaded, which
+# is what the =s0 on the end of the address means. Measured on a real channel
+# that is 8334 square and 646 KB, for a picture drawn 44 across on a card and
+# 96 on a channel page, and Qt will not decode it at all because its pixels
+# come to more than the 256 MB it allows an image. The CDN resizes on request,
+# so a size is asked for instead: the same avatar at 512 is 23 KB and is still
+# sharp on a channel page at twice the scale.
+AVATAR_PX = 512
+ORIGINAL_SIZE = "=s0"
 BANNER_ID = "banner_uncropped"
 BANNER_RATIO = 3
 
@@ -60,6 +70,13 @@ def _optional_int(text: str) -> int | None:
         return int(float(text))
     except ValueError:
         return None
+
+
+def sized(url: str | None) -> str | None:
+    """Ask the picture CDN for a sensible size rather than the original."""
+    if url and url.endswith(ORIGINAL_SIZE):
+        return f"{url[:-len(ORIGINAL_SIZE)]}=s{AVATAR_PX}"
+    return url
 
 
 def pick_images(thumbnails: list[dict]) -> tuple[str | None, str | None]:
@@ -98,7 +115,10 @@ def pick_images(thumbnails: list[dict]) -> tuple[str | None, str | None]:
     if not avatar and squares:
         avatar = max(squares)[1]
     banner = max(wides)[1] if wides else uncropped_banner
-    return avatar, banner
+    # The banner is left as it comes. A crop is asked for by width already,
+    # and the uncropped fallback is the artwork at 2560 by 1440 rather than
+    # anything the owner uploaded.
+    return sized(avatar), banner
 
 
 def parse_output(text: str) -> ChannelDetails:

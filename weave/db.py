@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 27
+SCHEMA_VERSION = 28
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -377,6 +377,16 @@ class Database:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
             row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             was = int(row["value"]) if row else 0
+            if was and was < 28:
+                # Avatars asked for at their original size. Most are harmless,
+                # one measured 265 MB of pixels and could not be decoded at
+                # all, and every one of them costs far more to fetch than it
+                # is worth. The address carries the size, so it is rewritten
+                # in place; the pictures come back at the next visit.
+                conn.execute(
+                    "UPDATE channels "
+                    "SET avatar_url = substr(avatar_url, 1, length(avatar_url) - 3) || '=s512' "
+                    "WHERE avatar_url LIKE '%=s0'")
             if was and was < 27:
                 # A channel already seen streaming is known to stream, so it
                 # keeps its answer rather than being asked again. Everything

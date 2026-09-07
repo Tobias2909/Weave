@@ -32,8 +32,8 @@ import time
 from pathlib import Path
 
 import requests
-from PySide6.QtCore import QRunnable, QThreadPool
-from PySide6.QtGui import QImage
+from PySide6.QtCore import QBuffer, QIODevice, QRunnable, Qt, QThreadPool
+from PySide6.QtGui import QImage, QImageReader
 from PySide6.QtQuick import QQuickAsyncImageProvider, QQuickImageResponse, QQuickTextureFactory
 
 from . import __version__
@@ -55,6 +55,26 @@ REQUEST_TIMEOUT_S = 20.0
 FAILURE_LOG = "failures.log"
 MAX_LOGGED = 200
 RETRY_AFTER_S = 1.5
+
+# Qt refuses outright to decode a picture whose pixels would need more than its
+# 256 MB allocation limit, and says so on the console once per attempt. Nothing
+# here is meant to be that big, but a channel avatar asked for at its original
+# size can be: one measured 8334 square, which is 265 MB of pixels for
+# something drawn 44 across, so it was rejected, never cached, and downloaded
+# again on every single visit to the view. Reading the header first and asking
+# for a smaller decode fixes it for good, whatever the source. The jpeg and
+# webp readers scale while they decode and never allocate the full frame.
+# 2048 is above the widest thing Weave draws, which is a channel banner.
+MAX_EDGE = 2048
+
+
+def _read(reader: QImageReader) -> QImage:
+    """Decode, shrinking anything bigger than Weave has any use for."""
+    size = reader.size()
+    if size.isValid() and max(size.width(), size.height()) > MAX_EDGE:
+        reader.setScaledSize(size.scaled(MAX_EDGE, MAX_EDGE,
+                                         Qt.AspectRatioMode.KeepAspectRatio))
+    return reader.read()
 
 
 def _record(directory: Path, url: str, reason: str) -> None:
@@ -147,7 +167,11 @@ class _Response(QQuickImageResponse, QRunnable):
     def _load_from_disk(self) -> bool:
         if not self._fresh():
             return False
-        return self._image.load(str(self._path))
+        image = _read(QImageReader(str(self._path)))
+        if image.isNull():
+            return False
+        self._image = image
+        return True
 
     def _download(self) -> bool:
         """One retry, because a picture that failed on a bad connection will
@@ -170,9 +194,22 @@ class _Response(QQuickImageResponse, QRunnable):
                     break
                 continue
             payload = response.content
-            if not self._image.loadFromData(payload):
+            # Read through a buffer rather than with loadFromData, so an
+            # oversized picture is decoded smaller instead of refused.
+            buffer = QBuffer()
+            # setData rather than the constructor: a QByteArray handed to
+            # QBuffer is not owned by it, so a temporary one is freed while the
+            # reader still points at it, and the process dies in bad_alloc on
+            # a length read out of freed memory. setData copies.
+            buffer.setData(payload)
+            buffer.open(QIODevice.OpenModeFlag.ReadOnly)
+            image = _read(QImageReader(buffer))
+            if image.isNull():
                 reason = "unreadable"
                 break
+            self._image = image
+            # The original bytes are what is kept, so the cache stays a copy
+            # of what the server sent and the shrinking happens on the way out.
             self._store(payload)
             return True
 
