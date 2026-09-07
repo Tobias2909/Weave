@@ -78,6 +78,7 @@ Popup {
     }
 
     onOpened: {
+        App.clearAddState()
         filter = ""
         searchField.text = ""
         reload()
@@ -148,6 +149,28 @@ Popup {
                 if (App.addChannelToGroupByRef(root.groupId, text))
                     text = ""
             }
+            // An answer about the last reference must not be read as one
+            // about what is being typed now.
+            onTextEdited: App.clearAddState()
+        }
+
+        // Whether that worked. The status line in the toolbar says so too,
+        // but this window is drawn over it, so without this a reference that
+        // was misspelled looked exactly like one that was accepted.
+        Label {
+            objectName: "manageAddAnswer"
+            width: parent.width
+            visible: App.addMessage !== ""
+            // No height binding. A wrapping label's implicit height comes
+            // from its width, and tying the height back to it is a loop the
+            // engine complains about. A Column skips what is not visible, so
+            // there is nothing to collapse by hand.
+            text: App.addMessage
+            color: App.addState === "failed" ? Theme.colors.error
+                                             : (App.addState === "added" ? Theme.colors.accent
+                                                                         : Theme.colors.textMuted)
+            font.pixelSize: 11
+            wrapMode: Text.Wrap
         }
 
         // Four hundred and sixty six channels is not a list anybody reads

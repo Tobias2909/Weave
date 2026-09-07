@@ -146,6 +146,55 @@ class WalkingThem(unittest.TestCase):
         self.assertEqual(self.db.get_state("wizard_hidden"), "1")
 
 
+class WhatAddingAChannelSays(unittest.TestCase):
+    """Typing a channel into a box has to answer.
+
+    The status line said so all along, but it is one truncated line in the
+    corner of the toolbar and the window that manages a group is drawn over
+    it, so a misspelled reference looked exactly like an accepted one.
+    """
+
+    def setUp(self):
+        self.bridge = Bridge.__new__(Bridge)
+        QObject.__init__(self.bridge)
+        self.bridge._add_state = ""
+        self.bridge._add_message = ""
+        self.bridge._add_queue = []
+        self.bridge._adder = None
+        self.bridge._adding = -1
+        self.bridge._set_status = lambda *_a, **_k: None
+        self.bridge._start_next_add = lambda: None
+
+    def state(self):
+        return (Bridge.addState.fget(self.bridge), Bridge.addMessage.fget(self.bridge))
+
+    def test_nothing_is_said_before_anything_is_typed(self):
+        self.assertEqual(self.state(), ("", ""))
+
+    def test_a_reference_that_is_not_one_is_refused_out_loud(self):
+        self.assertFalse(Bridge._queue_channel(self.bridge, "definitely not a channel", -1))
+        state, message = self.state()
+        self.assertEqual(state, "failed")
+        self.assertIn("handle", message)
+
+    def test_a_reference_that_reads_says_it_is_looking(self):
+        self.assertTrue(Bridge._queue_channel(self.bridge, "@somebody", -1))
+        state, message = self.state()
+        self.assertEqual(state, "working")
+        self.assertIn("somebody", message)
+
+    def test_one_that_comes_back_with_nothing_says_that_too(self):
+        Bridge._on_channel_failed(self.bridge, "no such channel")
+        state, message = self.state()
+        self.assertEqual(state, "failed")
+        self.assertIn("no such channel", message)
+
+    def test_typing_again_clears_the_last_answer(self):
+        Bridge._on_channel_failed(self.bridge, "no such channel")
+        Bridge.clearAddState(self.bridge)
+        self.assertEqual(self.state(), ("", ""))
+
+
 class WhatTheImportPageSays(unittest.TestCase):
     """The step that fails, and the only one that has to explain itself."""
 

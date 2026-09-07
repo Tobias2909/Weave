@@ -326,9 +326,18 @@ ApplicationWindow {
                     background: Rectangle {
                         radius: 6
                         color: Theme.colors.background
-                        border.width: 1
-                        border.color: addField.activeFocus ? Theme.colors.accent : Theme.colors.border
+                        // The edge answers, since there is no room in this row
+                        // for a sentence. Red for a reference that came back
+                        // with nothing, accent while one is being looked for
+                        // and once it has been added. What it says is in the
+                        // status line beside it.
+                        border.width: App.addState === "" ? 1 : 2
+                        border.color: App.addState === "failed"
+                                      ? Theme.colors.error
+                                      : (App.addState !== "" || addField.activeFocus
+                                         ? Theme.colors.accent : Theme.colors.border)
                     }
+                    onTextEdited: App.clearAddState()
                     onAccepted: {
                         // Keep the text when it was not even understood, so a typo
                         // can be corrected rather than retyped.

@@ -841,6 +841,20 @@ class Smoke:
                    f"{len(read(manage, 'everyone'))} channels")
         search = find(window, "manageSearchField")
         self.check("with a search when there are many", search is not None)
+
+        # Something typed into it has to say whether it worked. The status
+        # line does, but this window is drawn over it.
+        answer = find(window, "manageAddAnswer")
+        self.check("nothing is claimed before anything is typed",
+                   not read(answer, "visible"), str(read(answer, "text")))
+        bridge.addChannelToGroupByRef(-1, "definitely not a channel")
+        settle(0.4)
+        self.check("a reference that is not one says so",
+                   read(answer, "visible") and read(bridge, "addState") == "failed",
+                   str(read(answer, "text")))
+        bridge.clearAddState()
+        settle(0.2)
+        self.check("and typing again clears the answer", not read(answer, "visible"))
         write(rows, "contentY", 40.0)
         settle(0.2)
         bridge.groupsChanged.emit()

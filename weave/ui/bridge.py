@@ -139,6 +139,7 @@ class Bridge(QObject):
     updateChanged = Signal()
     wizardChanged = Signal()
     recommendedChanged = Signal()
+    addChanged = Signal()
     importChanged = Signal()
     boxesChanged = Signal()
     viewChanged = Signal()
@@ -271,6 +272,12 @@ class Bridge(QObject):
         self._wizard_step = 0
         self._import_state = ""
         self._import_message = ""
+        # How the last attempt at adding a channel went. The status line says
+        # so too, but it is one truncated line in a corner of the toolbar, and
+        # the window that manages a group is modal over it, so what happened
+        # to something typed in there was invisible.
+        self._add_state = ""
+        self._add_message = ""
         self._starting_timer = QTimer(self)
         self._starting_timer.setSingleShot(True)
         self._starting_timer.timeout.connect(lambda: self._set_starting(""))
@@ -487,6 +494,9 @@ class Bridge(QObject):
                             notify=wizardChanged)
     # "" before anything was asked, then working, done or failed.
     importState = Property(str, lambda self: self._import_state, notify=importChanged)
+    # "" before anything was asked, then working, added or failed.
+    addState = Property(str, lambda self: self._add_state, notify=addChanged)
+    addMessage = Property(str, lambda self: self._add_message, notify=addChanged)
     importMessage = Property(str, lambda self: self._import_message, notify=importChanged)
     recommendedText = Property(str, lambda self: self._recommended_line(),
                                notify=recommendedChanged)
@@ -2938,11 +2948,26 @@ class Bridge(QObject):
         # toolbar box means: follow it, and show it in All.
         return self._queue_channel(text, group_id)
 
+    def _set_add(self, state: str, message: str) -> None:
+        self._add_state = state
+        self._add_message = message
+        self.addChanged.emit()
+
+    @Slot()
+    def clearAddState(self) -> None:
+        """Forget the last attempt. Called as a box is opened or typed into,
+        so an answer about the last reference is not read as one about this."""
+        if self._add_state or self._add_message:
+            self._set_add("", "")
+
     def _queue_channel(self, text: str, group_id: int) -> bool:
         ref = ids.parse_channel_ref(text)
         if not ref:
+            self._set_add("failed", "That is not a channel id, a handle, a channel address "
+                                    "or a twitch.tv link")
             self._set_status("could not read that as a channel")
             return False
+        self._set_add("working", f"Looking for {ref.value}")
         self._add_queue.append((ref, group_id))
         if self._adder is not None and self._adder.isRunning():
             waiting = len(self._add_queue)
@@ -3052,6 +3077,7 @@ class Bridge(QObject):
             # asking for it back in the same words they first used.
             self._db.restore_to_all(key)
         label = title or ext_id
+        self._set_add("added", f"Added {label}")
         if group_id >= 0:
             self._db.add_to_group(group_id, key)
             self.groupsChanged.emit()
@@ -3070,6 +3096,7 @@ class Bridge(QObject):
 
     def _on_channel_failed(self, message: str) -> None:
         self._adding = -1
+        self._set_add("failed", f"Nothing came back for that one. {message}")
         self._set_status(f"could not add that channel, {message}")
         self._start_next_add()
 
