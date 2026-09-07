@@ -327,6 +327,127 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class TellingAnAnnouncementFromAVideo(unittest.TestCase):
+    """A stream that has not begun looks like an ordinary video in a feed.
+
+    Nothing in RSS says otherwise, and the subscriptions sweep only reaches
+    the newest entries across a whole list, so one could sit in the grid as a
+    card that looks playable and is not. In a channel's streams tab there is
+    one thing an ordinary entry never looks like: nothing has watched it.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self._tmp.name) / "t.db")
+        self.cfg = Config(raw={})
+        self.db.add_channel("yt:UC1", "youtube", "UC1", "One")
+        self.poller = poller.FeedPoller(self.db, self.cfg)
+        self._real = poller.rss.fetch
+        self.addCleanup(setattr, poller.rss, "fetch", self._real)
+
+    def tearDown(self):
+        self.db.close()
+        self._tmp.cleanup()
+
+    def round_with(self, live_videos):
+        def fake(fetcher, ext_id, kind=rss.VIDEOS):
+            if kind == rss.LIVE:
+                return rss.FeedResult("UC1", "One", live_videos, rss.LIVE)
+            return rss.FeedResult("UC1", "One", [], rss.VIDEOS)
+        poller.rss.fetch = fake
+        budget = Budget(self.db, self.cfg.budget_limits, self.cfg.budget_window_s)
+        self.poller._phase_rss(None, budget)
+
+    def pending(self):
+        return [row["key"] for row in self.db.streams_to_settle(10)]
+
+    def test_one_with_nothing_watching_it_is_asked_about(self):
+        self.round_with([VideoRow("youtube", "aaaaaaaaaaa", "yt:UC1", "Announced", views=0)])
+        self.assertEqual(self.pending(), ["yt:aaaaaaaaaaa"])
+
+    def test_a_stream_that_has_been_watched_is_not(self):
+        self.round_with([VideoRow("youtube", "bbbbbbbbbbb", "yt:UC1", "Ended", views=120_000)])
+        self.assertEqual(self.pending(), [])
+
+    def test_nor_is_one_that_was_already_there(self):
+        # Asked once. A stream that has sat unwatched for a week is not news.
+        self.round_with([VideoRow("youtube", "aaaaaaaaaaa", "yt:UC1", "Announced", views=0)])
+        self.db.settle_stream("yt:aaaaaaaaaaa")
+        self.round_with([VideoRow("youtube", "aaaaaaaaaaa", "yt:UC1", "Announced", views=0)])
+        self.assertEqual(self.pending(), [])
+
+    def test_nor_is_one_the_sweep_has_already_settled(self):
+        self.db.upsert_videos([VideoRow("youtube", "ccccccccccc", "yt:UC1", "Live",
+                                        live_status="is_live")])
+        self.db.mark_streams_pending(["yt:ccccccccccc"])
+        self.assertEqual(self.pending(), [])
+
+
+class SettlingAFreshlyPublishedStream(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self._tmp.name) / "t.db")
+        self.cfg = Config(raw={})
+        self.db.add_channel("yt:UC1", "youtube", "UC1", "One")
+        self.db.upsert_videos([VideoRow("youtube", "aaaaaaaaaaa", "yt:UC1", "Unknown yet")])
+        self.db.mark_streams_pending(["yt:aaaaaaaaaaa"])
+        self.watcher = poller.LiveWatcher(self.db, self.cfg)
+        self._real = poller.livecheck.check
+        self.addCleanup(setattr, poller.livecheck, "check", self._real)
+
+    def tearDown(self):
+        self.db.close()
+        self._tmp.cleanup()
+
+    def answer(self, state):
+        poller.livecheck.check = lambda *a, **k: state
+        budget = Budget(self.db, self.cfg.budget_limits, self.cfg.budget_window_s)
+        self.watcher._settle_streams(budget)
+
+    def row(self):
+        return self.db.conn.execute(
+            "SELECT live_status, scheduled_at, stream_pending FROM videos "
+            "WHERE key='yt:aaaaaaaaaaa'").fetchone()
+
+    def test_an_announcement_is_marked_as_one_with_its_time(self):
+        self.answer(LiveState("aaaaaaaaaaa", None, False, 1788825600, True))
+        self.assertEqual(self.row()["live_status"], "is_upcoming")
+        self.assertEqual(self.row()["scheduled_at"], 1788825600)
+
+    def test_a_stream_that_is_on_is_marked_live(self):
+        self.answer(LiveState("aaaaaaaaaaa", 3707, True, None, False))
+        self.assertEqual(self.row()["live_status"], "is_live")
+
+    def test_one_that_has_ended_becomes_an_ordinary_video(self):
+        self.answer(LiveState("aaaaaaaaaaa", None, False, None, False))
+        self.assertEqual(self.row()["live_status"], "was_live")
+
+    def test_every_answer_ends_the_question(self):
+        self.answer(LiveState("aaaaaaaaaaa", None, False, None, False))
+        self.assertIsNone(self.row()["stream_pending"])
+        self.assertEqual(self.db.streams_to_settle(10), [])
+
+    def test_a_refusal_leaves_it_to_be_asked_again(self):
+        def refuse(*_a, **_k):
+            raise poller.livecheck.LiveCheckError("no")
+        poller.livecheck.check = refuse
+        budget = Budget(self.db, self.cfg.budget_limits, self.cfg.budget_window_s)
+        self.watcher._settle_streams(budget)
+        self.assertEqual([row["key"] for row in self.db.streams_to_settle(10)],
+                         ["yt:aaaaaaaaaaa"])
+
+    def test_only_a_few_are_asked_in_one_round(self):
+        self.db.upsert_videos([
+            VideoRow("youtube", f"ddddddddd{n:02d}", "yt:UC1", f"Also {n}") for n in range(6)])
+        self.db.mark_streams_pending([f"yt:ddddddddd{n:02d}" for n in range(6)])
+        asked = []
+        poller.livecheck.check = lambda cfg, ext_id, *a, **k: (
+            asked.append(ext_id) or LiveState(ext_id, None, False, None, False))
+        budget = Budget(self.db, self.cfg.budget_limits, self.cfg.budget_window_s)
+        self.watcher._settle_streams(budget)
+        self.assertEqual(len(asked), poller.NEW_STREAMS_PER_CHECK)
+
+
 class LearningWhenAnAnnouncedStreamIsDue(unittest.TestCase):
     """The sweep reports the time as NA for every one of them, so the card
     could say a stream was announced and never when."""

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 29
+SCHEMA_VERSION = 30
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -286,6 +286,11 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # subscription import would quietly put back exactly the channels somebody
     # had just taken out.
     ("channels", "left_all", "INTEGER NOT NULL DEFAULT 0"),
+    # A video that arrived from a channel's streams tab with nothing watching
+    # it, which is what an announcement looks like the moment it is published
+    # and what an ordinary video never looks like there. One question settles
+    # it, and this is the note that one is owed.
+    ("videos", "stream_pending", "INTEGER"),
     # A long playlist list buries everything under it, so each one can be put
     # out of the way without being forgotten.
     ("playlists", "hidden", "INTEGER NOT NULL DEFAULT 0"),
@@ -998,6 +1003,41 @@ class Database:
             return
         with self.conn as conn:
             conn.execute("UPDATE videos SET scheduled_at=? WHERE key=?", (starts_at, video_key))
+
+    def mark_streams_pending(self, keys: Iterable[str]) -> None:
+        """Note that these are owed a question.
+
+        Only ones nothing knows a live state for. A stream the sweep has
+        already called live or ended is settled, and asking again would spend
+        a request to be told what is already stored.
+        """
+        keys = list(keys)
+        if not keys:
+            return
+        with self.conn as conn:
+            conn.executemany(
+                "UPDATE videos SET stream_pending=1 WHERE key=? AND live_status IS NULL",
+                [(key,) for key in keys])
+
+    def streams_to_settle(self, limit: int = 3) -> list[sqlite3.Row]:
+        """The ones still owed that question, newest first, since a stream
+        about to begin matters more than one from last week."""
+        return list(self.conn.execute(
+            "SELECT key, ext_id FROM videos WHERE stream_pending=1 "
+            "ORDER BY published_at DESC NULLS LAST LIMIT ?", (limit,)))
+
+    def settle_stream(self, key: str) -> None:
+        with self.conn as conn:
+            conn.execute("UPDATE videos SET stream_pending=NULL WHERE key=?", (key,))
+
+    def set_upcoming(self, key: str, starts_at: int | None) -> None:
+        """It has not begun. Said outright rather than through set_live_state,
+        which only knows running and finished."""
+        with self.conn as conn:
+            conn.execute(
+                "UPDATE videos SET live_status='is_upcoming', "
+                "scheduled_at=COALESCE(?, scheduled_at), stream_pending=NULL WHERE key=?",
+                (starts_at, key))
 
     def upcoming_without_start(self, limit: int = 3) -> list[sqlite3.Row]:
         """Announced streams whose start time nothing has learned yet.

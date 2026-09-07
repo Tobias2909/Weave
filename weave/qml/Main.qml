@@ -312,9 +312,17 @@ ApplicationWindow {
                     // window anyone can drag to. The only box in the bar now,
                     // so it needs no telling apart from anything.
                     visible: root.width >= 400
+                    // Wide enough for what it says, measured rather than
+                    // guessed at, and only where the bar can spare it. The 220
+                    // it used to ask for cut its own placeholder in half.
+                    TextMetrics {
+                        id: searchHint
+                        font: searchField.font
+                        text: searchField.placeholderText
+                    }
                     Layout.fillWidth: true
-                    Layout.preferredWidth: 220
-                    Layout.maximumWidth: 220
+                    Layout.preferredWidth: Math.ceil(searchHint.width) + 24
+                    Layout.maximumWidth: Math.ceil(searchHint.width) + 24
                     Layout.minimumWidth: 150
                     placeholderText: "Search yours, or YouTube with return"
                     color: Theme.colors.text
@@ -791,8 +799,12 @@ ApplicationWindow {
 
     ChannelHeader {
         id: channelHeader
+        objectName: "channelHeader"
         anchors.left: sidebar.right
-        anchors.right: parent.right
+        // The panel is drawn over this view, so step aside for it the way the
+        // grid does rather than running underneath it. The banner is the
+        // widest thing in the window and it was the one piece still doing so.
+        anchors.right: detailPanel.visible ? detailPanel.left : parent.right
         anchors.top: liveBar.visible ? liveBar.bottom : parent.top
         anchors.topMargin: liveBar.visible ? 0 : banner.height
         info: App.channelInfo

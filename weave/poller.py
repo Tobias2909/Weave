@@ -108,6 +108,11 @@ LIVE_PROBES_PER_TICK = 4
 # calls come first, so this is deliberately a trickle.
 UPCOMING_PER_CHECK = 3
 
+# How many freshly published streams are asked about in one live check. Same
+# arithmetic as above, and the same trickle: this only has anything to do at
+# all in the minutes after a channel announces something.
+NEW_STREAMS_PER_CHECK = 3
+
 
 class FeedPoller(Worker):
     finished_poll = Signal(int, int, int)   # channels polled, rows touched, failures
@@ -338,6 +343,7 @@ class FeedPoller(Worker):
                     refused.append(key)
                 else:
                     spent += cost
+                    pending: list[str] = []
                     if kind == rss.LIVE:
                         if result is None:
                             no_streams.add(key)
@@ -345,9 +351,24 @@ class FeedPoller(Worker):
                             self.progress.emit("feeds", done, total)
                             continue
                         self._db.set_channel_streams(key, True)
+                        # An announcement is published with nothing watching
+                        # it, and in a streams tab that is the one thing an
+                        # ordinary entry never looks like: every real stream
+                        # in there has been watched by somebody. Measured on
+                        # a live feed, the announced one was the only entry of
+                        # fifteen with no views. The ones that look like that
+                        # and are new here are asked about once, since the
+                        # feed itself never says which is which and a card
+                        # that cannot be played must not look like one that
+                        # can.
+                        fresh = self._db.unknown_video_keys([v.key for v in result.videos])
+                        pending = [v.key for v in result.videos
+                                   if v.key in fresh and not v.views]
                     if variant:
                         self._db.set_feed_variant(key, variant)
                     touched += self._db.upsert_videos(result.videos)
+                    if kind == rss.LIVE and pending:
+                        self._db.mark_streams_pending(pending)
                     if result.channel_title:
                         self._db.add_channel(key, "youtube", key.split(":", 1)[1],
                                              result.channel_title)
@@ -951,6 +972,36 @@ class LiveWatcher(Worker):
         self._db.close()
         self.updated.emit(len(rows) + youtube)
 
+    def _settle_streams(self, budget: Budget) -> None:
+        """Ask what a freshly published stream actually is.
+
+        The feeds carry no live state at all and the subscriptions sweep only
+        reaches the newest entries across a whole list, so an announcement
+        arrived looking exactly like an ordinary video for as long as it took
+        the sweep to notice it. It is one question per stream and the answer
+        is kept, so this only ever runs on what has just appeared.
+        """
+        rows = self._db.streams_to_settle(NEW_STREAMS_PER_CHECK)
+        rows = rows[:budget.allowance(PLAYER, len(rows)).granted]
+        for row in rows:
+            if self._cancel.is_set():
+                return
+            budget.spend(PLAYER)
+            try:
+                state = livecheck.check(self._cfg, row["ext_id"], self._throttle, self._cancel)
+            except ProcessCancelled:
+                return
+            except livecheck.LiveCheckError:
+                budget.spend(PLAYER, count=0, refused=1)
+                # Left pending. A refusal is not an answer, and asking again
+                # in a minute and a half costs one request.
+                continue
+            if state.upcoming:
+                self._db.set_upcoming(row["key"], state.starts_at)
+            else:
+                self._db.set_live_state(row["key"], state.viewers, state.still_live)
+                self._db.settle_stream(row["key"])
+
     def _check_upcoming(self, budget: Budget) -> None:
         """Learn when an announced stream is actually due.
 
@@ -1006,7 +1057,10 @@ class LiveWatcher(Worker):
             self._db.set_live_state(row["key"], state.viewers, state.still_live)
             found += 1 if state.still_live else 0
         # After the streams that are on, since a viewer count going stale is
-        # felt and a start time is not.
+        # felt and a start time is not. The freshly published ones come first
+        # of those two, because until one is settled its card looks like a
+        # video that can be played and is not.
+        self._settle_streams(budget)
         self._check_upcoming(budget)
         return found
 
