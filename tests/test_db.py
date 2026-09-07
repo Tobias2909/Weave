@@ -402,13 +402,18 @@ class Groups(DatabaseCase):
         self.assertEqual(self.db.unwatched_total(), 1)
 
     def test_which_groups_hold_a_channel(self):
-        # What the tick beside each entry in the channel menu reads.
+        # What the tick beside each entry in the channel menu reads. All
+        # answers as -1, since that menu asks one question of every list a
+        # channel can be shown in and All is one of them.
         second = self.db.create_group("Second")
         self.db.add_to_group(self.group, "yt:UC1")
-        self.assertEqual(self.db.groups_holding("yt:UC1"), [self.group])
+        self.assertEqual(self.db.groups_holding("yt:UC1"), [-1, self.group])
         self.db.add_to_group(second, "yt:UC1")
-        self.assertEqual(sorted(self.db.groups_holding("yt:UC1")), sorted([self.group, second]))
+        self.assertEqual(sorted(self.db.groups_holding("yt:UC1")),
+                         sorted([-1, self.group, second]))
         self.db.remove_from_group(self.group, "yt:UC1")
+        self.assertEqual(self.db.groups_holding("yt:UC1"), [-1, second])
+        self.db.remove_from_all("yt:UC1")
         self.assertEqual(self.db.groups_holding("yt:UC1"), [second])
 
     def test_adding_the_same_channel_twice_changes_nothing(self):

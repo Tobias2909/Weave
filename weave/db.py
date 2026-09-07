@@ -1237,8 +1237,18 @@ class Database:
             (group_id,)))
 
     def groups_holding(self, channel_key: str) -> list[int]:
-        return [int(row["group_id"]) for row in self.conn.execute(
+        """Which lists show this channel, All among them as -1.
+
+        All is not a row in the groups table and this does not pretend it is,
+        but the window asks one question of both, so it answers for both.
+        """
+        held = [int(row["group_id"]) for row in self.conn.execute(
             "SELECT group_id FROM group_members WHERE channel_key=?", (channel_key,))]
+        found = self.conn.execute(
+            "SELECT in_all FROM channels WHERE key=? AND tracked=1", (channel_key,)).fetchone()
+        if found and found["in_all"]:
+            held.insert(0, -1)
+        return held
 
     def move_group(self, group_id: int, delta: int) -> bool:
         """Shift a group one place in the sidebar.

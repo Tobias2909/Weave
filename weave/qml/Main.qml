@@ -1246,10 +1246,11 @@ ApplicationWindow {
 
         Instantiator {
             id: channelGroupEntries
-            // All is not a real group and cannot hold anything, so it is not
-            // offered. Filtering by id rather than by position, since which
-            // row All occupies is not this file's business.
-            model: App.groups.filter(function (g) { return g.id >= 0 })
+            // All is offered like any other list. It is not a row in the
+            // groups table, but it holds channels in the sense this menu is
+            // asking about, and a channel followed here has every reason to
+            // sit beside a subscribed one.
+            model: App.groups
             // A delegate created here does not inherit this file's id scope,
             // so the menu is handed to each entry from out here.
             onObjectAdded: (index, object) => {

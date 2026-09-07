@@ -315,25 +315,30 @@ Rectangle {
                 width: channelRow.width - avatar.width - channelRow.spacing
                 spacing: 3
 
-                Text {
-                    id: channelName
+                // The name is a link, and the line under it is not, so the
+                // handlers live on a wrapper around the name alone rather
+                // than on the column that holds both. On the Text itself they
+                // were never offered the press at all.
+                Item {
+                    objectName: "channelLink"
                     width: parent.width
-                    text: card.channelTitle
-                    color: (channelHover.hovered || avatarHover.hovered)
-                           ? Theme.colors.text : Theme.colors.textMuted
-                    font.pixelSize: 12
-                    font.underline: channelHover.hovered || avatarHover.hovered
-                    elide: Text.ElideRight
+                    height: channelName.implicitHeight + 8
 
-                    // The whole line, not only the glyphs. A name is one row
-                    // of twelve pixel text in a band of forty four, and
-                    // hitting it was a game of its own.
-                    HoverHandler {
-                        id: channelHover
-                        margin: 8
+                    Text {
+                        id: channelName
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: card.channelTitle
+                        color: (channelHover.hovered || avatarHover.hovered)
+                               ? Theme.colors.text : Theme.colors.textMuted
+                        font.pixelSize: 12
+                        font.underline: channelHover.hovered || avatarHover.hovered
+                        elide: Text.ElideRight
                     }
+
+                    HoverHandler { id: channelHover }
                     TapHandler {
-                        margin: 8
                         gesturePolicy: TapHandler.ReleaseWithinBounds
                         onTapped: card.channelRequested()
                     }

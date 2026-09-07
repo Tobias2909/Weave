@@ -522,10 +522,20 @@ class Smoke:
         self.check("so the card draws a letter to press instead",
                    mark is not None and read(mark, "visible") and read(mark, "width") == 44,
                    f"{read(mark, 'width') if mark else 'missing'} px")
+        # The name is a link too. Handlers declared inside the Text itself
+        # were never offered the press, which is why only the picture worked.
+        card = next(iter(visible_children(read(find(window, "grid"), "contentItem"))), None)
+        self.check("the name beside it is a link as well",
+                   item_named(card, "channelLink") is not None)
         bridge.openChannel(row["channelKey"])
         settle(0.5)
         self.check("and pressing it reaches that channel",
                    read(bridge, "viewKind") == "channel", read(bridge, "viewKind"))
+        # All is one of the lists the groups menu offers on a channel page.
+        offered = read(bridge, "groups")
+        self.check("the groups menu can put a channel in All",
+                   any(row["id"] < 0 for row in offered),
+                   ", ".join(str(row["name"]) for row in offered))
         bridge.selectGroup(-1)
         settle(0.3)
 

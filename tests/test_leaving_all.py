@@ -95,6 +95,41 @@ class LeavingAll(unittest.TestCase):
         self.assertEqual(self.in_all(), [])
 
 
+class TheGroupsMenuOnAChannel(unittest.TestCase):
+    """All is one of the lists that menu offers, and it answers for it."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self._tmp.name) / "t.db")
+        self.db.add_channel(ONE_KEY, "youtube", ONE, "One")
+
+    def tearDown(self):
+        self.db.close()
+        self._tmp.cleanup()
+
+    def test_a_followed_channel_is_shown_as_being_in_all(self):
+        self.assertIn(-1, self.db.groups_holding(ONE_KEY))
+
+    def test_one_taken_out_of_it_is_not(self):
+        self.db.remove_from_all(ONE_KEY)
+        self.assertNotIn(-1, self.db.groups_holding(ONE_KEY))
+
+    def test_a_group_only_channel_is_not_either(self):
+        group = self.db.create_group("Mine")
+        self.db.add_channel(TWO_KEY, "youtube", TWO, "Two", in_all=False)
+        self.db.add_to_group(group, TWO_KEY)
+        self.assertEqual(self.db.groups_holding(TWO_KEY), [group])
+
+    def test_all_comes_first_so_the_menu_leads_with_it(self):
+        group = self.db.create_group("Mine")
+        self.db.add_to_group(group, ONE_KEY)
+        self.assertEqual(self.db.groups_holding(ONE_KEY), [-1, group])
+
+    def test_a_channel_nobody_follows_is_in_nothing(self):
+        self.db.remember_channel(TWO_KEY, "youtube", TWO, "Two")
+        self.assertEqual(self.db.groups_holding(TWO_KEY), [])
+
+
 class WhatCannotUndoIt(unittest.TestCase):
     """The whole point of remembering the decision."""
 

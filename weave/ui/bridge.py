@@ -1802,9 +1802,15 @@ class Bridge(QObject):
     def addChannelToGroup(self, group_id: int, channel_key: str) -> None:
         if not channel_key:
             return
-        self._db.add_to_group(group_id, channel_key)
+        # All is one of the lists a channel can be put into. There is no
+        # reason a channel followed here should not sit beside a subscribed
+        # one, and putting it in All is exactly what following it means.
+        if group_id < 0:
+            self._db.restore_to_all(channel_key)
+        else:
+            self._db.add_to_group(group_id, channel_key)
         self.groupsChanged.emit()
-        if self._view_kind == GROUP:
+        if self._view_kind in (GROUP, ALL):
             self.reload()
 
     @Slot(int, str)
