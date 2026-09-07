@@ -1643,7 +1643,11 @@ ApplicationWindow {
         id: playlistChooser
         objectName: "playlistChooser"
         anchors.centerIn: parent
-        width: 420
+        // The same size as the one for the linked playlists below. Two
+        // windows that do the same thing to two lists are one window as far
+        // as the eye is concerned, and a step in size between them reads as a
+        // step in importance.
+        width: Math.min(560, root.width - 80)
         height: Math.min(520, root.height - 80)
         padding: 16
         modal: true
@@ -1883,7 +1887,7 @@ ApplicationWindow {
         objectName: "keptChooser"
         anchors.centerIn: parent
         width: Math.min(560, root.width - 80)
-        height: Math.min(480, root.height - 80)
+        height: Math.min(520, root.height - 80)
         padding: 16
         modal: true
         focus: true

@@ -1272,15 +1272,25 @@ def main() -> int:
     parser.add_argument("--no-seed", action="store_true", help="do not add sample videos")
     args = parser.parse_args()
 
-    if not os.environ.get("XDG_STATE_HOME"):
-        # This walk writes. It seeds channels and videos, follows one, keeps a
-        # playlist and overwrites the music shelves, and against a real
-        # collection all of that lands in it. The test harness points every
-        # XDG directory at a scratch copy, and running the walk by hand has to
-        # do the same rather than be trusted to remember.
-        print("refusing to walk the real collection: set XDG_STATE_HOME "
-              "(and XDG_CONFIG_HOME, XDG_CACHE_HOME) to a scratch directory",
-              file=sys.stderr)
+    missing = [name for name in ("XDG_STATE_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME")
+               if not os.environ.get(name)]
+    # A session always sets this one, and it is the session's own. Unset is
+    # not the danger here; the danger is the real one, so it counts as missing
+    # until it points somewhere else.
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or ""
+    if not runtime or runtime.startswith("/run/user"):
+        missing.append("XDG_RUNTIME_DIR")
+    if missing:
+        # This walk writes, and it presses things. It seeds channels and
+        # videos, follows one, keeps a playlist and overwrites the music
+        # shelves, and against a real collection all of that lands in it.
+        # The runtime directory matters just as much: mpv's IPC socket lives
+        # there, and a press that reaches a running mpv hands a test video to
+        # the player somebody is watching. The test harness points every one
+        # of these at a scratch copy, and running the walk by hand has to do
+        # the same rather than be trusted to remember.
+        print("refusing to walk the real collection and the real player: set "
+              + ", ".join(missing) + " to a scratch directory", file=sys.stderr)
         return 2
 
     if args.offline:
