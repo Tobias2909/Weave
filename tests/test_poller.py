@@ -119,20 +119,41 @@ class FeedJobs(unittest.TestCase):
     def rows(self):
         return self.db.channels_due(self.cfg.feed_tiers)
 
-    def test_only_the_videos_feed_by_default(self):
+    def test_a_channel_nobody_has_looked_at_gets_both_feeds(self):
+        # Streams live in their own tab, so a channel not asked for it shows a
+        # stream only once it has ended. Nothing else reveals that a channel
+        # streams unless it is subscribed, so the first round asks and the
+        # answer is remembered.
         jobs = self.poller._feed_jobs(self.rows())
-        self.assertEqual({kind for _, _, kind in jobs}, {rss.VIDEOS})
-        self.assertEqual(len(jobs), 2)
+        self.assertEqual({kind for _, _, kind in jobs}, {rss.VIDEOS, rss.LIVE})
+        self.assertIn(("yt:UC1", "UC1", rss.LIVE), jobs)
 
-    def test_a_channel_that_streams_also_gets_its_live_feed(self):
-        # Streams live in their own tab, so without this a stream would only
-        # appear once it had ended. Only channels seen streaming are asked,
-        # because asking every channel would double the round for nothing.
+    def test_one_without_a_streams_tab_gets_only_its_videos(self):
+        self.db.set_channel_streams("yt:UC1", False)
+        self.db.set_channel_streams("yt:UC2", True)
+        jobs = self.poller._feed_jobs(self.rows())
+        self.assertIn(("yt:UC2", "UC2", rss.LIVE), jobs)
+        self.assertNotIn(("yt:UC1", "UC1", rss.LIVE), jobs)
+        self.assertEqual(len(jobs), 3)
+
+    def test_the_ones_nobody_has_looked_at_are_asked_a_few_at_a_time(self):
+        # Asking all of them at once would double a round and press against
+        # the request ceiling, and the answer is kept for good, so there is no
+        # hurry. Known streamers are not part of that limit.
+        for index in range(3, 9):
+            self.db.add_channel(f"yt:UC{index}", "youtube", f"UC{index}", f"C{index}")
+        self.db.set_channel_streams("yt:UC1", True)
+        jobs = self.poller._feed_jobs(self.rows())
+        live = [key for key, _, kind in jobs if kind == rss.LIVE]
+        self.assertIn("yt:UC1", live)
+        self.assertEqual(len(live), 1 + poller.LIVE_PROBES_PER_TICK)
+
+    def test_a_channel_seen_streaming_keeps_its_live_feed(self):
+        self.db.set_channel_streams("yt:UC2", False)
         self.db.upsert_videos([VideoRow("youtube", "aaaaaaaaaaa", "yt:UC2", "Stream",
                                         live_status="was_live")])
         jobs = self.poller._feed_jobs(self.rows())
         self.assertIn(("yt:UC2", "UC2", rss.LIVE), jobs)
-        self.assertNotIn(("yt:UC1", "UC1", rss.LIVE), jobs)
 
     def test_a_remembered_variant_is_used(self):
         self.db.set_feed_variant("yt:UC1", rss.CHANNEL)
@@ -175,6 +196,16 @@ class FeedFallback(unittest.TestCase):
                      rss.CHANNEL: rss.FeedResult("UC1", "One", [], rss.CHANNEL)})
         _, cost, variant = self.poller._fetch_one(None, "UC1", rss.VIDEOS)
         self.assertEqual((cost, variant), (2, rss.CHANNEL))
+
+    def test_a_missing_streams_tab_answers_with_nothing_rather_than_raising(self):
+        # There is nothing to fall back to for this one. A channel that has
+        # never streamed genuinely has no streams tab, so the caller is handed
+        # no result and decides what it meant by whether the videos feed of
+        # the same channel answered in the same round.
+        self.answer({rss.LIVE: HttpError(404, "u")})
+        result, cost, variant = self.poller._fetch_one(None, "UC1", rss.LIVE)
+        self.assertIsNone(result)
+        self.assertEqual((cost, variant), (1, None))
 
     def test_a_refusal_is_not_mistaken_for_a_missing_tab(self):
         # The endpoint answers a burst with a 404 too. The mixed feed is the
@@ -292,3 +323,65 @@ class BudgetedRound(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DecidingWhetherAChannelStreams(unittest.TestCase):
+    """What a 404 on the streams tab is taken to mean.
+
+    The endpoint answers a burst of requests with a 404 as well, so a round in
+    which a channel answered nothing at all is not allowed to decide that the
+    channel has no streams tab. Getting that wrong would quietly stop asking
+    for the streams of every channel the first time the endpoint pushed back.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self._tmp.name) / "t.db")
+        self.cfg = Config(raw={})
+        self.db.add_channel("yt:UC1", "youtube", "UC1", "One")
+        self.poller = poller.FeedPoller(self.db, self.cfg)
+        self._real = poller.rss.fetch
+        self.addCleanup(setattr, poller.rss, "fetch", self._real)
+
+    def tearDown(self):
+        self.db.close()
+        self._tmp.cleanup()
+
+    def answer(self, table):
+        def fake(fetcher, ext_id, kind=rss.VIDEOS):
+            found = table[kind]
+            if isinstance(found, Exception):
+                raise found
+            return found
+        poller.rss.fetch = fake
+
+    def run_round(self):
+        budget = Budget(self.db, self.cfg.budget_limits, self.cfg.budget_window_s)
+        return self.poller._phase_rss(None, budget)
+
+    def streams_column(self):
+        return self.db.channels()[0]["streams"]
+
+    def test_a_missing_streams_tab_is_remembered_and_not_asked_again(self):
+        self.answer({rss.VIDEOS: rss.FeedResult("UC1", "One", [], rss.VIDEOS),
+                     rss.LIVE: HttpError(404, "u")})
+        _, _, failures = self.run_round()
+        # Not an error either. A channel that has never streamed answering
+        # that way is the ordinary case, not a fault to report.
+        self.assertEqual(failures, 0)
+        self.assertEqual(self.streams_column(), 0)
+        self.assertNotIn("yt:UC1", self.db.channels_that_stream())
+
+    def test_a_refusal_leaves_the_question_open(self):
+        self.answer({rss.VIDEOS: HttpError(404, "u"), rss.CHANNEL: HttpError(404, "u"),
+                     rss.LIVE: HttpError(404, "u")})
+        self.run_round()
+        self.assertIsNone(self.streams_column())
+        self.assertIn("yt:UC1", self.db.channels_not_asked_for_streams())
+
+    def test_a_streams_tab_that_answers_is_remembered_too(self):
+        self.answer({rss.VIDEOS: rss.FeedResult("UC1", "One", [], rss.VIDEOS),
+                     rss.LIVE: rss.FeedResult("UC1", "One", [], rss.LIVE)})
+        self.run_round()
+        self.assertEqual(self.streams_column(), 1)
+        self.assertIn("yt:UC1", self.db.channels_that_stream())

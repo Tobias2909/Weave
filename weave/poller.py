@@ -94,6 +94,14 @@ class Worker(QThread):
         return Throttle(slots, cfg.min_request_interval_s)
 
 
+# How many channels whose streams tab has never been asked get asked in one
+# tick. A round of 15 channels a minute spends 225 feed requests in a fifteen
+# minute window against a ceiling of 300, so there is room for about 60 more.
+# Four a tick is 60 a window, which fits, and it settles a list of several
+# hundred channels over a couple of hours without the feed itself slowing down.
+LIVE_PROBES_PER_TICK = 4
+
+
 class FeedPoller(Worker):
     finished_poll = Signal(int, int, int)   # channels polled, rows touched, failures
     progress = Signal(str, int, int)        # phase, done, total
@@ -191,18 +199,27 @@ class FeedPoller(Worker):
     def _feed_jobs(self, rows: list) -> list[tuple[str, str, str]]:
         """One job per feed to fetch, as key, channel id and which tab.
 
-        A channel gets its videos feed, and its live feed as well if it has
-        ever been seen streaming. Streams live in their own tab, so without
-        that second feed a stream would only appear once it had ended, and
-        most channels have never streamed so asking them all would double the
-        request count for nothing.
+        Streams live in their own tab, so a channel not asked for that tab
+        shows a stream only once it has ended. Every channel known to stream
+        is asked for it every round, which is cheap because most channels do
+        not stream.
+
+        The ones nobody has looked at are asked a few at a time. Nothing else
+        reveals that a channel streams, so they have to be asked, but asking
+        all of them at once would double a round and press against the request
+        ceiling, and there is no hurry about a question that is answered once
+        and then remembered for good.
         """
         jobs = [(row["key"], row["ext_id"], row["feed_variant"] or rss.VIDEOS)
                 for row in rows]
-        if self._cfg.poll_live_feeds:
-            streamers = self._db.channels_that_stream()
-            jobs += [(row["key"], row["ext_id"], rss.LIVE) for row in rows
-                     if row["key"] in streamers and (row["feed_variant"] or "") != rss.CHANNEL]
+        if not self._cfg.poll_live_feeds:
+            return jobs
+        streamers = self._db.channels_that_stream()
+        unasked = self._db.channels_not_asked_for_streams()
+        wanted = [row for row in rows if row["key"] in streamers]
+        wanted += [row for row in rows if row["key"] in unasked][:LIVE_PROBES_PER_TICK]
+        jobs += [(row["key"], row["ext_id"], rss.LIVE) for row in wanted
+                 if (row["feed_variant"] or "") != rss.CHANNEL]
         return jobs
 
     def _fetch_one(self, fetcher: Fetcher, ext_id: str, kind: str) -> tuple[object, int, str | None]:
@@ -214,11 +231,19 @@ class FeedPoller(Worker):
         rather than with a busy signal. The mixed channel feed is the
         discriminator: it answers in the first case and refuses in the second,
         so a fallback only sticks when that call succeeds.
+
+        The streams tab is the one case with nothing to fall back to, since a
+        channel that has never streamed genuinely has no such tab. So a 404
+        there returns no result rather than raising, and the caller decides
+        what it meant by looking at whether the same channel's videos feed
+        answered in the same round.
         """
         try:
             return rss.fetch(fetcher, ext_id, kind), 1, None
         except HttpError as exc:
-            if exc.status != 404 or kind in (rss.CHANNEL, rss.LIVE):
+            if exc.status == 404 and kind == rss.LIVE:
+                return None, 1, None
+            if exc.status != 404 or kind == rss.CHANNEL:
                 raise
             result = rss.fetch(fetcher, ext_id, rss.CHANNEL)
             return result, 2, rss.CHANNEL
@@ -245,6 +270,10 @@ class FeedPoller(Worker):
         spent = 0
         refused: list[str] = []
         polled: set[str] = set()
+        # Channels whose streams tab answered 404. Whether that means they have
+        # no such tab is decided after the round, since the endpoint refuses
+        # with a 404 as well.
+        no_streams: set[str] = set()
         total = len(jobs)
         with ThreadPoolExecutor(max_workers=self._cfg.max_concurrency) as pool:
             futures = {pool.submit(self._fetch_one, fetcher, ext_id, kind): (key, kind)
@@ -272,6 +301,13 @@ class FeedPoller(Worker):
                     refused.append(key)
                 else:
                     spent += cost
+                    if kind == rss.LIVE:
+                        if result is None:
+                            no_streams.add(key)
+                            done += 1
+                            self.progress.emit("feeds", done, total)
+                            continue
+                        self._db.set_channel_streams(key, True)
                     if variant:
                         self._db.set_feed_variant(key, variant)
                     touched += self._db.upsert_videos(result.videos)
@@ -290,6 +326,14 @@ class FeedPoller(Worker):
                         self.failure.emit(key, "returned no entries")
                 done += 1
                 self.progress.emit("feeds", done, total)
+
+        # A streams tab that 404s while the same channel's videos feed
+        # answered is a channel that does not stream, and it is not asked
+        # again. One that 404s in a round where that channel answered nothing
+        # is the endpoint pushing back, so no verdict is stored and it is
+        # asked again later.
+        for key in no_streams & polled:
+            self._db.set_channel_streams(key, False)
 
         budget.spend(FEEDS, spent, refused=len(refused))
         if refused:

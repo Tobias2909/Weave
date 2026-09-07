@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -324,6 +324,12 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # play path can refuse to hand an announced stream to a player.
     ("cached_videos", "live_status", "TEXT"),
     ("cached_videos", "scheduled_at", "INTEGER"),
+    # Whether this channel has a streams tab. NULL means nobody has looked
+    # yet, which is what gets it looked at. Before this the answer was
+    # inferred from having stored a stream already, and the only thing that
+    # stores one for a channel nobody is subscribed to is that very tab, so a
+    # channel added by hand never had its streams read at all.
+    ("channels", "streams", "INTEGER"),
 )
 
 
@@ -367,6 +373,13 @@ class Database:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
             row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             was = int(row["value"]) if row else 0
+            if was and was < 27:
+                # A channel already seen streaming is known to stream, so it
+                # keeps its answer rather than being asked again. Everything
+                # else is left unknown and gets one look at its streams tab.
+                conn.execute(
+                    "UPDATE channels SET streams=1 WHERE key IN "
+                    "(SELECT DISTINCT channel_key FROM videos WHERE live_status IS NOT NULL)")
             if was and was < 25:
                 # in_all arrives set for every existing row, which is right for
                 # the channels followed and wrong for the ones a saved video
@@ -634,13 +647,47 @@ class Database:
             conn.execute("UPDATE channels SET feed_variant=? WHERE key=?", (variant, key))
 
     def channels_that_stream(self, platform: str = "youtube") -> set[str]:
-        """Channels known to broadcast, so the live feed is only asked of the
-        ones it can answer for. Most channels have never streamed and asking
-        them would double the request count for nothing."""
+        """Channels whose streams tab is worth asking for.
+
+        Streams live in their own tab, so a channel not asked for it shows a
+        stream only once it has ended. Most channels have never streamed and
+        asking all of them every round would double the request count for
+        nothing, so the answer is remembered per channel.
+
+        This is the ones known to stream, either because the tab answered once
+        or because a stream of theirs has been stored from somewhere else. The
+        ones nobody has looked at are a separate question, since asking those
+        is a one off cost that has to be paced.
+        """
         return {row[0] for row in self.conn.execute(
-            "SELECT DISTINCT v.channel_key FROM videos v "
-            "JOIN channels c ON c.key = v.channel_key AND c.tracked = 1 "
-            "WHERE v.platform=? AND v.live_status IS NOT NULL", (platform,))}
+            "SELECT c.key FROM channels c "
+            "WHERE c.platform=? AND c.tracked=1 "
+            "  AND (c.streams=1 "
+            "       OR EXISTS (SELECT 1 FROM videos v WHERE v.channel_key=c.key "
+            "                  AND v.live_status IS NOT NULL))", (platform,))}
+
+    def channels_not_asked_for_streams(self, platform: str = "youtube") -> set[str]:
+        """Channels whose streams tab has never been asked for.
+
+        Nothing else reveals that a channel streams. The subscriptions sweep
+        only reaches the newest entries across every subscription, so over a
+        long list a channel's stream may never appear in one, and a channel
+        added by hand or reached through a group is not in a sweep at all.
+        Waiting to be told therefore meant waiting for ever, which is why
+        these are asked once and the answer kept.
+        """
+        return {row[0] for row in self.conn.execute(
+            "SELECT c.key FROM channels c "
+            "WHERE c.platform=? AND c.tracked=1 AND c.streams IS NULL "
+            "  AND NOT EXISTS (SELECT 1 FROM videos v WHERE v.channel_key=c.key "
+            "                  AND v.live_status IS NOT NULL)", (platform,))}
+
+    def set_channel_streams(self, key: str, streams: bool) -> None:
+        """Remember whether this channel has a streams tab, so the question is
+        asked once rather than every round."""
+        with self.conn as conn:
+            conn.execute("UPDATE channels SET streams=? WHERE key=?",
+                         (1 if streams else 0, key))
 
     def remove_channel(self, key: str) -> None:
         with self.conn as conn:

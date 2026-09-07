@@ -100,13 +100,44 @@ class Channels(DatabaseCase):
         # Promoting twice is not a second promotion.
         self.assertEqual(self.db.promote_channels(["yt:UCb"]), 0)
 
-    def test_only_channels_that_have_streamed_are_asked_for_live(self):
+    def test_a_channel_nobody_has_looked_at_is_a_question_not_a_no(self):
+        # The bug this replaces: whether a channel streams was inferred from
+        # having stored a stream of theirs already, and the only thing that
+        # stores one is either that very tab or a sweep of the subscriptions.
+        # A channel the sweep never reaches was therefore never asked at all.
+        self.db.add_channel("yt:UC1", "youtube", "UC1")
+        self.assertEqual(self.db.channels_that_stream(), set())
+        self.assertEqual(self.db.channels_not_asked_for_streams(), {"yt:UC1"})
+
+    def test_an_answer_either_way_settles_it(self):
+        self.db.add_channel("yt:UC1", "youtube", "UC1")
+        self.db.set_channel_streams("yt:UC1", True)
+        self.assertEqual(self.db.channels_not_asked_for_streams(), set())
+        self.assertEqual(self.db.channels_that_stream(), {"yt:UC1"})
+        self.db.set_channel_streams("yt:UC1", False)
+        self.assertEqual(self.db.channels_not_asked_for_streams(), set())
+        self.assertEqual(self.db.channels_that_stream(), set())
+
+    def test_one_looked_at_and_found_without_a_streams_tab_is_left_alone(self):
         self.db.add_channel("yt:UC1", "youtube", "UC1")
         self.db.add_channel("yt:UC2", "youtube", "UC2")
-        self.db.upsert_videos([self.video("aaaaaaaaaaa", channel="yt:UC1"),
-                               self.video("bbbbbbbbbbb", channel="yt:UC2",
-                                          live_status="was_live")])
+        self.db.set_channel_streams("yt:UC1", False)
+        self.db.set_channel_streams("yt:UC2", True)
         self.assertEqual(self.db.channels_that_stream(), {"yt:UC2"})
+
+    def test_a_stream_from_anywhere_else_puts_it_back(self):
+        # The sweep reports a live video without the tab being asked, and that
+        # outranks an older verdict of no.
+        self.db.add_channel("yt:UC1", "youtube", "UC1")
+        self.db.set_channel_streams("yt:UC1", False)
+        self.db.upsert_videos([self.video("aaaaaaaaaaa", channel="yt:UC1",
+                                          live_status="was_live")])
+        self.assertEqual(self.db.channels_that_stream(), {"yt:UC1"})
+
+    def test_a_channel_that_is_not_polled_is_not_asked(self):
+        self.db.remember_channel("yt:UC9", "youtube", "UC9", "Kept for a video")
+        self.assertNotIn("yt:UC9", self.db.channels_that_stream())
+        self.assertNotIn("yt:UC9", self.db.channels_not_asked_for_streams())
 
     def test_the_feed_variant_is_remembered(self):
         self.db.add_channel("yt:UC1", "youtube", "UC1")
