@@ -23,6 +23,51 @@ class DatabaseCase(unittest.TestCase):
         return VideoRow("youtube", ext_id, channel, kwargs.pop("title", ext_id), **kwargs)
 
 
+class MovingABox(DatabaseCase):
+    """Boxes are ordered by hand the way groups are."""
+
+    def three(self):
+        return [self.db.create_box(name) for name in ("One", "Two", "Three")]
+
+    def names(self):
+        return [box["name"] for box in self.db.boxes()]
+
+    def test_they_start_in_the_order_they_were_made(self):
+        self.three()
+        self.assertEqual(self.names(), ["One", "Two", "Three"])
+
+    def test_one_can_be_moved_up(self):
+        _, two, _ = self.three()
+        self.assertTrue(self.db.move_box(two, -1))
+        self.assertEqual(self.names(), ["Two", "One", "Three"])
+
+    def test_and_down(self):
+        _, two, _ = self.three()
+        self.assertTrue(self.db.move_box(two, 1))
+        self.assertEqual(self.names(), ["One", "Three", "Two"])
+
+    def test_neither_end_moves_past_itself(self):
+        one, _, three = self.three()
+        self.assertFalse(self.db.move_box(one, -1))
+        self.assertFalse(self.db.move_box(three, 1))
+        self.assertEqual(self.names(), ["One", "Two", "Three"])
+
+    def test_a_box_that_is_not_there_moves_nothing(self):
+        self.three()
+        self.assertFalse(self.db.move_box(999, 1))
+        self.assertEqual(self.names(), ["One", "Two", "Three"])
+
+    def test_a_gap_left_by_a_deletion_is_closed(self):
+        # Positions are rewritten from the resulting order rather than
+        # swapped, which is what makes a list with gaps in it come out
+        # consecutive.
+        one, two, three = self.three()
+        self.db.delete_box(two)
+        self.assertTrue(self.db.move_box(three, -1))
+        self.assertEqual(self.names(), ["Three", "One"])
+        self.assertEqual([box["position"] for box in self.db.boxes()], [0, 1])
+
+
 class AVideoWhoseChannelIsUnknown(DatabaseCase):
     """A video always brings a channel row with it.
 

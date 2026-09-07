@@ -408,6 +408,36 @@ class Smoke:
         self.check("a failure takes the chip away", read(bridge, "startingKey") == "",
                    str(read(bridge, "startingKey")))
 
+    def boxes(self, bridge, window) -> None:
+        """A box is ordered by hand the way a group is."""
+        first = bridge.createBox("Alpha")
+        second = bridge.createBox("Beta")
+        settle(0.3)
+        menu = find(window, "boxMenu")
+        write(menu, "boxId", first)
+        write(menu, "boxName", "Alpha")
+        menu.open()
+        settle(0.3)
+        entries = [text.strip() for text, _ in menu_entries(menu)]
+        self.check("the box menu is in the order he asked for",
+                   entries == ["Rename", "Move up", "Move down", "Delete the box"],
+                   ", ".join(entries))
+        menu.close()
+        settle(0.2)
+        names = [box["name"] for box in read(bridge, "boxes")]
+        bridge.moveBox(second, -1)
+        settle(0.3)
+        moved = [box["name"] for box in read(bridge, "boxes")]
+        self.check("a box can be moved up", moved.index("Beta") < moved.index("Alpha"),
+                   f"{', '.join(names)} to {', '.join(moved)}")
+        bridge.moveBox(second, 1)
+        settle(0.3)
+        back = [box["name"] for box in read(bridge, "boxes")]
+        self.check("and down again", back == names, ", ".join(back))
+        bridge.deleteBox(first)
+        bridge.deleteBox(second)
+        settle(0.3)
+
     def wizard(self, bridge, window) -> None:
         """The pages a fresh install is walked through.
 
@@ -648,8 +678,9 @@ class Smoke:
         menu.open()
         settle(0.3)
         labels = [text.strip() for text, _ in menu_entries(menu)]
-        self.check("the group menu leads with managing it",
-                   labels[:1] == ["Manage the group"], ", ".join(labels))
+        self.check("the group menu is in the order he asked for",
+                   labels == ["Rename", "Move up", "Move down", "Manage the group",
+                              "Delete the group"], ", ".join(labels))
         menu.close()
         settle(0.2)
 
@@ -793,6 +824,7 @@ class Smoke:
 
         self.starting(bridge, window)
         self.updates(bridge, window)
+        self.boxes(bridge, window)
         self.wizard(bridge, window)
         self.scrolling(bridge, window)
 

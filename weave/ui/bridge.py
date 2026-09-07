@@ -1706,6 +1706,11 @@ class Bridge(QObject):
         if self._db.move_group(group_id, delta):
             self.groupsChanged.emit()
 
+    @Slot(int, int)
+    def moveBox(self, box_id: int, delta: int) -> None:
+        if self._db.move_box(box_id, delta):
+            self.boxesChanged.emit()
+
     @Slot(int, str)
     def addChannelToGroup(self, group_id: int, channel_key: str) -> None:
         if not channel_key:

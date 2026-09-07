@@ -121,10 +121,10 @@ Popup {
                     "This is your subscriptions and nothing else. No front page, no "
                         + "recommendations you did not ask for, and every video opens in mpv "
                         + "rather than in a page. These few pages are only the parts worth "
-                        + "knowing before you start, and there is a good deal more on the "
-                        + "settings page once you want it. It takes about a minute, none of "
-                        + "it is final, and Getting started on that page opens these again "
-                        + "whenever you want them.",
+                        + "knowing before you start. There is a good deal more in here than "
+                        + "they cover, and the rest is worth finding as you go. It takes "
+                        + "about a minute, none of it is final, and Getting started on the "
+                        + "settings page opens these again whenever you want them.",
                     "Weave builds its feed from each channel's own feed, so it has to know "
                         + "which channels are yours. Importing reads that list from YouTube "
                         + "once and follows every channel in it. Nothing is written back to "

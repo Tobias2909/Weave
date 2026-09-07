@@ -8,8 +8,14 @@ Rectangle {
     id: panel
     // Read as a colour first. The roles are handed over as text, and asking
     // a piece of text for its red gives nothing, which builds a black bar.
-    readonly property color panel: Qt.color(Theme.colors.surface)
-    color: Qt.rgba(panel.r, panel.g, panel.b,
+    //
+    // Named ground rather than panel. A property that shares the name of an
+    // id loses to the id, so panel.r read the item rather than the colour and
+    // came back undefined, which Qt.rgba paints black. On a dark theme that
+    // looked plausible. On a light one the whole bar was black with dark text
+    // on it.
+    readonly property color ground: Qt.color(Theme.colors.surface)
+    color: Qt.rgba(ground.r, ground.g, ground.b,
                    // A pale bar keeps more of itself, or the gradient behind
                    // it shows through and the dark text on it stops being
                    // readable.

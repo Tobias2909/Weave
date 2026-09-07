@@ -1298,16 +1298,6 @@ ApplicationWindow {
         property string groupName: ""
 
         ThemedMenuItem {
-            text: "Manage the group"
-            onTriggered: {
-                var id = groupMenu.groupId, name = groupMenu.groupName
-                groupMenu.dismiss()
-                manageGroup.groupId = id
-                manageGroup.groupName = name
-                manageGroup.open()
-            }
-        }
-        ThemedMenuItem {
             text: "Rename"
             onTriggered: {
                 var id = groupMenu.groupId, name = groupMenu.groupName
@@ -1324,6 +1314,16 @@ ApplicationWindow {
             onTriggered: { App.moveGroup(groupMenu.groupId, 1); groupMenu.dismiss() }
         }
         ThemedMenuItem {
+            text: "Manage the group"
+            onTriggered: {
+                var id = groupMenu.groupId, name = groupMenu.groupName
+                groupMenu.dismiss()
+                manageGroup.groupId = id
+                manageGroup.groupName = name
+                manageGroup.open()
+            }
+        }
+        ThemedMenuItem {
             // The channels themselves are untouched, as with a box and its
             // videos.
             text: "Delete the group"
@@ -1333,6 +1333,7 @@ ApplicationWindow {
 
     ThemedMenu {
         id: boxMenu
+        objectName: "boxMenu"
         property int boxId: -1
         property string boxName: ""
 
@@ -1345,6 +1346,16 @@ ApplicationWindow {
             }
         }
         ThemedMenuItem {
+            text: "Move up"
+            onTriggered: { App.moveBox(boxMenu.boxId, -1); boxMenu.dismiss() }
+        }
+        ThemedMenuItem {
+            text: "Move down"
+            onTriggered: { App.moveBox(boxMenu.boxId, 1); boxMenu.dismiss() }
+        }
+        ThemedMenuItem {
+            // The videos themselves are untouched, as with a group and its
+            // channels.
             text: "Delete the box"
             onTriggered: { App.deleteBox(boxMenu.boxId); boxMenu.dismiss() }
         }

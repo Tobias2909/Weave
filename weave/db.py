@@ -1284,6 +1284,24 @@ class Database:
             "  (SELECT COUNT(*) FROM box_items i WHERE i.box_id = b.id) AS items "
             "FROM boxes b ORDER BY b.position, b.id")]
 
+    def move_box(self, box_id: int, delta: int) -> bool:
+        """Shift a box one place in the sidebar, the way a group moves.
+
+        Positions are rewritten from the resulting order rather than swapped,
+        so a list that was never ordered, or was left with gaps by a deletion,
+        comes out consecutive either way.
+        """
+        order = [row["id"] for row in self.boxes()]
+        if box_id not in order:
+            return False
+        was = order.index(box_id)
+        now = max(0, min(len(order) - 1, was + delta))
+        if now == was:
+            return False
+        order.insert(now, order.pop(was))
+        self.set_box_order(order)
+        return True
+
     def box_by_name(self, name: str) -> dict | None:
         row = self.conn.execute(
             "SELECT id, name, position FROM boxes WHERE name=? COLLATE NOCASE", (name,)).fetchone()

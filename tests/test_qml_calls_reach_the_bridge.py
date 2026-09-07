@@ -92,6 +92,27 @@ class TheWindowCanReachWhatItCalls(unittest.TestCase):
                     found.append(f"{path.name}:{number}: {line.strip()}")
         self.assertEqual(found, [], "\n".join(found))
 
+    def test_no_property_is_named_after_an_id(self) -> None:
+        """A property that shares the name of an id in the same file loses.
+
+        The id wins the lookup, so reading the property gives the item, and
+        asking an item for a colour channel gives undefined, which Qt.rgba
+        paints black without a word. That is exactly how the panel beside the
+        feed came out black on every light theme.
+        """
+        ids = re.compile(r"^\s*id:\s*([A-Za-z_][A-Za-z0-9_]*)", re.M)
+        declared = re.compile(
+            r"^\s*(?:readonly\s+)?property\s+[A-Za-z_][A-Za-z0-9_<>]*\s+"
+            r"([A-Za-z_][A-Za-z0-9_]*)", re.M)
+        clashes = []
+        for path in self.files:
+            text = path.read_text()
+            names = set(ids.findall(text))
+            for name in declared.findall(text):
+                if name in names:
+                    clashes.append(f"{path.name}: property {name} shares the name of an id")
+        self.assertEqual(clashes, [], "\n".join(clashes))
+
     def test_the_check_would_notice_a_lost_decorator(self) -> None:
         """A method that is not a slot must not pass as one."""
         from weave.ui.bridge import Bridge
