@@ -22,6 +22,18 @@ ROLES = (
 )
 
 
+def _runs(indices: list[int]) -> list[tuple[int, int]]:
+    """Neighbouring numbers gathered into ranges, so a change to a stretch of
+    rows is announced once rather than row by row."""
+    runs: list[tuple[int, int]] = []
+    for index in indices:
+        if runs and index == runs[-1][1] + 1:
+            runs[-1] = (runs[-1][0], index)
+        else:
+            runs.append((index, index))
+    return runs
+
+
 class FeedModel(QAbstractListModel):
     def __init__(self, db: Database, watch_later_dir=None, parent=None) -> None:
         super().__init__(parent)
@@ -74,14 +86,39 @@ class FeedModel(QAbstractListModel):
             item["progress"] = (min(1.0, seconds / duration)
                                 if seconds and duration and duration > 0 else 0.0)
 
-        grew = (len(built) > len(self._rows) and self._rows
-                and [row["key"] for row in built[:len(self._rows)]]
-                == [row["key"] for row in self._rows])
-        if grew:
+        keys = [row["key"] for row in built]
+        known = [row["key"] for row in self._rows]
+
+        # The same videos with fresher numbers, which is what a poll usually
+        # comes back with. Resetting the model for that sent the grid to the
+        # top, so a refresh landing while somebody was reading threw them back
+        # to the first row every time, at no fixed interval and for no visible
+        # reason. Only the rows that really changed are announced, or three
+        # hundred delegates would rebind once a minute for nothing.
+        if keys == known:
+            changed = [index for index, (fresh, old) in enumerate(zip(built, self._rows))
+                       if fresh != old]
+            self._rows = built
+            for first, last in _runs(changed):
+                self.dataChanged.emit(self.index(first), self.index(last))
+            return
+
+        # Loading more at the bottom. Being thrown to the top is exactly what
+        # that must not do.
+        if self._rows and len(built) > len(self._rows) and keys[:len(known)] == known:
             self.beginInsertRows(QModelIndex(), len(self._rows), len(built) - 1)
             self._rows = built
             self.endInsertRows()
             return
+
+        # New videos arriving at the front, which is where a feed puts them.
+        # An insertion keeps the view where it is; a reset would not.
+        if known and len(built) > len(known) and keys[len(built) - len(known):] == known:
+            self.beginInsertRows(QModelIndex(), 0, len(built) - len(known) - 1)
+            self._rows = built
+            self.endInsertRows()
+            return
+
         self.beginResetModel()
         self._rows = built
         self.endResetModel()

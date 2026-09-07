@@ -347,6 +347,60 @@ class Smoke:
         bridge.selectGroup(-1)
         settle(0.3)
 
+    def scrolling(self, bridge, window) -> None:
+        """A refresh landing while somebody is reading must not move the page.
+
+        This is the one the reader notices. A poll finishes once a minute and
+        reloads the grid, and while the model reset for that, the grid went
+        back to the top at what felt like random moments.
+        """
+        from weave import paths
+        from weave.db import Database, VideoRow
+
+        db = Database(paths.DB_FILE)
+        db.upsert_videos([
+            VideoRow("youtube", f"scrollvid{i:02d}", "yt:UCsmokesmokesmokesmokes1",
+                     f"Scroll {i}", published_at=1_600_000_000 + i, duration_s=60)
+            for i in range(40)
+        ])
+        bridge.selectGroup(-1)
+        bridge.reload()
+        settle(0.4)
+        grid = find(window, "grid")
+        room = read(grid, "contentHeight") - read(grid, "height")
+        self.check("the feed is long enough to scroll", room > 0, f"{room:.0f} px of room")
+        QQmlProperty.write(grid, "contentY", 300.0)
+        settle(0.3)
+        was = read(grid, "contentY")
+
+        # What a poll comes back with almost every time: the same videos.
+        bridge.reload()
+        settle(0.4)
+        self.check("a refresh with the same videos does not move the page",
+                   abs(read(grid, "contentY") - was) < 1, f"{was:.0f} to {read(grid, 'contentY'):.0f}")
+
+        # And what it comes back with when something was published.
+        db.upsert_videos([VideoRow("youtube", "scrollfresh", "yt:UCsmokesmokesmokesmokes1",
+                                   "Fresh", published_at=1_900_000_000, duration_s=60)])
+        bridge.reload()
+        settle(0.4)
+        self.check("a new video arriving does not move it either",
+                   abs(read(grid, "contentY") - was) < 1,
+                   f"{was:.0f} to {read(grid, 'contentY'):.0f}")
+        # Six seeded, forty for the scroll and this one. The seventh seeded
+        # video is in a group only, so All never held it.
+        self.check("and the new video is in the grid",
+                   read(grid, "count") == 47, f"count {read(grid, 'count')}")
+
+        # A view change is the case that should go back to the top.
+        bridge.showHistory()
+        settle(0.3)
+        bridge.selectGroup(-1)
+        settle(0.4)
+        self.check("changing view starts at the top", read(grid, "contentY") <= 0,
+                   f"{read(grid, 'contentY'):.0f}")
+        db.close()
+
     def run(self, engine, bridge, window) -> None:
         self.warnings = Warnings(engine)
         settle(1.2)
@@ -521,6 +575,8 @@ class Smoke:
         for name in ("cacheSize", "cookieSource", "musicIdentity", "twitchState"):
             self.check(f"the page states the {name}", str(read(find(window, name), "text")) != "",
                        str(read(find(window, name), "text")))
+
+        self.scrolling(bridge, window)
 
         if self.shot:
             self.check("screenshot written", screenshot(window, self.shot), self.shot)

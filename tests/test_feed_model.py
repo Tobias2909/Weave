@@ -35,6 +35,9 @@ class Showing(unittest.TestCase):
         self.events = []
         self.model.modelReset.connect(lambda: self.events.append("reset"))
         self.model.rowsInserted.connect(lambda *_a: self.events.append("inserted"))
+        self.changes = []
+        self.model.dataChanged.connect(
+            lambda first, last, *_a: self.changes.append((first.row(), last.row())))
 
     def tearDown(self):
         self.db.close()
@@ -47,10 +50,21 @@ class Showing(unittest.TestCase):
         self.assertEqual(self.events, ["inserted"])
         self.assertEqual(self.model.rowCount(), 3)
 
-    def test_a_different_list_is_a_reset(self):
+    def test_a_new_video_at_the_front_is_an_addition_too(self):
+        # Where a feed puts what is new. This was a reset until a refresh
+        # landing mid scroll was noticed throwing the reader to the top.
         self.model.show([row("aaaaaaaaaaa")])
         self.events.clear()
         self.model.show([row("zzzzzzzzzzz"), row("aaaaaaaaaaa")])
+        self.assertEqual(self.events, ["inserted"])
+        self.assertEqual([self.model.key_at(i) for i in range(2)],
+                         ["yt:zzzzzzzzzzz", "yt:aaaaaaaaaaa"])
+
+    def test_a_list_in_another_order_is_a_reset(self):
+        # Nothing to keep a place against, so the honest answer is a reset.
+        self.model.show([row("aaaaaaaaaaa"), row("bbbbbbbbbbb")])
+        self.events.clear()
+        self.model.show([row("bbbbbbbbbbb"), row("aaaaaaaaaaa")])
         self.assertEqual(self.events, ["reset"])
 
     def test_a_shorter_list_is_a_reset(self):
@@ -59,13 +73,44 @@ class Showing(unittest.TestCase):
         self.model.show([row("aaaaaaaaaaa")])
         self.assertEqual(self.events, ["reset"])
 
-    def test_the_same_list_again_is_a_reset_rather_than_nothing(self):
-        # Titles and counts change under the same keys, so the rows are
-        # rebuilt. It costs a position only when nothing was added.
+    def test_the_same_list_again_changes_rows_rather_than_resetting(self):
+        # What a poll comes back with nearly every time: the same videos with
+        # fresher numbers. A reset for that is what sent the grid to the top
+        # once a minute, which is the whole reason for the check.
         self.model.show([row("aaaaaaaaaaa")])
         self.events.clear()
         self.model.show([row("aaaaaaaaaaa", title="Renamed")])
-        self.assertEqual(self.events, ["reset"])
+        self.assertEqual(self.events, [])
+        self.assertEqual(self.changes, [(0, 0)])
+        self.assertEqual(self.model.row_at(0)["title"], "Renamed")
+
+    def test_only_the_rows_that_changed_are_announced(self):
+        # Three hundred delegates rebinding once a minute for nothing is the
+        # other way to get this wrong.
+        first = [row(name * 11, title=name) for name in "abcde"]
+        self.model.show(first)
+        self.events.clear()
+        second = [dict(one) for one in first]
+        second[3]["title"] = "Renamed"
+        self.model.show(second)
+        self.assertEqual(self.events, [])
+        self.assertEqual(self.changes, [(3, 3)])
+
+    def test_neighbouring_changes_are_announced_as_one_stretch(self):
+        first = [row(name * 11, title=name) for name in "abcde"]
+        self.model.show(first)
+        self.events.clear()
+        second = [dict(one) for one in first]
+        second[1]["title"] = "Renamed"
+        second[2]["title"] = "Renamed too"
+        self.model.show(second)
+        self.assertEqual(self.changes, [(1, 2)])
+
+    def test_the_same_list_with_nothing_changed_says_nothing(self):
+        self.model.show([row("aaaaaaaaaaa")])
+        self.events.clear()
+        self.model.show([row("aaaaaaaaaaa")])
+        self.assertEqual((self.events, self.changes), ([], []))
 
     def test_the_first_list_of_all_is_a_reset(self):
         self.model.show([row("aaaaaaaaaaa")])
