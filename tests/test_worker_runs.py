@@ -155,6 +155,16 @@ class WorkerRuns(unittest.TestCase):
         # not the same as asking for their videos in the feed.
         self.assertNotIn("yt:UC3", [row["key"] for row in self.db.channels()])
 
+    def test_channel_playlists_fetcher(self):
+        from weave.sources.playlists import Playlist
+
+        self.db.add_channel("yt:UC4", "youtube", "UC4", "One")
+        self.patch(poller.playlist_source, "fetch_channel_lists",
+                   lambda *a, **k: [Playlist("PL" + "a" * 22, "Theirs")])
+        said = self.run_worker(poller.ChannelPlaylistsFetcher(self.db, self.cfg, "yt:UC4", "UC4"))
+        self.assertFalse([word for word in MISTAKES if word in said])
+        self.assertEqual([row["title"] for row in self.db.channel_playlists("yt:UC4")], ["Theirs"])
+
     def test_channel_avatars_fetcher(self):
         self.db.remember_channel("yt:UC2", "youtube", "UC2", "A stranger")
         self.patch(poller.channel_source, "fetch",
@@ -408,7 +418,7 @@ class WorkerRuns(unittest.TestCase):
         run_here = {"FeedPoller", "SubsImporter", "ChannelDetailsFetcher",
                     "HistoryImporter", "RecommendationsFetcher", "PlaylistsFetcher",
                     "PlaylistItemsFetcher", "SearchFetcher", "LiveWatcher",
-                    "ChannelFeedFetcher",
+                    "ChannelFeedFetcher", "ChannelPlaylistsFetcher",
                     "DetailFetcher", "ChannelAvatarsFetcher"}
         # The checkup runs the doctor, which counts its own requests.
         run_here.add("Checkup")

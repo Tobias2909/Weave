@@ -42,6 +42,7 @@ from ..poller import (
     FeedPoller,
     HistoryImporter,
     ChannelFeedFetcher,
+    ChannelPlaylistsFetcher,
     ImageCacheJob,
     LiveWatcher,
     MusicHistoryReader,
@@ -123,6 +124,10 @@ UPDATE_INTERVAL_S = 24 * 60 * 60
 # anything shorter would spend a request to be told the same thing.
 CHANNEL_FEED_TRUST_S = 15 * 60
 
+# How long a channel's playlists tab is trusted. A day: a channel does not
+# make a playlist every hour and reading the tab is a request.
+CHANNEL_PLAYLISTS_TRUST_S = 24 * 60 * 60
+
 # The pages of the walk through, counted from the welcome one, so the number
 # reads as how far there is to go rather than as a page number.
 WIZARD_LAST = 4
@@ -145,6 +150,7 @@ class Bridge(QObject):
     updateChanged = Signal()
     wizardChanged = Signal()
     recommendedChanged = Signal()
+    channelTabChanged = Signal()
     addChanged = Signal()
     importChanged = Signal()
     boxesChanged = Signal()
@@ -262,6 +268,10 @@ class Bridge(QObject):
         self._checks: list = []
         self._cache_job: ImageCacheJob | None = None
         self._channel_feed: ChannelFeedFetcher | None = None
+        self._channel_lists: ChannelPlaylistsFetcher | None = None
+        # Which half of a channel page is showing. Not part of the view, since
+        # walking back and forth between the two is not walking anywhere.
+        self._channel_tab = "videos"
         # What was last handed to mpv, so the thing that was pressed can say
         # so itself. Cleared when mpv reports back, on a failure, and by a
         # timer, because a chip that never leaves is worse than none.
@@ -366,6 +376,11 @@ class Bridge(QObject):
 
     def _get_playlists(self) -> list:
         return self._db.playlists()
+
+    def _get_kept_playlists(self) -> list:
+        """The ones kept off a channel page, which are somebody else's and are
+        listed apart from your own for that reason."""
+        return self._db.playlists(origin="channel")
 
     def _get_all_playlists(self) -> list:
         """Every playlist including the hidden ones, for the chooser. Hiding
@@ -517,6 +532,7 @@ class Bridge(QObject):
     schedule = Property("QVariantList", lambda self: self._get_schedule(),
                         notify=checksChanged)
     playlists = Property("QVariantList", _get_playlists, notify=playlistsChanged)
+    keptPlaylists = Property("QVariantList", _get_kept_playlists, notify=playlistsChanged)
     allPlaylists = Property("QVariantList", _get_all_playlists, notify=playlistsChanged)
     viewKind = Property(str, _get_view_kind, notify=viewChanged)
     viewId = Property(int, _get_view_id, notify=viewChanged)
@@ -1280,6 +1296,11 @@ class Bridge(QObject):
     def _on_playlists(self, count: int) -> None:
         self._set_notice("")
         self._set_status(f"{count} playlists")
+        # A playlist opened off a channel page a day ago and never kept has
+        # been read once and is not coming back. Its row exists only so its
+        # videos had somewhere to live, and this is the moment to sweep those
+        # up, since the list of playlists is being rebuilt anyway.
+        self._db.sweep_temporary_playlists()
         self.playlistsChanged.emit()
 
     @Slot()
@@ -1593,6 +1614,11 @@ class Bridge(QObject):
     def openChannel(self, channel_key: str) -> None:
         if not channel_key:
             return
+        # Every channel opens on its videos. Which half of the last one was
+        # showing says nothing about this one.
+        if self._channel_tab != "videos":
+            self._channel_tab = "videos"
+            self.channelTabChanged.emit()
         self._set_view(CHANNEL, -1, channel_key)
         found = self._db.channel(channel_key)
         if not found:
@@ -1610,6 +1636,79 @@ class Bridge(QObject):
             self._fetch_channel_details(channel_key, found["ext_id"])
         if found and found["platform"] == "youtube":
             self._fetch_channel_feed(channel_key, found["ext_id"])
+
+    channelTab = Property(str, lambda self: self._channel_tab, notify=channelTabChanged)
+    channelPlaylists = Property("QVariantList", lambda self: self._channel_playlists(),
+                                notify=channelTabChanged)
+
+    def _channel_playlists(self) -> list:
+        if not self._view_channel:
+            return []
+        return [{"key": row["ext_id"], "title": row["title"],
+                 # A count only once it has been opened, since the listing
+                 # carries none and asking for one is a request each.
+                 "itemsText": f"{row['items']} videos" if row["items"] else "",
+                 "kept": row["origin"] == "channel"}
+                for row in self._db.channel_playlists(self._view_channel)]
+
+    @Slot(str)
+    def showChannelTab(self, which: str) -> None:
+        if which not in ("videos", "playlists") or which == self._channel_tab:
+            return
+        self._channel_tab = which
+        self.channelTabChanged.emit()
+        if which == "playlists":
+            self._fetch_channel_playlists()
+
+    def _fetch_channel_playlists(self, force: bool = False) -> None:
+        """Read the tab, once a day unless asked again.
+
+        A channel does not make a playlist every hour, and this is a request,
+        so what was read yesterday is read again and what was read this
+        morning is not.
+        """
+        if self._channel_lists is not None and self._channel_lists.isRunning():
+            return
+        found = self._db.channel(self._view_channel)
+        if not found or found.get("platform") != "youtube":
+            return
+        age = self._db.channel_playlists_age_s(self._view_channel)
+        if not force and age is not None and age < CHANNEL_PLAYLISTS_TRUST_S:
+            return
+        self._channel_lists = ChannelPlaylistsFetcher(
+            self._db, self._cfg, self._view_channel, found["ext_id"], self)
+        self._channel_lists.fetched.connect(self._on_channel_playlists)
+        self._channel_lists.failed.connect(
+            lambda _key, message: self._set_status(f"could not read the playlists, {message}"))
+        self._launch(self._channel_lists)
+
+    def _on_channel_playlists(self, channel_key: str, count: int) -> None:
+        if self._view_channel == channel_key:
+            self.channelTabChanged.emit()
+        if not count:
+            self._set_status("that channel lists no playlists")
+
+    @Slot(str, str)
+    def openChannelPlaylist(self, playlist_id: str, title: str) -> None:
+        """Look inside one of a channel's playlists.
+
+        Its videos need a playlists row to hang off, so one is made and marked
+        as something being looked at rather than something kept.
+        """
+        if not playlist_id:
+            return
+        self._db.open_channel_playlist(playlist_id, title or playlist_id)
+        self.playlistsChanged.emit()
+        self.selectPlaylist(playlist_id)
+
+    @Slot(str, bool)
+    def keepPlaylist(self, playlist_id: str, keep: bool = True) -> None:
+        if not playlist_id:
+            return
+        self._db.keep_playlist(playlist_id, keep)
+        self.playlistsChanged.emit()
+        self.channelTabChanged.emit()
+        self._set_status("playlist kept" if keep else "playlist let go")
 
     def _fetch_channel_feed(self, channel_key: str, ext_id: str) -> None:
         """Ask this one channel for its videos, because its page is open.

@@ -27,6 +27,7 @@ from . import ytdlp
 from .flatlist import APPROXIMATE_DATES, FIELDS, FlatVideo, is_unavailable, parse
 
 FEED_PLAYLISTS = "https://www.youtube.com/feed/playlists"
+CHANNEL_PLAYLISTS = "https://www.youtube.com/channel/{channel_id}/playlists"
 PLAYLIST_URL = "https://www.youtube.com/playlist?list={playlist_id}"
 
 # Liked videos and the uploads playlists are addressed the same way, so the id
@@ -98,6 +99,34 @@ def fetch_list(cfg: Config, limit: int = 100, throttle: Throttle | None = None,
     if found:
         return found
     raise ytdlp.blame(result, PlaylistError, "the playlist list")
+
+
+def fetch_channel_lists(cfg: Config, channel_id: str, limit: int = 100,
+                        throttle: Throttle | None = None, timeout: float = 180.0,
+                        cancel: threading.Event | None = None) -> list[Playlist]:
+    """The playlists a channel has made, by id and title.
+
+    One call for the whole tab, measured at half a second. It carries no video
+    count: the count field in this listing is the number of playlists, not the
+    number of videos in each, and a real count is a call per playlist. So the
+    count comes later, free, from opening one.
+
+    An empty answer is a real thing here, unlike the feed of your own
+    playlists. A channel with no playlists is ordinary, so this says nothing
+    rather than raising.
+    """
+    command = [
+        "yt-dlp", "--no-warnings", "--flat-playlist",
+        *cookie_args(cfg), *APPROXIMATE_DATES,
+        "--playlist-end", str(max(1, limit)),
+        "--print", "%(id)s\t%(title)s",
+        CHANNEL_PLAYLISTS.format(channel_id=channel_id),
+    ]
+    result = ytdlp.run(command, PlaylistError, "the channel playlists", throttle, cancel, timeout)
+    found = parse_list(result.stdout)
+    if found or not ytdlp.complained(result):
+        return found
+    raise ytdlp.blame(result, PlaylistError, "the channel playlists")
 
 
 def fetch_items(cfg: Config, playlist_id: str, limit: int = 300,

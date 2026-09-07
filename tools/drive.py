@@ -539,6 +539,56 @@ class Smoke:
         bridge.selectGroup(-1)
         settle(0.3)
 
+    def channel_playlists(self, bridge, window) -> None:
+        """The playlists half of a channel page.
+
+        Fed by hand, since reading the tab is a request and this walk makes
+        none. What it proves is the half itself: the tabs, the tiles, opening
+        one and keeping it.
+        """
+        from weave import paths
+        from weave.db import Database
+        from weave.sources.playlists import Playlist
+
+        key = "yt:UCsmokesmokesmokesmokes1"
+        listed = Database(paths.DB_FILE)
+        listed.replace_channel_playlists(key, [Playlist(f"PL{n:022d}", f"List {n}")
+                                               for n in range(3)])
+        listed.close()
+        bridge.openChannel(key)
+        settle(0.5)
+        self.check("a channel opens on its videos", read(bridge, "channelTab") == "videos",
+                   read(bridge, "channelTab"))
+        bridge.showChannelTab("playlists")
+        settle(0.6)
+        tiles = read(bridge, "channelPlaylists")
+        self.check("and its playlists are a half of their own", len(tiles) == 3,
+                   f"{len(tiles)} listed")
+        self.check("with no count until one is opened",
+                   all(tile["itemsText"] == "" for tile in tiles))
+        root = window.contentItem()
+        self.check("drawn as tiles", item_named(root, "playlistTile") is not None)
+
+        bridge.openChannelPlaylist(tiles[0]["key"], tiles[0]["title"])
+        settle(0.5)
+        self.check("opening one shows it", read(bridge, "viewKind") == "playlist"
+                   and read(bridge, "viewPlaylist") == tiles[0]["key"],
+                   f"{read(bridge, 'viewKind')} {read(bridge, 'viewPlaylist')}")
+        self.check("and it stays out of your own playlists",
+                   not any(row["ext_id"] == tiles[0]["key"] for row in read(bridge, "playlists")))
+
+        bridge.keepPlaylist(tiles[0]["key"], True)
+        settle(0.4)
+        self.check("keeping it gives it a place of its own",
+                   [row["ext_id"] for row in read(bridge, "keptPlaylists")] == [tiles[0]["key"]],
+                   ", ".join(str(row["title"]) for row in read(bridge, "keptPlaylists")))
+        bridge.keepPlaylist(tiles[0]["key"], False)
+        settle(0.3)
+        self.check("and letting it go takes it back out",
+                   read(bridge, "keptPlaylists") == [])
+        bridge.selectGroup(-1)
+        settle(0.3)
+
     def bar(self, bridge, window) -> None:
         """The line in the bar has to say all of what it says.
 
@@ -1111,6 +1161,7 @@ class Smoke:
         self.announcements(bridge, window)
         self.suggestions(bridge, window)
         self.strangers(bridge, window)
+        self.channel_playlists(bridge, window)
         self.bar(bridge, window)
         self.following(bridge, window)
         self.boxes(bridge, window)

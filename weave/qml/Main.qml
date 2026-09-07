@@ -783,6 +783,33 @@ ApplicationWindow {
                     wrapMode: Text.Wrap
                 }
 
+                // Somebody else's lists, kept off their channel page. Apart
+                // from your own, because they are not yours and are not in
+                // the feed that reads yours.
+                SidebarHeading {
+                    visible: App.keptPlaylists.length > 0
+                    height: visible ? implicitHeight : 0
+                    text: "Linked playlists"
+                }
+
+                Repeater {
+                    model: App.keptPlaylists
+                    SidebarRow {
+                        width: sidebarColumn.width
+                        label: modelData.title
+                        count: modelData.items
+                        selected: App.viewKind === "playlist"
+                                  && App.viewPlaylist === modelData.ext_id
+                        onActivated: App.selectPlaylist(modelData.ext_id)
+                        onRevealRequested: root.revealRow(this)
+                        onContextRequested: {
+                            keptPlaylistMenu.playlistId = modelData.ext_id
+                            keptPlaylistMenu.playlistName = modelData.title
+                            keptPlaylistMenu.popup()
+                        }
+                    }
+                }
+
             }
         }
     }
@@ -875,8 +902,9 @@ ApplicationWindow {
         objectName: "gridHeader"
         readonly property bool onHistory: App.viewKind === "history"
         readonly property bool onSuggestions: App.viewKind === "recommended"
+        readonly property bool onChannel: App.viewKind === "channel"
 
-        visible: grid.visible && (onHistory || onSuggestions)
+        visible: onHistory || onSuggestions || onChannel
         height: visible ? 42 : 0
         anchors.left: grid.left
         anchors.right: grid.right
@@ -904,6 +932,30 @@ ApplicationWindow {
                 text: "Music"
                 accent: App.historyShowsMusic
                 onClicked: App.showMusicInHistory(true)
+            }
+        }
+
+        // A channel has two halves. Walking between them is not walking
+        // anywhere, so it is a pair of buttons rather than a view of its own.
+        Row {
+            objectName: "channelTabs"
+            visible: viewBar.onChannel
+            anchors.left: parent.left
+            anchors.leftMargin: 6
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 8
+
+            FlatButton {
+                objectName: "channelVideos"
+                text: "Videos"
+                accent: App.channelTab === "videos"
+                onClicked: App.showChannelTab("videos")
+            }
+            FlatButton {
+                objectName: "channelPlaylistsTab"
+                text: "Playlists"
+                accent: App.channelTab === "playlists"
+                onClicked: App.showChannelTab("playlists")
             }
         }
 
@@ -947,11 +999,21 @@ ApplicationWindow {
         }
     }
 
+    ChannelPlaylists {
+        objectName: "channelPlaylistsView"
+        visible: App.viewKind === "channel" && App.channelTab === "playlists"
+        anchors.left: grid.left
+        anchors.right: grid.right
+        anchors.top: grid.top
+        anchors.bottom: grid.bottom
+    }
+
     GridView {
         id: grid
         objectName: "grid"
         visible: App.viewKind !== "music" && App.viewKind !== "debug"
                  && App.viewKind !== "settings"
+                 && !(App.viewKind === "channel" && App.channelTab === "playlists")
         anchors.left: sidebar.right
         anchors.right: detailPanel.visible ? detailPanel.left : parent.right
         // Under the row above, which holds the place the grid used to take
@@ -1348,6 +1410,33 @@ ApplicationWindow {
         ThemedMenuItem {
             text: "New group"
             onTriggered: { channelsMenu.dismiss(); root.askForName("group", -1, "", "") }
+        }
+    }
+
+    ThemedMenu {
+        id: keptPlaylistMenu
+        objectName: "keptPlaylistMenu"
+        property string playlistId: ""
+        property string playlistName: ""
+
+        ThemedMenuItem {
+            text: "Read it again"
+            onTriggered: {
+                var id = keptPlaylistMenu.playlistId
+                keptPlaylistMenu.dismiss()
+                App.selectPlaylist(id)
+                App.refreshPlaylist()
+            }
+        }
+        ThemedMenuItem {
+            // The playlist itself is untouched. This is only whether it is
+            // kept here, the way a group keeps its channels.
+            text: "Let it go"
+            onTriggered: {
+                var id = keptPlaylistMenu.playlistId
+                keptPlaylistMenu.dismiss()
+                App.keepPlaylist(id, false)
+            }
         }
     }
 

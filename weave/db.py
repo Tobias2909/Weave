@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 30
+SCHEMA_VERSION = 31
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -81,6 +81,18 @@ CREATE TABLE IF NOT EXISTS playlists (
     items_at   INTEGER,                    -- when its contents were last read
     hidden     INTEGER NOT NULL DEFAULT 0, -- kept, but out of the sidebar
     seen_at    INTEGER NOT NULL
+);
+
+-- What a channel's playlists tab lists. Names only: the listing carries no
+-- video count, and a real one is a request per playlist, so a count appears
+-- once a playlist has been opened and its contents are known.
+CREATE TABLE IF NOT EXISTS channel_playlists (
+    channel_key TEXT NOT NULL REFERENCES channels(key) ON DELETE CASCADE,
+    ext_id      TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    position    INTEGER NOT NULL DEFAULT 0,
+    seen_at     INTEGER NOT NULL,
+    PRIMARY KEY (channel_key, ext_id)
 );
 
 CREATE TABLE IF NOT EXISTS playlist_items (
@@ -291,6 +303,13 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # and what an ordinary video never looks like there. One question settles
     # it, and this is the note that one is owed.
     ("videos", "stream_pending", "INTEGER"),
+    # Where a playlist row came from. mine is one of yours, read from your own
+    # playlists feed. channel is one you kept off a channel page, which your
+    # feed knows nothing about and must never delete. temp is one you opened
+    # to look at, which needs a row of its own only because a playlist's items
+    # hang off one, and which is swept up later.
+    ("playlists", "origin", "TEXT NOT NULL DEFAULT 'mine'"),
+    ("channels", "playlists_at", "INTEGER"),
     # A long playlist list buries everything under it, so each one can be put
     # out of the way without being forgotten.
     ("playlists", "hidden", "INTEGER NOT NULL DEFAULT 0"),
@@ -1810,9 +1829,12 @@ class Database:
         with self.conn as conn:
             keep = [row["ext_id"] for row in rows]
             marks = ",".join("?" * len(keep)) or "''"
-            conn.execute(f"DELETE FROM playlists WHERE ext_id NOT IN ({marks})", keep)
+            # Only your own. One kept off a channel page is not in this feed
+            # and reading the feed is not a reason to lose it.
+            conn.execute(
+                f"DELETE FROM playlists WHERE origin='mine' AND ext_id NOT IN ({marks})", keep)
             known = {row["ext_id"]: row["position"] for row in
-                     conn.execute("SELECT ext_id, position FROM playlists")}
+                     conn.execute("SELECT ext_id, position FROM playlists WHERE origin='mine'")}
             next_place = max(known.values(), default=-1) + 1
             payload = []
             for row in rows:
@@ -1850,19 +1872,111 @@ class Database:
                              list(enumerate(order)))
         return True
 
-    def playlists(self, include_hidden: bool = False) -> list[dict]:
+    def playlists(self, include_hidden: bool = False, origin: str = "mine") -> list[dict]:
         """The playlists, hidden ones left out unless asked for.
 
         Hiding is not forgetting. A hidden playlist keeps its contents and
         comes back the moment it is shown again, which is the difference
         between this and removing it.
+
+        `origin` says which list is being asked for. Yours, the ones kept off
+        a channel page, or everything.
         """
-        where = "" if include_hidden else "WHERE p.hidden = 0"
+        where = ["p.origin != 'temp'"] if origin == "any" else [f"p.origin = '{origin}'"]
+        if not include_hidden:
+            where.append("p.hidden = 0")
+        clause = " WHERE " + " AND ".join(where)
         return [dict(row) for row in self.conn.execute(
-            "SELECT p.ext_id, p.title, p.position, p.items_at, p.hidden, p.is_music, "
+            "SELECT p.ext_id, p.title, p.position, p.items_at, p.hidden, p.is_music, p.origin, "
             "       (SELECT COUNT(*) FROM playlist_items i WHERE i.playlist_id = p.ext_id) "
             "         AS items "
-            f"FROM playlists p {where} ORDER BY p.position, p.title")]
+            f"FROM playlists p {clause} ORDER BY p.position, p.title")]
+
+    # ---- playlists a channel has made -----------------------------------
+
+    def replace_channel_playlists(self, channel_key: str, rows: list) -> int:
+        """What this channel's playlists tab lists now, in the order it gave.
+
+        Swapped in wholesale. This is a listing rather than anything of yours,
+        so nothing here is worth keeping when the channel no longer offers it,
+        and a playlist you kept lives in the playlists table and is untouched
+        by this.
+        """
+        now = int(time.time())
+        with self.conn as conn:
+            conn.execute("DELETE FROM channel_playlists WHERE channel_key=?", (channel_key,))
+            conn.executemany(
+                "INSERT INTO channel_playlists(channel_key, ext_id, title, position, seen_at) "
+                "VALUES(?,?,?,?,?)",
+                [(channel_key, row.ext_id, row.title, place, now)
+                 for place, row in enumerate(rows)])
+            conn.execute("UPDATE channels SET playlists_at=? WHERE key=?", (now, channel_key))
+        return len(rows)
+
+    def channel_playlists(self, channel_key: str) -> list[dict]:
+        """The tab as it was last read, with what is known about each one.
+
+        A count is only there once a playlist has been opened, since the
+        listing carries none and asking for one is a request per playlist.
+        """
+        return [dict(row) for row in self.conn.execute(
+            "SELECT c.ext_id, c.title, "
+            "       (SELECT COUNT(*) FROM playlist_items i WHERE i.playlist_id = c.ext_id) "
+            "         AS items, "
+            "       (SELECT p.origin FROM playlists p WHERE p.ext_id = c.ext_id) AS origin "
+            "FROM channel_playlists c WHERE c.channel_key=? ORDER BY c.position", (channel_key,))]
+
+    def channel_playlists_age_s(self, channel_key: str) -> int | None:
+        row = self.conn.execute(
+            "SELECT playlists_at FROM channels WHERE key=?", (channel_key,)).fetchone()
+        stamp = row["playlists_at"] if row else None
+        return None if not stamp else int(time.time()) - int(stamp)
+
+    def open_channel_playlist(self, ext_id: str, title: str) -> None:
+        """Give a playlist somewhere to hang its contents.
+
+        A playlist's videos hang off a playlists row, so looking at one means
+        making a row for it. It is marked temp, which keeps it out of the
+        sidebar and marks it as something to sweep up later, and keeping it is
+        what makes it stay.
+        """
+        with self.conn as conn:
+            conn.execute(
+                "INSERT INTO playlists(ext_id, title, position, seen_at, hidden, origin) "
+                "VALUES(?,?,0,?,1,'temp') "
+                "ON CONFLICT(ext_id) DO UPDATE SET title=excluded.title",
+                (ext_id, title, int(time.time())))
+
+    def keep_playlist(self, ext_id: str, keep: bool = True) -> None:
+        """Keep a channel's playlist, or stop keeping it.
+
+        Kept, it moves into the sidebar's own section and stays through every
+        reading of your own playlists feed. Dropped, it becomes what it was
+        before, something you were looking at.
+        """
+        with self.conn as conn:
+            if keep:
+                place = conn.execute(
+                    "SELECT COALESCE(MAX(position), -1) + 1 FROM playlists "
+                    "WHERE origin='channel'").fetchone()[0]
+                conn.execute(
+                    "UPDATE playlists SET origin='channel', hidden=0, position=? WHERE ext_id=?",
+                    (place, ext_id))
+            else:
+                conn.execute(
+                    "UPDATE playlists SET origin='temp', hidden=1 WHERE ext_id=?", (ext_id,))
+
+    def sweep_temporary_playlists(self, older_than_s: int = 86400) -> int:
+        """Drop the rows made only to look at a playlist once. Their contents
+        go with them, through the foreign key."""
+        cut = int(time.time()) - max(0, older_than_s)
+        with self.conn as conn:
+            # Counted before the delete rather than from total_changes, which
+            # would also count every item that went with them.
+            gone = [row["ext_id"] for row in conn.execute(
+                "SELECT ext_id FROM playlists WHERE origin='temp' AND seen_at <= ?", (cut,))]
+            conn.executemany("DELETE FROM playlists WHERE ext_id=?", [(one,) for one in gone])
+            return len(gone)
 
     def set_playlist_music(self, playlist_id: str, music: bool) -> None:
         """Mark a playlist as music, or stop marking it.

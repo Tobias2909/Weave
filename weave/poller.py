@@ -861,6 +861,41 @@ class ChannelFeedFetcher(Worker):
         self.fetched.emit(self._key, touched)
 
 
+class ChannelPlaylistsFetcher(Worker):
+    """What one channel's playlists tab lists.
+
+    One call for the whole tab, and only names: the listing carries no video
+    count and a real one is a call per playlist, so a count arrives later and
+    free, from opening one.
+    """
+
+    fetched = Signal(str, int)            # channel key, how many
+    failed = Signal(str, str)
+
+    def __init__(self, db: Database, cfg: Config, channel_key: str, ext_id: str,
+                 parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._db = db
+        self._cfg = cfg
+        self._key = channel_key
+        self._ext_id = ext_id
+        self._throttle = self._throttle_for(cfg)
+
+    def work(self) -> None:
+        _spend(self._db, self._cfg, BROWSE)
+        try:
+            found = playlist_source.fetch_channel_lists(
+                self._cfg, self._ext_id, throttle=self._throttle, cancel=self._cancel)
+        except ProcessCancelled:
+            return
+        except playlist_source.PlaylistError as exc:
+            _spend(self._db, self._cfg, BROWSE, count=0, refused=1)
+            self.failed.emit(self._key, str(exc))
+            return
+        self._db.replace_channel_playlists(self._key, found)
+        self.fetched.emit(self._key, len(found))
+
+
 class TwitchLogin(Worker):
     """The device code login, and the follow list that comes with it.
 
