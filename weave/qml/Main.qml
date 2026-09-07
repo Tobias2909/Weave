@@ -31,7 +31,9 @@ ApplicationWindow {
         if (App.viewKind === "history") return App.historyShowsMusic
                                               ? "Read the listening again"
                                               : "Read it again"
-        if (App.viewKind === "recommended") return "Ask again"
+        // Recommended is not here. Its button sits on the page itself, where
+        // what it acts on is, since nobody read a button in the bar as
+        // belonging to the page under it.
         if (App.viewKind === "playlist") return "Read it again"
         if (App.viewKind === "search") return App.searchScope === "youtube"
                                               ? "Search again" : "Search YouTube"
@@ -911,12 +913,16 @@ ApplicationWindow {
         // and has nothing to do with this view.
         header: Component {
             Item {
-                objectName: "historyHeader"
+                objectName: "gridHeader"
                 width: grid.width
-                height: App.viewKind === "history" ? 42 : 0
-                visible: App.viewKind === "history"
+                readonly property bool onHistory: App.viewKind === "history"
+                readonly property bool onSuggestions: App.viewKind === "recommended"
+                height: onHistory || onSuggestions ? 42 : 0
+                visible: height > 0
 
                 Row {
+                    objectName: "historyHeader"
+                    visible: parent.onHistory
                     anchors.left: parent.left
                     anchors.leftMargin: 6
                     anchors.verticalCenter: parent.verticalCenter
@@ -933,6 +939,45 @@ ApplicationWindow {
                         text: "Music"
                         accent: App.historyShowsMusic
                         onClicked: App.showMusicInHistory(true)
+                    }
+                }
+
+                // The suggestions say where they came from and how old they
+                // are, and the one thing that can be done about that sits
+                // beside them rather than in the bar.
+                Item {
+                    objectName: "recommendedHeader"
+                    visible: parent.onSuggestions
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.leftMargin: 6
+                    anchors.rightMargin: 6
+                    anchors.verticalCenter: parent.verticalCenter
+                    height: 28
+
+                    Label {
+                        objectName: "recommendedState"
+                        anchors.left: parent.left
+                        anchors.right: askAgain.left
+                        anchors.rightMargin: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: App.recommendedText
+                        color: Theme.colors.textMuted
+                        font.pixelSize: 12
+                        elide: Text.ElideRight
+                    }
+
+                    FlatButton {
+                        id: askAgain
+                        objectName: "recommendedRefresh"
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Fresh recommendations"
+                        // Not tied to App.busy. That flag belongs to the feed
+                        // poll, which has nothing to do with this page, and a
+                        // button that greys out once a minute for no visible
+                        // reason reads as broken.
+                        onClicked: App.refreshRecommended()
                     }
                 }
             }

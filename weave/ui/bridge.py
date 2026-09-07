@@ -405,7 +405,7 @@ class Bridge(QObject):
         if self._view_kind == PLAYLIST:
             return "This playlist is empty."
         if self._view_kind == RECOMMENDED:
-            return "Nothing suggested yet.\nPress Ask again in the bar."
+            return "Nothing suggested yet.\nPress Fresh recommendations above."
         if self._view_kind == SEARCH and self._search_scope == "youtube":
             return f"YouTube found nothing for {self._search_text}."
         if self._view_kind == SEARCH:
@@ -487,6 +487,7 @@ class Bridge(QObject):
     # "" before anything was asked, then working, done or failed.
     importState = Property(str, lambda self: self._import_state, notify=importChanged)
     importMessage = Property(str, lambda self: self._import_message, notify=importChanged)
+    recommendedText = Property(str, lambda self: self._recommended_line(), notify=viewChanged)
     cacheCeiling = Property(int, lambda self: self._ceiling_mb(), notify=cacheChanged)
     cacheCeilingText = Property(str, lambda self: imagecache.ceiling_label(self._ceiling_mb()),
                                 notify=cacheChanged)
@@ -1322,6 +1323,20 @@ class Bridge(QObject):
         """Drop the lot. Every picture is fetched again the next time it is
         looked at, so this costs time rather than anything else."""
         self._run_cache_job(ImageCacheJob.CLEAR)
+
+    def _recommended_line(self) -> str:
+        """When the suggestions were last read, for the row above them.
+
+        A page of cards with a button over it and nothing else says nothing
+        about why they are what they are. Their age is the answer to that, and
+        it is also the answer to whether pressing the button is worth a
+        request.
+        """
+        age = self._db.recommended_age_s()
+        count = self._db.recommended_count()
+        if age is None or not count:
+            return "Nothing read yet"
+        return f"Read {fmt.age_text(int(time.time()) - age)} · {count} suggestions"
 
     def _newer_version(self) -> str:
         """The version worth telling him about, or nothing.

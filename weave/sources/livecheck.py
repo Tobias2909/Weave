@@ -33,23 +33,45 @@ class LiveState:
     ext_id: str
     viewers: int | None
     still_live: bool
+    # When an announced stream is due, which is the one thing the subscriptions
+    # sweep never carries. Only meaningful while the state is is_upcoming.
+    starts_at: int | None = None
+    upcoming: bool = False
+
+
+def _number(text: str) -> int | None:
+    text = text.strip()
+    try:
+        return int(float(text))
+    except ValueError:
+        return None
 
 
 def parse_line(ext_id: str, text: str) -> LiveState:
     line = next((row for row in text.splitlines() if row.strip()), "")
-    viewers, _, status = line.partition("|")
-    viewers = viewers.strip()
-    try:
-        count = int(viewers)
-    except ValueError:
-        count = None
-    return LiveState(ext_id, count, status.strip() == "is_live")
+    parts = line.split("|")
+    status = parts[1].strip() if len(parts) > 1 else ""
+    return LiveState(
+        ext_id,
+        _number(parts[0] if parts else ""),
+        status == "is_live",
+        _number(parts[2]) if len(parts) > 2 else None,
+        status == "is_upcoming",
+    )
 
 
 def check(cfg: Config, ext_id: str, throttle: Throttle | None = None,
           cancel: threading.Event | None = None, timeout: float = 90.0) -> LiveState:
-    command = ["yt-dlp", "--no-warnings", "--simulate", *cookie_args(cfg),
-               "--print", "%(concurrent_view_count)s|%(live_status)s",
+    command = ["yt-dlp", "--no-warnings", "--simulate",
+               # An announced stream has no formats yet, and without this
+               # yt-dlp treats that as an error, prints nothing and takes the
+               # start time with it. Measured against a real one: with the
+               # flag it answers is_upcoming and the timestamp, without it the
+               # only thing on the terminal is a sentence about how long there
+               # is to wait.
+               "--ignore-no-formats-error",
+               *cookie_args(cfg),
+               "--print", "%(concurrent_view_count)s|%(live_status)s|%(release_timestamp)s",
                WATCH_URL.format(video_id=ext_id)]
     result = ytdlp.run(command, LiveCheckError, "the live check", throttle, cancel, timeout)
     if result.returncode != 0 and not result.stdout.strip():

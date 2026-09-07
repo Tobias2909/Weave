@@ -408,6 +408,32 @@ class Smoke:
         self.check("a failure takes the chip away", read(bridge, "startingKey") == "",
                    str(read(bridge, "startingKey")))
 
+    def suggestions(self, bridge, window) -> None:
+        """The suggestions page says how old it is and carries its own button.
+
+        It was one button in the toolbar, which nobody read as belonging to
+        the page under it.
+        """
+        root = window.contentItem()
+        bridge.showRecommended()
+        settle(0.6)
+        state = item_named(root, "recommendedState")
+        button = item_named(root, "recommendedRefresh")
+        self.check("the suggestions page carries its own button",
+                   button is not None and str(read(button, "text")) == "Fresh recommendations",
+                   str(read(button, "text")) if button is not None else "missing")
+        self.check("and says how old they are",
+                   state is not None and str(read(state, "text")) != "",
+                   str(read(state, "text")) if state is not None else "missing")
+        self.check("the bar no longer offers the same thing twice",
+                   str(read(find(window, "viewAction"), "text")) == "",
+                   str(read(find(window, "viewAction"), "text")))
+        bridge.selectGroup(-1)
+        settle(0.4)
+        self.check("and none of it follows the feed home",
+                   item_named(root, "recommendedRefresh") is None
+                   or not read(item_named(root, "recommendedRefresh"), "visible"))
+
     def boxes(self, bridge, window) -> None:
         """A box is ordered by hand the way a group is."""
         first = bridge.createBox("Alpha")
@@ -855,6 +881,7 @@ class Smoke:
 
         self.starting(bridge, window)
         self.updates(bridge, window)
+        self.suggestions(bridge, window)
         self.boxes(bridge, window)
         self.wizard(bridge, window)
         self.scrolling(bridge, window)

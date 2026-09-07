@@ -118,10 +118,8 @@ Popup {
                 objectName: "wizardBody"
                 width: parent.width
                 text: [
-                    "This is your subscriptions first. Nothing is put in front of them, "
-                        + "what YouTube suggests waits on a page of its own until you go "
-                        + "looking for it, and every video opens in mpv rather than in a "
-                        + "page. These few pages are only the parts worth knowing before you "
+                    "This is your subscriptions first. Every video opens in mpv rather "
+                        + "than in a page. These few pages are only the parts worth knowing before you "
                         + "start. There is a good deal more in here than they cover, and the "
                         + "rest is worth finding as you go. None of it is final either, and "
                         + "the Getting started button on the settings page opens these pages "

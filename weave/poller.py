@@ -103,6 +103,11 @@ class Worker(QThread):
 # hundred channels over a couple of hours without the feed itself slowing down.
 LIVE_PROBES_PER_TICK = 4
 
+# How many announced streams are asked about their start time in one live
+# check. One request each, the answer is kept for good, and the live bar's own
+# calls come first, so this is deliberately a trickle.
+UPCOMING_PER_CHECK = 3
+
 
 class FeedPoller(Worker):
     finished_poll = Signal(int, int, int)   # channels polled, rows touched, failures
@@ -880,6 +885,36 @@ class LiveWatcher(Worker):
         self._db.close()
         self.updated.emit(len(rows) + youtube)
 
+    def _check_upcoming(self, budget: Budget) -> None:
+        """Learn when an announced stream is actually due.
+
+        The subscriptions sweep reports the time as NA for every one of them,
+        so the card could say a stream was announced and never when. It is one
+        request per video and the answer never changes, so a few are asked
+        each round and that is the end of it. What comes back also says
+        whether it is still announced, which is what keeps one that has since
+        gone live or been cancelled from being asked about for ever.
+        """
+        rows = self._db.upcoming_without_start(UPCOMING_PER_CHECK)
+        rows = rows[:budget.allowance(PLAYER, len(rows)).granted]
+        for row in rows:
+            if self._cancel.is_set():
+                return
+            budget.spend(PLAYER)
+            try:
+                state = livecheck.check(self._cfg, row["ext_id"], self._throttle, self._cancel)
+            except ProcessCancelled:
+                return
+            except livecheck.LiveCheckError:
+                budget.spend(PLAYER, count=0, refused=1)
+                continue
+            if state.starts_at is not None:
+                self._db.set_scheduled_at(row["key"], state.starts_at)
+            elif not state.upcoming:
+                # It began, or it was called off. Either way it is not an
+                # announcement any more, so it stops being asked about.
+                self._db.set_live_state(row["key"], state.viewers, state.still_live)
+
     def _check_youtube(self) -> int:
         """Give the YouTube streams a viewer count so they order against the
         Twitch ones, and drop the ones that have finished."""
@@ -904,6 +939,9 @@ class LiveWatcher(Worker):
                 continue
             self._db.set_live_state(row["key"], state.viewers, state.still_live)
             found += 1 if state.still_live else 0
+        # After the streams that are on, since a viewer count going stale is
+        # felt and a start time is not.
+        self._check_upcoming(budget)
         return found
 
     def _fetch_missing_avatars(self, client: twitch.Client) -> None:

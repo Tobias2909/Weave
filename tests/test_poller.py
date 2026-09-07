@@ -327,6 +327,73 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class LearningWhenAnAnnouncedStreamIsDue(unittest.TestCase):
+    """The sweep reports the time as NA for every one of them, so the card
+    could say a stream was announced and never when."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self._tmp.name) / "t.db")
+        self.cfg = Config(raw={})
+        self.db.add_channel("yt:UC1", "youtube", "UC1", "One")
+        self.db.upsert_videos([
+            VideoRow("youtube", "aaaaaaaaaaa", "yt:UC1", "Announced",
+                     live_status="is_upcoming"),
+        ])
+        self.watcher = poller.LiveWatcher(self.db, self.cfg)
+        self._real = poller.livecheck.check
+        self.addCleanup(setattr, poller.livecheck, "check", self._real)
+        self.asked = []
+
+    def tearDown(self):
+        self.db.close()
+        self._tmp.cleanup()
+
+    def answer(self, state):
+        def fake(cfg, ext_id, *a, **k):
+            self.asked.append(ext_id)
+            return state
+        poller.livecheck.check = fake
+        budget = Budget(self.db, self.cfg.budget_limits, self.cfg.budget_window_s)
+        self.watcher._check_upcoming(budget)
+
+    def row(self):
+        return self.db.conn.execute(
+            "SELECT live_status, scheduled_at FROM videos WHERE key='yt:aaaaaaaaaaa'").fetchone()
+
+    def test_the_time_is_stored(self):
+        self.answer(LiveState("aaaaaaaaaaa", None, False, 1788825600, True))
+        self.assertEqual(self.row()["scheduled_at"], 1788825600)
+
+    def test_and_it_is_not_asked_about_again(self):
+        self.answer(LiveState("aaaaaaaaaaa", None, False, 1788825600, True))
+        self.assertEqual(self.db.upcoming_without_start(), [])
+
+    def test_one_that_has_begun_stops_being_an_announcement(self):
+        # Otherwise it would be asked about on every check for ever, since it
+        # never gains a start time.
+        self.answer(LiveState("aaaaaaaaaaa", 12, True, None, False))
+        self.assertEqual(self.row()["live_status"], "is_live")
+
+    def test_one_that_was_called_off_becomes_an_ordinary_video(self):
+        self.answer(LiveState("aaaaaaaaaaa", None, False, None, False))
+        self.assertEqual(self.row()["live_status"], "was_live")
+
+    def test_an_announcement_with_no_time_yet_is_left_alone(self):
+        self.answer(LiveState("aaaaaaaaaaa", None, False, None, True))
+        self.assertEqual(self.row()["live_status"], "is_upcoming")
+        self.assertIsNone(self.row()["scheduled_at"])
+
+    def test_only_a_few_are_asked_in_one_round(self):
+        self.db.upsert_videos([
+            VideoRow("youtube", f"bbbbbbbbb{n:02d}", "yt:UC1", f"Also {n}",
+                     live_status="is_upcoming")
+            for n in range(6)
+        ])
+        self.answer(LiveState("x", None, False, None, True))
+        self.assertEqual(len(self.asked), poller.UPCOMING_PER_CHECK)
+
+
 class AFeedThatNamesAStranger(unittest.TestCase):
     """A feed entry can belong to a channel Weave has never heard of.
 

@@ -948,6 +948,26 @@ class Database:
                 (viewers if still_live else None,
                  "is_live" if still_live else "was_live", video_key))
 
+    def set_scheduled_at(self, video_key: str, starts_at: int | None) -> None:
+        """When an announced stream is due, in real time rather than as the
+        phrase the sweep hands over, which is nothing at all."""
+        if starts_at is None:
+            return
+        with self.conn as conn:
+            conn.execute("UPDATE videos SET scheduled_at=? WHERE key=?", (starts_at, video_key))
+
+    def upcoming_without_start(self, limit: int = 3) -> list[sqlite3.Row]:
+        """Announced streams whose start time nothing has learned yet.
+
+        The subscriptions sweep reports the time as NA for every one of them,
+        so the only way to a real time is to ask about the video itself, which
+        is one request each and is why this is handed out a few at a time.
+        """
+        return list(self.conn.execute(
+            "SELECT key, ext_id FROM videos "
+            "WHERE live_status='is_upcoming' AND scheduled_at IS NULL "
+            "ORDER BY published_at DESC LIMIT ?", (limit,)))
+
     def live_youtube(self, limit: int = 12) -> list[sqlite3.Row]:
         return list(self.conn.execute(
             "SELECT key, ext_id FROM videos WHERE live_status='is_live' "
