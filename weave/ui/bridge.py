@@ -3079,6 +3079,11 @@ class Bridge(QObject):
             self._db.restore_to_all(key)
         label = title or ext_id
         self._set_add("added", f"Added {label}")
+        # Whichever list it went into, the window that manages that list is
+        # listening for this. Following into All only ever said so through the
+        # feed, so a channel added in All's own window did not appear until the
+        # window was closed and opened again.
+        self.groupsChanged.emit()
         if group_id >= 0:
             self._db.add_to_group(group_id, key)
             self.groupsChanged.emit()

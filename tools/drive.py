@@ -886,6 +886,17 @@ class Smoke:
         bridge.clearAddState()
         settle(0.2)
         self.check("and typing again clears the answer", not read(answer, "visible"))
+
+        # A channel that resolves has to appear in the list it was added to
+        # without the window being closed and opened again.
+        was = len(read(manage, "everyone"))
+        bridge._adding = -1
+        bridge._on_channel_added("yt:UCaddedaddedaddedadded1", "youtube",
+                                 "UCaddedaddedaddedadded1", "Added by hand")
+        settle(0.6)
+        self.check("one that is added appears at once",
+                   len(read(manage, "everyone")) == was + 1,
+                   f"{was} to {len(read(manage, 'everyone'))}")
         write(rows, "contentY", 40.0)
         settle(0.2)
         bridge.groupsChanged.emit()
