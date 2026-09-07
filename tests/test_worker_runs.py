@@ -138,6 +138,21 @@ class WorkerRuns(unittest.TestCase):
         self.run_worker(poller.ChannelDetailsFetcher(self.db, self.cfg, "yt:UC1", "UC1"))
         self.assertEqual(self.db.channel("yt:UC1")["banner_url"], "b.jpg")
 
+    def test_channel_feed_fetcher(self):
+        # Opening a channel's page asks that one channel for its videos, since
+        # the poller asks after the channels somebody follows in an order of
+        # its own and a stranger is in no such order at all.
+        self.db.remember_channel("yt:UC3", "youtube", "UC3", "A stranger")
+        self.patch(poller.rss, "fetch", lambda fetcher, ext_id, kind=poller.rss.VIDEOS:
+                   poller.rss.FeedResult(ext_id, "A stranger", [
+                       VideoRow("youtube", "ccccccccccc", "yt:UC3", "Theirs")], kind))
+        said = self.run_worker(poller.ChannelFeedFetcher(self.db, self.cfg, "yt:UC3", "UC3"))
+        self.assertFalse([word for word in MISTAKES if word in said])
+        self.assertTrue(self.db.channel_has_videos("yt:UC3"))
+        # And it does not start following them. Opening a stranger's page is
+        # not the same as asking for their videos in the feed.
+        self.assertNotIn("yt:UC3", [row["key"] for row in self.db.channels()])
+
     def test_channel_avatars_fetcher(self):
         self.db.remember_channel("yt:UC2", "youtube", "UC2", "A stranger")
         self.patch(poller.channel_source, "fetch",
@@ -391,6 +406,7 @@ class WorkerRuns(unittest.TestCase):
         run_here = {"FeedPoller", "SubsImporter", "ChannelDetailsFetcher",
                     "HistoryImporter", "RecommendationsFetcher", "PlaylistsFetcher",
                     "PlaylistItemsFetcher", "SearchFetcher", "LiveWatcher",
+                    "ChannelFeedFetcher",
                     "DetailFetcher", "ChannelAvatarsFetcher"}
         # The checkup runs the doctor, which counts its own requests.
         run_here.add("Checkup")

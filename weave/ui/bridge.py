@@ -41,6 +41,7 @@ from ..poller import (
     DetailFetcher,
     FeedPoller,
     HistoryImporter,
+    ChannelFeedFetcher,
     ImageCacheJob,
     LiveWatcher,
     MusicHistoryReader,
@@ -116,6 +117,11 @@ KEEP_MUSIC = object()
 # day, because a release is not published twice in an afternoon and the check
 # is worth exactly one request.
 UPDATE_INTERVAL_S = 24 * 60 * 60
+
+# How recently a channel must have been asked for opening its page to ask
+# again. The feed itself is cached for fifteen minutes on the other end, so
+# anything shorter would spend a request to be told the same thing.
+CHANNEL_FEED_TRUST_S = 15 * 60
 
 # The pages of the walk through, counted from the welcome one, so the number
 # reads as how far there is to go rather than as a page number.
@@ -255,6 +261,7 @@ class Bridge(QObject):
         self._checkup: Checkup | None = None
         self._checks: list = []
         self._cache_job: ImageCacheJob | None = None
+        self._channel_feed: ChannelFeedFetcher | None = None
         # What was last handed to mpv, so the thing that was pressed can say
         # so itself. Cleared when mpv reports back, on a failure, and by a
         # timer, because a chip that never leaves is worse than none.
@@ -1604,6 +1611,36 @@ class Bridge(QObject):
         if found and found["platform"] == "youtube" and \
                 self._db.channel_details_are_stale(channel_key):
             self._fetch_channel_details(channel_key, found["ext_id"])
+        if found and found["platform"] == "youtube":
+            self._fetch_channel_feed(channel_key, found["ext_id"])
+
+    def _fetch_channel_feed(self, channel_key: str, ext_id: str) -> None:
+        """Ask this one channel for its videos, because its page is open.
+
+        The poller asks after the channels somebody follows, in its own order
+        and at its own pace, so a page opened off a card showed whatever
+        happened to be stored, which for a stranger is nothing at all and for
+        one just put in a group is nothing yet.
+
+        Only when what is stored is old enough to be worth a request. Walking
+        back onto a page a minute later asks nothing.
+        """
+        if self._channel_feed is not None and self._channel_feed.isRunning():
+            return
+        polled = (self._db.channel(channel_key) or {}).get("last_polled_at") or 0
+        if time.time() - polled < CHANNEL_FEED_TRUST_S:
+            return
+        self._channel_feed = ChannelFeedFetcher(self._db, self._cfg, channel_key, ext_id, self)
+        self._channel_feed.fetched.connect(self._on_channel_feed)
+        self._channel_feed.failed.connect(
+            lambda _key, message: self._set_status(f"could not read that channel, {message}"))
+        self._launch(self._channel_feed)
+
+    def _on_channel_feed(self, channel_key: str, touched: int) -> None:
+        if self._view_kind == CHANNEL and self._view_channel == channel_key:
+            self.reload()
+        if touched:
+            self._set_status(f"{touched} rows from that channel")
 
     def _fetch_channel_details(self, channel_key: str, ext_id: str) -> None:
         """Ask for one channel's picture, banner and follower count.

@@ -354,11 +354,16 @@ ApplicationWindow {
                     color: Theme.colors.textMuted
                     font.pixelSize: 12
                     elide: Text.ElideRight
-                    // Free to be narrower than its text, down to nothing, and
-                    // never wider than it or than the room a bar can spare.
+                    // The width owes nothing to the text. It used to be capped
+                    // at the label's own implicit width, which is a loop: the
+                    // cell is sized from the text, the text is elided to the
+                    // cell, and a pass that runs while those two disagree
+                    // leaves a line cut short with half the bar empty beside
+                    // it. A constant ceiling and a right edge cannot do that.
+                    horizontalAlignment: Text.AlignRight
                     Layout.fillWidth: true
                     Layout.minimumWidth: 0
-                    Layout.maximumWidth: Math.min(380, implicitWidth)
+                    Layout.maximumWidth: 460
                 }
 
                 Switch {

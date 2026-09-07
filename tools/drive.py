@@ -493,6 +493,22 @@ class Smoke:
                    item_named(root, "recommendedRefresh") is None
                    or not read(item_named(root, "recommendedRefresh"), "visible"))
 
+    def bar(self, bridge, window) -> None:
+        """The line in the bar has to say all of what it says.
+
+        It was cut short with plenty of bar left over, because its cell was
+        sized from the label's own implicit width, which the label then elided
+        to fit the cell.
+        """
+        label = find(window, "status")
+        for text in ("feeds 12 of 15", "durations 1 of 1",
+                     "455 subscriptions found, 12 newly tracked"):
+            bridge._set_status(text)
+            settle(0.35)
+            self.check(f"the bar says {text.split()[0]} in full",
+                       read(label, "width") >= read(label, "implicitWidth") - 1,
+                       f"{read(label, 'width'):.0f} of {read(label, 'implicitWidth'):.0f}")
+
     def following(self, bridge, window) -> None:
         """Following a channel by name, which the plus above the list offers.
 
@@ -1048,6 +1064,7 @@ class Smoke:
         self.updates(bridge, window)
         self.announcements(bridge, window)
         self.suggestions(bridge, window)
+        self.bar(bridge, window)
         self.following(bridge, window)
         self.boxes(bridge, window)
         self.wizard(bridge, window)

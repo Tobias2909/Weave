@@ -752,6 +752,72 @@ class ChannelDetailsFetcher(Worker):
         self.fetched.emit(self._key)
 
 
+class ChannelFeedFetcher(Worker):
+    """One channel's own feed, asked for because its page was opened.
+
+    The feed poller asks after the channels somebody follows, in an order and
+    at a pace of its own. A channel page opened off a card is often neither
+    followed nor due, and until this it showed whatever happened to be stored,
+    which for a stranger is nothing at all.
+
+    One request, against the same ceiling as the poller's, and the same
+    fallback: a channel with no long form tab answers on the mixed feed.
+    """
+
+    fetched = Signal(str, int)            # channel key, rows touched
+    failed = Signal(str, str)
+
+    def __init__(self, db: Database, cfg: Config, channel_key: str, ext_id: str,
+                 parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._db = db
+        self._cfg = cfg
+        self._key = channel_key
+        self._ext_id = ext_id
+        self._throttle = self._throttle_for(cfg, 1)
+
+    def run(self) -> None:
+        fetcher = Fetcher(self._throttle, cancel=self._cancel)
+        budget = Budget(self._db, self._cfg.budget_limits, self._cfg.budget_window_s)
+        if budget.allowance(FEEDS, 1).empty:
+            fetcher.close()
+            self._db.close()
+            self.failed.emit(self._key, "asked as much as it should for now")
+            return
+        variant = self._db.channel(self._key)
+        variant = (variant or {}).get("feed_variant") or rss.VIDEOS
+        try:
+            budget.spend(FEEDS)
+            try:
+                result = rss.fetch(fetcher, self._ext_id, variant)
+            except HttpError as exc:
+                if exc.status != 404 or variant == rss.CHANNEL:
+                    raise
+                # No long form tab, which the mixed feed answers for.
+                budget.spend(FEEDS)
+                result = rss.fetch(fetcher, self._ext_id, rss.CHANNEL)
+                self._db.set_feed_variant(self._key, rss.CHANNEL)
+        except (FetchCancelled, ProcessCancelled):
+            fetcher.close()
+            self._db.close()
+            return
+        except Exception as exc:
+            budget.spend(FEEDS, count=0, refused=1)
+            fetcher.close()
+            self._db.close()
+            self.failed.emit(self._key, f"{type(exc).__name__}: {exc}")
+            return
+        touched = self._db.upsert_videos(result.videos)
+        if result.channel_title:
+            # remember rather than add. Opening a stranger's page is not
+            # following them, and add_channel would do exactly that.
+            self._db.remember_channel(self._key, "youtube", self._ext_id, result.channel_title)
+        self._db.mark_polled(self._key, None)
+        fetcher.close()
+        self._db.close()
+        self.fetched.emit(self._key, touched)
+
+
 class TwitchLogin(Worker):
     """The device code login, and the follow list that comes with it.
 
