@@ -9,7 +9,12 @@ Item {
     signal action()
 
     width: parent ? parent.width : 200
-    height: 26
+    // Its own height, so a heading that is drawn only sometimes can be given
+    // the room it takes and none when it is not there. An Item implies no
+    // height of its own, and a section that asked for its implicit one got
+    // nothing and vanished while its rows stayed.
+    implicitHeight: 26
+    height: implicitHeight
 
     Label {
         anchors.left: parent.left

@@ -786,8 +786,11 @@ ApplicationWindow {
                 // Somebody else's lists, kept off their channel page. Apart
                 // from your own, because they are not yours and are not in
                 // the feed that reads yours.
+                Item { width: 1; height: App.keptPlaylists.length > 0 ? 10 : 0 }
+
                 SidebarHeading {
                     id: keptHeading
+                    objectName: "keptHeading"
                     visible: App.keptPlaylists.length > 0
                     height: visible ? implicitHeight : 0
                     text: "Linked playlists"

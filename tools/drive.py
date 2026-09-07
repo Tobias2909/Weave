@@ -626,6 +626,12 @@ class Smoke:
         self.check("the wheel reaches the kept ones at the foot of the sidebar", reached,
                    f"{read(bridge, 'viewKind')} {read(bridge, 'viewPlaylist')}")
 
+        heading = find(window, "keptHeading")
+        self.check("the section has a heading of its own, with room to be seen",
+                   heading is not None and read(heading, "visible") is True
+                   and float(read(heading, "height")) > 0,
+                   f"height {read(heading, 'height') if heading else 'no heading'}")
+
         chooser = find(window, "keptChooser")
         call(chooser, "open")
         settle(0.4)
