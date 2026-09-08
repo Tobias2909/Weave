@@ -4,6 +4,12 @@ Everything else in the suite runs with nothing installed. This one needs mpv,
 and is skipped without it, because the whole point is that the entry ids mpv
 reports line up with the roles Weave gave them. A fake would only prove the
 fake. Two short generated tones stand in for tracks, so no network is touched.
+
+The player is told to play to nowhere. What is under test is what mpv reports
+back over its socket, never the sound, and a machine with no sound card cannot
+open an audio output at all: mpv then ends every entry with error rather than
+eof, which is not the module failing but the machine having no speakers. That
+is what a build runner is.
 """
 
 import math
@@ -53,6 +59,15 @@ class TheCommand(unittest.TestCase):
         self.assertIn("--volume=55", command)
         self.assertIn("--input-ipc-server=/run/x.sock", command)
 
+    @unittest.skipUnless(shutil.which("mpv"), "mpv is not installed")
+    def test_it_lets_mpv_find_its_own_audio_output(self):
+        # The tests name one so they can run on a machine with no sound card.
+        # The application must never name one: sound that has gone should say
+        # so rather than be played to nowhere.
+        self.assertFalse([one for one in mpv_command(55, "/run/x.sock")
+                          if one.startswith("--ao")])
+        self.assertIn("--ao=null", mpv_command(55, "/run/x.sock", ao="null"))
+
 
 class Reaping(unittest.TestCase):
     """Every way of letting go of the player waits on it, so a player that
@@ -97,7 +112,7 @@ class Playing(unittest.TestCase):
         self.b = os.path.join(self.dir, "b.wav")
         _tone(self.a, 4)
         _tone(self.b, 4)
-        self.engine = MusicEngine(socket_path=os.path.join(self.dir, "m.sock"))
+        self.engine = MusicEngine(socket_path=os.path.join(self.dir, "m.sock"), ao="null")
         self.engine.set_volume(0)
         self.started = []
         self.ended = []
@@ -187,7 +202,7 @@ class Playing(unittest.TestCase):
             "from PySide6.QtCore import QCoreApplication\n"
             "from weave.engine import MusicEngine\n"
             "app = QCoreApplication([])\n"
-            f"engine = MusicEngine(socket_path={os.path.join(self.dir, 'k.sock')!r})\n"
+            f"engine = MusicEngine(socket_path={os.path.join(self.dir, 'k.sock')!r}, ao='null')\n"
             "engine.set_volume(0)\n"
             f"engine.load({self.a!r})\n"
             "print(engine._process.pid, flush=True)\n"

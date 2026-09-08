@@ -50,10 +50,18 @@ CURRENT, NEXT = "current", "next"
 _OBSERVED = ("time-pos", "duration", "pause", "idle-active", "paused-for-cache")
 
 
-def mpv_command(volume: float, socket_path: os.PathLike | str) -> list[str]:
+def mpv_command(volume: float, socket_path: os.PathLike | str,
+                ao: str | None = None) -> list[str]:
     """The plain player, never the video wrapper, with none of the mpv
     configuration on this machine loaded. The wrapper carries shaders, overlays
-    and a socket of its own, all of which would be wrong here."""
+    and a socket of its own, all of which would be wrong here.
+
+    `ao` names an audio output instead of letting mpv find one. Nothing in the
+    application passes it, and it must stay that way: a machine whose sound has
+    gone should say so rather than play to nowhere. It is here for the tests,
+    which are about the entry ids mpv reports and not about the sound card, and
+    which otherwise cannot run on a machine that has none.
+    """
     binary = shutil.which("mpv")
     if binary is None:
         raise FileNotFoundError("mpv is not installed")
@@ -67,6 +75,7 @@ def mpv_command(volume: float, socket_path: os.PathLike | str) -> list[str]:
         "--prefetch-playlist=yes", "--gapless-audio=yes",
         f"--volume={max(0, min(100, round(volume)))}",
         "--audio-client-name=weave",
+        *([f"--ao={ao}"] if ao else []),
     ]
 
 
@@ -109,12 +118,15 @@ class MusicEngine(QObject):
     ended = Signal(str)                  # the current entry ended: eof, error, stop
     gone = Signal(str)                   # the player went away or would not start
 
-    def __init__(self, parent: QObject | None = None, socket_path=None) -> None:
+    def __init__(self, parent: QObject | None = None, socket_path=None,
+                 ao: str | None = None) -> None:
         super().__init__(parent)
         self._socket_path = socket_path or (paths.runtime_dir() / SOCKET_NAME)
         self._process: subprocess.Popen | None = None
         self._ipc: _Ipc | None = None
         self._volume = 70.0
+        # Only the tests name one. See mpv_command.
+        self._ao = ao
 
     # ---- lifecycle -------------------------------------------------------
 
@@ -128,7 +140,7 @@ class MusicEngine(QObject):
             return True
         self.quit()
         try:
-            command = mpv_command(self._volume, self._socket_path)
+            command = mpv_command(self._volume, self._socket_path, self._ao)
         except FileNotFoundError as exc:
             self.gone.emit(str(exc))
             return False
