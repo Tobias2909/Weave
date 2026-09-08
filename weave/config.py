@@ -63,6 +63,17 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         # that have been seen streaming are asked, so this is a handful of
         # extra requests rather than a second one per channel.
         "poll_live_feeds": True,
+        # Filling in the lengths RSS cannot carry. One channel per tick is one
+        # or two browse calls a minute, which sits inside the share background
+        # work is allowed, and a channel is answered whole by one call however
+        # many rows it is owed. A library with a long backlog therefore closes
+        # over hours rather than at once, on purpose.
+        "fill_lengths": True,
+        "length_channels_per_tick": 1,
+        # How long before a channel whose gap could not be closed is looked at
+        # again. What is left after a read is usually private, deleted or
+        # members only, and none of that changes in a week.
+        "length_recheck_s": 604800,
     },
     # Ceilings on how much each endpoint may be asked inside one window,
     # counted in the database so a restart cannot forget them. These are well
@@ -211,6 +222,18 @@ class Config:
     @property
     def poll_live_feeds(self) -> bool:
         return bool(self.get("poll", "poll_live_feeds"))
+
+    @property
+    def fill_lengths(self) -> bool:
+        return bool(self.get("poll", "fill_lengths"))
+
+    @property
+    def length_channels_per_tick(self) -> int:
+        return max(1, int(self.get("poll", "length_channels_per_tick")))
+
+    @property
+    def length_recheck_s(self) -> int:
+        return max(0, int(self.get("poll", "length_recheck_s")))
 
     @property
     def feed_tiers(self) -> FeedTiers:

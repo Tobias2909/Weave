@@ -208,6 +208,166 @@ class WorkerRuns(unittest.TestCase):
         self.run_worker(poller.OwnerFetcher(self.db, self.cfg, self.db.HISTORY))
         self.assertEqual(asked, ["fffffffffff"])
 
+    def test_length_filler_fills_a_channels_gap(self):
+        """The lengths RSS cannot carry, read off the channel's own tabs.
+
+        One call answers a whole channel, and the streams tab says was_live
+        outright, measured, so a stream that arrived through RSS with no live
+        state stops being a video in the videos half of a group.
+        """
+        from weave.sources.lengths import Length
+
+        self.db.add_channel("yt:UC7", "youtube", "UC7", "One")
+        self.db.set_channel_streams("yt:UC7", True)
+        self.db.upsert_videos([
+            VideoRow("youtube", "gggggggggg1", "yt:UC7", "A video", is_short=False),
+            VideoRow("youtube", "gggggggggg2", "yt:UC7", "A stream", is_short=False),
+            VideoRow("youtube", "gggggggggg3", "yt:UC7", "Known", is_short=False,
+                     duration_s=120),
+        ])
+        asked = []
+
+        def listing(ext_id, kind, **_k):
+            asked.append((ext_id, kind))
+            if ext_id != "UC7":
+                return []
+            if kind == poller.rss.VIDEOS:
+                return [Length("gggggggggg1", 1516, None)]
+            return [Length("gggggggggg2", 3930, "was_live")]
+
+        self.patch(poller.lengths, "fetch", listing)
+        # Every channel with a gap, so the one under test is reached whatever
+        # else the harness seeded.
+        said = self.run_worker(poller.LengthFiller(self.db, self.cfg, 5))
+        self.assertFalse([word for word in MISTAKES if word in said])
+        self.assertEqual([kind for ext, kind in asked if ext == "UC7"],
+                         [poller.rss.VIDEOS, poller.rss.LIVE])
+        self.assertEqual(self.db.video("yt:gggggggggg1")["duration_s"], 1516)
+        self.assertEqual(self.db.video("yt:gggggggggg2")["duration_s"], 3930)
+        self.assertEqual(self.db.video("yt:gggggggggg2")["live_status"], "was_live")
+        # The one that already had a length is untouched, and a listing is
+        # never asked to answer for it.
+        self.assertEqual(self.db.video("yt:gggggggggg3")["duration_s"], 120)
+
+    def test_a_length_already_stored_is_never_overwritten(self):
+        """Both writers COALESCE. Nothing here can lose a length, which is why
+        the gap is an absence and not a loss."""
+        from weave.sources.lengths import Length
+
+        self.db.add_channel("yt:UC11", "youtube", "UC11", "One")
+        self.db.upsert_videos([
+            VideoRow("youtube", "hhhhhhhhhh1", "yt:UC11", "Known", is_short=False,
+                     duration_s=120, live_status="was_live")])
+        self.db.fill_lengths([("yt:hhhhhhhhhh1", 999, "is_live")])
+        self.assertEqual(self.db.video("yt:hhhhhhhhhh1")["duration_s"], 120)
+        self.assertEqual(self.db.video("yt:hhhhhhhhhh1")["live_status"], "was_live")
+        # And a listing saying nothing cannot blank one out either.
+        self.db.fill_lengths([("yt:hhhhhhhhhh1", None, None)])
+        self.assertEqual(self.db.video("yt:hhhhhhhhhh1")["duration_s"], 120)
+        self.assertTrue(Length("x", None, None).ext_id)      # the shape is used above
+
+    def test_a_channels_gap_is_looked_at_once(self):
+        """Whatever is left after a read is private, deleted or members only,
+        and asking every poll would spend a request a minute on nothing."""
+        self.db.add_channel("yt:UC8", "youtube", "UC8", "One")
+        self.db.upsert_videos([
+            VideoRow("youtube", "iiiiiiiiii1", "yt:UC8", "Gone", is_short=False)])
+        rounds = []
+        self.patch(poller.lengths, "fetch",
+                   lambda ext_id, kind, **_k: rounds.append((ext_id, kind)) or [])
+        self.run_worker(poller.LengthFiller(self.db, self.cfg, 5))
+        self.run_worker(poller.LengthFiller(self.db, self.cfg, 5))
+        # Both tabs, since nothing has ever asked whether this one streams
+        # and NULL there is a question rather than a no.
+        self.assertEqual([r for r in rounds if r[0] == "UC8"],
+                         [("UC8", poller.rss.VIDEOS), ("UC8", poller.rss.LIVE)])
+        self.assertIsNone(self.db.video("yt:iiiiiiiiii1")["duration_s"])
+
+    def test_a_channel_that_never_streamed_costs_one_call(self):
+        self.db.add_channel("yt:UC9", "youtube", "UC9", "One")
+        self.db.set_channel_streams("yt:UC9", False)
+        self.db.upsert_videos([
+            VideoRow("youtube", "jjjjjjjjjj1", "yt:UC9", "A video", is_short=False)])
+        asked = []
+        self.patch(poller.lengths, "fetch",
+                   lambda ext_id, kind, **_k: asked.append((ext_id, kind)) or [])
+        self.run_worker(poller.LengthFiller(self.db, self.cfg, 5))
+        self.assertEqual([r for r in asked if r[0] == "UC9"],
+                         [("UC9", poller.rss.VIDEOS)])
+
+    def test_a_channel_never_asked_about_streams_is_asked_here(self):
+        """channels.streams has three states and NULL is a question, not a no.
+
+        Measured on a copy of a real library: skipping the NULL ones left
+        exactly half of each of those channels' rows owed, because the half
+        left over were the streams. The answer is kept while we are here.
+        """
+        from weave.sources.lengths import Length
+
+        self.db.add_channel("yt:UC12", "youtube", "UC12", "One")
+        self.assertIsNone(self.db.channel("yt:UC12")["streams"])
+        self.db.upsert_videos([
+            VideoRow("youtube", "mmmmmmmmmm1", "yt:UC12", "A stream", is_short=False)])
+        self.patch(poller.lengths, "fetch",
+                   lambda ext_id, kind, **_k: (
+                       [Length("mmmmmmmmmm1", 3930, "was_live")]
+                       if kind == poller.rss.LIVE and ext_id == "UC12" else []))
+        self.run_worker(poller.LengthFiller(self.db, self.cfg, 5))
+        self.assertEqual(self.db.video("yt:mmmmmmmmmm1")["duration_s"], 3930)
+        self.assertEqual(self.db.channel("yt:UC12")["streams"], 1)
+
+    def test_no_streams_tab_is_an_answer_and_not_a_refusal(self):
+        """A channel with no such tab is settled for good and gets stamped. A
+        refusal has to leave it alone so it comes round again, and treating
+        the first as the second asked the same channel every poll for ever.
+        """
+        from weave.sources.lengths import NoSuchTab
+
+        self.db.add_channel("yt:UC13", "youtube", "UC13", "One")
+        self.db.upsert_videos([
+            VideoRow("youtube", "nnnnnnnnnn1", "yt:UC13", "A video", is_short=False)])
+        rounds = []
+
+        def listing(ext_id, kind, **_k):
+            rounds.append((ext_id, kind))
+            if kind == poller.rss.LIVE:
+                raise NoSuchTab("no live tab")
+            return []
+
+        self.patch(poller.lengths, "fetch", listing)
+        said = self.run_worker(poller.LengthFiller(self.db, self.cfg, 5))
+        self.assertFalse(said)
+        self.assertEqual(self.db.channel("yt:UC13")["streams"], 0)
+        # Stamped, so a second round leaves it alone.
+        self.run_worker(poller.LengthFiller(self.db, self.cfg, 5))
+        self.assertEqual([r for r in rounds if r[0] == "UC13"],
+                         [("UC13", poller.rss.VIDEOS), ("UC13", poller.rss.LIVE)])
+
+    def test_a_refusal_leaves_the_channel_to_come_round_again(self):
+        self.db.add_channel("yt:UC14", "youtube", "UC14", "One")
+        self.db.upsert_videos([
+            VideoRow("youtube", "ooooooooo11", "yt:UC14", "A video", is_short=False)])
+        rounds = []
+
+        def listing(ext_id, kind, **_k):
+            rounds.append((ext_id, kind))
+            raise RuntimeError("the endpoint said no")
+
+        self.patch(poller.lengths, "fetch", listing)
+        self.run_worker(poller.LengthFiller(self.db, self.cfg, 1))
+        self.assertIsNone(self.db.channel("yt:UC14")["lengths_at"])
+
+    def test_shorts_are_not_worth_a_length(self):
+        """They never reach a feed, and they were a fifth of the gap."""
+        self.db.add_channel("yt:UC10", "youtube", "UC10", "One")
+        self.db.upsert_videos([
+            VideoRow("youtube", "kkkkkkkkkk1", "yt:UC10", "A short", is_short=True)])
+        asked = []
+        self.patch(poller.lengths, "fetch",
+                   lambda ext_id, kind, **_k: asked.append((ext_id, kind)) or [])
+        self.run_worker(poller.LengthFiller(self.db, self.cfg, 5))
+        self.assertEqual([r for r in asked if r[0] == "UC10"], [])
+
     def test_channel_playlists_fetcher(self):
         from weave.sources.playlists import Playlist
 
@@ -472,7 +632,8 @@ class WorkerRuns(unittest.TestCase):
                     "HistoryImporter", "RecommendationsFetcher", "PlaylistsFetcher",
                     "PlaylistItemsFetcher", "SearchFetcher", "LiveWatcher",
                     "ChannelFeedFetcher", "ChannelPlaylistsFetcher",
-                    "DetailFetcher", "ChannelAvatarsFetcher", "OwnerFetcher"}
+                    "DetailFetcher", "ChannelAvatarsFetcher", "OwnerFetcher",
+                    "LengthFiller"}
         # The checkup runs the doctor, which counts its own requests.
         run_here.add("Checkup")
         source = Path("weave/poller.py").read_text()
@@ -743,7 +904,7 @@ class WorkerRuns(unittest.TestCase):
 
         holders = ("_poller", "_importer", "_adder", "_details", "_searcher", "_recommended",
                    "_history", "_search", "_tracks", "_station", "_detail", "_cache_job",
-                   "_twitch", "_checkup", "_playlists", "_playlist_items")
+                   "_twitch", "_checkup", "_playlists", "_playlist_items", "_lengths")
 
         def make(held: str):
             bridge = Bridge.__new__(Bridge)
@@ -812,6 +973,12 @@ class WorkerRuns(unittest.TestCase):
         bridge, worker = make("_twitch")
         Bridge._on_worker_crashed(bridge, worker, "x")
         self.assertIn("failed", bridge._twitch_status)
+
+        # This one holds no flag at all, and must still be reported rather
+        # than fall through the chain of elifs into nothing.
+        bridge, worker = make("_lengths")
+        Bridge._on_worker_crashed(bridge, worker, "x")
+        self.assertTrue(bridge._problems and "x" in bridge._problems[0])
 
         # A worker the bridge holds nowhere in particular is still reported.
         bridge, worker = make("_checkup")

@@ -223,6 +223,18 @@ def _database(db: Database, report: Report) -> None:
     else:
         report.add("channels", OK, f"{counts['channels']} tracked")
 
+    # RSS carries no duration, so a length is filled in afterwards, and a
+    # library that had a backlog when it was first read has a long tail of
+    # rows still owed one. Said out loud, because the only way it shows
+    # otherwise is the lengths stopping partway down a feed.
+    owed, channels = db.lengths_gap()
+    if owed:
+        report.add("lengths", WARN, f"{owed} videos have no length, "
+                                    f"{channels} channels left to read",
+                   "Filled in the background, a channel a poll")
+    else:
+        report.add("lengths", OK, "every video has one")
+
 
 def _schedule(db: Database, cfg: Config, report: Report) -> None:
     tiers = cfg.feed_tiers

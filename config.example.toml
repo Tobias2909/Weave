@@ -57,6 +57,15 @@ sweep_interval_s = 900
 # own tab, so without this one only appears once it has ended. Only channels
 # seen streaming are asked.
 poll_live_feeds = true
+# Fill in the lengths RSS cannot carry, a channel at a time, off that channel's
+# own tab listings. RSS carries no duration at all and the subscriptions sweep
+# reaches only the newest thousand videos, so without this the lengths stop
+# partway down a feed that has been running a while. One channel a tick is one
+# or two requests a minute and answers that channel whole, so a long backlog
+# closes over hours rather than in a burst.
+fill_lengths = true
+length_channels_per_tick = 1
+length_recheck_s = 604800
 
 # Ceilings on how much each endpoint may be asked inside one window, counted in
 # the database so a restart cannot forget them. They sit well above what idle

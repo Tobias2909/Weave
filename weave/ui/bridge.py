@@ -49,6 +49,7 @@ from ..poller import (
     MusicHistoryReader,
     MusicHome,
     MusicSearch,
+    LengthFiller,
     OwnerFetcher,
     PlaylistItemsFetcher,
     PlaylistsFetcher,
@@ -269,6 +270,7 @@ class Bridge(QObject):
         self._report_path = ""
         # The one that asks who made a video nothing here knows the owner of.
         self._owners = None
+        self._lengths = None
         self._status = ""
 
         self._view_kind = ALL
@@ -3478,6 +3480,12 @@ class Bridge(QObject):
             self.twitchChanged.emit()
         elif worker in (self._checkup, self._playlists, self._playlist_items):
             self._set_notice("")
+        elif worker is self._lengths:
+            # Holds no flag: it is background work nothing is waiting on, and
+            # the channel it stopped on is left unstamped so it comes round
+            # again. Named here all the same, because the inventory test
+            # insists every worker with a handle on the bridge is.
+            pass
         self._problems.append(line)
         self.problemsChanged.emit()
         self._set_status(line)
@@ -3701,6 +3709,32 @@ class Bridge(QObject):
     def _on_poll_finished(self, channels: int, touched: int, failures: int) -> None:
         self._set_busy(False)
         self._judge_finished_streams()
+        self._fill_lengths()
         self.reload()
         suffix = f", {failures} failed" if failures else ""
         self._set_status(f"{channels} channels checked, {touched} rows updated{suffix}")
+
+    def _fill_lengths(self) -> None:
+        """Close the gap RSS leaves in the lengths, a channel at a time.
+
+        Off the end of a poll rather than on a timer of its own, so it can
+        never run beside one and the requests stay counted together.
+        """
+        if not self._cfg.fill_lengths:
+            return
+        if self._lengths is not None and self._lengths.isRunning():
+            return
+        self._lengths = LengthFiller(self._db, self._cfg,
+                                     self._cfg.length_channels_per_tick, self)
+        self._lengths.filled.connect(self._on_lengths_filled)
+        self._lengths.failed.connect(self._on_lengths_failed)
+        self._launch(self._lengths)
+
+    def _on_lengths_filled(self, rows: int, channels: int) -> None:
+        if rows:
+            self.reload()
+
+    def _on_lengths_failed(self, message: str) -> None:
+        # One channel's tabs not answering is not worth a banner. The channel
+        # is left unstamped and comes round again.
+        self._set_status(message)

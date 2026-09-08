@@ -48,7 +48,7 @@ from .process import run as run_process
 from .sources import channel as channel_source
 from .sources import comments as comment_source
 from .sources import dislikes as dislike_source
-from .sources import flatlist, livecheck, oembed, rss, subs, sweep, twitch
+from .sources import flatlist, lengths, livecheck, oembed, rss, subs, sweep, twitch
 from .sources import history as history_source
 from .sources import playlists as playlist_source
 from .sources import recommended as recommended_source
@@ -1198,6 +1198,104 @@ class OwnerFetcher(Worker):
             fetcher.close()
         if named:
             self.fetched.emit(named)
+
+
+class LengthFiller(Worker):
+    """The lengths RSS could not carry, filled in a channel at a time.
+
+    RSS carries no duration, and the only thing that fills one in is the
+    subscriptions sweep, which reaches the newest thousand videos across every
+    subscription. Everything older arrived through a channel feed's fifteen
+    entry window or through somebody opening a channel page, and was already
+    past the sweep's reach when it was stored. Nothing asked a second time, so
+    the durations simply stopped partway down a feed, which is exactly how it
+    was reported.
+
+    One call answers a whole channel, so this is ordered by how many rows a
+    channel is owed rather than by anything about the channel. Two calls at
+    most: the long form tab, and the streams tab for a channel known to
+    stream, because a stream that came in through RSS carries no live state
+    either and sits in the videos half of a group being a stream.
+
+    Stamped whatever comes back. A channel whose remaining rows are private,
+    deleted, or members only can never be answered, and asking again every
+    poll would spend a request a minute for ever on nothing.
+    """
+
+    filled = Signal(int, int)             # rows filled, channels looked at
+    failed = Signal(str)
+
+    def __init__(self, db: Database, cfg: Config, channels: int = 1,
+                 parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._db = db
+        self._cfg = cfg
+        self._channels = max(1, channels)
+        self._throttle = self._throttle_for(cfg, 1)
+
+    def work(self) -> None:
+        wanted = self._db.channels_missing_lengths(
+            self._channels, older_than_s=self._cfg.length_recheck_s)
+        if not wanted:
+            return
+        budget = Budget(self._db, self._cfg.budget_limits, self._cfg.budget_window_s)
+        filled = looked = 0
+        for row in wanted:
+            if self._cancel.is_set():
+                break
+            # Two at most, and both are wanted together or neither: a channel
+            # stamped after only half its tabs were read would keep the other
+            # half's gap until the recheck came round.
+            #
+            # channels.streams has three states and NULL is a question, not a
+            # no, so the streams tab is read for anything but a definite no.
+            # Measured on a copy of a real library: skipping the NULL ones left
+            # exactly half of each of those channels' rows owed, because the
+            # half that was left were the streams. The answer is kept while we
+            # are here, so this also settles that question for free.
+            tabs = [rss.VIDEOS] + ([rss.LIVE] if row["streams"] != 0 else [])
+            allowance = budget.allowance(BROWSE, len(tabs), background=True)
+            if allowance.granted < len(tabs):
+                break
+            owed = self._db.videos_without_a_length(row["key"])
+            if not owed:
+                self._db.mark_lengths_read(row["key"])
+                continue
+            found: list[tuple[str, int | None, str | None]] = []
+            trouble = ""
+            for kind in tabs:
+                try:
+                    budget.spend(BROWSE)
+                    answer = lengths.fetch(row["ext_id"], kind, throttle=self._throttle,
+                                           cancel=self._cancel)
+                except (FetchCancelled, ProcessCancelled):
+                    return
+                except lengths.NoSuchTab:
+                    # An answer rather than a refusal: there is no such tab, so
+                    # there is nothing there to owe a length and the channel is
+                    # settled. Not counted as refused, because the far side
+                    # answered perfectly well.
+                    if kind == rss.LIVE and row["streams"] is None:
+                        self._db.set_channel_streams(row["key"], False)
+                    continue
+                except Exception as exc:
+                    budget.spend(BROWSE, count=0, refused=1)
+                    trouble = f"{type(exc).__name__}: {exc}"
+                    break
+                if kind == rss.LIVE and row["streams"] is None:
+                    self._db.set_channel_streams(row["key"], bool(answer))
+                found.extend((f"yt:{item.ext_id}", item.duration_s, item.live_status)
+                             for item in answer if item.ext_id in owed)
+            if trouble:
+                # Left unstamped, so it is tried again rather than written off
+                # on one bad answer.
+                self.failed.emit(f"could not read a channel's tabs, {trouble}")
+                break
+            filled += self._db.fill_lengths(found)
+            self._db.mark_lengths_read(row["key"])
+            looked += 1
+        if filled or looked:
+            self.filled.emit(filled, looked)
 
 
 class TwitchLogin(Worker):

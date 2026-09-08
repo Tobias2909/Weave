@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 35
+SCHEMA_VERSION = 36
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -335,6 +335,10 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # because a group of people who stream and a group of people who do not
     # are not looked at the same way.
     ("groups", "shows", f"TEXT NOT NULL DEFAULT '{GROUP_SHOWS_ALL}'"),
+    # When this channel's stored videos were last read against its own tab
+    # listings to fill in the lengths RSS cannot carry. A stamp rather than a
+    # flag, so the gap can be looked at again once there is a reason to.
+    ("channels", "lengths_at", "INTEGER"),
     # The first video's frame, which the playlists tab hands over with the
     # names. A playlist has no picture of its own here for the same reason it
     # has no count: asking one for either is a call each.
@@ -1032,6 +1036,112 @@ class Database:
                 payload,
             )
             return conn.total_changes - before
+
+    def channels_missing_lengths(self, limit: int = 2, older_than_s: int = 0,
+                                 now: int | None = None) -> list[sqlite3.Row]:
+        """Channels holding videos with no length, worst first.
+
+        RSS carries no duration at all, and the only thing that fills one in is
+        the subscriptions sweep, which reaches roughly the newest thousand
+        videos across every subscription. Anything that arrived from a channel
+        feed's fifteen entry window, or from opening a channel page, was
+        already older than that when it was stored, and nothing ever asked a
+        second time. So a library that has been running a while is mostly rows
+        with no length, and it shows as the durations simply stopping partway
+        down a feed.
+
+        Shorts are left out. They never reach a feed, so a length for one is
+        of no use to anybody, and they are a fifth of the gap.
+
+        The count is what orders this, because one call answers a whole
+        channel however many rows it is owed.
+
+        `older_than_s` of zero means channels never read at all, not every
+        channel: a cutoff of now is a cutoff every stamp is already older
+        than, which would make the stamp do nothing and ask the same channel
+        every poll for ever.
+        """
+        now = int(time.time()) if now is None else now
+        cutoff = now - max(0, older_than_s)
+        return list(self.conn.execute(
+            """
+            SELECT c.key, c.ext_id, c.streams, c.lengths_at,
+                   COUNT(*) AS missing
+              FROM videos v
+              JOIN channels c ON c.key = v.channel_key
+             WHERE v.duration_s IS NULL
+               AND COALESCE(v.is_short, 0) = 0
+               AND c.platform = 'youtube'
+               AND c.tracked = 1
+               AND (c.lengths_at IS NULL
+                    OR (? > 0 AND c.lengths_at <= ?))
+             GROUP BY c.key
+             ORDER BY missing DESC, c.key
+             LIMIT ?
+            """,
+            (max(0, older_than_s), cutoff, max(1, limit)),
+        ))
+
+    def lengths_gap(self, older_than_s: int = 0, now: int | None = None) -> tuple[int, int]:
+        """How many videos still have no length, and how many channels still
+        have somewhere to look for one. What the page and the doctor say, so
+        the filling can be watched rather than guessed at."""
+        now = int(time.time()) if now is None else now
+        cutoff = now - max(0, older_than_s)
+        videos = self.conn.execute(
+            "SELECT COUNT(*) FROM videos v JOIN channels c ON c.key = v.channel_key "
+            "WHERE v.duration_s IS NULL AND COALESCE(v.is_short, 0) = 0 "
+            "AND c.platform = 'youtube' AND c.tracked = 1").fetchone()[0]
+        channels = self.conn.execute(
+            "SELECT COUNT(DISTINCT c.key) FROM videos v JOIN channels c ON c.key = v.channel_key "
+            "WHERE v.duration_s IS NULL AND COALESCE(v.is_short, 0) = 0 "
+            "AND c.platform = 'youtube' AND c.tracked = 1 "
+            "AND (c.lengths_at IS NULL OR (? > 0 AND c.lengths_at <= ?))",
+            (max(0, older_than_s), cutoff)).fetchone()[0]
+        return int(videos), int(channels)
+
+    def mark_lengths_read(self, channel_key: str, now: int | None = None) -> None:
+        """This channel's gap has been looked at. Stamped whatever came back,
+        so a channel whose remaining rows are private or deleted is not asked
+        about for ever."""
+        with self.conn as conn:
+            conn.execute("UPDATE channels SET lengths_at=? WHERE key=?",
+                         (int(time.time()) if now is None else now, channel_key))
+
+    def fill_lengths(self, rows: Iterable[tuple[str, int | None, str | None]]) -> int:
+        """Apply lengths, and live states, read off a channel's tab listings.
+
+        Both are COALESCEd, so nothing already known is overwritten and a
+        listing that says NA cannot blank a value out. The live state matters
+        as much as the length here: a video read out of the streams tab is a
+        stream, and rows that came in through RSS carry no live state at all,
+        so without this they sit in the videos half of a group being streams.
+        """
+        rows = [row for row in rows if row[1] is not None or row[2] is not None]
+        if not rows:
+            return 0
+        with self.conn as conn:
+            before = conn.total_changes
+            conn.executemany(
+                "UPDATE videos SET duration_s = COALESCE(duration_s, ?), "
+                "live_status = COALESCE(live_status, ?) "
+                "WHERE key = ? AND (duration_s IS NULL OR live_status IS NULL)",
+                [(duration, live, key) for key, duration, live in rows],
+            )
+            # A length past the Shorts ceiling settles that question too, the
+            # same way the sweep's own fill does.
+            conn.execute(
+                "UPDATE videos SET is_short=0 WHERE is_short IS NULL AND duration_s > ?",
+                (SHORTS_CEILING_S,),
+            )
+            return conn.total_changes - before
+
+    def videos_without_a_length(self, channel_key: str, limit: int = 1000) -> set[str]:
+        """The ids of this channel's stored videos that have no length, so a
+        listing is only asked to answer for rows that are owed one."""
+        return {row["ext_id"] for row in self.conn.execute(
+            "SELECT ext_id FROM videos WHERE channel_key=? AND duration_s IS NULL "
+            "AND COALESCE(is_short, 0) = 0 LIMIT ?", (channel_key, max(1, limit)))}
 
     def fill_details(self, rows: list[tuple[str, int | None, str | None, int | None]]) -> int:
         """Apply the durations, live flags and start times the subscriptions

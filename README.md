@@ -19,6 +19,9 @@ streaming along the top, and a line under a card showing where you stopped.*
 
 * A feed built from each channel's own RSS, which needs no login and carries
   exact publish times with exact view and like counts
+* Lengths are filled in behind the feed, since RSS carries none, a channel at a
+  time off its own listings, so a library read in from a long backlog fills its
+  gaps over the following hours instead of leaving them
 * One command imports every channel you already subscribe to, names and pictures
   included, and any channel can be tracked without subscribing to it
 * **Groups** hold whole channels, **boxes** hold individual videos, both made and
