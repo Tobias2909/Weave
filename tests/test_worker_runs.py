@@ -179,6 +179,35 @@ class WorkerRuns(unittest.TestCase):
         self.run_worker(poller.ChannelFeedFetcher(self.db, self.cfg, "yt:UC4", "UC4"))
         self.assertNotIn(poller.rss.LIVE, asked)
 
+    def test_owner_fetcher(self):
+        # Who made a video that nothing here knows the owner of. The history
+        # is full of these: a row there carries an id, a title, a duration and
+        # a picture and says nothing whatsoever about the channel.
+        self.db.replace_cached(self.db.HISTORY, [{
+            "ext_id": "eeeeeeeeeee", "title": "Something watched",
+            "channel_name": None, "channel_ext_id": None, "duration_s": 60,
+            "thumbnail_url": None, "views": None, "published_at": None,
+            "live_status": None, "scheduled_at": None}])
+        self.patch(poller.oembed, "fetch",
+                   lambda fetcher, ext_id: poller.oembed.Owner("Someone", "someone"))
+        self.run_worker(poller.OwnerFetcher(self.db, self.cfg, self.db.HISTORY))
+        self.assertEqual(self.db.owner_of("eeeeeeeeeee")["channel_name"], "Someone")
+        # And the card it was for now has a name on it.
+        self.assertEqual(self.db.cached(self.db.HISTORY)[0]["channel_title"], "Someone")
+
+    def test_an_owner_is_asked_after_once(self):
+        self.db.replace_cached(self.db.HISTORY, [{
+            "ext_id": "fffffffffff", "title": "Something else", "channel_name": None,
+            "channel_ext_id": None, "duration_s": 60, "thumbnail_url": None,
+            "views": None, "published_at": None, "live_status": None,
+            "scheduled_at": None}])
+        asked = []
+        self.patch(poller.oembed, "fetch", lambda fetcher, ext_id: (
+            asked.append(ext_id) or poller.oembed.Owner("Someone", "someone")))
+        self.run_worker(poller.OwnerFetcher(self.db, self.cfg, self.db.HISTORY))
+        self.run_worker(poller.OwnerFetcher(self.db, self.cfg, self.db.HISTORY))
+        self.assertEqual(asked, ["fffffffffff"])
+
     def test_channel_playlists_fetcher(self):
         from weave.sources.playlists import Playlist
 
@@ -443,7 +472,7 @@ class WorkerRuns(unittest.TestCase):
                     "HistoryImporter", "RecommendationsFetcher", "PlaylistsFetcher",
                     "PlaylistItemsFetcher", "SearchFetcher", "LiveWatcher",
                     "ChannelFeedFetcher", "ChannelPlaylistsFetcher",
-                    "DetailFetcher", "ChannelAvatarsFetcher"}
+                    "DetailFetcher", "ChannelAvatarsFetcher", "OwnerFetcher"}
         # The checkup runs the doctor, which counts its own requests.
         run_here.add("Checkup")
         source = Path("weave/poller.py").read_text()

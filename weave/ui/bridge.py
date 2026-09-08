@@ -49,6 +49,7 @@ from ..poller import (
     MusicHistoryReader,
     MusicHome,
     MusicSearch,
+    OwnerFetcher,
     PlaylistItemsFetcher,
     PlaylistsFetcher,
     RecommendationsFetcher,
@@ -250,6 +251,8 @@ class Bridge(QObject):
         self._problems: list[str] = []
         # Where the last report went, so the page can offer to open it.
         self._report_path = ""
+        # The one that asks who made a video nothing here knows the owner of.
+        self._owners = None
         self._status = ""
 
         self._view_kind = ALL
@@ -3178,6 +3181,25 @@ class Bridge(QObject):
             note += f", {marked} of them stored here and now marked watched"
         self._set_status(note)
         if self._view_kind == HISTORY:
+            self.reload()
+        self._name_the_strangers(self._db.HISTORY)
+
+    def _name_the_strangers(self, kind: str) -> None:
+        """Ask who made the videos in a listing that nothing here knows.
+
+        The history says nothing about the channel, so a card from a channel
+        nobody follows has no name and no face. Most answer from the videos
+        table for nothing; this is the rest, a few at a time, once in the life
+        of a video.
+        """
+        if self._owners is not None and self._owners.isRunning():
+            return
+        self._owners = OwnerFetcher(self._db, self._cfg, kind, parent=self)
+        self._owners.fetched.connect(self._on_owners)
+        self._launch(self._owners)
+
+    def _on_owners(self, named: int) -> None:
+        if self._view_kind in (HISTORY, RECOMMENDED):
             self.reload()
 
     @Slot(str, result=bool)

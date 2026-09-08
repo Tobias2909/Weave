@@ -36,7 +36,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QThread, Signal
 
 from . import backoff, imagecache, tokens
-from .budget import BROWSE, DISLIKES, FEEDS, PLAYER, TWITCH, Budget
+from .budget import BROWSE, DISLIKES, FEEDS, OEMBED, PLAYER, TWITCH, Budget
 from .config import Config
 from .db import Database
 from .ids import channel_key
@@ -48,7 +48,7 @@ from .process import run as run_process
 from .sources import channel as channel_source
 from .sources import comments as comment_source
 from .sources import dislikes as dislike_source
-from .sources import flatlist, livecheck, rss, subs, sweep, twitch
+from .sources import flatlist, livecheck, oembed, rss, subs, sweep, twitch
 from .sources import history as history_source
 from .sources import playlists as playlist_source
 from .sources import recommended as recommended_source
@@ -976,6 +976,67 @@ class ChannelPlaylistsFetcher(Worker):
             return
         self._db.replace_channel_playlists(self._key, found)
         self.fetched.emit(self._key, len(found))
+
+
+class OwnerFetcher(Worker):
+    """Who made the videos in a listing that nothing here knows the owner of.
+
+    The history is what this is for. A row there carries an id, a title, a
+    duration and a picture and says nothing whatsoever about the channel, so
+    a card from a channel nobody follows had no name, no face and nothing to
+    press. Most of them answer from the videos table; these are the rest.
+
+    One small call each, 868 bytes measured, and once in the life of a video,
+    because a video does not change hands. A few at a time so a page of
+    history costs a trickle rather than a burst.
+    """
+
+    fetched = Signal(int)                 # how many were named
+    failed = Signal(str)
+
+    def __init__(self, db: Database, cfg: Config, kind: str, limit: int = 12,
+                 parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._db = db
+        self._cfg = cfg
+        self._kind = kind
+        self._limit = limit
+        self._throttle = self._throttle_for(cfg, 1)
+
+    def work(self) -> None:
+        wanted = self._db.videos_without_an_owner(self._kind, self._limit)
+        if not wanted:
+            return
+        budget = Budget(self._db, self._cfg.budget_limits, self._cfg.budget_window_s)
+        allowance = budget.allowance(OEMBED, len(wanted))
+        if allowance.empty:
+            return
+        fetcher = Fetcher(self._throttle, cancel=self._cancel)
+        named = 0
+        try:
+            for ext_id in wanted[:allowance.granted]:
+                if self._cancel.is_set():
+                    break
+                try:
+                    budget.spend(OEMBED)
+                    owner = oembed.fetch(fetcher, ext_id)
+                except (FetchCancelled, ProcessCancelled):
+                    break
+                except Exception:
+                    # A private or removed video answers with an error rather
+                    # than a name. That is one card keeping the blank it had,
+                    # not a failure worth reporting.
+                    budget.spend(OEMBED, count=0, refused=1)
+                    continue
+                if owner is None:
+                    continue
+                self._db.remember_owner(ext_id, owner.channel_name, owner.handle,
+                                        owner.channel_ext_id)
+                named += 1
+        finally:
+            fetcher.close()
+        if named:
+            self.fetched.emit(named)
 
 
 class TwitchLogin(Worker):

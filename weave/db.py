@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 32
+SCHEMA_VERSION = 33
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -93,6 +93,18 @@ CREATE TABLE IF NOT EXISTS channel_playlists (
     position    INTEGER NOT NULL DEFAULT 0,
     seen_at     INTEGER NOT NULL,
     PRIMARY KEY (channel_key, ext_id)
+);
+
+-- Who made a video, for videos that are not in the videos table and never
+-- will be. A history row says nothing about its channel, measured, and the
+-- listing it came from is replaced wholesale every time it is read, so an
+-- answer worth one request has to live somewhere that survives that.
+CREATE TABLE IF NOT EXISTS video_owners (
+    ext_id         TEXT PRIMARY KEY,
+    channel_name   TEXT NOT NULL,
+    handle         TEXT,
+    channel_ext_id TEXT,
+    seen_at        INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS playlist_items (
@@ -1761,7 +1773,8 @@ class Database:
             SELECT 'yt:' || r.ext_id           AS key,
                    'youtube'                   AS platform,
                    r.ext_id                    AS ext_id,
-                   COALESCE(c.key, v.channel_key,
+                   COALESCE(c.key, v.channel_key, named.key,
+                            IIF(o.channel_ext_id IS NULL, NULL, 'yt:' || o.channel_ext_id),
                             IIF(r.channel_ext_id IS NULL, '', 'yt:' || r.channel_ext_id)) AS channel_key,
                    r.title                     AS title,
                    COALESCE(r.published_at, v.published_at)   AS published_at,
@@ -1771,13 +1784,22 @@ class Database:
                    v.likes                     AS likes,
                    COALESCE(r.live_status, v.live_status)     AS live_status,
                    COALESCE(r.scheduled_at, v.scheduled_at)   AS scheduled_at,
-                   COALESCE(c.title, r.channel_name, own.title)     AS channel_title,
-                   COALESCE(c.avatar_url, own.avatar_url)           AS avatar_url,
+                   COALESCE(c.title, r.channel_name, own.title,
+                            named.title, o.channel_name)            AS channel_title,
+                   COALESCE(c.avatar_url, own.avatar_url,
+                            named.avatar_url)                       AS avatar_url,
                    w.video_key IS NOT NULL     AS watched
             FROM cached_videos r
             LEFT JOIN channels c ON c.ext_id = r.channel_ext_id AND c.platform = 'youtube'
             LEFT JOIN videos v ON v.ext_id = r.ext_id AND v.platform = 'youtube'
             LEFT JOIN channels own ON own.key = v.channel_key
+            -- What one small call said about a video nothing else here knows.
+            -- Its name is matched against the channels already here as well,
+            -- which is how such a card gets a picture: a channel can be known
+            -- while a video of theirs from years ago is not.
+            LEFT JOIN video_owners o ON o.ext_id = r.ext_id
+            LEFT JOIN channels named ON named.title = o.channel_name
+                                    AND named.platform = 'youtube'
             LEFT JOIN watched w ON w.video_key = 'yt:' || r.ext_id
             WHERE r.kind = ?
             ORDER BY r.position
@@ -1785,6 +1807,46 @@ class Database:
             """,
             (kind, limit),
         ))
+
+    def videos_without_an_owner(self, kind: str, limit: int = 25) -> list[str]:
+        """Ids in a listing that nothing here knows the channel of.
+
+        The history is what this is for. Its rows carry no channel at all, and
+        the ones that are also in the videos table answer from there, so what
+        is left is videos from channels nobody here follows.
+        """
+        return [row["ext_id"] for row in self.conn.execute(
+            """
+            SELECT r.ext_id FROM cached_videos r
+            LEFT JOIN videos v ON v.ext_id = r.ext_id AND v.platform = 'youtube'
+            LEFT JOIN video_owners o ON o.ext_id = r.ext_id
+            WHERE r.kind = ?
+              AND (r.channel_name IS NULL OR r.channel_name = '')
+              AND v.ext_id IS NULL AND o.ext_id IS NULL
+            ORDER BY r.position
+            LIMIT ?
+            """, (kind, limit))]
+
+    def remember_owner(self, ext_id: str, channel_name: str, handle: str = "",
+                       channel_ext_id: str = "") -> None:
+        """Keep who made a video. Once in the life of a video: a video does not
+        change hands, and the point of the table is that this answer outlives
+        the listing that needed it."""
+        if not ext_id or not channel_name:
+            return
+        with self.conn as conn:
+            conn.execute(
+                "INSERT INTO video_owners(ext_id, channel_name, handle, channel_ext_id, seen_at) "
+                "VALUES(?,?,?,?,?) ON CONFLICT(ext_id) DO UPDATE SET "
+                "  channel_name=excluded.channel_name, handle=excluded.handle, "
+                "  channel_ext_id=COALESCE(excluded.channel_ext_id, video_owners.channel_ext_id)",
+                (ext_id, channel_name, handle or None, channel_ext_id or None, int(time.time())))
+
+    def owner_of(self, ext_id: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT ext_id, channel_name, handle, channel_ext_id FROM video_owners "
+            "WHERE ext_id=?", (ext_id,)).fetchone()
+        return dict(row) if row else None
 
     def cached_age_s(self, kind: str) -> int | None:
         stamp = self.get_int(f"{kind}_at", 0)
