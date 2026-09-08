@@ -1959,6 +1959,21 @@ class Database:
         stamp = row["playlists_at"] if row else None
         return None if not stamp else int(time.time()) - int(stamp)
 
+    def channel_playlists_lack_pictures(self, channel_key: str) -> bool:
+        """Whether what is stored for this channel is a listing from before
+        the pictures were read.
+
+        The tab is re-read at most once a day, so a listing stored without
+        pictures would show none for a day after the version that reads them
+        arrives. Rows with not one picture between them are treated as old
+        rather than as a channel whose playlists happen to have none, which
+        would mean every playlist of theirs being empty.
+        """
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS held, COUNT(thumbnail_url) AS pictures "
+            "FROM channel_playlists WHERE channel_key=?", (channel_key,)).fetchone()
+        return bool(row["held"]) and not row["pictures"]
+
     def playlist_source(self, ext_id: str) -> dict | None:
         """Which channel a playlist was opened off, if it was opened off one.
 

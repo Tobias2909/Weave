@@ -122,6 +122,39 @@ class LookingAtOne(unittest.TestCase):
         self.assertEqual(self.db.channel_playlists(CHANNEL)[0]["origin"], "channel")
 
 
+class ThePictures(unittest.TestCase):
+    """The listing carries a frame from each playlist's first video, so the
+    tiles have pictures without a call per playlist."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self._tmp.name) / "t.db")
+        self.db.add_channel(CHANNEL, "youtube", "UCaaaaaaaaaaaaaaaaaaaaaa", "One")
+
+    def tearDown(self):
+        self.db.close()
+        self._tmp.cleanup()
+
+    def test_a_picture_is_stored_with_the_name(self):
+        self.db.replace_channel_playlists(CHANNEL, [Playlist(ONE, "Theirs", "a.jpg")])
+        self.assertEqual(self.db.channel_playlists(CHANNEL)[0]["thumbnail_url"], "a.jpg")
+
+    def test_a_listing_from_before_them_reads_as_old(self):
+        # Read at most once a day, so without this a listing stored by an
+        # older version would show no pictures for a day after this one
+        # arrives.
+        self.db.replace_channel_playlists(CHANNEL, [Playlist(ONE, "Theirs")])
+        self.assertTrue(self.db.channel_playlists_lack_pictures(CHANNEL))
+
+    def test_one_with_pictures_does_not(self):
+        self.db.replace_channel_playlists(CHANNEL, [Playlist(ONE, "Theirs", "a.jpg"),
+                                                    Playlist(TWO, "Also theirs")])
+        self.assertFalse(self.db.channel_playlists_lack_pictures(CHANNEL))
+
+    def test_and_neither_does_a_channel_with_no_playlists_at_all(self):
+        self.assertFalse(self.db.channel_playlists_lack_pictures(CHANNEL))
+
+
 class TheWayBack(unittest.TestCase):
     """A playlist opened off a channel says which channel, so the bar above it
     can offer the way back to the tab it came from."""

@@ -1727,7 +1727,10 @@ class Bridge(QObject):
         if not found or found.get("platform") != "youtube":
             return
         age = self._db.channel_playlists_age_s(self._view_channel)
-        if not force and age is not None and age < CHANNEL_PLAYLISTS_TRUST_S:
+        # A listing stored before the pictures were read is old however
+        # recently it was read, since it cannot answer for the tiles.
+        stale = self._db.channel_playlists_lack_pictures(self._view_channel)
+        if not force and not stale and age is not None and age < CHANNEL_PLAYLISTS_TRUST_S:
             return
         self._channel_lists = ChannelPlaylistsFetcher(
             self._db, self._cfg, self._view_channel, found["ext_id"], self)

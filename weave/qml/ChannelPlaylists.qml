@@ -8,6 +8,15 @@ Flickable {
     id: root
     objectName: "channelPlaylists"
 
+    // One row of tiles, so a wheel notch over this moves as far as it does
+    // over the grid of videos. Read from outside, since the thing that turns
+    // a notch into a distance has to be declared beside a Flickable rather
+    // than inside one: a child of a Flickable is reparented into content that
+    // moves.
+    readonly property real rowHeight: tileHeight + flow.spacing
+    readonly property real tileWidth: Math.max(240, Math.floor((root.width - 40) / 3))
+    readonly property real tileHeight: tileWidth * 9 / 16 + 96
+
     contentHeight: flow.height + 20
     clip: true
     boundsBehavior: Flickable.StopAtBounds
@@ -28,8 +37,8 @@ Flickable {
                 objectName: "playlistTile"
                 required property var modelData
 
-                width: Math.max(240, Math.floor((flow.width - 20) / 3))
-                height: width * 9 / 16 + 96
+                width: root.tileWidth
+                height: root.tileHeight
                 title: modelData.title
                 thumbnail: modelData.thumbnail
                 itemsText: modelData.itemsText

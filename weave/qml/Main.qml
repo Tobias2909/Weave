@@ -1070,12 +1070,20 @@ ApplicationWindow {
     }
 
     ChannelPlaylists {
+        id: channelPlaylistsView
         objectName: "channelPlaylistsView"
         visible: App.viewKind === "channel" && App.channelTab === "playlists"
         anchors.left: grid.left
         anchors.right: grid.right
         anchors.top: grid.top
         anchors.bottom: grid.bottom
+    }
+
+    // The same distance a notch moves the videos. Beside the view rather than
+    // inside it, since a child of a Flickable rides in the content.
+    SmoothScroll {
+        flickable: channelPlaylistsView
+        step: channelPlaylistsView.rowHeight * App.scrollRowsPerNotch
     }
 
     GridView {
