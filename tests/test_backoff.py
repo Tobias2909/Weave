@@ -17,9 +17,11 @@ import unittest
 from pathlib import Path
 
 from weave import backoff, poller
+from weave.budget import FEEDS, Budget
 from weave.config import Config
 from weave.db import Database
 from weave.net import HttpError
+from weave.sources import rss
 
 
 class Deciding(unittest.TestCase):
@@ -209,3 +211,75 @@ class Saying(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WhatARoundSaysAboutItself(unittest.TestCase):
+    """The banner about the endpoint refusing is for the endpoint refusing.
+
+    A channel that posts only Shorts has no long form tab, and its feed
+    answers 404 every time. Counted as one refusal that is right, since a
+    round full of them is what a refusal looks like; said out loud as "the
+    feed endpoint replies to a burst with a refusal" it read as the
+    application being throttled, once per such channel per poll, and two
+    people took it for exactly that.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self._tmp.name) / "t.db")
+        self.cfg = Config(raw={})
+        self.poller = poller.FeedPoller(self.db, self.cfg)
+        self.said = []
+        self.poller.failure.connect(lambda source, message: self.said.append(message))
+        self._real = poller.rss.fetch
+        self.addCleanup(setattr, poller.rss, "fetch", self._real)
+
+    def tearDown(self):
+        self.db.close()
+        self._tmp.cleanup()
+
+    def answer(self, table):
+        def fake(fetcher, ext_id, kind=rss.VIDEOS):
+            found = table[kind]
+            if isinstance(found, Exception):
+                raise found
+            return found
+        poller.rss.fetch = fake
+
+    def run_round(self):
+        budget = Budget(self.db, self.cfg.budget_limits, self.cfg.budget_window_s)
+        return self.poller._phase_rss(None, budget)
+
+    def banners(self):
+        return [m for m in self.said if "did not answer" in m]
+
+    def test_one_shorts_only_channel_is_not_the_endpoint_refusing(self):
+        self.db.add_channel("yt:UC1", "youtube", "UC1", "Shorts only")
+        self.answer({rss.VIDEOS: HttpError(404, "u"), rss.LIVE: HttpError(404, "u")})
+        self.run_round()
+        self.assertEqual(self.banners(), [])
+        # Still counted, so a round full of these still rests the feed.
+        self.assertEqual(self.db.requests_in_window(FEEDS, backoff.WINDOW_S)[1], 1)
+
+    def test_a_round_refused_wholesale_is_still_said(self):
+        for n in range(8):
+            self.db.add_channel(f"yt:UC{n}", "youtube", f"UC{n}", f"Channel {n}")
+        self.answer({rss.VIDEOS: HttpError(404, "u"), rss.LIVE: HttpError(404, "u")})
+        self.run_round()
+        # Eight of eight is the endpoint, so the feed rests and the rest is
+        # what gets said. Either way something is, once.
+        said = [m for m in self.said if "did not answer" in m or "refusing" in m]
+        self.assertEqual(len(said), 1)
+        self.assertTrue(self.db.resting_until(FEEDS))
+
+    def test_a_channel_on_the_mixed_feed_saying_so_again_is_an_answer(self):
+        # It fell back after answering 404 in several rounds, its Shorts tab
+        # has been read, and a week later it is offered the long form tab
+        # once more. Answering 404 again is that channel being what it is.
+        self.db.add_channel("yt:UC1", "youtube", "UC1", "Shorts only")
+        self.db.set_feed_variant("yt:UC1", rss.CHANNEL)
+        self.db.stamp_shorts_sweep("yt:UC1")
+        self.answer({rss.VIDEOS: HttpError(404, "u")})
+        self.run_round()
+        self.assertEqual(self.banners(), [])
+        self.assertEqual(self.db.requests_in_window(FEEDS, backoff.WINDOW_S), (1, 0))

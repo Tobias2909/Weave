@@ -503,6 +503,7 @@ class FeedPoller(Worker):
 
         touched = failures = done = 0
         spent = 0
+        wire_before = fetcher.sent if fetcher is not None else 0
         refused: list[str] = []
         polled: set[str] = set()
         # Channels whose streams tab answered 404. Whether that means they have
@@ -543,8 +544,13 @@ class FeedPoller(Worker):
                         # rounds in a row. Counted as a refusal as well, since
                         # a 404 is what this endpoint says when it is pushing
                         # back and a round full of them is what the rest is
-                        # there to answer.
-                        refused.append(key)
+                        # there to answer. Except for a channel already on
+                        # the mixed feed being offered the tab again: it has
+                        # answered that way in several rounds already, so a
+                        # Shorts only channel saying so once more a week is
+                        # an answer, not the endpoint refusing.
+                        if key not in retests:
+                            refused.append(key)
                         if self._db.note_long_form_missing(key) >= LONG_FORM_STRIKES:
                             self._db.set_feed_variant(key, rss.CHANNEL)
                         if key in retests:
@@ -629,11 +635,22 @@ class FeedPoller(Worker):
         for key in no_streams & polled:
             self._db.set_channel_streams(key, False)
 
+        if fetcher is not None:
+            # What went over the wire, retries included, rather than what was
+            # asked for. The endpoint counts it that way.
+            spent = max(spent, fetcher.sent - wire_before)
         budget.spend(FEEDS, spent, refused=len(refused))
         # After the spend, so this round's refusals count towards the decision
         # rather than only the rounds before it.
         self._weigh_refusals()
-        if refused and not self._db.resting_until(FEEDS):
+        if (backoff.pushing_back(total, len(refused))
+                and not self._db.resting_until(FEEDS)):
+            # Said only when the round looks like the endpoint pushing back.
+            # One channel in thirty not answering is a Shorts only channel
+            # without a long form tab, or one bad connection, and a banner
+            # about the endpoint for that read as the application being
+            # throttled every time it was not. What one channel said is kept
+            # on the channel and shown by the doctor.
             self.failure.emit(
                 "feeds",
                 f"{len(refused)} of {total} feeds did not answer. The feed endpoint "

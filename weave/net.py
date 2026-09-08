@@ -61,6 +61,19 @@ class Fetcher:
 
     Retries cover 429 and 5xx only, honour Retry-After when present, and give
     up after `attempts` tries so a poll cannot hang forever on a dead host.
+
+    A 404 is not retried, and it used to be. The feed host answers a burst
+    with a 404 rather than a busy signal, so retrying looked right. Measured,
+    it never helped: a refused feed came back after thirty to ninety seconds,
+    while the retries waited two and then four, so during a refusal every
+    refused address was asked three times within seconds, which tripled the
+    load on the endpoint at exactly the moment it was asking for less, and the
+    request count only saw one. The poller's own rest is what answers a
+    refusal now, and one round later is soon enough for one channel.
+
+    `sent` counts every request actually made, retries included, so a caller
+    can charge the budget for what went over the wire rather than for what it
+    asked for.
     """
 
     def __init__(self, throttle: Throttle, timeout: float = 15.0, attempts: int = 3,
@@ -68,6 +81,8 @@ class Fetcher:
         self.throttle = throttle
         self.timeout = timeout
         self.attempts = max(1, attempts)
+        self.sent = 0
+        self._count = threading.Lock()
         # Set when the application is shutting down. Retries and backoff stop
         # immediately, so quitting waits at most one in flight request rather
         # than a full retry ladder.
@@ -84,6 +99,8 @@ class Fetcher:
             if self._cancelled():
                 raise Cancelled("cancelled")
             with self.throttle.slot():
+                with self._count:
+                    self.sent += 1
                 try:
                     response = self._session.get(url, timeout=self.timeout)
                 except requests.RequestException as exc:
@@ -92,10 +109,7 @@ class Fetcher:
             if response is not None:
                 if response.status_code == 200:
                     return response.content
-                # A four hundred and four is included on purpose. This host
-                # answers a burst with one rather than with a busy signal, and
-                # the same address succeeds moments later.
-                if response.status_code not in (404, 429, 500, 502, 503, 504):
+                if response.status_code not in (429, 500, 502, 503, 504):
                     raise HttpError(response.status_code, url)
                 last = HttpError(response.status_code, url)
                 retry_after = response.headers.get("Retry-After")
