@@ -64,11 +64,17 @@ class PlaylistError(RuntimeError):
 class Playlist:
     ext_id: str
     title: str
+    # The first video's frame, which the listing carries for a channel's
+    # playlists and not for your own. Empty rather than absent, so one shape
+    # answers for both.
+    thumbnail: str = ""
 
 
 def parse_list(text: str) -> list[Playlist]:
     """The playlists themselves, which are not videos and so are read here
-    rather than by the shared parser."""
+    rather than by the shared parser.
+
+    A third column is the picture, which only the channel listing carries."""
     out: list[Playlist] = []
     seen: set[str] = set()
     for line in text.splitlines():
@@ -80,7 +86,8 @@ def parse_list(text: str) -> list[Playlist]:
         if not PLAYLIST_ID.match(ext_id) or ext_id in seen or not title or title == "NA":
             continue
         seen.add(ext_id)
-        out.append(Playlist(ext_id, title))
+        picture = (parts[2] or "").strip() if len(parts) > 2 else ""
+        out.append(Playlist(ext_id, title, "" if picture in ("", "NA") else picture))
     return out
 
 
@@ -119,7 +126,11 @@ def fetch_channel_lists(cfg: Config, channel_id: str, limit: int = 100,
         "yt-dlp", "--no-warnings", "--flat-playlist",
         *cookie_args(cfg), *APPROXIMATE_DATES,
         "--playlist-end", str(max(1, limit)),
-        "--print", "%(id)s\t%(title)s",
+        # The picture comes with the listing. It is the first video's frame,
+        # measured at 480 by 270, and it costs nothing: asking a playlist for
+        # its own picture would be a call each, which is what the count is and
+        # why the count is not here.
+        "--print", "%(id)s\t%(title)s\t%(thumbnails.0.url)s",
         CHANNEL_PLAYLISTS.format(channel_id=channel_id),
     ]
     result = ytdlp.run(command, PlaylistError, "the channel playlists", throttle, cancel, timeout)

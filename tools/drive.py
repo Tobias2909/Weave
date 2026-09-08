@@ -552,8 +552,9 @@ class Smoke:
 
         key = "yt:UCsmokesmokesmokesmokes1"
         listed = Database(paths.DB_FILE)
-        listed.replace_channel_playlists(key, [Playlist(f"PL{n:022d}", f"List {n}")
-                                               for n in range(3)])
+        listed.replace_channel_playlists(key, [
+            Playlist(f"PL{n:022d}", f"List {n}", f"https://i.ytimg.com/vi/list{n}/hq.jpg")
+            for n in range(3)])
         listed.close()
         bridge.openChannel(key)
         settle(0.5)
@@ -595,6 +596,9 @@ class Smoke:
                    f"{len(tiles)} listed")
         self.check("with no count until one is opened",
                    all(tile["itemsText"] == "" for tile in tiles))
+        self.check("and a picture from the listing, which costs no request",
+                   all(tile["thumbnail"] != "" for tile in tiles),
+                   ", ".join(str(tile["thumbnail"])[:24] for tile in tiles))
         self.check("drawn as tiles", item_named(root, "playlistTile") is not None)
 
         bridge.openChannelPlaylist(tiles[0]["key"], tiles[0]["title"])

@@ -23,61 +23,19 @@ Flickable {
         Repeater {
             model: App.channelPlaylists
 
-            Rectangle {
+            PlaylistCard {
                 id: tile
                 objectName: "playlistTile"
                 required property var modelData
 
-                width: Math.max(200, Math.floor((flow.width - 20) / 3))
-                height: 84
-                radius: 8
-                color: hover.hovered ? Theme.colors.surfaceRaised : Theme.colors.surface
-                border.width: 1
-                border.color: Theme.colors.border
-
-                HoverHandler { id: hover }
-                TapHandler {
-                    gesturePolicy: TapHandler.ReleaseWithinBounds
-                    onTapped: App.openChannelPlaylist(tile.modelData.key, tile.modelData.title)
-                }
-
-                Column {
-                    anchors.fill: parent
-                    anchors.margins: 12
-                    spacing: 6
-
-                    Label {
-                        width: parent.width
-                        text: tile.modelData.title
-                        color: Theme.colors.text
-                        font.pixelSize: 13
-                        elide: Text.ElideRight
-                        maximumLineCount: 2
-                        wrapMode: Text.Wrap
-                    }
-
-                    Label {
-                        // Nothing until it has been opened, rather than a
-                        // confident zero for something nobody has counted.
-                        text: tile.modelData.itemsText !== "" ? tile.modelData.itemsText
-                                                              : "not read yet"
-                        color: Theme.colors.textMuted
-                        font.pixelSize: 11
-                    }
-                }
-
-                // Keeping it puts it in the panel and holds it through every
-                // reading of your own playlists, which never mention it.
-                FlatButton {
-                    objectName: "keepPlaylist"
-                    anchors.right: parent.right
-                    anchors.bottom: parent.bottom
-                    anchors.margins: 8
-                    visible: hover.hovered || tile.modelData.kept
-                    text: tile.modelData.kept ? "Kept" : "Keep"
-                    accent: tile.modelData.kept
-                    onClicked: App.keepPlaylist(tile.modelData.key, !tile.modelData.kept)
-                }
+                width: Math.max(240, Math.floor((flow.width - 20) / 3))
+                height: width * 9 / 16 + 96
+                title: modelData.title
+                thumbnail: modelData.thumbnail
+                itemsText: modelData.itemsText
+                kept: modelData.kept
+                onOpenRequested: App.openChannelPlaylist(tile.modelData.key, tile.modelData.title)
+                onKeepRequested: App.keepPlaylist(tile.modelData.key, !tile.modelData.kept)
             }
         }
     }

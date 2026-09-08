@@ -1693,6 +1693,7 @@ class Bridge(QObject):
                  # A count only once it has been opened, since the listing
                  # carries none and asking for one is a request each.
                  "itemsText": f"{row['items']} videos" if row["items"] else "",
+                 "thumbnail": qml_source(row["thumbnail_url"]),
                  "kept": row["origin"] == "channel"}
                 for row in self._db.channel_playlists(self._view_channel)]
 

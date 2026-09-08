@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 31
+SCHEMA_VERSION = 32
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -310,6 +310,10 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # hang off one, and which is swept up later.
     ("playlists", "origin", "TEXT NOT NULL DEFAULT 'mine'"),
     ("channels", "playlists_at", "INTEGER"),
+    # The first video's frame, which the playlists tab hands over with the
+    # names. A playlist has no picture of its own here for the same reason it
+    # has no count: asking one for either is a call each.
+    ("channel_playlists", "thumbnail_url", "TEXT"),
     # A long playlist list buries everything under it, so each one can be put
     # out of the way without being forgotten.
     ("playlists", "hidden", "INTEGER NOT NULL DEFAULT 0"),
@@ -1927,9 +1931,11 @@ class Database:
         with self.conn as conn:
             conn.execute("DELETE FROM channel_playlists WHERE channel_key=?", (channel_key,))
             conn.executemany(
-                "INSERT INTO channel_playlists(channel_key, ext_id, title, position, seen_at) "
-                "VALUES(?,?,?,?,?)",
-                [(channel_key, row.ext_id, row.title, place, now)
+                "INSERT INTO channel_playlists"
+                "(channel_key, ext_id, title, position, seen_at, thumbnail_url) "
+                "VALUES(?,?,?,?,?,?)",
+                [(channel_key, row.ext_id, row.title, place, now,
+                  getattr(row, "thumbnail", "") or None)
                  for place, row in enumerate(rows)])
             conn.execute("UPDATE channels SET playlists_at=? WHERE key=?", (now, channel_key))
         return len(rows)
@@ -1941,7 +1947,7 @@ class Database:
         listing carries none and asking for one is a request per playlist.
         """
         return [dict(row) for row in self.conn.execute(
-            "SELECT c.ext_id, c.title, "
+            "SELECT c.ext_id, c.title, c.thumbnail_url, "
             "       (SELECT COUNT(*) FROM playlist_items i WHERE i.playlist_id = c.ext_id) "
             "         AS items, "
             "       (SELECT p.origin FROM playlists p WHERE p.ext_id = c.ext_id) AS origin "
