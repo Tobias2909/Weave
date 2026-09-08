@@ -237,6 +237,21 @@ CREATE TABLE IF NOT EXISTS watched (
 """
 
 
+# What "owed a length" means, in one place, so the worker, the page and the
+# doctor cannot disagree about it. A Short never reaches a feed. A stream that
+# is on the air has no length yet, and an announcement that has not started has
+# none to have; both would keep a channel owed for ever and the doctor warning
+# about a gap nothing can close. An announcement whose start has passed is
+# owed one, since by then the tab listing knows how long it ran.
+_OWED_A_LENGTH = (
+    "v.duration_s IS NULL AND COALESCE(v.is_short, 0) = 0 "
+    "AND COALESCE(v.live_status, '') <> 'is_live' "
+    "AND NOT (COALESCE(v.live_status, '') = 'is_upcoming' "
+    "         AND COALESCE(v.scheduled_at, CAST(strftime('%s', 'now') AS INTEGER) + 1) "
+    "             > CAST(strftime('%s', 'now') AS INTEGER))"
+)
+
+
 @dataclass(frozen=True)
 class FeedTiers:
     """How often a channel is asked, decided by how recently it posted.
@@ -1139,13 +1154,12 @@ class Database:
         now = int(time.time()) if now is None else now
         cutoff = now - max(0, older_than_s)
         return list(self.conn.execute(
-            """
+            f"""
             SELECT c.key, c.ext_id, c.streams, c.lengths_at,
                    COUNT(*) AS missing
               FROM videos v
               JOIN channels c ON c.key = v.channel_key
-             WHERE v.duration_s IS NULL
-               AND COALESCE(v.is_short, 0) = 0
+             WHERE {_OWED_A_LENGTH}
                AND c.platform = 'youtube'
                AND c.tracked = 1
                AND (c.lengths_at IS NULL
@@ -1164,14 +1178,14 @@ class Database:
         now = int(time.time()) if now is None else now
         cutoff = now - max(0, older_than_s)
         videos = self.conn.execute(
-            "SELECT COUNT(*) FROM videos v JOIN channels c ON c.key = v.channel_key "
-            "WHERE v.duration_s IS NULL AND COALESCE(v.is_short, 0) = 0 "
-            "AND c.platform = 'youtube' AND c.tracked = 1").fetchone()[0]
+            f"SELECT COUNT(*) FROM videos v JOIN channels c ON c.key = v.channel_key "
+            f"WHERE {_OWED_A_LENGTH} "
+            f"AND c.platform = 'youtube' AND c.tracked = 1").fetchone()[0]
         channels = self.conn.execute(
-            "SELECT COUNT(DISTINCT c.key) FROM videos v JOIN channels c ON c.key = v.channel_key "
-            "WHERE v.duration_s IS NULL AND COALESCE(v.is_short, 0) = 0 "
-            "AND c.platform = 'youtube' AND c.tracked = 1 "
-            "AND (c.lengths_at IS NULL OR (? > 0 AND c.lengths_at <= ?))",
+            f"SELECT COUNT(DISTINCT c.key) FROM videos v JOIN channels c ON c.key = v.channel_key "
+            f"WHERE {_OWED_A_LENGTH} "
+            f"AND c.platform = 'youtube' AND c.tracked = 1 "
+            f"AND (c.lengths_at IS NULL OR (? > 0 AND c.lengths_at <= ?))",
             (max(0, older_than_s), cutoff)).fetchone()[0]
         return int(videos), int(channels)
 
@@ -1215,8 +1229,8 @@ class Database:
         """The ids of this channel's stored videos that have no length, so a
         listing is only asked to answer for rows that are owed one."""
         return {row["ext_id"] for row in self.conn.execute(
-            "SELECT ext_id FROM videos WHERE channel_key=? AND duration_s IS NULL "
-            "AND COALESCE(is_short, 0) = 0 LIMIT ?", (channel_key, max(1, limit)))}
+            f"SELECT v.ext_id FROM videos v WHERE v.channel_key=? AND {_OWED_A_LENGTH} "
+            f"LIMIT ?", (channel_key, max(1, limit)))}
 
     def fill_details(self, rows: list[tuple[str, int | None, str | None, int | None]]) -> int:
         """Apply the durations, live flags and start times the subscriptions

@@ -283,6 +283,29 @@ class WorkerRuns(unittest.TestCase):
                          [("UC8", poller.rss.VIDEOS), ("UC8", poller.rss.LIVE)])
         self.assertIsNone(self.db.video("yt:iiiiiiiiii1")["duration_s"])
 
+    def test_a_library_with_every_length_filled_asks_nothing(self):
+        """What the worker does once the backlog is paid off: nothing, at no
+        cost, and it does not stamp or touch a channel either."""
+        self.db.add_channel("yt:UC12", "youtube", "UC12", "One")
+        self.db.upsert_videos([
+            VideoRow("youtube", "kkkkkkkkkk1", "yt:UC12", "Known", is_short=False,
+                     duration_s=120),
+            VideoRow("youtube", "kkkkkkkkkk2", "yt:UC12", "On air", is_short=False,
+                     live_status="is_live"),
+            VideoRow("youtube", "kkkkkkkkkk3", "yt:UC12", "A Short", is_short=True)])
+        # Only this channel, so the harness's other seeds cannot be what is
+        # asked about.
+        self.db.conn.execute("UPDATE channels SET tracked=0 WHERE key <> 'yt:UC12'")
+        self.db.conn.commit()
+        asked = []
+        self.patch(poller.lengths, "fetch",
+                   lambda ext_id, kind, **_k: asked.append((ext_id, kind)) or [])
+        before = self.db.request_totals(900)
+        self.run_worker(poller.LengthFiller(self.db, self.cfg, 5))
+        self.assertEqual(asked, [])
+        self.assertEqual(self.db.request_totals(900), before)
+        self.assertIsNone(self.db.channel("yt:UC12")["lengths_at"])
+
     def test_a_channel_that_never_streamed_costs_one_call(self):
         self.db.add_channel("yt:UC9", "youtube", "UC9", "One")
         self.db.set_channel_streams("yt:UC9", False)

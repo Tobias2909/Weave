@@ -174,6 +174,35 @@ class WhatTheDatabaseDoes(unittest.TestCase):
                                         channel_key=loose, title="L", is_short=False)])
         self.assertEqual([row["key"] for row in self.db.channels_missing_lengths(5)], [])
 
+    def test_a_stream_on_the_air_or_not_yet_started_is_not_owed_a_length(self):
+        # Neither has a length to be read. Counting them kept a channel owed
+        # for ever and the doctor warning about a gap nothing could close. An
+        # announcement whose start has passed is owed one, since by then the
+        # tab listing knows how long it ran.
+        import time
+        now = int(time.time())
+        self.db.upsert_videos([video("aaaaaaaaaaa", live_status="is_live"),
+                               video("bbbbbbbbbbb", live_status="is_upcoming"),
+                               video("ccccccccccc", live_status="is_upcoming"),
+                               video("ddddddddddd", live_status="is_upcoming"),
+                               video("eeeeeeeeeee")])
+        self.db.set_scheduled_at("yt:ccccccccccc", now + 3600)
+        self.db.set_scheduled_at("yt:ddddddddddd", now - 3600)
+        self.assertEqual(self.db.videos_without_a_length(CHANNEL_KEY),
+                         {"ddddddddddd", "eeeeeeeeeee"})
+        self.assertEqual(self.db.lengths_gap(), (2, 1))
+
+    def test_with_nothing_owed_no_channel_is_offered(self):
+        # The quiet state, once the backlog is paid off. No channel comes up,
+        # so the worker returns before it builds a budget or asks anything,
+        # and the recheck window changes nothing about that.
+        self.db.upsert_videos([video("aaaaaaaaaaa", duration_s=60),
+                               video("bbbbbbbbbbb", duration_s=600, live_status="was_live"),
+                               video("ccccccccccc", is_short=True)])
+        self.assertEqual(self.db.channels_missing_lengths(5), [])
+        self.assertEqual(self.db.channels_missing_lengths(5, older_than_s=1), [])
+        self.assertEqual(self.db.lengths_gap(), (0, 0))
+
     def test_the_gap_can_be_counted_for_the_page_and_the_doctor(self):
         self.db.upsert_videos([video("aaaaaaaaaaa"), video("bbbbbbbbbbb"),
                                video("ccccccccccc", duration_s=60)])
