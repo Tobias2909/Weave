@@ -153,6 +153,7 @@ class Bridge(QObject):
     recommendedChanged = Signal()
     channelTabChanged = Signal()
     playlistViewChanged = Signal()
+    reportChanged = Signal()
     addChanged = Signal()
     importChanged = Signal()
     boxesChanged = Signal()
@@ -247,6 +248,8 @@ class Bridge(QObject):
 
         self._busy = False
         self._problems: list[str] = []
+        # Where the last report went, so the page can offer to open it.
+        self._report_path = ""
         self._status = ""
 
         self._view_kind = ALL
@@ -1575,6 +1578,38 @@ class Bridge(QObject):
         self._set_notice("")
         self._checks = [dict(check) for check in checks]
         self.checksChanged.emit()
+
+    @Slot()
+    def exportReport(self) -> None:
+        """Write everything this page knows to one file, to be sent on.
+
+        The page answers what is wrong on the machine it is running on. This
+        is the same answers in something that can be attached to a message,
+        for a problem somebody else has to look at. It carries no channel
+        names, no video titles and nothing secret.
+        """
+        from .. import report as report_bundle
+        self._set_notice("Writing the report", clear_after_s=30)
+        try:
+            path = report_bundle.write(self._db, self._cfg, network=False,
+                                       problems=list(self._problems))
+        except Exception as exc:
+            self._set_notice("")
+            self._set_status(f"the report could not be written, {type(exc).__name__}: {exc}")
+            return
+        self._set_notice("")
+        self._report_path = str(path)
+        self.reportChanged.emit()
+        self._set_status(f"report written to {path}")
+
+    reportPath = Property(str, lambda self: self._report_path, notify=reportChanged)
+
+    @Slot()
+    def showReport(self) -> None:
+        """Open the folder the last report went to, so it can be attached to
+        something without hunting for it."""
+        if self._report_path:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(self._report_path).parent)))
 
     @Slot()
     def showRecommended(self) -> None:

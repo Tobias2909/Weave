@@ -45,6 +45,49 @@ Item {
                 text: "Without asking YouTube"
                 onClicked: App.runChecks(false)
             }
+            // Everything on this page in one file, to be sent to somebody who
+            // is not sitting at this machine.
+            FlatButton {
+                objectName: "exportReport"
+                text: "Save a report"
+                onClicked: App.exportReport()
+            }
+        }
+
+        // Where the last one went. Only after one has been written, and it
+        // opens the folder rather than the file, since the thing to do with
+        // it is attach it to something.
+        Rectangle {
+            objectName: "reportLine"
+            visible: App.reportPath !== ""
+            Layout.fillWidth: true
+            height: visible ? 34 : 0
+            radius: 6
+            color: Theme.colors.surface
+            border.width: 1
+            border.color: Theme.colors.border
+
+            Label {
+                anchors.left: parent.left
+                anchors.leftMargin: 10
+                anchors.right: openFolder.left
+                anchors.rightMargin: 10
+                anchors.verticalCenter: parent.verticalCenter
+                text: "Report written to " + App.reportPath
+                color: Theme.colors.textMuted
+                font.pixelSize: 12
+                elide: Text.ElideMiddle
+            }
+
+            FlatButton {
+                id: openFolder
+                objectName: "openReportFolder"
+                anchors.right: parent.right
+                anchors.rightMargin: 4
+                anchors.verticalCenter: parent.verticalCenter
+                text: "Open the folder"
+                onClicked: App.showReport()
+            }
         }
 
         Flickable {

@@ -1164,6 +1164,25 @@ class Smoke:
         settle(0.3)
         self.check("and back off it the way it came",
                    read(bridge, "viewKind") == "debug", read(bridge, "viewKind"))
+
+        # The report the page can write, which is the thing somebody sends when
+        # nothing is arriving. Written for real, into the scratch home this
+        # walk runs in.
+        root = window.contentItem()
+        save = item_named(root, "exportReport")
+        self.check("the page offers to save a report", save is not None)
+        call(save, "clicked")
+        ok = wait_until(lambda: read(bridge, "reportPath") != "", 20.0)
+        self.check("and writing one says where it went", ok, read(bridge, "reportPath"))
+        if ok:
+            import zipfile
+            with zipfile.ZipFile(read(bridge, "reportPath")) as bundle:
+                held = sorted(bundle.namelist())
+            self.check("the report holds the checks and the numbers",
+                       "checks.txt" in held and "numbers.txt" in held, ", ".join(held))
+        line = item_named(root, "reportLine")
+        self.check("and the page says so", line is not None and read(line, "visible") is True)
+
         bridge.showSettings()
         settle(0.4)
 
