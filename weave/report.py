@@ -32,6 +32,18 @@ from .db import SCHEMA_VERSION, Database
 SECRET_KEYS = ("client_id", "client_secret", "token", "secret", "password", "key")
 
 
+def _player_command(cfg) -> str:
+    """What a video is actually handed to. The configured value is usually
+    auto, and which of the two answers auto resolves to is the thing a report
+    about playback needs to carry."""
+    from .player.mpv import PlayerNotFound, resolve_command
+
+    try:
+        return " ".join(resolve_command(cfg))
+    except PlayerNotFound as exc:
+        return f"nothing, {exc}"
+
+
 def _versions() -> str:
     lines = [f"weave {__version__}",
              f"python {sys.version.split()[0]}",
@@ -164,7 +176,7 @@ def _numbers(db: Database, cfg: Config) -> str:
         f"watched {one('SELECT COUNT(*) FROM watched')}",
         f"pictures {files} files, {pictures // (1024 * 1024)} MB",
         f"cookies from {'a browser profile' if cfg.browser_profile != 'auto' else 'auto'}",
-        f"player {cfg.player_command}",
+        f"player {cfg.player_command}, resolved to {_player_command(cfg)}",
     ]
     return "\n".join(lines) + "\n"
 

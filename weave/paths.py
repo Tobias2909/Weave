@@ -36,6 +36,13 @@ def data_home() -> Path:
     return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
 
 
+def bin_home() -> Path:
+    """Where a user installed program lives. On PATH in a terminal, and often
+    not on the one a desktop entry is started with, which is why it is looked
+    in by name rather than trusted to be on PATH."""
+    return Path(os.environ.get("XDG_BIN_HOME") or Path.home() / ".local" / "bin")
+
+
 def runtime_dir() -> Path:
     """Where mpv puts its IPC socket. Falls back to /tmp when unset."""
     return Path(os.environ.get("XDG_RUNTIME_DIR") or "/tmp")

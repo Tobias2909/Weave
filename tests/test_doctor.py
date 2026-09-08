@@ -5,6 +5,7 @@ is honest, since the whole reason it exists is that a scraper failing looks
 exactly like a scraper with nothing to say.
 """
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -101,6 +102,53 @@ class ToolVersions(unittest.TestCase):
         done = subprocess.CompletedProcess(["x"], 1, stdout="", stderr="broken")
         with mock.patch.object(doctor.subprocess, "run", return_value=done):
             self.assertIsNone(doctor._version(["x", "--version"]))
+
+
+class WhichPlayer(unittest.TestCase):
+    """The report says which mpv a video is handed to, resolved rather than as
+    configured. Started from the start menu, Weave used to fall back to plain
+    mpv without a word, and a window per video was the only sign of it."""
+
+    def setUp(self):
+        self.cfg = Config(raw={})
+        self._path = os.environ.get("PATH", "")
+        self._bin = os.environ.get("XDG_BIN_HOME")
+        self.addCleanup(self._restore)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        os.environ["PATH"] = "/usr/bin:/bin"
+        os.environ["XDG_BIN_HOME"] = self._tmp.name
+
+    def _restore(self):
+        os.environ["PATH"] = self._path
+        if self._bin is None:
+            os.environ.pop("XDG_BIN_HOME", None)
+        else:
+            os.environ["XDG_BIN_HOME"] = self._bin
+
+    def line(self):
+        report = doctor.Report()
+        doctor._player(self.cfg, report)
+        return [check for check in report.checks if check.name == "player"][0]
+
+    def install_wrapper(self):
+        from weave.player.mpv import WRAPPER_NAME
+
+        wrapper = Path(self._tmp.name) / WRAPPER_NAME
+        wrapper.write_text("#!/bin/sh\nexit 0\n")
+        wrapper.chmod(0o755)
+        return wrapper
+
+    def test_the_wrapper_is_the_good_answer(self):
+        wrapper = self.install_wrapper()
+        found = self.line()
+        self.assertEqual(found.state, doctor.OK)
+        self.assertIn(str(wrapper), found.detail)
+
+    def test_plain_mpv_is_worth_a_warning(self):
+        found = self.line()
+        self.assertEqual(found.state, doctor.WARN)
+        self.assertIn("window per video", found.detail)
 
 
 class Schedule(unittest.TestCase):

@@ -113,6 +113,29 @@ def _tools(report: Report) -> None:
             report.add(name, WARN, "not installed", why)
 
 
+def _player(cfg: Config, report: Report) -> None:
+    """Which mpv a video is handed to, resolved rather than as configured.
+
+    Worth a line of its own because the answer depends on where Weave was
+    started from. The wrapper lives in ~/.local/bin, which a shell has on PATH
+    and a desktop session has not, and without it every video opens a window of
+    its own and nothing reports what was watched.
+    """
+    from .player.mpv import PlayerNotFound, WRAPPER_NAME, resolve_command
+
+    try:
+        command = resolve_command(cfg)
+    except PlayerNotFound as exc:
+        report.add("player", FAIL, str(exc), "Install mpv, or set player.command")
+        return
+    if Path(command[0]).name == WRAPPER_NAME:
+        report.add("player", OK, f"{command[0]}, one window reused")
+    else:
+        report.add("player", WARN, f"{command[0]}, a window per video",
+                   f"{WRAPPER_NAME} was not found. Without it mpv is started "
+                   f"again for every video and nothing is marked watched")
+
+
 def _config(cfg: Config, report: Report) -> None:
     """Whether the config file was actually read. A file with a typo in it
     yields the defaults and nothing else says so."""
@@ -362,6 +385,7 @@ def run(cfg: Config, db: Database, network: bool = True) -> Report:
     _weave(db, report)
     _config(cfg, report)
     _tools(report)
+    _player(cfg, report)
     _cookies(cfg, report)
     _database(db, report)
     _schedule(db, cfg, report)

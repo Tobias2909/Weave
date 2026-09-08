@@ -46,11 +46,35 @@ class PlayerNotFound(RuntimeError):
     pass
 
 
+def find_wrapper() -> str | None:
+    """The single instance wrapper, whether or not PATH mentions it.
+
+    PATH is not the same everywhere Weave is started from. A shell has read a
+    profile and has ~/.local/bin on it; a desktop entry is started from the
+    session, whose PATH is the bare system one, so the wrapper is invisible
+    there. Weave then fell back to plain mpv without a word, and every video
+    opened a window of its own instead of being handed to the one already
+    playing, with nothing on its IPC socket to watch, so nothing was ever
+    marked watched either.
+
+    So the usual place is looked in by name as well.
+    """
+    found = shutil.which(WRAPPER_NAME)
+    if found:
+        return found
+    candidate = paths.bin_home() / WRAPPER_NAME
+    if candidate.is_file():
+        return str(candidate)
+    return None
+
+
 def resolve_command(cfg: Config) -> list[str]:
     """Prefer the wrapper, fall back to plain mpv.
 
     The fallback is what lets Weave work on a machine that has never seen the
-    mpv config repository. Playback there loses the wrapper's extras but works.
+    mpv config repository. Playback there loses the wrapper's extras, which
+    includes reusing one window, so it is the second choice and not a quiet
+    equal of the first.
     """
     configured = cfg.player_command
     if configured and configured != "auto":
@@ -59,7 +83,7 @@ def resolve_command(cfg: Config) -> list[str]:
             return [str(Path(parts[0]).expanduser()), *parts[1:]]
         raise PlayerNotFound(f"configured player not found: {configured}")
 
-    wrapper = shutil.which(WRAPPER_NAME)
+    wrapper = find_wrapper()
     if wrapper:
         return [wrapper]
     mpv = shutil.which("mpv")
