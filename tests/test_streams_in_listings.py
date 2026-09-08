@@ -50,10 +50,25 @@ class StoredWithTheSuggestions(unittest.TestCase):
         self.assertTrue(card["scheduledText"].startswith("Starts in"))
         self.assertIn(" at ", card["startsText"])
 
+    def test_a_stream_that_has_ended_says_so_as_well(self) -> None:
+        # A recording of a stream plays like any video, and looking at one is
+        # nothing like watching a video: hours of it, made in one sitting. The
+        # card carries the badge a live one carries, spent.
+        self.db.replace_cached(self.db.RECOMMENDED,
+                               [listing_row(live_status="was_live")])
+        card = self.cards(self.db.RECOMMENDED)[0]
+        self.assertTrue(card["wasLive"])
+        self.assertFalse(card["isLive"] or card["isUpcoming"])
+
+    def test_and_a_stream_that_is_on_is_not_a_recording_of_one(self) -> None:
+        self.db.replace_cached(self.db.RECOMMENDED,
+                               [listing_row(live_status="is_live")])
+        self.assertFalse(self.cards(self.db.RECOMMENDED)[0]["wasLive"])
+
     def test_an_ordinary_suggestion_is_neither(self) -> None:
         self.db.replace_cached(self.db.RECOMMENDED, [listing_row()])
         card = self.cards(self.db.RECOMMENDED)[0]
-        self.assertFalse(card["isLive"] or card["isUpcoming"])
+        self.assertFalse(card["isLive"] or card["isUpcoming"] or card["wasLive"])
 
     def test_a_later_page_keeps_it_too(self) -> None:
         self.db.replace_cached(self.db.RECOMMENDED, [listing_row()])

@@ -584,6 +584,10 @@ class Smoke:
         bridge.showChannelTab("streams")
         settle(0.5)
         streams = read(find(window, "grid"), "count")
+        badges = [item for item in items_named_like(root, "streamBadge")
+                  if read(item, "visible")]
+        self.check("a recording of a stream is badged as one",
+                   len(badges) == 1, f"{len(badges)} badged")
         self.check("the two halves are the whole channel between them and nothing twice",
                    streams >= 1 and videos >= 1 and videos + streams == held,
                    f"{videos} videos, {streams} streams, {held} stored")

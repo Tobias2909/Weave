@@ -16,6 +16,10 @@ Rectangle {
     property string likesText: ""
     property bool watched: false
     property bool isLive: false
+    // A recording of a stream, which plays like any video and is nothing like
+    // one to look at: hours long, and made by somebody sitting down for an
+    // evening rather than by cutting something together.
+    property bool wasLive: false
     property bool isUpcoming: false
     property bool canListen: true
     property string scheduledText: ""
@@ -216,6 +220,38 @@ Rectangle {
                           : card.durationText
                     color: Theme.colors.badgeText
                     font.pixelSize: 11
+                    font.bold: true
+                }
+            }
+
+            // What the LIVE badge becomes once the stream has ended: the same
+            // word in the same colour, hollow rather than filled, because the
+            // thing it named is over. A recording of a stream plays like any
+            // video and is nothing like one to look at, and the length alone
+            // does not say which it is.
+            Rectangle {
+                objectName: "streamBadge"
+                visible: card.wasLive && !card.isLive && !card.isUpcoming
+                anchors.left: parent.left
+                anchors.bottom: parent.bottom
+                anchors.margins: 6
+                anchors.bottomMargin: card.progress > 0 ? 9 : 6
+                radius: 4
+                // The same dark pill the length sits in, so it carries its
+                // weight on any picture, marked out by the colour a live one
+                // is filled with.
+                color: Theme.colors.badgeBackground
+                border.width: 1
+                border.color: Theme.colors.live
+                width: spent.implicitWidth + 12
+                height: spent.implicitHeight + 6
+
+                Text {
+                    id: spent
+                    anchors.centerIn: parent
+                    text: "STREAM"
+                    color: Theme.colors.live
+                    font.pixelSize: 10
                     font.bold: true
                 }
             }

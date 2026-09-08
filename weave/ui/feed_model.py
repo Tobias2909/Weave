@@ -18,7 +18,7 @@ from ..sources import progress as mpv_progress
 ROLES = (
     "key", "title", "channelKey", "channelTitle", "channelAvatar", "thumbnail", "ageText",
     "durationText", "viewsText", "likesText", "watched", "url", "isLive",
-    "isUpcoming", "scheduledText", "startsText", "progress",
+    "isUpcoming", "scheduledText", "startsText", "progress", "wasLive",
 )
 
 
@@ -156,6 +156,10 @@ class FeedModel(QAbstractListModel):
             "watched": bool(row["watched"]),
             "url": ids.watch_url(row["platform"], row["ext_id"]),
             "isLive": row["live_status"] == "is_live",
+            # A recording of a stream. It plays like any video, but it is
+            # hours long and was not made the way a video was, so the card
+            # says which it is looking at.
+            "wasLive": row["live_status"] == "was_live",
             # An announced stream behaves like a normal video everywhere
             # except that mpv cannot open it yet, so the card says when it
             # starts instead of a duration and the play path refuses it.
