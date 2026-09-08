@@ -74,6 +74,10 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "feeds": 300,
         "browse": 40,
         "player": 60,
+        # One small answer each, 868 bytes measured, and asked once in the
+        # life of a video. It only has anything to do for a video nothing
+        # else here knows the owner of, which the history is full of.
+        "oembed": 120,
         "dislikes": 60,
         "twitch": 120,
     },
@@ -226,7 +230,7 @@ class Config:
 
     @property
     def budget_limits(self) -> dict[str, int]:
-        keys = ("feeds", "browse", "player", "dislikes", "twitch")
+        keys = ("feeds", "browse", "player", "oembed", "dislikes", "twitch")
         return {key: max(0, int(self.get("budget", key))) for key in keys}
 
     @property

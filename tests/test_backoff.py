@@ -144,5 +144,46 @@ class Resting(unittest.TestCase):
         self.assertEqual(self.db.rest_step("feeds"), 0)
 
 
+class Saying(unittest.TestCase):
+    """The page has to say a rest is on, or nothing arriving looks like a
+    fault. What somebody needs is when it started, how long it has left, what
+    the ceiling is and when the next round will really ask anything."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self._tmp.name) / "t.db")
+        self.cfg = Config(raw={})
+
+    def tearDown(self):
+        self.db.close()
+        self._tmp.cleanup()
+
+    def lines(self) -> dict[str, str]:
+        from weave import doctor
+        return {check.name: check.detail
+                for check in doctor.run(self.cfg, self.db, network=False).checks}
+
+    def test_it_says_when_the_rest_ends_and_how_long_it_has_run(self):
+        self.db.rest_endpoint("feeds", int(time.time()) + 470, 3)
+        said = self.lines()["the feed rest"]
+        self.assertIn("resting since", said)
+        self.assertIn("8 min from now", said)
+        self.assertIn("Rest 3 in a row", said)
+        self.assertIn("16 min", said)          # what the next one would be
+
+    def test_it_says_when_the_next_round_asks_anything(self):
+        self.db.rest_endpoint("feeds", int(time.time()) + 120, 1)
+        self.assertIn("when the rest ends", self.lines()["next refresh"])
+
+    def test_and_says_the_ordinary_cadence_when_nothing_is_resting(self):
+        said = self.lines()["next refresh"]
+        self.assertIn("60 s", said)
+        self.assertIn("15 channels a tick", said)
+
+    def test_the_ceiling_is_on_the_requests_line(self):
+        self.db.record_requests("feeds", count=232, refused=79)
+        self.assertIn("feeds 232/300 (79 refused)", self.lines()["requests"])
+
+
 if __name__ == "__main__":
     unittest.main()

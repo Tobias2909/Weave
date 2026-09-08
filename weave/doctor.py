@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import __version__, paths
+from . import __version__, backoff, paths
 from .budget import FEEDS
 from .config import Config
 from .cookies import browser_spec
@@ -211,6 +211,18 @@ def _schedule(db: Database, cfg: Config, report: Report) -> None:
         detail += f", about {due / per_hour * 60:.0f} min to come round"
     report.add("polling", OK if due <= total else WARN, detail)
 
+    # When the next round actually asks anything, which is not the tick when
+    # the endpoint is being left alone.
+    resting = db.resting_until(FEEDS) - int(time.time())
+    if resting > 0:
+        report.add("next refresh", WARN,
+                   f"at {time.strftime('%H:%M', time.localtime(time.time() + resting))}"
+                   f", in {(resting + 59) // 60} min, when the rest ends",
+                   "Refreshing by hand goes anyway")
+    else:
+        report.add("next refresh", OK,
+                   f"within {cfg.tick_interval_s} s, {cfg.channels_per_tick} channels a tick")
+
 
 def _budget(db: Database, cfg: Config, report: Report) -> None:
     window = cfg.budget_window_s // 60
@@ -234,13 +246,28 @@ def _budget(db: Database, cfg: Config, report: Report) -> None:
                "" if worst == OK else "An endpoint is pushing back or is at its ceiling. "
                                       "It clears on its own")
 
-    # A rest is a decision the application made, so it says so rather than
-    # leaving somebody to wonder why nothing is arriving.
+
+
+
+def _rest(db: Database, report: Report) -> None:
+    """Whether the feeds are being left alone, and everything somebody staring
+    at a window that is not refreshing would want to know.
+
+    Said whether or not anything has been asked lately, because a rest is
+    exactly the case where nothing has been.
+    """
     left = db.resting_until(FEEDS) - int(time.time())
-    if left > 0:
-        report.add("the feed endpoint", WARN,
-                   f"being left alone for another {(left + 59) // 60} min",
-                   "It refused too much of a round. Refreshing by hand goes anyway")
+    if left <= 0:
+        return
+    step = db.rest_step(FEEDS)
+    ran_for = min(backoff.LONGEST_S, backoff.FIRST_S * (2 ** max(0, step - 1)))
+    started = time.strftime("%H:%M", time.localtime(time.time() + left - ran_for))
+    until = time.strftime("%H:%M", time.localtime(time.time() + left))
+    report.add("the feed rest", WARN,
+               f"resting since {started}, until {until}, {(left + 59) // 60} min from now. "
+               f"Rest {step} in a row, the next one would be "
+               f"{min(backoff.LONGEST_S, backoff.FIRST_S * (2 ** step)) // 60} min",
+               "It refused too much of a round. Refreshing by hand goes anyway")
 
 
 def _cache(report: Report) -> None:
@@ -324,6 +351,7 @@ def run(cfg: Config, db: Database, network: bool = True) -> Report:
     _database(db, report)
     _schedule(db, cfg, report)
     _budget(db, cfg, report)
+    _rest(db, report)
     _cache(report)
     _twitch(cfg, report, network)
     if network:

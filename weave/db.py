@@ -1746,28 +1746,38 @@ class Database:
         here, which is how one of these gets its icon, and left as whatever
         the source said otherwise. The key is worked out from the channel id
         even when there is no row, because that key is what putting the
-        channel in a group is addressed to. The history says nothing at all
-        about the channel, measured, so those come out blank.
+        channel in a group is addressed to.
+
+        The history says nothing whatsoever about the channel, measured: a row
+        there carries an id, a title, a duration and a picture and no more. So
+        a second join answers from the other end, on the video itself. A video
+        already stored knows its channel, and that channel knows its name and
+        its picture, which is how a history card gets a face without a single
+        request. Whatever the listing itself said still wins, since that came
+        from the same reading as the row.
         """
         return list(self.conn.execute(
             """
             SELECT 'yt:' || r.ext_id           AS key,
                    'youtube'                   AS platform,
                    r.ext_id                    AS ext_id,
-                   COALESCE(c.key, IIF(r.channel_ext_id IS NULL, '', 'yt:' || r.channel_ext_id)) AS channel_key,
+                   COALESCE(c.key, v.channel_key,
+                            IIF(r.channel_ext_id IS NULL, '', 'yt:' || r.channel_ext_id)) AS channel_key,
                    r.title                     AS title,
-                   r.published_at              AS published_at,
-                   r.thumbnail_url             AS thumbnail_url,
-                   r.duration_s                AS duration_s,
-                   r.views                     AS views,
-                   NULL                        AS likes,
-                   r.live_status               AS live_status,
-                   r.scheduled_at              AS scheduled_at,
-                   COALESCE(c.title, r.channel_name) AS channel_title,
-                   c.avatar_url                AS avatar_url,
+                   COALESCE(r.published_at, v.published_at)   AS published_at,
+                   COALESCE(r.thumbnail_url, v.thumbnail_url) AS thumbnail_url,
+                   COALESCE(r.duration_s, v.duration_s)       AS duration_s,
+                   COALESCE(r.views, v.views)                 AS views,
+                   v.likes                     AS likes,
+                   COALESCE(r.live_status, v.live_status)     AS live_status,
+                   COALESCE(r.scheduled_at, v.scheduled_at)   AS scheduled_at,
+                   COALESCE(c.title, r.channel_name, own.title)     AS channel_title,
+                   COALESCE(c.avatar_url, own.avatar_url)           AS avatar_url,
                    w.video_key IS NOT NULL     AS watched
             FROM cached_videos r
             LEFT JOIN channels c ON c.ext_id = r.channel_ext_id AND c.platform = 'youtube'
+            LEFT JOIN videos v ON v.ext_id = r.ext_id AND v.platform = 'youtube'
+            LEFT JOIN channels own ON own.key = v.channel_key
             LEFT JOIN watched w ON w.video_key = 'yt:' || r.ext_id
             WHERE r.kind = ?
             ORDER BY r.position

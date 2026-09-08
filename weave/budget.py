@@ -33,6 +33,7 @@ PLAYER = "player"      # youtubei player, through yt-dlp: live checks, comments
 # YouTube Music is not counted yet. Every call to it is one deliberate click
 # and there is no path that can burst, so there is nothing to protect against
 # until the music area starts refreshing on its own.
+OEMBED = "oembed"      # youtube.com/oembed, a name for a video nothing else knows
 DISLIKES = "dislikes"  # returnyoutubedislikeapi.com
 TWITCH = "twitch"      # api.twitch.tv
 
