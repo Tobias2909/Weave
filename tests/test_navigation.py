@@ -71,6 +71,20 @@ class NoDatabase:
     def get_state(self, name, default=""):
         return default
 
+    # What a search walked back onto asks for. Nothing was ever kept here, so
+    # the words alone are what the restored view has.
+    def search_kind(self, words):
+        return f"search:{words}"
+
+    def cached_flat(self, kind):
+        return []
+
+    def cached_age_s(self, kind):
+        return None
+
+    def decorate(self, rows):
+        return list(rows)
+
 
 class Recorder:
     """A signal that only counts, so a bridge built with __new__ can emit."""
@@ -102,11 +116,13 @@ def make_bridge():
     bridge._music_cache = TrackCache()
     bridge._music_autoplay = None
     bridge._results = []
+    bridge._web_results = []
     bridge._results_label = ""
     bridge._searching = False
     bridge.viewChanged = Recorder()
     bridge.statusChanged = Recorder()
     bridge.searchEnded = Recorder()
+    bridge.searchRestored = Recorder()
     bridge.navChanged = Recorder()
     # The row above the suggestions is told on the way onto that page, since
     # how long ago they were read keeps growing while nothing else changes.

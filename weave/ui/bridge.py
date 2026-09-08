@@ -155,6 +155,10 @@ class Bridge(QObject):
     playlistSkippedChanged = Signal()
     noticeChanged = Signal()
     searchEnded = Signal()
+    # The words a search is being walked back onto, so the box can say what
+    # the page on screen is answering. Sent after the view has moved, or the
+    # box refilling itself would read as somebody typing them again.
+    searchRestored = Signal(str)
     checksChanged = Signal()
     cacheChanged = Signal()
     startingChanged = Signal()
@@ -1106,11 +1110,50 @@ class Bridge(QObject):
         try:
             if entry.view[0] == SEARCH:
                 self._search_text = entry.search_text
-                self._search_scope = "stored"
+                self._restore_kept_search()
             self._set_view(*entry.view)
         finally:
             self._nav_replaying = False
+        if entry.view[0] == SEARCH:
+            # After the view has moved, so the box refilling itself lands on a
+            # search that is already showing and is dropped by the guard in
+            # search() rather than starting one.
+            self.searchRestored.emit(self._search_text)
         self.navChanged.emit()
+
+    def _restore_kept_search(self) -> None:
+        """Put back what a search was showing, for a walk back onto it.
+
+        The words alone would search only what is stored here, and something
+        that was looked for on YouTube was looked for there because it is not
+        in the feed, so that answers nothing: an empty page under an empty
+        box, which is what walking back onto a search used to be. What YouTube
+        answered is kept per set of words, so the same rows are drawn again
+        and nothing is asked.
+
+        A set that has aged past its trust window is still drawn. This is a
+        walk back onto a page that was on screen a moment ago, not a fresh
+        search, so putting the page back is the whole job and pressing return
+        is how somebody asks for newer.
+        """
+        self._web_results = []
+        self._search_scope = "stored"
+        self._exhausted = False
+        if not self._search_text:
+            return
+        kind = self._db.search_kind(self._search_text)
+        stored = self._db.cached_flat(kind)
+        if not stored:
+            # Never asked of YouTube, or dropped since. What is stored here
+            # still answers, which is what typing the words gives.
+            return
+        age = self._db.cached_age_s(kind)
+        self._search_scope = "youtube"
+        # The same call a fresh page goes through, so a restored set and a new
+        # one cannot draw differently.
+        self._web_results = self._db.decorate(stored)
+        self._set_status(f"{len(self._web_results)} results from YouTube, read "
+                         f"{fmt.age_text(int(time.time()) - (age or 0))}")
 
     def _sidebar_playlists(self) -> list[dict]:
         """Both playlist lists as one, in the order the sidebar draws them.
@@ -1187,6 +1230,11 @@ class Bridge(QObject):
                 kind, view_id, channel, playlist = self._before_search
                 self._search_text = ""
                 self._set_view(kind, view_id, channel, playlist)
+            return
+        if self._view_kind == SEARCH and text == self._search_text:
+            # The box saying what the page already answers, which is what a
+            # walk back onto a search does to it. Going on would throw away
+            # the results that were just put back.
             return
         first = self._view_kind != SEARCH
         if first:

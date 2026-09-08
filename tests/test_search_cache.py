@@ -217,5 +217,135 @@ class WhatComesBackIsKept(unittest.TestCase):
         self.assertEqual(self.db.cached_flat(self.db.search_kind("cats")), [])
 
 
+class WalkingBackOntoASearch(unittest.TestCase):
+    """What the page shows when the mouse's back button lands on a search.
+
+    It used to show nothing at all. The words came back but the scope did
+    not, so the page searched what is stored here, and something looked for
+    on YouTube is looked for there precisely because it is not in the feed.
+    """
+
+    def setUp(self):
+        self.db = support.scratch_db(self)
+        bridge = Bridge.__new__(Bridge)
+        bridge._db = self.db
+        bridge._search_text = ""
+        bridge._search_scope = "stored"
+        bridge._view_kind = "all"
+        bridge._web_results = []
+        bridge._exhausted = True
+        self.statuses = []
+        bridge._set_status = lambda text, *_a, **_k: self.statuses.append(text)
+        self.bridge = bridge
+
+    def store(self, words="cats", age_s=0):
+        kind = self.db.search_kind(words)
+        self.db.replace_cached(kind, [flat("aaaaaaaaaaa"), flat("bbbbbbbbbbb")])
+        if age_s:
+            with self.db.conn as conn:
+                conn.execute("UPDATE cached_videos SET seen_at=? WHERE kind=?",
+                             (int(time.time()) - age_s, kind))
+
+    def restore(self, words="cats"):
+        self.bridge._search_text = words
+        Bridge._restore_kept_search(self.bridge)
+
+    def test_the_kept_results_come_back(self):
+        self.store()
+        self.restore()
+        self.assertEqual(self.bridge._search_scope, "youtube")
+        self.assertEqual([row["ext_id"] for row in self.bridge._web_results],
+                         ["aaaaaaaaaaa", "bbbbbbbbbbb"])
+
+    def test_and_they_are_shaped_like_a_fresh_page(self):
+        self.store()
+        self.restore()
+        row = self.bridge._web_results[0]
+        for field in ("key", "channel_key", "channel_title", "watched", "thumbnail_url"):
+            self.assertIn(field, row)
+
+    def test_a_set_older_than_the_trust_window_still_comes_back(self):
+        # A walk back is putting a page that was just on screen back, not
+        # asking for a fresh one, so age is not a reason to draw nothing.
+        self.store(age_s=SEARCH_TRUST_S + 60)
+        self.restore()
+        self.assertEqual(len(self.bridge._web_results), 2)
+
+    def test_nothing_kept_leaves_the_search_against_what_is_stored(self):
+        self.restore("otters")
+        self.assertEqual(self.bridge._search_scope, "stored")
+        self.assertEqual(self.bridge._web_results, [])
+
+    def test_another_search_is_not_answered_from_this_one(self):
+        self.store("cats")
+        self.restore("dogs")
+        self.assertEqual(self.bridge._search_scope, "stored")
+        self.assertEqual(self.bridge._web_results, [])
+
+    def test_no_words_at_all_restores_nothing(self):
+        self.store()
+        self.restore("")
+        self.assertEqual(self.bridge._search_scope, "stored")
+        self.assertEqual(self.bridge._web_results, [])
+
+    def test_more_can_be_asked_for_again(self):
+        self.store()
+        self.bridge._exhausted = True
+        self.restore()
+        self.assertFalse(self.bridge._exhausted)
+
+    def test_it_says_how_old_the_set_is(self):
+        self.store()
+        self.restore()
+        self.assertTrue(self.statuses)
+        self.assertIn("from YouTube", self.statuses[-1])
+
+
+class TheBoxSayingWhatIsShowing(unittest.TestCase):
+    """Refilling the search box must not throw the restored page away.
+
+    The box is refilled from the outside on a walk back, and every change to
+    it calls search(). Without the guard that call is a fresh local search
+    under the same words, which replaced the kept results with nothing.
+    """
+
+    def setUp(self):
+        self.db = support.scratch_db(self)
+        bridge = Bridge.__new__(Bridge)
+        bridge._db = self.db
+        bridge._view_kind = "search"
+        bridge._view_id = -1
+        bridge._view_channel = ""
+        bridge._view_playlist = ""
+        bridge._search_text = "cats"
+        bridge._search_scope = "youtube"
+        bridge._web_results = [{"key": "yt:aaaaaaaaaaa"}]
+        bridge._before_search = ("all", -1, "", "")
+        bridge._nav = type("Nav", (), {"note_search": staticmethod(lambda _t: None)})()
+        self.reloads = 0
+
+        def reload():
+            self.reloads += 1
+        bridge.reload = reload
+        bridge.viewChanged = type("Sig", (), {"emit": staticmethod(lambda: None)})()
+        self.bridge = bridge
+
+    def test_the_same_words_again_change_nothing(self):
+        Bridge.search(self.bridge, "cats")
+        self.assertEqual(self.bridge._search_scope, "youtube")
+        self.assertEqual(len(self.bridge._web_results), 1)
+        self.assertEqual(self.reloads, 0)
+
+    def test_spacing_around_them_is_still_the_same_words(self):
+        Bridge.search(self.bridge, "  cats ")
+        self.assertEqual(self.bridge._search_scope, "youtube")
+
+    def test_different_words_are_a_real_search_again(self):
+        Bridge.search(self.bridge, "dogs")
+        self.assertEqual(self.bridge._search_scope, "stored")
+        self.assertEqual(self.bridge._web_results, [])
+        self.assertEqual(self.reloads, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

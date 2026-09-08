@@ -343,6 +343,11 @@ ApplicationWindow {
                     Connections {
                         target: App
                         function onSearchEnded() { searchField.text = "" }
+                        // Walked back onto a search, which put its results
+                        // back. The box says which words they answer. The
+                        // bridge drops the search this retypes, so the kept
+                        // results survive it.
+                        function onSearchRestored(words) { searchField.text = words }
                     }
                     // Typing searches what is stored, which costs nothing.
                     // Pressing return asks YouTube itself, which costs a request.
