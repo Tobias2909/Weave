@@ -12,7 +12,7 @@ SQLite file in your own home directory, and it never writes to your account.
 
 ![The feed, with the live bar across the top](docs/shots/feed.png)
 
-*The feed in the Weave Dark theme. Groups and boxes down the left, whoever is
+*The feed in Aurora. Groups and boxes down the left, whoever is
 streaming along the top, and a line under a card showing where you stopped.*
 
 ## What it does
@@ -41,13 +41,18 @@ streaming along the top, and a line under a card showing where you stopped.*
   listening it remembers, and media keys through MPRIS
 * Themes are files, fourteen come with it, and there is an editor with a colour
   wheel that derives a whole palette from two dots
+* A channel page in three parts, the videos, the streams it has made and the
+  playlists, and a playlist you keep sits in the sidebar under your own
+* A report written to one file from the How things are page, holding the checks,
+  the versions, the counts and every request of the last day, and no channel
+  names, no titles and nothing secret
 * Its own window frame, mouse back and forward buttons, and a remembered shape
 
 ## What is playing
 
 ![The detail panel beside the feed](docs/shots/panel.png)
 
-*Violet Glow. The panel mirrors `mpv` rather than the grid, so it follows an
+*Ultraviolet. The panel mirrors `mpv` rather than the grid, so it follows an
 `mpv` side track change too. Views and likes are already stored and appear at
 once, while the dislike estimate and the comments are fetched only for a video
 somebody is actually looking at.*
@@ -61,15 +66,34 @@ watching and how long it has been going.
 
 ![A channel page with its banner](docs/shots/channel.png)
 
-*Deep Sea. Clicking a channel name opens everything stored from it, watched ones
-dimmed rather than hidden, since asking for a channel means asking for all of
-it.*
+*Sunset Drive. Clicking a channel name opens everything stored from it, watched
+ones dimmed rather than hidden, since asking for a channel means asking for all
+of it.*
+
+A channel that streams gets a half of its own for the recordings. The videos
+tab and the streams tab are separate lists at the source, so past streams used
+to appear nowhere, and a recording is badged as one wherever it turns up, since
+three hours of somebody sitting down for an evening is not a video and the
+length alone never said so.
+
+## The playlists a channel has made
+
+![A channel's playlists, drawn as stacks of videos](docs/shots/playlists.png)
+
+*Mint Fade. A playlist is drawn as the stack of videos it is. The pictures come
+with the listing, so a page of them costs the one request that read the tab
+rather than a request each.*
+
+Opening one reads it, which is also where its count comes from, because the
+listing carries names and pictures and no count at all. Keeping a playlist puts
+it in a section of its own in the sidebar, apart from yours, since it belongs to
+somebody else and no reading of your own playlists knows anything about it.
 
 ## Music
 
 ![The music area with the player bar](docs/shots/music.png)
 
-*Nitro Pop. The shelves YouTube Music itself opens on, favourites, saved
+*Bloom. The shelves YouTube Music itself opens on, favourites, saved
 addresses for a round the clock stream, and a bar that survives switching views.*
 
 Nothing is downloaded. `yt-dlp` resolves an address and a second `mpv` with no
@@ -86,7 +110,7 @@ three settings rather than two, off, the whole queue, and the one track.
 
 ![A playlist, with the count of entries that are gone](docs/shots/playlist.png)
 
-*Paper, one of the four light themes. A playlist keeps the order somebody gave
+*Linen, one of the four light ones. A playlist keeps the order somebody gave
 it, and entries that have gone private are counted at the foot of the list
 rather than quietly making it shorter.*
 
@@ -101,8 +125,8 @@ one of its videos goes to the player bar instead.
 
 ![The settings page with the theme editor](docs/shots/themes.png)
 
-*Sunset Drive. Every theme in the list is a file in the same format as one you
-write, and the window repaints as you save it.*
+*Frost, another of them. Every theme in the list is a file in the same format
+as one you write, and the window repaints as you save it.*
 
 Move two or three dots on the wheel and all sixteen colour roles follow, with
 text moved until it clears a contrast ratio, in whichever direction reaches

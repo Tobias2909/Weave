@@ -319,6 +319,30 @@ def seed(theme: str, height: int = HEIGHT) -> None:
                           {"ext_id": "LL", "title": "Liked videos"},
                           {"ext_id": "PLmock000003", "title": "Practice loops"}])
     db.set_playlist_music("PLmock000003", True)
+    # What a channel's playlists tab lists, for the half of a channel page that
+    # shows them. The pictures come with that listing in reality, so they are
+    # seeded the same way here.
+    from weave.sources.playlists import Playlist
+    channel_lists = ["Rebuilding the lathe, every step",
+                     "Soldering, from the first joint",
+                     "Shop tours and what is on the bench",
+                     "Answering your questions, live",
+                     "Everything about flux",
+                     "Small repairs nobody asked for"]
+    db.replace_channel_playlists(f"yt:UCmock{0:018d}", [
+        Playlist(f"PLchannel{index:013d}", title, thumb(f"chanlist{index}", index + 71))
+        for index, title in enumerate(channel_lists)])
+    for index, title in enumerate(channel_lists):
+        db.open_channel_playlist(f"PLchannel{index:013d}", title)
+        db.replace_playlist_items(f"PLchannel{index:013d}", [{
+            "ext_id": f"mockchan{index}{item:02d}", "title": f"Part {item + 1}",
+            "channel_name": CHANNELS[0][0], "channel_ext_id": f"UCmock{0:018d}",
+            "duration_s": 600 + item * 120,
+            "thumbnail_url": thumb(f"chanitem{index}{item}", index * 7 + item),
+            "views": 12_000 + item * 900, "published_at": NOW - (item + 2) * DAY,
+        } for item in range(3 + index * 2)])
+    db.keep_playlist(f"PLchannel{0:013d}")
+
     db.replace_playlist_items("PLmock000001", [{
         "ext_id": f"mocklist{index:03d}", "title": title,
         "channel_name": CHANNELS[index % len(CHANNELS)][0],
@@ -529,6 +553,14 @@ def shot_channel(bridge, _window) -> None:
     settle(2.0)
 
 
+def shot_playlists(bridge, _window) -> None:
+    """The other half of a channel page, the playlists it has made."""
+    bridge.openChannel(f"yt:UCmock{0:018d}")
+    settle(1.2)
+    bridge.showChannelTab("playlists")
+    settle(2.0)
+
+
 def shot_playlist(bridge, window) -> None:
     bridge.selectPlaylist("PLmock000001")
     settle(1.4)
@@ -596,16 +628,22 @@ def shot_themes(bridge, window) -> None:
 # how tall the window is. A section of the music page is two rows deep, and a
 # row laid out below the fold is never given its pictures, so that one is
 # taken in a taller window rather than by scrolling to it.
+# A different theme in every picture, and none of them twice, because the
+# pictures are also the tour of what ships. Fourteen ship and seven are in the
+# readme, so the ones in it are seven that nothing else shows. Only ones that
+# ship: a theme somebody wrote for themselves is not in anybody else's copy,
+# and the shot would come out in whatever the fallback is.
 SHOTS = {
-    "feed": ("Weave Dark", shot_feed, HEIGHT),
-    "panel": ("Violet Glow", shot_panel, HEIGHT),
-    "music": ("Nitro Pop", shot_music, 1080),
-    "channel": ("Deep Sea", shot_channel, HEIGHT),
-    "playlist": ("Paper", shot_playlist, HEIGHT),
-    "suggestions": ("Aurora", shot_suggestions, HEIGHT),
-    "search": ("Ultraviolet", shot_search, HEIGHT),
-    "history": ("Linen", shot_history, HEIGHT),
-    "themes": ("Sunset Drive", shot_themes, 1080),
+    "feed": ("Aurora", shot_feed, HEIGHT),
+    "panel": ("Ultraviolet", shot_panel, HEIGHT),
+    "music": ("Bloom", shot_music, 1080),
+    "channel": ("Sunset Drive", shot_channel, HEIGHT),
+    "playlists": ("Mint Fade", shot_playlists, HEIGHT),
+    "playlist": ("Linen", shot_playlist, HEIGHT),
+    "suggestions": ("Deep Sea", shot_suggestions, HEIGHT),
+    "search": ("Violet Glow", shot_search, HEIGHT),
+    "history": ("Paper Dark", shot_history, HEIGHT),
+    "themes": ("Frost", shot_themes, 1080),
 }
 
 
