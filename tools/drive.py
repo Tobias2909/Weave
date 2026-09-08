@@ -441,16 +441,28 @@ class Smoke:
         self.check("and it is not drawn while nothing starts",
                    wash is not None and not read(wash, "visible"))
 
+        # Which answer is right depends on the machine. mpv is what a video is
+        # handed to, so where there is none there is nothing to start and the
+        # press correctly marks nothing. Asked of the player rather than of
+        # PATH, since a configured command and the wrapper are both answers
+        # PATH does not have.
+        playable = getattr(bridge._player, "_error", None) is None
         bridge.play("yt:smokevid005")
         settle(0.4)
-        self.check("pressing a card marks it as starting",
-                   read(bridge, "startingKey") == "yt:smokevid005",
-                   str(read(bridge, "startingKey")))
         washes = [found for found in
                   (item_named(card, "startingWash")
                    for card in visible_children(read(grid, "contentItem")))
                   if found is not None and read(found, "visible")]
-        self.check("the chip is drawn on exactly one card", len(washes) == 1, f"{len(washes)} of them")
+        if playable:
+            self.check("pressing a card marks it as starting",
+                       read(bridge, "startingKey") == "yt:smokevid005",
+                       str(read(bridge, "startingKey")))
+            self.check("the chip is drawn on exactly one card", len(washes) == 1,
+                       f"{len(washes)} of them")
+        else:
+            self.check("with no mpv on the machine, a press marks nothing",
+                       read(bridge, "startingKey") == "" and not washes,
+                       f"key {read(bridge, 'startingKey')!r}, {len(washes)} chips")
         self.check("and the bottom of the window says nothing",
                    read(bridge, "notice") == "", str(read(bridge, "notice")))
         if self.shot:

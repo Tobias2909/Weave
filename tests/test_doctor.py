@@ -116,7 +116,17 @@ class WhichPlayer(unittest.TestCase):
         self.addCleanup(self._restore)
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        os.environ["PATH"] = "/usr/bin:/bin"
+        # A plain mpv of this test's own, rather than whatever the machine
+        # happens to have on /usr/bin. The warning being tested is about the
+        # wrapper being absent, not about mpv being installed, and reaching
+        # for the real one meant the line read FAIL rather than WARN on a
+        # machine without it.
+        self._path_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._path_dir.cleanup)
+        plain = Path(self._path_dir.name) / "mpv"
+        plain.write_text("#!/bin/sh\nexit 0\n")
+        plain.chmod(0o755)
+        os.environ["PATH"] = self._path_dir.name
         os.environ["XDG_BIN_HOME"] = self._tmp.name
 
     def _restore(self):

@@ -12,10 +12,14 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: System libraries Qt needs on a bare runner
+      # Qt is bundled in the PySide6 wheel but its system libraries are not.
+      # mpv is not a convenience here: it is what Weave hands a video to, so a
+      # runner without it is not a machine Weave can run on. With it, the
+      # engine tests drive a real headless mpv instead of skipping.
+      - name: What a runner does not come with
         run: |
           sudo apt-get update
-          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libdbus-1-3 \
+          sudo apt-get install -y mpv libegl1 libgl1 libxkbcommon-x11-0 libdbus-1-3 \
             libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0
 
       - name: Install

@@ -33,11 +33,25 @@ class FindingTheWrapper(unittest.TestCase):
             os.environ["XDG_BIN_HOME"] = self._bin
 
     def make_wrapper(self, directory: Path) -> Path:
+        return self._make(directory, mpv.WRAPPER_NAME)
+
+    def make_mpv(self, directory: Path) -> Path:
+        """A plain mpv of this test's own.
+
+        These tests used to reach for the machine's real one, through a PATH
+        of /usr/bin:/bin and through the literal string /usr/bin/mpv, so what
+        they proved depended on what happened to be installed. On a machine
+        without mpv two of them did not fail on their own terms, they errored
+        on a player that was never the subject. Both make their own now.
+        """
+        return self._make(directory, "mpv")
+
+    def _make(self, directory: Path, name: str) -> Path:
         directory.mkdir(parents=True, exist_ok=True)
-        wrapper = directory / mpv.WRAPPER_NAME
-        wrapper.write_text("#!/bin/sh\nexit 0\n")
-        wrapper.chmod(0o755)
-        return wrapper
+        made = directory / name
+        made.write_text("#!/bin/sh\nexit 0\n")
+        made.chmod(0o755)
+        return made
 
     def test_it_is_found_on_path(self):
         tmp = tempfile.TemporaryDirectory()
@@ -69,14 +83,20 @@ class FindingTheWrapper(unittest.TestCase):
         # What a machine that has never seen the mpv config repository gets.
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        os.environ["PATH"] = "/usr/bin:/bin"
-        os.environ["XDG_BIN_HOME"] = tmp.name
+        empty = tempfile.TemporaryDirectory()
+        self.addCleanup(empty.cleanup)
+        plain = self.make_mpv(Path(tmp.name))
+        os.environ["PATH"] = tmp.name
+        os.environ["XDG_BIN_HOME"] = empty.name
         command = mpv.resolve_command(self.cfg)
-        self.assertEqual(Path(command[0]).name, "mpv")
+        self.assertEqual(command, [str(plain)])
 
     def test_a_configured_player_still_wins(self):
-        cfg = Config(raw={"player": {"command": "/usr/bin/mpv --no-config"}})
-        self.assertEqual(mpv.resolve_command(cfg), ["/usr/bin/mpv", "--no-config"])
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        plain = self.make_mpv(Path(tmp.name))
+        cfg = Config(raw={"player": {"command": f"{plain} --no-config"}})
+        self.assertEqual(mpv.resolve_command(cfg), [str(plain), "--no-config"])
 
 
 if __name__ == "__main__":
