@@ -2331,6 +2331,23 @@ class Database:
                 f"SELECT key FROM videos WHERE key IN ({marks})", chunk))
         return found
 
+    def streams_to_judge(self, limit: int = 400) -> list[sqlite3.Row]:
+        """Streams that have ended, have a length, and carry no mark yet.
+
+        A stream watched while it was live is never marked at the time. What
+        it will turn out to be is not known until it ends: mpv reports the
+        rewind window as the length and starts you at the live edge, so any
+        share of it read while the broadcast is running says nothing. Once it
+        has ended there is a real length to measure the stopped position
+        against, which is what this is for.
+        """
+        return list(self.conn.execute(
+            "SELECT v.key, v.platform, v.ext_id, v.duration_s FROM videos v "
+            "LEFT JOIN watched w ON w.video_key = v.key "
+            "WHERE v.live_status = 'was_live' AND v.duration_s > 0 "
+            "  AND w.video_key IS NULL "
+            "ORDER BY v.published_at DESC NULLS LAST LIMIT ?", (limit,)))
+
     def set_watched(self, video_key: str, progress: float | None, source: str) -> None:
         with self.conn as conn:
             conn.execute(

@@ -29,6 +29,15 @@ class Rule(unittest.TestCase):
     def feed(self, name, data):
         self.watcher._handle({"event": "property-change", "name": name, "data": data})
 
+    def start(self):
+        """A file begins at its beginning.
+
+        Nothing is decided in the first seconds of a file, since that is the
+        window a growing duration is measured in, so a test that expects a
+        mark has to have played from somewhere.
+        """
+        self.feed("time-pos", 0.0)
+
     def load(self, path, duration=100.0):
         # A real session sets this when it connects.
         self.watcher._had_session = True
@@ -69,8 +78,10 @@ class Rule(unittest.TestCase):
 
     def test_switching_video_flushes_then_resets(self):
         self.load(YT)
+        self.start()
         self.feed("time-pos", 95.0)          # over the threshold, reported
         self.load(YT_OTHER)                  # handoff to another video
+        self.start()
         self.feed("time-pos", 10.0)          # only 10 percent of the new one
         self.watcher._handle({"event": "end-file", "reason": "quit"})
         self.assertEqual([k for k, _ in self.marked], ["yt:aaaaaaaaaaa"])
@@ -96,18 +107,37 @@ class Rule(unittest.TestCase):
             self.feed("time-pos", float(pos))
         self.assertEqual(self.marked, [])
 
-    def test_a_live_stream_ending_is_not_a_video_being_finished(self):
+    def test_sitting_through_the_end_of_a_stream_is_finishing_it(self):
+        # Where playback stopped is what decides a stream, and this stopped at
+        # the end. When it started and how long it ran say nothing.
         self.feed("path", YT)
         self.feed("seekable", False)
         self.feed("duration", 15.0)
         self.feed("time-pos", 14.0)
         self.watcher._handle({"event": "end-file", "reason": "eof"})
-        self.assertEqual(self.marked, [])
+        self.assertEqual([k for k, _ in self.marked], ["yt:aaaaaaaaaaa"])
 
-    def test_weave_saying_it_is_live_is_enough_on_its_own(self):
-        # Covers a stream whose seekable flag has not arrived yet.
+    def test_and_so_it_is_for_one_weave_knows_is_live(self):
         self.watcher.set_live_hint(True)
         self.load(YT)
+        self.feed("time-pos", 99.0)
+        self.watcher._handle({"event": "end-file", "reason": "eof"})
+        self.assertEqual([k for k, _ in self.marked], ["yt:aaaaaaaaaaa"])
+
+    def test_but_closing_the_window_partway_is_not(self):
+        self.watcher.set_live_hint(True)
+        self.load(YT)
+        self.feed("time-pos", 99.0)
+        self.watcher._handle({"event": "end-file", "reason": "quit"})
+        self.assertEqual(self.marked, [])
+
+    def test_and_a_twitch_channel_is_never_marked_at_all(self):
+        # A Twitch entry is the channel, not one broadcast, so a mark on it
+        # would answer for every stream that channel ever makes.
+        m3u8 = "https://video-weaver.ham02.hls.ttvnw.net/v1/playlist/blob.m3u8"
+        self.watcher.set_twitch_hint("examplechannel")
+        self.watcher.set_live_hint(True)
+        self.load(m3u8)
         self.feed("time-pos", 99.0)
         self.watcher._handle({"event": "end-file", "reason": "eof"})
         self.assertEqual(self.marked, [])
@@ -122,6 +152,7 @@ class Rule(unittest.TestCase):
     def test_an_ordinary_seekable_video_is_still_marked(self):
         self.load(YT)
         self.feed("seekable", True)
+        self.start()
         self.feed("time-pos", 71.0)
         self.assertEqual([k for k, _ in self.marked], ["yt:aaaaaaaaaaa"])
 
@@ -141,6 +172,7 @@ class Rule(unittest.TestCase):
         self.feed("time-pos", 99.0)
         self.load(YT_OTHER)
         self.feed("seekable", True)
+        self.start()
         self.feed("time-pos", 95.0)
         self.assertEqual([k for k, _ in self.marked], ["yt:bbbbbbbbbbb"])
 
@@ -151,7 +183,54 @@ class Rule(unittest.TestCase):
         self.feed("time-pos", 14.0)
         self.load(YT_OTHER)
         self.feed("seekable", True)
+        self.start()
         self.feed("time-pos", 90.0)
+        self.assertEqual([k for k, _ in self.marked], ["yt:bbbbbbbbbbb"])
+
+    def test_a_live_stream_is_told_by_its_growing_length(self):
+        # The one that bites. YouTube gives a live stream a rewind window, so
+        # mpv reports it as seekable, and a stream that went live since the
+        # last poll is pressed as an ordinary video, so neither of the other
+        # two guards fires. Its length grows while it plays, and a recording's
+        # never does. Measured on his own database: five streams of one to
+        # four hours, every one marked at 99 or 100 percent.
+        self.load(YT, duration=3600.0)
+        self.feed("seekable", True)
+        self.feed("time-pos", 3599.0)
+        for second in range(1, 40):
+            self.feed("duration", 3600.0 + second)
+            self.feed("time-pos", 3599.0 + second)
+        self.assertEqual(self.marked, [])
+
+    def test_and_a_recording_of_the_same_length_is_not(self):
+        self.load(YT, duration=3600.0)
+        self.feed("seekable", True)
+        self.feed("time-pos", 3000.0)
+        self.feed("time-pos", 3200.0)
+        self.assertEqual([k for k, _ in self.marked], ["yt:aaaaaaaaaaa"])
+
+    def test_nothing_is_decided_in_the_first_seconds_of_a_file(self):
+        # The window the growing length is measured in. A live stream reads as
+        # finished within a second or two of the live edge, so a mark that
+        # early would land before there is anything to compare.
+        self.load(YT)
+        self.feed("time-pos", 90.0)
+        self.feed("time-pos", 95.0)
+        self.assertEqual(self.marked, [])
+
+    def test_but_a_file_short_enough_to_end_in_them_is_still_marked(self):
+        self.load(YT, duration=8.0)
+        self.feed("time-pos", 0.0)
+        self.feed("time-pos", 8.0)
+        self.watcher._handle({"event": "end-file", "reason": "eof"})
+        self.assertEqual([k for k, _ in self.marked], ["yt:aaaaaaaaaaa"])
+
+    def test_growth_does_not_leak_into_the_next_file(self):
+        self.load(YT, duration=100.0)
+        self.feed("duration", 400.0)
+        self.load(YT_OTHER, duration=100.0)
+        self.start()
+        self.feed("time-pos", 95.0)
         self.assertEqual([k for k, _ in self.marked], ["yt:bbbbbbbbbbb"])
 
     def test_unidentifiable_path_is_ignored(self):
@@ -163,10 +242,12 @@ class Rule(unittest.TestCase):
     def test_twitch_needs_the_hint(self):
         m3u8 = "https://video-weaver.ham02.hls.ttvnw.net/v1/playlist/blob.m3u8"
         self.load(m3u8)
+        self.start()
         self.feed("time-pos", 99.0)
         self.assertEqual(self.marked, [])
         self.watcher.set_twitch_hint("examplechannel")
         self.load(m3u8)
+        self.start()
         self.feed("time-pos", 99.0)
         self.assertEqual([k for k, _ in self.marked], ["twitch:examplechannel"])
 

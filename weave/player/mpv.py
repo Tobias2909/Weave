@@ -83,13 +83,28 @@ class _IpcWatcher(QThread):
     seen, divided by the duration, has to reach the configured threshold.
 
     A live stream is never marked, and guarding that needs care. mpv reports a
-    duration for one, but it is the length of the sliding window rather than of
-    the stream, measured at about fifteen seconds, so a few seconds of watching
-    already looks like most of the video and the stream is marked watched
-    almost at once. Two independent guards catch it. Weave says so when it
-    starts one itself, and mpv reports a live stream as not seekable, which
-    covers a stream started from somewhere else.
+    duration for one, but it is the window that can be seeked rather than the
+    length of the stream, and the position starts at the live edge, so a few
+    seconds of watching already looks like all of the video. Three independent
+    guards catch it. Weave says so when it starts one itself; mpv reports a
+    stream with no rewind at all as not seekable; and a live stream's duration
+    grows while it plays, which a recording's never does.
+
+    The third is the one that matters in practice. YouTube gives a live stream
+    a rewind window, so it is seekable, and a stream that went live since the
+    last poll is pressed as an ordinary video, so neither of the first two
+    fires. Growth takes a few seconds to show, which is why nothing is marked
+    in the first seconds of a file at all.
     """
+
+    # Nothing is marked before this much of a file has played. A live stream's
+    # duration grows by a second a second, so a few seconds is enough to tell
+    # it from a recording, and no ordinary video is decided in that time
+    # either: reaching the end is a separate path and is not held back.
+    GRACE_S = 20.0
+    # Duration wobbles by a frame or two on some containers, so growth means
+    # growth rather than any change at all.
+    GROWTH_S = 3.0
 
     nowPlaying = Signal(str, str)     # key, media title
     watched = Signal(str, float)      # key, progress
@@ -118,6 +133,13 @@ class _IpcWatcher(QThread):
         self._max_pos = 0.0
         self._reported: set[str] = set()
         self._last_whole_second = -1
+        # The first duration this file reported and whether it has grown since.
+        # A recording's is fixed; a live stream's climbs as it is broadcast.
+        self._first_duration: float | None = None
+        self._duration_grew = False
+        # The first position seen in this file, so the grace below is time
+        # played rather than time since mpv started.
+        self._first_pos: float | None = None
         self._had_session = False
 
     def set_live_hint(self, live: bool) -> None:
@@ -239,6 +261,12 @@ class _IpcWatcher(QThread):
             self._on_new_path(data)
         elif name == "duration":
             self._duration = float(data) if isinstance(data, (int, float)) and data > 0 else None
+            if self._duration is None:
+                return
+            if self._first_duration is None:
+                self._first_duration = self._duration
+            elif self._duration > self._first_duration + self.GROWTH_S:
+                self._duration_grew = True
         elif name == "seekable":
             self._seekable = data if isinstance(data, bool) else None
         elif name == "time-pos":
@@ -247,6 +275,8 @@ class _IpcWatcher(QThread):
             # time-pos arrives around 24 times a second. Only act when the
             # whole second changes, so a two hour video costs a few thousand
             # cheap comparisons instead of a few hundred thousand.
+            if self._first_pos is None:
+                self._first_pos = float(data)
             self._max_pos = max(self._max_pos, float(data))
             whole = int(data)
             if whole == self._last_whole_second:
@@ -260,6 +290,9 @@ class _IpcWatcher(QThread):
         self._seekable = None
         self._max_pos = 0.0
         self._last_whole_second = -1
+        self._first_duration = None
+        self._duration_grew = False
+        self._first_pos = None
         if not isinstance(path, str):
             self._key = None
             return
@@ -277,28 +310,56 @@ class _IpcWatcher(QThread):
         return min(1.0, self._max_pos / self._duration)
 
     def _is_live(self) -> bool:
-        """Either guard is enough. Weave knows what it started, and mpv knows
-        that a live stream cannot be seeked."""
+        """Any one guard is enough. Weave knows what it started, mpv knows that
+        a stream with no rewind cannot be seeked, and a duration that grows
+        while the file plays belongs to something still being broadcast."""
         with self._hint_lock:
             hinted = self._live_current or self._pending_live
-        return hinted or self._seekable is False
+        return hinted or self._seekable is False or self._duration_grew
+
+    def _too_soon(self) -> bool:
+        """Whether this file has played long enough to be judged.
+
+        A live stream reads as finished within a second or two, and the guard
+        that catches it needs a few seconds of duration to compare. Nothing is
+        marked before then.
+        """
+        if self._first_pos is None:
+            return True
+        return (self._max_pos - self._first_pos) < self.GRACE_S
 
     def _check_threshold(self) -> None:
-        if self._is_live():
+        if self._is_live() or self._too_soon():
             return
         progress = self._progress()
         if self._key and progress is not None and progress >= self._threshold:
             self._report(progress)
 
     def _flush(self, reached_end: bool) -> None:
-        # Reaching the end of a live stream means the broadcast stopped, not
-        # that it was watched.
-        if not self._key or self._is_live():
+        if not self._key:
             return
         progress = self._progress()
-        if reached_end:
+        if reached_end and (not self._is_live() or self._key.startswith("yt:")):
+            # Not held back by the grace, and for a stream not by the live
+            # guard either. A file short enough to end inside the grace was
+            # watched from beginning to end, and a live stream that reaches
+            # its end while somebody is watching was left at the end, which is
+            # what decides a stream: where you stopped, not when you joined.
+            #
+            # A Twitch entry is a channel rather than a video, so it is left
+            # alone. Marking one would answer for every broadcast that channel
+            # ever makes.
             self._report(progress if progress is not None else 1.0)
-        elif progress is not None and progress >= self._threshold:
+            return
+        if reached_end:
+            return
+        if self._is_live() or self._too_soon():
+            # Where it stopped is remembered by mpv either way, in the resume
+            # file that draws the bar under the card. A stream is judged
+            # against a real length once it has ended, not against the rewind
+            # window while it is running.
+            return
+        if progress is not None and progress >= self._threshold:
             self._report(progress)
 
     def _report(self, progress: float) -> None:

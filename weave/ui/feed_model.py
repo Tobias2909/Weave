@@ -56,6 +56,13 @@ class FeedModel(QAbstractListModel):
         name = self._role_ids.get(role)
         return self._rows[index.row()].get(name) if name else None
 
+    @property
+    def watch_later_dir(self):
+        """Where mpv keeps its resume files. Held here because this is what
+        reads them for the bar under a card, and lent out so the one sweep
+        that has to judge a finished stream reads the same directory."""
+        return self._watch_later_dir
+
     def reload(self, hide_watched: bool = True, group_id: int | None = None,
                channel_key: str | None = None, box_id: int | None = None,
                query: str | None = None, watched_only: bool = False,

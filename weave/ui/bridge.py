@@ -32,6 +32,7 @@ from ..cookies import browser_spec
 from ..db import Database
 from ..imagecache import SECONDS_PER_DAY, plain_source, qml_source
 from ..sources import release as release_source
+from ..sources import progress as mpv_progress
 from ..player.mpv import Player
 from ..poller import (
     ChannelAdder,
@@ -343,6 +344,9 @@ class Bridge(QObject):
         if self._player.error:
             self._problems.append(self._player.error)
 
+        # A stream watched live is judged once it has ended, so the answer
+        # arrives on the pass after the one that read its length.
+        self._judge_finished_streams()
         self.reload()
         self._set_status(self._idle_status())
 
@@ -3449,6 +3453,36 @@ class Bridge(QObject):
         self._live_is_ready()
         self._set_live_checking(False)
 
+    def _judge_finished_streams(self) -> None:
+        """Mark the streams whose stopped position turned out to be most of
+        them.
+
+        Nothing is marked while a stream is live, so this is where a stream
+        gets its answer: where playback stopped, over the length the recording
+        ended up being. Where you joined and how long you sat there say
+        nothing; the position you left at is the whole of it.
+
+        mpv keeps that position itself, in the same resume file that draws the
+        bar under a card, so there is nothing to record while watching.
+        """
+        rows = self._db.streams_to_judge()
+        if not rows:
+            return
+        urls = {row["key"]: ids.watch_url(row["platform"], row["ext_id"]) for row in rows}
+        found = mpv_progress.positions_for(list(urls.values()),
+                                           self._model.watch_later_dir)
+        marked = 0
+        for row in rows:
+            seconds = found.get(urls[row["key"]])
+            if not seconds:
+                continue
+            share = min(1.0, seconds / row["duration_s"])
+            if share >= self._cfg.watched_threshold:
+                self._db.set_watched(row["key"], share, "mpv")
+                marked += 1
+        if marked:
+            self._set_status(f"{marked} finished streams marked watched")
+
     def _on_watched(self, key: str, progress: float) -> None:
         self._db.set_watched(key, progress, "mpv")
         self.reload()
@@ -3468,6 +3502,7 @@ class Bridge(QObject):
 
     def _on_poll_finished(self, channels: int, touched: int, failures: int) -> None:
         self._set_busy(False)
+        self._judge_finished_streams()
         self.reload()
         suffix = f", {failures} failed" if failures else ""
         self._set_status(f"{channels} channels checked, {touched} rows updated{suffix}")
