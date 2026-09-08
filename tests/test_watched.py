@@ -192,8 +192,8 @@ class Rule(unittest.TestCase):
         # mpv reports it as seekable, and a stream that went live since the
         # last poll is pressed as an ordinary video, so neither of the other
         # two guards fires. Its length grows while it plays, and a recording's
-        # never does. Measured on his own database: five streams of one to
-        # four hours, every one marked at 99 or 100 percent.
+        # never does. Measured on a real collection, where five streams of one
+        # to four hours were every one marked at 99 or 100 percent.
         self.load(YT, duration=3600.0)
         self.feed("seekable", True)
         self.feed("time-pos", 3599.0)

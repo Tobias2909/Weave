@@ -1487,8 +1487,8 @@ class Bridge(QObject):
     def _wizard_is_needed(self) -> bool:
         """Whether there is anything left for those pages to offer.
 
-        Two ways out of them. The box, which is his own answer to never
-        seeing them again, and simply being set up, since a copy that already
+        Two ways out of them. The box, which is the reader's own answer to
+        never seeing them again, and simply being set up, since a copy that already
         has channels and a Twitch connection has nothing to be walked through
         and being asked every launch would be nagging.
         """
