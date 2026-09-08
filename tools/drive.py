@@ -208,6 +208,25 @@ def colour_count(image: QImage, rgb: tuple[int, int, int], tolerance: int = 24) 
     return found
 
 
+def colours_across(image: QImage, x: float, y: float, width: float) -> int:
+    """How many different colours a horizontal run of pixels holds.
+
+    A strip of bare window is one colour and a strip with cards in it is
+    several, so this says whether something is being covered without needing
+    to know which theme is on.
+    """
+    if image is None or image.isNull():
+        return 0
+    small = image.convertToFormat(QImage.Format.Format_RGB32)
+    row = int(y)
+    if row < 0 or row >= small.height():
+        return 0
+    seen = set()
+    for step in range(int(x), min(int(x + width), small.width()), 4):
+        seen.add(QColor(small.pixel(step, row)).name())
+    return len(seen)
+
+
 def artwork_file() -> str:
     """A small picture on disk, so the walk has something real to draw without
     reaching the network. Returned as a URL, which is what QML wants."""
@@ -1021,6 +1040,30 @@ class Smoke:
                    abs(read(ground, "y") + read(clip, "y") + read(bar, "y")) < 1,
                    f"ground {read(ground, 'y'):.0f} clip {read(clip, 'y'):.0f} "
                    f"bar {read(bar, 'y'):.0f}")
+        # And that they take the strip they sat in with them. The ground under
+        # them is the whole window and is held still against it, so it stayed
+        # behind when they left and went on painting a band of empty window
+        # over the top of the grid, hiding whatever card was passing under.
+        #
+        # Measured rather than reasoned about, and by counting colours per row
+        # rather than naming one, so it holds on any of the fourteen themes
+        # and whatever the cards happen to be showing: a row of bare window is
+        # one flat colour, a row with cards in it is not. With the band left
+        # behind, every one of these rows was flat; with it gone, most are not.
+        #
+        # Offscreen paints nothing until it is asked to, and the first grab of
+        # a run comes back before the scene graph has drawn, so it is asked
+        # twice and the second one is the picture.
+        window.grabWindow()
+        settle(0.2)
+        frame = window.grabWindow()
+        rows = range(32, 86, 6)
+        lively = sum(1 for down in rows
+                     if colours_across(frame, read(grid, "x") + 4,
+                                       read(grid, "y") + down,
+                                       read(grid, "width") - 8) > 1)
+        self.check("and leave the top of the grid to the cards", lively > 0,
+                   f"{lively} of {len(rows)} rows below the top hold more than one colour")
 
         write(grid, "contentY", 250.0)
         settle(0.5)

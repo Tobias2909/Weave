@@ -1159,6 +1159,13 @@ ApplicationWindow {
             // Its own y rather than an anchor, since an anchor cannot be
             // animated and the point of it is that it slides.
             y: groupBarClip.away ? -height : 0
+            // The ground below is the whole window and is held still against
+            // it, so without this it stayed behind when the buttons left and
+            // went on painting a strip of empty window over the top of the
+            // grid, hiding whatever card was passing under. Clipped to the
+            // strip, it goes exactly where the strip goes and stays lined up
+            // with the window while it is there.
+            clip: true
             // Out of the way means out of reach as well, so a press cannot
             // land on a button that is not on the screen.
             enabled: !groupBarClip.away
