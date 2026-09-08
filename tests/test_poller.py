@@ -8,6 +8,7 @@ whole live check and took the results that had already been gathered with it.
 import contextlib
 import io
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -305,6 +306,36 @@ class SweepDetector(unittest.TestCase):
         self.answer([SweptVideo("aaaaaaaaaaa", 300, None, "UCabcdefghijklmnopqrstuv")])
         self.poller._phase_sweep(self.budget)
         self.assertEqual(self.db.channels_due(self.cfg.feed_tiers), [])
+
+    def test_the_sweep_marks_the_channels_it_lists(self):
+        # Something new or not. Coverage is about which channels the sweep
+        # watches, and it watches every channel whose videos it lists.
+        self.answer([SweptVideo("aaaaaaaaaaa", 300, None, "UCabcdefghijklmnopqrstuv")])
+        self.poller._phase_sweep(self.budget)
+        self.assertTrue(self.db.channels()[0]["sweep_seen_at"])
+        self.assertEqual(self.db.sweep_coverage(30), (1, 1))
+
+    def test_the_views_it_carries_are_applied(self):
+        self.answer([SweptVideo("aaaaaaaaaaa", 300, None, "UCabcdefghijklmnopqrstuv",
+                                views=4400)])
+        self.poller._phase_sweep(self.budget)
+        row = self.db.conn.execute("SELECT views FROM videos WHERE key='yt:aaaaaaaaaaa'").fetchone()
+        self.assertEqual(row["views"], 4400)
+
+    def test_a_covered_channel_is_left_alone_while_the_sweep_is_fresh(self):
+        # Just polled, and the sweep has named it. Half an hour later it is
+        # not due, where the hot tier alone would have asked it twice.
+        self.answer([SweptVideo("aaaaaaaaaaa", 300, None, "UCabcdefghijklmnopqrstuv")])
+        self.poller._phase_sweep(self.budget)
+        now = int(time.time())
+        self.db.conn.execute("UPDATE channels SET last_polled_at=?", (now - 1800,))
+        self.db.conn.execute("UPDATE videos SET published_at=?", (now - 3600,))
+        self.db.conn.commit()
+        self.assertTrue(self.poller._sweep_fresh())
+        self.assertEqual(self.db.channels_due(self.cfg.feed_tiers, sweep_fresh=True), [])
+        # And back on its tier the moment the sweep is stale.
+        self.db.set_state("sweep_at", str(now - self.cfg.sweep_stale_s - 1))
+        self.assertFalse(self.poller._sweep_fresh())
 
     def test_a_recent_sweep_is_not_repeated(self):
         calls = []

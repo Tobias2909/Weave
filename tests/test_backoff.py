@@ -177,6 +177,15 @@ class Saying(unittest.TestCase):
         self.db.rest_endpoint("feeds", int(time.time()) + 120, 1)
         self.assertIn("when the rest ends", self.lines()["next refresh"])
 
+    def test_it_says_whether_the_sweep_can_be_leaned_on(self):
+        self.assertIn("has not answered yet", self.lines()["the sweep"])
+        self.db.set_state("sweep_at", str(int(time.time()) - 60))
+        self.db.add_channel("yt:UC1", "youtube", "UC1", "One")
+        self.db.mark_sweep_seen(["yt:UC1"])
+        self.assertIn("1 of 1 channels covered", self.lines()["the sweep"])
+        self.db.set_state("sweep_at", str(int(time.time()) - 7200))
+        self.assertIn("own interval", self.lines()["the sweep"])
+
     def test_and_says_the_ordinary_cadence_when_nothing_is_resting(self):
         said = self.lines()["next refresh"]
         self.assertIn("60 s", said)

@@ -1039,3 +1039,78 @@ class AppState(DatabaseCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChannelsTheSweepCovers(DatabaseCase):
+    """A channel the subscriptions sweep names is asked on its own only every
+    few hours, because the sweep finds anything new from it first.
+
+    Measured before this: the hot tier alone was over two hundred feed
+    requests a quarter of an hour, every one re-reading fifteen entries the
+    sweep had already listed. What a re-read buys is fresher view and like
+    counts, and six hours is soon enough for that.
+    """
+
+    def hot_channel(self, key="yt:UC1", polled_ago=1800, seen=True):
+        now = int(time.time())
+        self.db.add_channel(key, "youtube", key.split(":")[1])
+        self.db.upsert_videos([self.video(key[-11:].ljust(11, "z"), channel=key,
+                                          published_at=now - 86400)])
+        self.db.conn.execute("UPDATE channels SET last_polled_at=? WHERE key=?",
+                             (now - polled_ago, key))
+        self.db.conn.commit()
+        if seen:
+            self.db.mark_sweep_seen([key])
+
+    def due(self, fresh=True):
+        return [r["key"] for r in self.db.channels_due(TIERS, sweep_fresh=fresh)]
+
+    def test_a_covered_channel_waits_for_the_refresh_interval(self):
+        self.hot_channel(polled_ago=1800)
+        self.assertEqual(self.due(), [])
+        self.hot_channel("yt:UC2", polled_ago=TIERS.covered_s + 60)
+        self.assertEqual(self.due(), ["yt:UC2"])
+
+    def test_without_a_fresh_sweep_the_tier_decides_as_before(self):
+        self.hot_channel(polled_ago=1800)
+        self.assertEqual(self.due(fresh=False), ["yt:UC1"])
+
+    def test_a_channel_the_sweep_never_named_is_on_its_tier(self):
+        self.hot_channel(polled_ago=1800, seen=False)
+        self.assertEqual(self.due(), ["yt:UC1"])
+
+    def test_coverage_ages_out(self):
+        self.hot_channel(polled_ago=1800)
+        old = int(time.time()) - (TIERS.coverage_days + 1) * 86400
+        self.db.conn.execute("UPDATE channels SET sweep_seen_at=?", (old,))
+        self.db.conn.commit()
+        self.assertEqual(self.due(), ["yt:UC1"])
+
+    def test_a_dormant_covered_channel_is_not_asked_more_often_than_before(self):
+        # The refresh interval is a ceiling on how often, never a floor.
+        now = int(time.time())
+        self.db.add_channel("yt:UC1", "youtube", "UC1")
+        self.db.upsert_videos([self.video("aaaaaaaaaaa", published_at=now - 400 * 86400)])
+        self.db.conn.execute("UPDATE channels SET last_polled_at=?", (now - TIERS.covered_s - 60,))
+        self.db.conn.commit()
+        self.db.mark_sweep_seen(["yt:UC1"])
+        self.assertEqual(self.due(), [])
+
+    def test_a_promotion_still_goes_first(self):
+        self.hot_channel(polled_ago=60)
+        self.assertEqual(self.due(), [])
+        self.db.promote_channels(["yt:UC1"])
+        self.assertEqual(self.due(), ["yt:UC1"])
+
+    def test_coverage_is_counted(self):
+        self.hot_channel("yt:UC1")
+        self.hot_channel("yt:UC2", seen=False)
+        self.assertEqual(self.db.sweep_coverage(TIERS.coverage_days), (1, 2))
+
+    def test_views_from_the_sweep_only_ever_rise(self):
+        self.db.add_channel("yt:UC1", "youtube", "UC1")
+        self.db.upsert_videos([self.video("aaaaaaaaaaa", views=4487)])
+        self.assertEqual(self.db.raise_views([("yt:aaaaaaaaaaa", 4400)]), 0)
+        self.assertEqual(self.db.raise_views([("yt:aaaaaaaaaaa", 5100)]), 1)
+        row = self.db.conn.execute("SELECT views FROM videos WHERE key='yt:aaaaaaaaaaa'").fetchone()
+        self.assertEqual(row["views"], 5100)

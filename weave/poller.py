@@ -356,12 +356,23 @@ class FeedPoller(Worker):
             return 0
         except sweep.SweepError as exc:
             budget.spend(BROWSE, 0, refused=1)
-            self.failure.emit("durations", str(exc))
+            # Said plainly, because more rides on this call now than the
+            # durations: while it does not answer, anything new is found by
+            # the per channel feeds again, slower and at the old cost.
+            self.failure.emit(
+                "sweep",
+                f"the subscriptions sweep did not answer, {exc}. Until it does, every "
+                f"channel is asked on its own interval and new videos take longer to show")
             return 0
 
         # Stamped only on an answer, so a failure is retried on the next tick
         # rather than waiting out the interval.
         self._db.set_state("sweep_at", str(int(time.time())))
+        # Every channel the sweep lists is one it watches, and one that is
+        # therefore asked on its own only now and then. And the views it
+        # carries keep the counts of the newest videos fresh for nothing.
+        self._db.mark_sweep_seen({channel_key(v.channel_id) for v in videos if v.channel_id})
+        self._db.raise_views([(v.key, v.views) for v in videos if v.views])
         filled = self._db.fill_details(
             [(v.key, v.duration_s, v.live_status, v.scheduled_at) for v in videos])
 
@@ -378,6 +389,20 @@ class FeedPoller(Worker):
                 self.progress.emit("new", promoted, promoted)
         self.progress.emit("durations", 1, 1)
         return filled
+
+    def _sweep_fresh(self) -> bool:
+        """Whether the sweep can be leaned on for finding what is new.
+
+        While it answers, a channel it covers is asked on its own only every
+        few hours, since anything new from it arrives through the sweep and a
+        promotion. The moment it has been silent longer than sweep_stale_s,
+        because yt-dlp broke or the cookies died, every channel is back on its
+        tiered interval, so the feed keeps moving with nothing to notice but
+        the doctor saying so.
+        """
+        if not self._cfg.sweep_limit or not self._cfg.sweep_stale_s:
+            return False
+        return time.time() - self._db.get_int("sweep_at", 0) < self._cfg.sweep_stale_s
 
     def _phase_details_again(self) -> int:
         """Apply the sweep's durations and live flags a second time.
@@ -479,7 +504,8 @@ class FeedPoller(Worker):
             return 0, 0, 0
         rows = self._db.channels_due(self._cfg.feed_tiers,
                                      limit=self._cfg.channels_per_tick,
-                                     force=self._force_all)
+                                     force=self._force_all,
+                                     sweep_fresh=self._sweep_fresh())
         if not rows:
             return 0, 0, 0
         jobs = self._feed_jobs(rows)

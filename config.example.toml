@@ -53,6 +53,13 @@ min_request_interval_ms = 220
 # there is a reason to.
 sweep_limit = 1000
 sweep_interval_s = 900
+# A channel the sweep has named lately is asked on its own only every six hours,
+# to refresh views and likes. Anything new from it arrives through the sweep,
+# which asks that channel's feed the same minute. Should the sweep stop
+# answering for half an hour, every channel is back on its own interval.
+sweep_refresh_s = 21600
+sweep_coverage_days = 30
+sweep_stale_s = 1800
 # Ask a channel's live feed as well as its videos feed. Streams live in their
 # own tab, so without this one only appears once it has ended. Only channels
 # seen streaming are asked.

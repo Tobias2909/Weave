@@ -238,13 +238,37 @@ def _database(db: Database, report: Report) -> None:
 
 def _schedule(db: Database, cfg: Config, report: Report) -> None:
     tiers = cfg.feed_tiers
-    due = len(db.channels_due(tiers, limit=100000))
+    swept_at = db.get_int("sweep_at", 0)
+    age = int(time.time()) - swept_at
+    fresh = bool(cfg.sweep_limit and swept_at and age < cfg.sweep_stale_s)
+    due = len(db.channels_due(tiers, limit=100000, sweep_fresh=fresh))
     total = len(db.channels(platform="youtube"))
     per_hour = cfg.channels_per_tick * (3600 / max(1, cfg.tick_interval_s))
     detail = f"{due} of {total} channels due, {cfg.channels_per_tick} asked a tick"
     if due and per_hour:
         detail += f", about {due / per_hour * 60:.0f} min to come round"
     report.add("polling", OK if due <= total else WARN, detail)
+
+    # Which channels the sweep covers, and whether it is fresh enough to be
+    # leaned on. A covered channel is asked on its own only every few hours,
+    # so this is most of the difference between a quiet endpoint and a busy
+    # one, and the one thing that changes when the sweep breaks.
+    covered, followed = db.sweep_coverage(tiers.coverage_days)
+    if not cfg.sweep_limit:
+        report.add("the sweep", WARN, "off, every channel is asked on its own interval")
+    elif not swept_at:
+        report.add("the sweep", WARN, "has not answered yet, every channel is asked on "
+                                      "its own interval until it does")
+    elif age >= cfg.sweep_stale_s:
+        report.add("the sweep", WARN,
+                   f"last answered {age // 60} min ago, so every channel is asked on its "
+                   f"own interval until it does",
+                   "Check yt-dlp and the cookies below")
+    else:
+        report.add("the sweep", OK,
+                   f"{covered} of {followed} channels covered, last swept {age // 60} min "
+                   f"ago. A covered channel is asked on its own every "
+                   f"{tiers.covered_s // 3600} h and at once when the sweep names it")
 
     # When the next round actually asks anything, which is not the tick when
     # the endpoint is being left alone.

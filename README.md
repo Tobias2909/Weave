@@ -260,6 +260,15 @@ a quarter of an hour for one that posted this week down to once a day for one
 silent for a year. A quarter of an hour is the floor, since the feed answers with
 `max-age=900` and asking sooner returns the same body.
 
+Most channels are not asked on that schedule at all. Every quarter of an hour one
+call reads your subscriptions feed, the newest thousand videos across everything
+you follow, and any channel it names with something new is asked in the same
+minute. A channel that call covers is otherwise asked only every six hours, to
+refresh its view and like counts, since anything new from it arrives through the
+sweep first. Should the sweep stop answering for half an hour, every channel falls
+back to its own interval until it returns. The page called How things are says
+how many channels the sweep covers and when it last answered.
+
 None of that would catch a dormant channel posting again, so one paginated sweep
 of your subscriptions runs alongside it, and any video in it Weave has never seen
 puts its channel at the front of the queue. Underneath sits a ceiling per

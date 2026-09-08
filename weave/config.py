@@ -59,6 +59,16 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         # only when there is a reason to.
         "sweep_limit": 1000,
         "sweep_interval_s": 900,
+        # A channel the sweep has named within sweep_coverage_days has
+        # anything new from it found by the sweep, which asks its feed at
+        # once. Its own feed is otherwise asked only every sweep_refresh_s,
+        # to refresh views and likes. If the sweep has not answered for
+        # sweep_stale_s, every channel is back on its tiered interval until
+        # it does. Measured on a large list: this took a quarter hour from
+        # around two hundred and forty feed requests to well under a hundred.
+        "sweep_refresh_s": 21600,
+        "sweep_coverage_days": 30,
+        "sweep_stale_s": 1800,
         # Ask a channel's live feed as well as its videos feed. Only channels
         # that have been seen streaming are asked, so this is a handful of
         # extra requests rather than a second one per channel.
@@ -220,6 +230,10 @@ class Config:
         return max(0, int(self.get("poll", "sweep_interval_s")))
 
     @property
+    def sweep_stale_s(self) -> int:
+        return max(0, int(self.get("poll", "sweep_stale_s")))
+
+    @property
     def poll_live_feeds(self) -> bool:
         return bool(self.get("poll", "poll_live_feeds"))
 
@@ -245,6 +259,8 @@ class Config:
             warm_s=max(60, int(self.get("poll", "warm_interval_s"))),
             cold_s=max(60, int(self.get("poll", "cold_interval_s"))),
             frozen_s=max(60, int(self.get("poll", "frozen_interval_s"))),
+            covered_s=max(900, int(self.get("poll", "sweep_refresh_s"))),
+            coverage_days=max(1, int(self.get("poll", "sweep_coverage_days"))),
         )
 
     @property

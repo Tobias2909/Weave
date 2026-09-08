@@ -35,6 +35,10 @@ class ParseLines(unittest.TestCase):
     def test_key(self):
         self.assertEqual(sweep.parse_lines("aaaaaaaaaaa|1|NA")[0].key, "yt:aaaaaaaaaaa")
 
+    def test_the_view_count_comes_along_and_na_is_none(self):
+        rows = sweep.parse_lines("aaaaaaaaaaa|300|NA|UC1|NA|4400\nbbbbbbbbbbb|NA|is_live|UC1|NA|NA")
+        self.assertEqual([r.views for r in rows], [4400, None])
+
     def test_the_owning_channel_comes_along(self):
         # This is what makes one call over every subscription a detector as
         # well as a filler. Without it a new video says that something is new

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 36
+SCHEMA_VERSION = 37
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -259,6 +259,13 @@ class FeedTiers:
     warm_s: int = 3600
     cold_s: int = 21600
     frozen_s: int = 86400
+    # A channel the subscriptions sweep has named within coverage_days is
+    # asked no more often than covered_s, whatever its tier says, because the
+    # sweep is what finds anything new from it and promotes it at once. The
+    # tiered interval still wins where it is longer, so a dormant channel is
+    # not asked more often than before.
+    covered_s: int = 21600
+    coverage_days: int = 30
 
 
 @dataclass(frozen=True)
@@ -339,6 +346,13 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # listings to fill in the lengths RSS cannot carry. A stamp rather than a
     # flag, so the gap can be looked at again once there is a reason to.
     ("channels", "lengths_at", "INTEGER"),
+    # When the subscriptions sweep last named this channel. A channel the
+    # sweep covers has anything new from it arrive through the sweep, which
+    # promotes it, so its own feed is asked only now and then to refresh the
+    # counts rather than on the tiered schedule. Measured before this: the
+    # hot tier alone was over two hundred feed requests a quarter of an hour,
+    # every one of them re-reading fifteen entries the sweep had already seen.
+    ("channels", "sweep_seen_at", "INTEGER"),
     # The first video's frame, which the playlists tab hands over with the
     # names. A playlist has no picture of its own here for the same reason it
     # has no count: asking one for either is a call each.
@@ -724,8 +738,15 @@ class Database:
         return [key for key in keys if key not in have]
 
     def channels_due(self, tiers: FeedTiers, platform: str = "youtube",
-                     limit: int | None = None, force: bool = False) -> list[sqlite3.Row]:
+                     limit: int | None = None, force: bool = False,
+                     sweep_fresh: bool = False) -> list[sqlite3.Row]:
         """Channels that are past their own interval, most overdue first.
+
+        With `sweep_fresh`, a channel the subscriptions sweep has named lately
+        is asked only every `tiers.covered_s`: the sweep sees anything new
+        from it first and promotes it, so its own feed is read on promotion
+        and otherwise only to refresh the counts. Without it, when the sweep
+        is stale or off, every channel is on its tiered interval as before.
 
         Only channels that are followed. One carried along by a video saved
         out of the suggestions is here for its name and its picture, and
@@ -755,26 +776,37 @@ class Database:
             "warm_s": tiers.warm_s,
             "cold_s": tiers.cold_s,
             "frozen_s": tiers.frozen_s,
+            "covered_s": tiers.covered_s,
+            "seen_cut": now - tiers.coverage_days * 86400,
+            "sweep_fresh": 1 if sweep_fresh else 0,
             "force": 1 if force else 0,
             "limit": limit if limit is not None else -1,
         }
         return list(self.conn.execute(
             """
             SELECT * FROM (
-                SELECT c.*,
-                       l.published AS last_published_at,
+                SELECT t.*,
                        CASE
-                           WHEN l.published IS NULL       THEN :frozen_s
-                           WHEN l.published >= :hot_cut   THEN :hot_s
-                           WHEN l.published >= :warm_cut  THEN :warm_s
-                           WHEN l.published >= :cold_cut  THEN :cold_s
-                           ELSE :frozen_s
+                           WHEN :sweep_fresh = 1 AND t.sweep_seen_at >= :seen_cut
+                                THEN MAX(:covered_s, t.tier_s)
+                           ELSE t.tier_s
                        END AS interval_s
-                FROM channels c
-                LEFT JOIN (SELECT channel_key, MAX(published_at) AS published
-                             FROM videos GROUP BY channel_key) l
-                       ON l.channel_key = c.key
-                WHERE c.platform = :platform AND c.tracked = 1
+                FROM (
+                    SELECT c.*,
+                           l.published AS last_published_at,
+                           CASE
+                               WHEN l.published IS NULL       THEN :frozen_s
+                               WHEN l.published >= :hot_cut   THEN :hot_s
+                               WHEN l.published >= :warm_cut  THEN :warm_s
+                               WHEN l.published >= :cold_cut  THEN :cold_s
+                               ELSE :frozen_s
+                           END AS tier_s
+                    FROM channels c
+                    LEFT JOIN (SELECT channel_key, MAX(published_at) AS published
+                                 FROM videos GROUP BY channel_key) l
+                           ON l.channel_key = c.key
+                    WHERE c.platform = :platform AND c.tracked = 1
+                ) t
             )
             WHERE :force = 1
                OR COALESCE(last_polled_at, 0) <= :now - interval_s
@@ -783,6 +815,49 @@ class Database:
             """,
             params,
         ))
+
+    def mark_sweep_seen(self, keys: Iterable[str]) -> int:
+        """Remember that the subscriptions sweep named these channels.
+
+        Named at all, not only with something new: the point is which channels
+        the sweep watches, and it watches every channel whose videos it
+        lists. A channel it stops naming for a month falls back to its tiered
+        interval on its own, since the stamp ages out.
+        """
+        keys = list(keys)
+        if not keys:
+            return 0
+        now = int(time.time())
+        with self.conn as conn:
+            before = conn.total_changes
+            conn.executemany("UPDATE channels SET sweep_seen_at=? WHERE key=?",
+                             [(now, key) for key in keys])
+            return conn.total_changes - before
+
+    def sweep_coverage(self, days: int) -> tuple[int, int]:
+        """How many followed channels the sweep has named within `days`, and
+        how many there are."""
+        cut = int(time.time()) - max(1, days) * 86400
+        row = self.conn.execute(
+            "SELECT COALESCE(SUM(sweep_seen_at >= ?), 0), COUNT(*) FROM channels "
+            "WHERE platform='youtube' AND tracked=1", (cut,)).fetchone()
+        return int(row[0]), int(row[1])
+
+    def raise_views(self, rows: list[tuple[str, int]]) -> int:
+        """Apply the view counts the sweep carries, upwards only.
+
+        The sweep rounds them, so a stored exact count could be replaced with
+        a smaller round one and a card would count down. A count that is
+        higher is newer, whatever its precision.
+        """
+        if not rows:
+            return 0
+        with self.conn as conn:
+            before = conn.total_changes
+            conn.executemany(
+                "UPDATE videos SET views=? WHERE key=? AND (views IS NULL OR views < ?)",
+                [(views, key, views) for key, views in rows])
+            return conn.total_changes - before
 
     def promote_channels(self, keys: Iterable[str]) -> int:
         """Make these channels the next ones asked.

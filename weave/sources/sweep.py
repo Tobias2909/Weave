@@ -44,6 +44,8 @@ class SweptVideo:
     # while live_status is is_upcoming; yt-dlp reports NA once the wait is
     # over, so a video that has since gone live or ended carries none.
     scheduled_at: int | None = None
+    # Rounded by the listing, so only ever applied upwards.
+    views: int | None = None
 
     @property
     def key(self) -> str:
@@ -83,8 +85,9 @@ def parse_lines(text: str) -> list[SweptVideo]:
         # rather than being dropped.
         channel = _optional_text(parts[3]) if len(parts) > 3 else None
         scheduled = _optional_int(parts[4]) if len(parts) > 4 else None
+        views = _optional_int(parts[5]) if len(parts) > 5 else None
         out.append(SweptVideo(ext_id, _optional_int(parts[1]), _optional_text(parts[2]),
-                              channel, scheduled))
+                              channel, scheduled, views))
     return out
 
 
@@ -96,7 +99,7 @@ def fetch(cfg: Config, limit: int = 400, throttle: Throttle | None = None,
         *cookie_args(cfg),
         "--playlist-end", str(max(1, limit)),
         "--print",
-        "%(id)s|%(duration)s|%(live_status)s|%(channel_id)s|%(release_timestamp)s",
+        "%(id)s|%(duration)s|%(live_status)s|%(channel_id)s|%(release_timestamp)s|%(view_count)s",
         SUBSCRIPTIONS,
     ]
     result = ytdlp.run(command, SweepError, "the sweep", throttle, cancel, timeout)
