@@ -121,6 +121,33 @@ class LookingAtOne(unittest.TestCase):
         self.db.keep_playlist(ONE)
         self.assertEqual(self.db.channel_playlists(CHANNEL)[0]["origin"], "channel")
 
+    def test_it_can_be_kept_straight_off_the_tab(self):
+        # The tile on a channel's tab offers keeping, and nothing has been
+        # opened at that point, so there is no row to move into the section.
+        # Every other test here opens one first, which is why this held.
+        self.db.keep_playlist(ONE)
+        self.assertEqual(self.kept(), [ONE])
+        self.assertEqual(self.mine(), [])
+
+    def test_and_it_is_kept_under_the_name_the_tab_gave(self):
+        self.db.keep_playlist(ONE)
+        self.assertEqual(self.db.playlist(ONE)["title"], "Theirs")
+
+    def test_opening_it_afterwards_leaves_it_kept(self):
+        self.db.keep_playlist(ONE)
+        self.db.open_channel_playlist(ONE, "Theirs")
+        self.assertEqual(self.kept(), [ONE])
+
+    def test_and_letting_go_of_one_kept_that_way_still_works(self):
+        self.db.keep_playlist(ONE)
+        self.db.keep_playlist(ONE, False)
+        self.assertEqual(self.kept(), [])
+
+    def test_but_nothing_the_tab_never_listed_is_kept(self):
+        self.db.keep_playlist(TWO)
+        self.assertEqual(self.kept(), [])
+        self.assertIsNone(self.db.playlist(TWO))
+
 
 class ThePictures(unittest.TestCase):
     """The listing carries a frame from each playlist's first video, so the

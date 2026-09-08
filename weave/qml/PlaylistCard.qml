@@ -21,9 +21,16 @@ Item {
     readonly property int lift: 8
 
     HoverHandler { id: hover }
-    TapHandler {
-        gesturePolicy: TapHandler.ReleaseWithinBounds
-        onTapped: card.openRequested()
+
+    // A MouseArea rather than a TapHandler, and declared first so everything
+    // else is drawn over it. A handler does not consume the press, so the
+    // Keep button on the card was opening the playlist as well as pressing
+    // itself, and opening it was the half that showed. Underneath, the button
+    // takes its own presses and everything else falls through to here, since
+    // a label and a picture accept none.
+    MouseArea {
+        anchors.fill: parent
+        onClicked: card.openRequested()
     }
 
     // The rest of the list, behind the card. Two sheets is enough to read as

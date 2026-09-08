@@ -2464,7 +2464,21 @@ class Database:
         Kept, it moves into the sidebar's own section and stays through every
         reading of your own playlists feed. Dropped, it becomes what it was
         before, something you were looking at.
+
+        Keeping can be asked for from the tile on a channel's tab, and a
+        playlists row is only made by opening one, so from there there was
+        nothing to update and the press did nothing at all. A missing row is
+        made here out of what the tab already knows, which is the same row
+        opening it would have made. Nothing the tab never listed is kept,
+        since there would be no name to make it under.
         """
+        if keep and self.playlist(ext_id) is None:
+            named = self.conn.execute(
+                "SELECT title FROM channel_playlists WHERE ext_id=? ORDER BY position LIMIT 1",
+                (ext_id,)).fetchone()
+            if named is None:
+                return
+            self.open_channel_playlist(ext_id, named["title"] or ext_id)
         with self.conn as conn:
             if keep:
                 place = conn.execute(
