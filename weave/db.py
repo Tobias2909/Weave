@@ -791,6 +791,18 @@ class Database:
             "  AND NOT EXISTS (SELECT 1 FROM videos v WHERE v.channel_key=c.key "
             "                  AND v.live_status IS NOT NULL)", (platform,))}
 
+    def channel_stream_count(self, channel_key: str) -> int:
+        """How many of this channel's stored videos are streams.
+
+        What decides whether a channel page offers a streams half at all. A
+        channel that has never streamed gets no button rather than a button
+        onto an empty page, and plenty of channels whose streams tab answers
+        at all answer it with nothing.
+        """
+        return int(self.conn.execute(
+            f"SELECT COUNT(*) FROM videos v WHERE v.channel_key=? AND {self.IS_A_STREAM}",
+            (channel_key,)).fetchone()[0])
+
     def set_channel_streams(self, key: str, streams: bool) -> None:
         """Remember whether this channel has a streams tab, so the question is
         asked once rather than every round."""
@@ -2188,10 +2200,20 @@ class Database:
             "WHERE w.video_key IS NULL AND (v.is_short IS NULL OR v.is_short = 0)"
         ).fetchone()[0])
 
+    # What tells a stream from a video here. A stream that has ended keeps its
+    # live_status, an announced one has an hour and no status yet, and one only
+    # suspected of being an announcement is being asked about. All three belong
+    # on a channel's streams half rather than among its videos.
+    # Every part answers true or false and never NULL. An unset stream_pending
+    # compared with = leaves the whole test NULL, and NOT NULL is NULL, so the
+    # videos half came back empty while both halves looked right on their own.
+    IS_A_STREAM = ("(v.live_status IS NOT NULL OR v.scheduled_at IS NOT NULL "
+                   "OR COALESCE(v.stream_pending, 0) = 1)")
+
     def feed(self, limit: int = 300, hide_watched: bool = True,
              group_id: int | None = None, channel_key: str | None = None,
              box_id: int | None = None, query: str | None = None,
-             watched_only: bool = False) -> list[sqlite3.Row]:
+             watched_only: bool = False, streams: bool | None = None) -> list[sqlite3.Row]:
         """The video list for whichever view is showing.
 
         A box orders by the order things were put in it rather than by publish
@@ -2245,6 +2267,11 @@ class Database:
         if watched_only:
             where.append("w.video_key IS NOT NULL")
             order = "w.watched_at DESC"
+        if streams is not None:
+            # The two halves of a channel page. A feed, a group or a box says
+            # nothing here and holds both, which is right: a stream of a
+            # channel you follow belongs in what you follow.
+            where.append(self.IS_A_STREAM if streams else f"NOT {self.IS_A_STREAM}")
 
         args.append(limit)
         return list(self.conn.execute(

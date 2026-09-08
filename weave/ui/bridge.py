@@ -432,6 +432,10 @@ class Bridge(QObject):
             "followersText": fmt.count_text(found.get("follower_count")),
             "videos": found.get("video_count") or 0,
             "platform": found.get("platform", "youtube"),
+            # Nothing stored means no button. A channel that has never
+            # streamed must not offer a half with nothing on it, and a tab
+            # that answers at all often answers with nothing.
+            "streams": self._db.channel_stream_count(self._view_channel) if found else 0,
         }
 
     def _get_playlist_skipped_text(self) -> str:
@@ -907,12 +911,19 @@ class Bridge(QObject):
         # search is asking for one particular thing, and hiding the watched
         # half of the history would leave nothing at all.
         honour_toggle = self._view_kind in (ALL, GROUP)
+        # A channel's videos and its streams are two halves of one page, so
+        # each half asks for its own rows. Nowhere else says anything here: a
+        # stream of a channel you follow belongs in what you follow.
+        streams = None
+        if self._view_kind == CHANNEL and self._channel_tab in ("videos", "streams"):
+            streams = self._channel_tab == "streams"
         self._model.reload(
             hide_watched=self._hide_watched and honour_toggle,
             group_id=self._view_id if self._view_kind == GROUP else None,
             box_id=self._view_id if self._view_kind == BOX else None,
             channel_key=self._view_channel if self._view_kind == CHANNEL else None,
             query=self._search_text if self._view_kind == SEARCH else None,
+            streams=streams,
         )
         self.emptyHintChanged.emit()
         self.groupsChanged.emit()
@@ -1687,12 +1698,16 @@ class Bridge(QObject):
 
     @Slot(str)
     def showChannelTab(self, which: str) -> None:
-        if which not in ("videos", "playlists") or which == self._channel_tab:
+        if which not in ("videos", "playlists", "streams") or which == self._channel_tab:
             return
         self._channel_tab = which
         self.channelTabChanged.emit()
         if which == "playlists":
             self._fetch_channel_playlists()
+        else:
+            # Videos and streams are two readings of what is stored, so
+            # walking between them is a reload rather than a request.
+            self.reload()
 
     def _fetch_channel_playlists(self, force: bool = False) -> None:
         """Read the tab, once a day unless asked again.
@@ -1782,6 +1797,10 @@ class Bridge(QObject):
     def _on_channel_feed(self, channel_key: str, touched: int) -> None:
         if self._view_kind == CHANNEL and self._view_channel == channel_key:
             self.reload()
+            # What the page says about the channel, which now includes whether
+            # it has ever streamed. The streams half appears here or not at
+            # all, since this is the one look its tab gets.
+            self.viewChanged.emit()
         if touched:
             self._set_status(f"{touched} rows from that channel")
 

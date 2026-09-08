@@ -857,8 +857,43 @@ class ChannelFeedFetcher(Worker):
             # following them, and add_channel would do exactly that.
             self._db.remember_channel(self._key, "youtube", self._ext_id, result.channel_title)
         self._db.mark_polled(self._key, None)
+        touched += self._read_streams_once(fetcher, budget, variant)
         fetcher.close()
         self.fetched.emit(self._key, touched)
+
+    def _read_streams_once(self, fetcher, budget, variant: str) -> int:
+        """The streams tab, the first time this channel's page is opened.
+
+        The page offers a streams half only for a channel with a stream stored,
+        so a channel nobody has asked about would never grow one: the poller
+        asks after the channels somebody follows, a few unasked ones a round,
+        and a stranger opened from a search is in neither list.
+
+        Once. The answer is remembered either way, so this is one request in
+        the life of a channel rather than one per visit. A channel with no
+        long form tab is skipped, the same way the poller skips it: what it
+        has is a mixed feed, which the videos half already read.
+        """
+        if variant == rss.CHANNEL or not self._cfg.poll_live_feeds:
+            return 0
+        if (self._db.channel(self._key) or {}).get("streams") is not None:
+            return 0
+        if budget.allowance(FEEDS, 1).empty:
+            return 0
+        try:
+            budget.spend(FEEDS)
+            streams = rss.fetch(fetcher, self._ext_id, rss.LIVE)
+        except HttpError as exc:
+            if exc.status == 404:
+                self._db.set_channel_streams(self._key, False)
+            return 0
+        except (FetchCancelled, ProcessCancelled):
+            return 0
+        except Exception:
+            budget.spend(FEEDS, count=0, refused=1)
+            return 0
+        self._db.set_channel_streams(self._key, bool(streams.videos))
+        return self._db.upsert_videos(streams.videos)
 
 
 class ChannelPlaylistsFetcher(Worker):

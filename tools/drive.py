@@ -547,7 +547,7 @@ class Smoke:
         one and keeping it.
         """
         from weave import paths
-        from weave.db import Database
+        from weave.db import Database, VideoRow
         from weave.sources.playlists import Playlist
 
         key = "yt:UCsmokesmokesmokesmokes1"
@@ -559,6 +559,35 @@ class Smoke:
         settle(0.5)
         self.check("a channel opens on its videos", read(bridge, "channelTab") == "videos",
                    read(bridge, "channelTab"))
+        root = window.contentItem()
+        streamsTab = item_named(root, "channelStreamsTab")
+        # The other seeded channel, which has one video and has never streamed.
+        bridge.openChannel("yt:UCsmokesmokesmokesmokes2")
+        settle(0.5)
+        self.check("a channel that has never streamed offers no streams half",
+                   streamsTab is not None and read(streamsTab, "visible") is False)
+
+        # A stream of theirs, stored the way the streams feed stores one.
+        stored = Database(paths.DB_FILE)
+        stored.upsert_videos([VideoRow("youtube", "smokestream", key, "A stream that ended",
+                                       published_at=1_700_000_500, live_status="was_live")])
+        held = len(stored.feed(channel_key=key, hide_watched=False))
+        stored.close()
+        bridge.selectGroup(-1)
+        settle(0.3)
+        bridge.openChannel(key)
+        settle(0.5)
+        self.check("and one that has offers it",
+                   read(streamsTab, "visible") is True)
+        videos = read(find(window, "grid"), "count")
+        bridge.showChannelTab("streams")
+        settle(0.5)
+        streams = read(find(window, "grid"), "count")
+        self.check("the two halves are the whole channel between them and nothing twice",
+                   streams >= 1 and videos >= 1 and videos + streams == held,
+                   f"{videos} videos, {streams} streams, {held} stored")
+        bridge.showChannelTab("videos")
+        settle(0.4)
         bridge.showChannelTab("playlists")
         settle(0.6)
         tiles = read(bridge, "channelPlaylists")
@@ -566,7 +595,6 @@ class Smoke:
                    f"{len(tiles)} listed")
         self.check("with no count until one is opened",
                    all(tile["itemsText"] == "" for tile in tiles))
-        root = window.contentItem()
         self.check("drawn as tiles", item_named(root, "playlistTile") is not None)
 
         bridge.openChannelPlaylist(tiles[0]["key"], tiles[0]["title"])
@@ -904,10 +932,12 @@ class Smoke:
         self.check("a new video arriving does not move it either",
                    abs(read(grid, "contentY") - was) < 1,
                    f"{was:.0f} to {read(grid, 'contentY'):.0f}")
-        # Six seeded, forty for the scroll and this one. The seventh seeded
-        # video is in a group only, so All never held it.
+        # Six seeded, forty for the scroll, the stream stored on the channel
+        # page above and this one. The seventh seeded video is in a group
+        # only, so All never held it, and the stream is here because a stream
+        # of a channel you follow belongs in what you follow.
         self.check("and the new video is in the grid",
-                   read(grid, "count") == 47, f"count {read(grid, 'count')}")
+                   read(grid, "count") == 48, f"count {read(grid, 'count')}")
 
         # A view change is the case that should go back to the top.
         bridge.showHistory()

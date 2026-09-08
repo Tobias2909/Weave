@@ -964,6 +964,16 @@ ApplicationWindow {
                 accent: App.channelTab === "videos"
                 onClicked: App.showChannelTab("videos")
             }
+            // Only for a channel with a stream stored. Most channels have
+            // never streamed, and a button onto an empty half is worse than
+            // no button.
+            FlatButton {
+                objectName: "channelStreamsTab"
+                visible: App.channelInfo.streams > 0
+                text: "Streams"
+                accent: App.channelTab === "streams"
+                onClicked: App.showChannelTab("streams")
+            }
             FlatButton {
                 objectName: "channelPlaylistsTab"
                 text: "Playlists"

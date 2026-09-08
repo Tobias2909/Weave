@@ -58,10 +58,12 @@ class FeedModel(QAbstractListModel):
 
     def reload(self, hide_watched: bool = True, group_id: int | None = None,
                channel_key: str | None = None, box_id: int | None = None,
-               query: str | None = None, watched_only: bool = False) -> None:
+               query: str | None = None, watched_only: bool = False,
+               streams: bool | None = None) -> None:
         self.show(self._db.feed(hide_watched=hide_watched, group_id=group_id,
                                 channel_key=channel_key, box_id=box_id,
-                                query=query, watched_only=watched_only))
+                                query=query, watched_only=watched_only,
+                                streams=streams))
 
     def show(self, rows) -> None:
         """Draw these rows, whatever produced them.

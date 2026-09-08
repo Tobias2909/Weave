@@ -155,6 +155,30 @@ class WorkerRuns(unittest.TestCase):
         # not the same as asking for their videos in the feed.
         self.assertNotIn("yt:UC3", [row["key"] for row in self.db.channels()])
 
+    def test_a_channel_page_reads_the_streams_tab_once(self):
+        # The page offers a streams half only for a channel with a stream
+        # stored, so a channel nobody has asked about would never grow one:
+        # the poller asks after the channels somebody follows, a few unasked
+        # ones a round, and a stranger is in neither list. Asked once in the
+        # life of a channel, and the answer remembered either way.
+        self.db.remember_channel("yt:UC4", "youtube", "UC4", "A streamer")
+        asked = []
+
+        def fetch(fetcher, ext_id, kind=poller.rss.VIDEOS):
+            asked.append(kind)
+            rows = [VideoRow("youtube", "ddddddddddd", "yt:UC4", "A stream",
+                             live_status="was_live")] if kind == poller.rss.LIVE else []
+            return poller.rss.FeedResult(ext_id, "A streamer", rows, kind)
+
+        self.patch(poller.rss, "fetch", fetch)
+        self.run_worker(poller.ChannelFeedFetcher(self.db, self.cfg, "yt:UC4", "UC4"))
+        self.assertIn(poller.rss.LIVE, asked)
+        self.assertEqual(self.db.channel_stream_count("yt:UC4"), 1)
+
+        asked.clear()
+        self.run_worker(poller.ChannelFeedFetcher(self.db, self.cfg, "yt:UC4", "UC4"))
+        self.assertNotIn(poller.rss.LIVE, asked)
+
     def test_channel_playlists_fetcher(self):
         from weave.sources.playlists import Playlist
 
