@@ -234,6 +234,14 @@ def _budget(db: Database, cfg: Config, report: Report) -> None:
                "" if worst == OK else "An endpoint is pushing back or is at its ceiling. "
                                       "It clears on its own")
 
+    # A rest is a decision the application made, so it says so rather than
+    # leaving somebody to wonder why nothing is arriving.
+    left = db.resting_until(FEEDS) - int(time.time())
+    if left > 0:
+        report.add("the feed endpoint", WARN,
+                   f"being left alone for another {(left + 59) // 60} min",
+                   "It refused too much of a round. Refreshing by hand goes anyway")
+
 
 def _cache(report: Report) -> None:
     if not paths.IMAGE_CACHE.exists():

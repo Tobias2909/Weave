@@ -35,7 +35,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-from . import imagecache, tokens
+from . import backoff, imagecache, tokens
 from .budget import BROWSE, DISLIKES, FEEDS, PLAYER, TWITCH, Budget
 from .config import Config
 from .db import Database
@@ -209,6 +209,48 @@ class FeedPoller(Worker):
             endpoint,
             f"asked as much as it should for now, {wait // 60 + 1} min until there is room")
 
+    def _resting(self) -> bool:
+        """Whether the feed endpoint is being left alone at the moment.
+
+        A forced refresh goes anyway. That is somebody asking, in front of the
+        window, and an application that ignores a button is worse than one
+        that asks too often.
+        """
+        left = self._db.resting_until(FEEDS) - int(time.time())
+        if left <= 0:
+            return False
+        if self._force_all:
+            self._db.rest_endpoint(FEEDS, 0, self._db.rest_step(FEEDS))
+            return False
+        self._rest_notice(left)
+        return True
+
+    def _rest_notice(self, left: int) -> None:
+        """Say it, but not once a minute for half an hour."""
+        stamp = self._db.get_int(f"rest_notice.{FEEDS}", 0)
+        now = int(time.time())
+        if now - stamp < 300:
+            return
+        self._db.set_state(f"rest_notice.{FEEDS}", str(now))
+        self.failure.emit(FEEDS, backoff.said("feed", left))
+
+    def _weigh_refusals(self) -> None:
+        """Decide, after a round, whether the endpoint is pushing back.
+
+        Read from what was recorded rather than from this round alone, so a
+        small round lands against the same few minutes a large one does, and
+        so a restart's first round sees what the last one ran into.
+        """
+        sent, refused = self._db.requests_in_window(FEEDS, backoff.WINDOW_S)
+        rest = backoff.next_rest(sent, refused, self._db.rest_step(FEEDS))
+        if not rest.resting:
+            if self._db.resting_until(FEEDS) or self._db.rest_step(FEEDS):
+                self._db.rest_endpoint(FEEDS, 0, 0)
+            return
+        self._db.rest_endpoint(FEEDS, int(time.time()) + rest.seconds, rest.step)
+        self._db.set_state(f"rest_notice.{FEEDS}", "0")
+        self._rest_notice(rest.seconds)
+
     # ---- phase 1 ---------------------------------------------------------
 
     def _phase_sweep(self, budget: Budget) -> int:
@@ -325,6 +367,8 @@ class FeedPoller(Worker):
             return result, 2, rss.CHANNEL
 
     def _phase_rss(self, fetcher: Fetcher, budget: Budget) -> tuple[int, int, int]:
+        if self._resting():
+            return 0, 0, 0
         rows = self._db.channels_due(self._cfg.feed_tiers,
                                      limit=self._cfg.channels_per_tick,
                                      force=self._force_all)
@@ -428,7 +472,10 @@ class FeedPoller(Worker):
             self._db.set_channel_streams(key, False)
 
         budget.spend(FEEDS, spent, refused=len(refused))
-        if refused:
+        # After the spend, so this round's refusals count towards the decision
+        # rather than only the rounds before it.
+        self._weigh_refusals()
+        if refused and not self._db.resting_until(FEEDS):
             self.failure.emit(
                 "feeds",
                 f"{len(refused)} of {total} feeds did not answer. The feed endpoint "

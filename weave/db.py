@@ -1153,6 +1153,24 @@ class Database:
         ).fetchone()
         return int(row[0]), int(row[1])
 
+    def resting_until(self, endpoint: str) -> int:
+        """When this endpoint may be asked again, as a unix time.
+
+        In the database rather than in the poller, because a restart begins a
+        round at once and a rest that a restart walks past is no rest at all.
+        """
+        return self.get_int(f"rest.{endpoint}", 0)
+
+    def rest_step(self, endpoint: str) -> int:
+        """How many times in a row this endpoint has been rested. What makes
+        the next rest longer than the last."""
+        return self.get_int(f"rest_step.{endpoint}", 0)
+
+    def rest_endpoint(self, endpoint: str, until: int, step: int) -> None:
+        """Leave it alone until then, or clear a rest when until is 0."""
+        self.set_state(f"rest.{endpoint}", str(int(until)))
+        self.set_state(f"rest_step.{endpoint}", str(int(step)))
+
     def budget_frees_at(self, endpoint: str, window_s: int) -> int:
         """When the oldest bucket still inside the window leaves it, as a unix
         time. That is the soonest a full budget can have room again, and it is
