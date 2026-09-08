@@ -112,6 +112,11 @@ SHELF_LIFETIME_S = 6 * 3600
 MUSIC_SEARCH = "search"
 MUSIC_SEARCH_LABEL = "Search results"
 
+# Said on a press that cannot go anywhere. One wording for both the card and
+# the headphone, since it is the same address being refused for the same
+# reason.
+MEMBERS_NOTICE = "that one is for members of the channel"
+
 # One shelf shown in full, which is where the tile at the end of a shelf goes.
 # A place with the same shape as a track list, so the mouse buttons walk on and
 # off it, but nothing is fetched for it. It is the shelf that is already held.
@@ -2285,6 +2290,14 @@ class Bridge(QObject):
         row = self._model.row_for_key(key)
         if not row:
             return
+        if row.get("isMembers"):
+            # Behind the channel's membership. There is nothing to hand mpv:
+            # what comes back is a sentence about joining the channel, and mpv
+            # would open a window to say so. It is said here instead, because a
+            # press that is simply ignored reads as the application being
+            # broken, which is what the card's own mark is there to prevent.
+            self._set_notice(MEMBERS_NOTICE, 6)
+            return
         if row.get("isUpcoming"):
             # An announced stream is still just a listing. Handing its watch
             # URL to mpv crashes it, since there is nothing there yet, so the
@@ -3023,6 +3036,11 @@ class Bridge(QObject):
         """
         row = self._model.row_for_key(video_key) or {}
         if not self._audio or not row:
+            return
+        if row.get("isMembers"):
+            # The headphone reaches the same address the card does, so it is
+            # refused for the same reason.
+            self._set_notice(MEMBERS_NOTICE, 6)
             return
         if self._view_kind == PLAYLIST:
             queue = [self._as_track(self._model.row_at(index))

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 37
+SCHEMA_VERSION = 38
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -345,6 +345,12 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # and what an ordinary video never looks like there. One question settles
     # it, and this is the note that one is owed.
     ("videos", "stream_pending", "INTEGER"),
+    # Behind a channel's membership. Nothing here can be opened without one,
+    # so there is no live state to learn, no length to fill in and nothing to
+    # hand mpv. The card says so and the press is refused, rather than the
+    # player being handed an address that answers with a sentence about
+    # joining the channel.
+    ("videos", "members_only", "INTEGER NOT NULL DEFAULT 0"),
     # Where a playlist row came from. mine is one of yours, read from your own
     # playlists feed. channel is one you kept off a channel page, which your
     # feed knows nothing about and must never delete. temp is one you opened
@@ -1360,8 +1366,20 @@ class Database:
         """The ones still owed that question, newest first, since a stream
         about to begin matters more than one from last week."""
         return list(self.conn.execute(
-            "SELECT key, ext_id FROM videos WHERE stream_pending=1 "
+            "SELECT key, ext_id FROM videos WHERE stream_pending=1 AND members_only=0 "
             "ORDER BY published_at DESC NULLS LAST LIMIT ?", (limit,)))
+
+    def set_members_only(self, key: str, members_only: bool = True) -> None:
+        """Mark a video as behind the channel's membership.
+
+        Written from the one place that can tell, the live check, because the
+        feeds carry no sign of it at all. Once marked, nothing asks about it
+        again: without a membership the answer cannot change and every ask
+        would spend a request to be told the same thing.
+        """
+        with self.conn as conn:
+            conn.execute("UPDATE videos SET members_only=? WHERE key=?",
+                         (1 if members_only else 0, key))
 
     def settle_stream(self, key: str) -> None:
         with self.conn as conn:
@@ -1385,7 +1403,7 @@ class Database:
         """
         return list(self.conn.execute(
             "SELECT key, ext_id FROM videos "
-            "WHERE live_status='is_upcoming' AND scheduled_at IS NULL "
+            "WHERE live_status='is_upcoming' AND scheduled_at IS NULL AND members_only=0 "
             "ORDER BY published_at DESC LIMIT ?", (limit,)))
 
     def live_youtube(self, limit: int = 12) -> list[sqlite3.Row]:

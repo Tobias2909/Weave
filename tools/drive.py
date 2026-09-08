@@ -504,6 +504,49 @@ class Smoke:
         bridge.closeDetail()
         settle(0.3)
 
+    def members(self, bridge, window) -> None:
+        """A video behind the channel's membership.
+
+        There is nothing to hand mpv, so the press is refused and the picture
+        says why before anybody presses it. Marked here by hand, because the
+        only thing that can tell is the live check and it is a request.
+        """
+        from weave import paths
+        from weave.db import Database
+
+        db = Database(paths.DB_FILE)
+        with db.conn as conn:
+            conn.execute("UPDATE videos SET members_only=1 WHERE key='yt:smokevid004'")
+        db.close()
+        bridge.selectGroup(-1)
+        bridge.reload()
+        settle(0.5)
+        grid = find(window, "grid")
+        call(grid, "forceLayout")
+        settle(0.3)
+
+        marked = [found for found in
+                  (item_named(card, "membersBadge")
+                   for card in visible_children(read(grid, "contentItem")))
+                  if found is not None and read(found, "visible")]
+        self.check("a members only video is marked on its picture",
+                   len(marked) == 1, f"{len(marked)} of them")
+        word = item_named(marked[0], "membersWord") if marked else None
+        self.check("and the mark is a word rather than a symbol",
+                   word is not None and str(read(word, "text")) == "MEMBERS",
+                   str(read(word, "text")) if word is not None else "no word")
+
+        bridge._set_notice("")
+        bridge.play("yt:smokevid004")
+        settle(0.4)
+        self.check("pressing it starts nothing",
+                   read(bridge, "startingKey") == "", str(read(bridge, "startingKey")))
+        self.check("and the window says why rather than nothing at all",
+                   "members" in str(read(bridge, "notice")).lower(),
+                   str(read(bridge, "notice")))
+        bridge._set_notice("")
+        settle(0.2)
+
     def suggestions(self, bridge, window) -> None:
         """The suggestions page says how old it is and carries its own button.
 
@@ -1500,6 +1543,7 @@ class Smoke:
         self.starting(bridge, window)
         self.updates(bridge, window)
         self.announcements(bridge, window)
+        self.members(bridge, window)
         self.suggestions(bridge, window)
         self.strangers(bridge, window)
         self.channel_playlists(bridge, window)

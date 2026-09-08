@@ -20,6 +20,7 @@ Rectangle {
     // one to look at: hours long, and made by somebody sitting down for an
     // evening rather than by cutting something together.
     property bool wasLive: false
+    property bool isMembers: false
     property bool isUpcoming: false
     property bool canListen: true
     property string scheduledText: ""
@@ -164,6 +165,40 @@ Rectangle {
                             font.pixelSize: 11
                         }
                     }
+                }
+            }
+
+            // Behind the channel's membership. It says so on the picture, the
+            // way a stream does, because the only other sign of it is a press
+            // that does nothing. The free corner: the length and the live word
+            // hold the bottom right, a finished stream the bottom left, and the
+            // headphone the top right on hover.
+            //
+            // Hollow like the stream word rather than filled, since it is not
+            // announcing something happening, and in the accent rather than the
+            // live colour, because the two say different things and a members
+            // stream can be both at once.
+            Rectangle {
+                objectName: "membersBadge"
+                visible: card.isMembers
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.margins: 6
+                radius: 4
+                color: Theme.colors.badgeBackground
+                border.width: 1
+                border.color: Theme.colors.accent
+                width: members.implicitWidth + 12
+                height: members.implicitHeight + 6
+
+                Text {
+                    id: members
+                    objectName: "membersWord"
+                    anchors.centerIn: parent
+                    text: "MEMBERS"
+                    color: Theme.colors.accent
+                    font.pixelSize: 10
+                    font.bold: true
                 }
             }
 

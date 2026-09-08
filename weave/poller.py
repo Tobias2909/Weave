@@ -1505,7 +1505,14 @@ class LiveWatcher(Worker):
                 # Left pending. A refusal is not an answer, and asking again
                 # in a minute and a half costs one request.
                 continue
-            if state.upcoming:
+            if state.members_only:
+                # Behind the channel's membership, so there is no live state to
+                # settle: without one the answer is the same sentence every
+                # time. Marked and settled, which is what stops it being asked
+                # about, and the card and the press read the mark from there.
+                self._db.set_members_only(row["key"])
+                self._db.settle_stream(row["key"])
+            elif state.upcoming:
                 self._db.set_upcoming(row["key"], state.starts_at)
             else:
                 self._db.set_live_state(row["key"], state.viewers, state.still_live)
@@ -1534,7 +1541,12 @@ class LiveWatcher(Worker):
             except livecheck.LiveCheckError:
                 budget.spend(PLAYER, count=0, refused=1)
                 continue
-            if state.starts_at is not None:
+            if state.members_only:
+                # A start time that cannot be read, on a stream that cannot be
+                # opened. Marking it is what takes it out of the list this
+                # walks, so it is asked once and never again.
+                self._db.set_members_only(row["key"])
+            elif state.starts_at is not None:
                 self._db.set_scheduled_at(row["key"], state.starts_at)
             elif not state.upcoming:
                 # It began, or it was called off. Either way it is not an
@@ -1562,6 +1574,13 @@ class LiveWatcher(Worker):
                 break
             except livecheck.LiveCheckError:
                 budget.spend(PLAYER, count=0, refused=1)
+                continue
+            if state.members_only:
+                # It cannot be watched and its count cannot be read, so it
+                # leaves the bar rather than sitting in it with a number that
+                # will never move again.
+                self._db.set_members_only(row["key"])
+                self._db.set_live_state(row["key"], None, False)
                 continue
             self._db.set_live_state(row["key"], state.viewers, state.still_live)
             found += 1 if state.still_live else 0

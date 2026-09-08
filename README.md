@@ -37,6 +37,8 @@ streaming along the top, and a line under a card showing where you stopped.*
   came from it is known for what it is
 * An announced premiere is badged with when it starts and is refused by the
   player rather than handed over to fail
+* A video behind a channel membership is badged as one and refused the same way,
+  so a press cannot open a window that only says to go and join the channel
 * Search everything stored as you type, or press enter to search YouTube itself
 * What YouTube suggests, the history it keeps and your own playlists, each in its
   own place and never poured into the feed

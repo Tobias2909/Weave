@@ -23,6 +23,12 @@ from . import ytdlp
 
 WATCH_URL = "https://www.youtube.com/watch?v={video_id}"
 
+# What yt-dlp calls a video behind a channel's membership. Measured against a
+# real one, with and without cookies: the word arrives on stdout even though
+# there are no formats to play, so this call learns it for free while it is
+# asking the viewer count. Nothing cheaper says so anywhere.
+MEMBERS_ONLY = "subscriber_only"
+
 
 class LiveCheckError(RuntimeError):
     pass
@@ -37,6 +43,12 @@ class LiveState:
     # sweep never carries. Only meaningful while the state is is_upcoming.
     starts_at: int | None = None
     upcoming: bool = False
+    # Behind the channel's membership. Nothing else says so: it is absent from
+    # the channel feeds, and the subscriptions feed reports availability as NA
+    # for every entry, measured over a thousand of them. This call is the one
+    # place it shows, and it costs nothing extra because the call is already
+    # being made for the viewer count.
+    members_only: bool = False
 
 
 def _number(text: str) -> int | None:
@@ -51,12 +63,16 @@ def parse_line(ext_id: str, text: str) -> LiveState:
     line = next((row for row in text.splitlines() if row.strip()), "")
     parts = line.split("|")
     status = parts[1].strip() if len(parts) > 1 else ""
+    # Older output had three fields. Tolerated, so a line from before this was
+    # asked for still yields the viewer count rather than being thrown away.
+    availability = parts[3].strip() if len(parts) > 3 else ""
     return LiveState(
         ext_id,
         _number(parts[0] if parts else ""),
         status == "is_live",
         _number(parts[2]) if len(parts) > 2 else None,
         status == "is_upcoming",
+        availability == MEMBERS_ONLY,
     )
 
 
@@ -71,7 +87,9 @@ def check(cfg: Config, ext_id: str, throttle: Throttle | None = None,
                # is to wait.
                "--ignore-no-formats-error",
                *cookie_args(cfg),
-               "--print", "%(concurrent_view_count)s|%(live_status)s|%(release_timestamp)s",
+               "--print",
+               "%(concurrent_view_count)s|%(live_status)s|%(release_timestamp)s"
+               "|%(availability)s",
                WATCH_URL.format(video_id=ext_id)]
     result = ytdlp.run(command, LiveCheckError, "the live check", throttle, cancel, timeout)
     if result.returncode != 0 and not result.stdout.strip():

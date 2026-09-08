@@ -18,7 +18,7 @@ from ..sources import progress as mpv_progress
 ROLES = (
     "key", "title", "channelKey", "channelTitle", "channelAvatar", "thumbnail", "ageText",
     "durationText", "viewsText", "likesText", "watched", "url", "isLive",
-    "isUpcoming", "scheduledText", "startsText", "progress", "wasLive",
+    "isUpcoming", "scheduledText", "startsText", "progress", "wasLive", "isMembers",
 )
 
 
@@ -141,6 +141,9 @@ class FeedModel(QAbstractListModel):
         # membership against its values, not its column names, unlike the plain
         # dict a few callers still hand in.
         scheduled_at = row["scheduled_at"] if "scheduled_at" in row.keys() else None  # noqa: SIM118
+        # Asked for the same way, and for the same reason: a search result and
+        # a playlist entry are built from a listing that has no such column.
+        members_only = row["members_only"] if "members_only" in row.keys() else 0  # noqa: SIM118
         is_upcoming = row["live_status"] == "is_upcoming"
         return {
             "key": row["key"],
@@ -169,6 +172,10 @@ class FeedModel(QAbstractListModel):
             # announced says nothing about when to turn up. The card puts this
             # where the age of an ordinary video goes.
             "startsText": fmt.start_time_text(scheduled_at) if is_upcoming else "",
+            # Behind the channel's membership. The card says so on the picture
+            # the way a stream does, and the play path refuses it, because what
+            # mpv would be handed is a sentence about joining the channel.
+            "isMembers": bool(members_only),
             "progress": 0.0,
         }
 

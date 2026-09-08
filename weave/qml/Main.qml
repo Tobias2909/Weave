@@ -1374,6 +1374,7 @@ ApplicationWindow {
                 watched: model.watched
                 isLive: model.isLive
                 wasLive: model.wasLive
+                isMembers: model.isMembers
                 isUpcoming: model.isUpcoming
                 scheduledText: model.scheduledText
                 startsText: model.startsText
