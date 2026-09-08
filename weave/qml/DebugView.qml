@@ -8,6 +8,12 @@ import QtQuick.Layouts
 Item {
     id: view
 
+    // The part that scrolls, lent out so a wheel notch can be given the
+    // same distance it has over the videos. What turns a notch into a
+    // distance has to be declared beside a Flickable rather than inside
+    // one, since a child of a Flickable rides in the content.
+    readonly property Flickable scrolls: sheet
+
     // The palette has one red and one amber. Red for something that is
     // broken, amber for something worth a look, and the accent for fine.
     function markColour(state) {

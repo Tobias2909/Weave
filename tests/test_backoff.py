@@ -180,6 +180,28 @@ class Saying(unittest.TestCase):
         self.assertIn("60 s", said)
         self.assertIn("15 channels a tick", said)
 
+    def test_the_endpoint_is_probed_with_a_channel_that_is_followed(self):
+        # The constant it used is YouTube's own channel, whose feed answers
+        # 404 whatever the endpoint is doing, so the check cried wolf on every
+        # visit to the page. A followed channel is the question the poller
+        # asks all day, which is the one worth asking.
+        from weave import doctor
+        self.db.add_channel("yt:UCkkkkkkkkkkkkkkkkkkkkkk", "youtube",
+                            "UCkkkkkkkkkkkkkkkkkkkkkk", "Followed")
+        self.db.mark_polled("yt:UCkkkkkkkkkkkkkkkkkkkkkk", None)
+        self.assertEqual(doctor.probe_channel(self.db), "UCkkkkkkkkkkkkkkkkkkkkkk")
+
+    def test_and_by_the_constant_when_nothing_is_followed_yet(self):
+        from weave import doctor
+        self.assertEqual(doctor.probe_channel(self.db), doctor.PROBE_CHANNEL)
+
+    def test_a_channel_already_failing_is_not_the_one_to_ask_about(self):
+        from weave import doctor
+        self.db.add_channel("yt:UCkkkkkkkkkkkkkkkkkkkkkk", "youtube",
+                            "UCkkkkkkkkkkkkkkkkkkkkkk", "Failed")
+        self.db.mark_polled("yt:UCkkkkkkkkkkkkkkkkkkkkkk", "HttpError: HTTP 404")
+        self.assertEqual(doctor.probe_channel(self.db), doctor.PROBE_CHANNEL)
+
     def test_the_ceiling_is_on_the_requests_line(self):
         self.db.record_requests("feeds", count=232, refused=79)
         self.assertIn("feeds 232/300 (79 refused)", self.lines()["requests"])

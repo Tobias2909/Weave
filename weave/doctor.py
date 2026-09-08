@@ -321,6 +321,21 @@ def _twitch(cfg: Config, report: Report, network: bool) -> None:
         report.add("Twitch", WARN, f"{type(exc).__name__}: {exc}")
 
 
+def probe_channel(db: Database) -> str:
+    """Which channel to ask the feed endpoint about.
+
+    One of the followed ones, because that is the exact question the poller
+    asks all day and the only one whose answer says anything about whether the
+    poller will work. The constant is the fallback for a fresh install with
+    nothing followed yet, and it is only that: a channel can stop having a
+    feed, and a probe that always fails says nothing at all.
+    """
+    row = db.conn.execute(
+        "SELECT ext_id FROM channels WHERE platform='youtube' AND tracked=1 "
+        "AND last_error IS NULL ORDER BY last_polled_at DESC LIMIT 1").fetchone()
+    return row["ext_id"] if row else PROBE_CHANNEL
+
+
 def _endpoints(cfg: Config, db: Database, report: Report) -> None:
     from .net import Fetcher, Throttle
     from .sources import rss
@@ -328,7 +343,7 @@ def _endpoints(cfg: Config, db: Database, report: Report) -> None:
     fetcher = Fetcher(Throttle(1, cfg.min_request_interval_s), timeout=15.0, attempts=1)
     try:
         try:
-            found = rss.fetch(fetcher, PROBE_CHANNEL)
+            found = rss.fetch(fetcher, probe_channel(db))
             db.record_requests(FEEDS, 1)
             report.add("the feed endpoint", OK, f"answered with {len(found.videos)} entries")
         except Exception as exc:

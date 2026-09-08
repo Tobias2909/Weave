@@ -1165,6 +1165,14 @@ class Smoke:
         self.check("and back off it the way it came",
                    read(bridge, "viewKind") == "debug", read(bridge, "viewKind"))
 
+        # Both of these pages are a column of rows rather than a grid, and both
+        # scrolled at whatever a Flickable does by itself until they were given
+        # the wheel step the videos use.
+        for page in ("debugView", "settingsView"):
+            view = find(window, page)
+            self.check(f"{page} lends out the part that scrolls",
+                       view is not None and read(view, "scrolls") is not None)
+
         # The report the page can write, which is the thing somebody sends when
         # nothing is arriving. Written for real, into the scratch home this
         # walk runs in.

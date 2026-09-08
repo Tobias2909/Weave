@@ -887,6 +887,14 @@ ApplicationWindow {
         anchors.bottom: miniPlayer.top
     }
 
+    // Both pages are a column of rows rather than a grid of cards, and both
+    // scrolled at whatever a Flickable does by itself, which is a third of
+    // what a notch moves anywhere else in the window.
+    SmoothScroll {
+        flickable: debugView.scrolls
+        step: grid.cellHeight * App.scrollRowsPerNotch
+    }
+
     SettingsView {
         id: settingsView
         objectName: "settingsView"
@@ -899,6 +907,11 @@ ApplicationWindow {
         anchors.topMargin: liveBar.visible ? 0 : banner.height
         anchors.bottom: miniPlayer.top
         onPlaylistsRequested: playlistChooser.open()
+    }
+
+    SmoothScroll {
+        flickable: settingsView.scrolls
+        step: grid.cellHeight * App.scrollRowsPerNotch
     }
 
     // The row above the cards, for the two views that have one. Outside the

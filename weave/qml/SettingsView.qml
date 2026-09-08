@@ -13,6 +13,12 @@ Item {
     // asked for from here rather than opened from here.
     signal playlistsRequested()
 
+    // The part that scrolls, lent out so a wheel notch can be given the same
+    // distance it has over the videos. What turns a notch into a distance has
+    // to be declared beside a Flickable rather than inside one, since a child
+    // of a Flickable rides in the content.
+    readonly property Flickable scrolls: sheet
+
     // One width for the left hand word of every stated fact, so the answers
     // line up down the page rather than each starting wherever its own word
     // happens to end.
