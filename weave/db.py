@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 34
+SCHEMA_VERSION = 35
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -292,6 +292,14 @@ class VideoRow:
 
 # Columns added after the first release. Listed rather than folded into the
 # schema above so an existing database gains them too.
+# What a group can be told to show. Named here rather than as strings in the
+# window, since the value is stored and a typo would be stored with it.
+GROUP_SHOWS_ALL = "all"
+GROUP_SHOWS_VIDEOS = "videos"
+GROUP_SHOWS_STREAMS = "streams"
+GROUP_SHOWS = (GROUP_SHOWS_ALL, GROUP_SHOWS_VIDEOS, GROUP_SHOWS_STREAMS)
+
+
 _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("channels", "last_classified_at", "INTEGER"),
     ("channels", "banner_url", "TEXT"),
@@ -322,6 +330,11 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # hang off one, and which is swept up later.
     ("playlists", "origin", "TEXT NOT NULL DEFAULT 'mine'"),
     ("channels", "playlists_at", "INTEGER"),
+    # Which half of a group is being looked at: all of it, the videos or the
+    # streams. Kept per group rather than as one setting for all of them,
+    # because a group of people who stream and a group of people who do not
+    # are not looked at the same way.
+    ("groups", "shows", f"TEXT NOT NULL DEFAULT '{GROUP_SHOWS_ALL}'"),
     # The first video's frame, which the playlists tab hands over with the
     # names. A playlist has no picture of its own here for the same reason it
     # has no count: asking one for either is a call each.
@@ -1401,7 +1414,7 @@ class Database:
         """Groups with their member and unwatched counts, in display order."""
         return [dict(row) for row in self.conn.execute(
             """
-            SELECT g.id, g.name, g.position,
+            SELECT g.id, g.name, g.position, g.shows,
                    (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id) AS members,
                    (SELECT COUNT(*)
                       FROM videos v
@@ -1413,6 +1426,28 @@ class Database:
             ORDER BY g.position, g.id
             """
         )]
+
+    def group_shows(self, group_id: int) -> str:
+        """Which half of a group is being looked at.
+
+        Its own query rather than a walk over groups(), since the feed asks
+        this on every reload and groups() counts the unwatched rows of every
+        group to answer. A group that has gone answers all, so a view left
+        pointing at a deleted one shows a whole empty feed rather than a
+        filtered one.
+        """
+        row = self.conn.execute("SELECT shows FROM groups WHERE id=?", (group_id,)).fetchone()
+        found = row["shows"] if row else None
+        return found if found in GROUP_SHOWS else GROUP_SHOWS_ALL
+
+    def set_group_shows(self, group_id: int, shows: str) -> bool:
+        """Look at all of a group, its videos or its streams. False when that
+        is not one of the three, so a value nothing can read is never stored."""
+        if shows not in GROUP_SHOWS:
+            return False
+        with self.conn as conn:
+            conn.execute("UPDATE groups SET shows=? WHERE id=?", (shows, group_id))
+        return True
 
     def group_by_name(self, name: str) -> dict | None:
         row = self.conn.execute(

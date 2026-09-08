@@ -44,14 +44,24 @@ Item {
                            ? event.angleDelta.x : event.angleDelta.y) / 120
             if (notches === 0)
                 return
-            var span = control.horizontal
-                       ? control.flickable.contentWidth - control.flickable.width
-                       : control.flickable.contentHeight - control.flickable.height
-            var limit = Math.max(0, span)
+            // A Flickable with a content margin rests at minus that margin
+            // rather than at zero, so the ends have to be worked out from the
+            // margins and not assumed. Clamping at zero left a view with a
+            // margin above it unable to reach its own top, which is where the
+            // row of buttons over a group lives. With no margins these are
+            // exactly zero and the span, which is what this used to say.
+            var lower = -(control.horizontal ? control.flickable.leftMargin
+                                             : control.flickable.topMargin)
+            var reach = control.horizontal
+                        ? control.flickable.contentWidth + control.flickable.rightMargin
+                          - control.flickable.width
+                        : control.flickable.contentHeight + control.flickable.bottomMargin
+                          - control.flickable.height
+            var upper = Math.max(lower, reach)
             var here = control.horizontal ? control.flickable.contentX
                                           : control.flickable.contentY
             var from = glide.running ? glide.to : here
-            var to = Math.max(0, Math.min(limit, from - notches * control.step))
+            var to = Math.max(lower, Math.min(upper, from - notches * control.step))
             if (to === here) {
                 glide.stop()
                 return

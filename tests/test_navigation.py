@@ -85,6 +85,10 @@ class NoDatabase:
     def decorate(self, rows):
         return list(rows)
 
+    # Which half of a group is showing. No group here has been told anything.
+    def group_shows(self, group_id):
+        return "all"
+
 
 class Recorder:
     """A signal that only counts, so a bridge built with __new__ can emit."""
@@ -123,6 +127,7 @@ def make_bridge():
     bridge.statusChanged = Recorder()
     bridge.searchEnded = Recorder()
     bridge.searchRestored = Recorder()
+    bridge.groupShowsChanged = Recorder()
     bridge.navChanged = Recorder()
     # The row above the suggestions is told on the way onto that page, since
     # how long ago they were read keeps growing while nothing else changes.

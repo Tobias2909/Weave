@@ -206,7 +206,7 @@ The plus beside **Channels** makes a group, the plus beside **Boxes** makes a
 box, and either can be renamed, moved or deleted by right clicking its row.
 Right click a card for the same sort of menu, which plays it, opens its channel,
 marks it watched or puts it in a box. Deleting a group keeps its channels and
-deleting a box keeps its videos.
+deleting a box keeps its videos. A group is read three ways. **All**, **Videos** and **Streams** sit over its cards and say which of them is wanted, every group keeps its own answer, and the row steps out of the way as you scroll down and comes back the moment you turn round.
 
 For Twitch, press **Connect Twitch** in the live bar and approve the page it
 opens, which already has the code filled in, so there is nothing to type and

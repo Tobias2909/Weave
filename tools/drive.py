@@ -892,6 +892,132 @@ class Smoke:
                    not read(line, "visible") and read(bridge, "updateVersion") == "",
                    str(read(bridge, "updateVersion")))
 
+    def group_bar(self, bridge, window, group_id) -> None:
+        """The row of buttons over a group, and where the first row starts.
+
+        The history keeps its bar in place, because the two words there are the
+        whole page. A group's three are a filter over a grid that gets
+        scrolled, so they are drawn over the top of the grid and go with the
+        reading. What has to hold either way is that the cards start at the
+        same height, which is why the grid carries the room the buttons take as
+        a content margin in a group and as a bar above it everywhere else.
+        """
+        from weave import paths
+        from weave.db import Database, VideoRow
+
+        # A channel of this step's own, put back at the end. The two seeded
+        # channels are what the rest of the walk counts and searches, and one
+        # of them is the channel that has never streamed, so borrowing either
+        # of them here quietly broke two checks further down.
+        third = "yt:UCsmokesmokesmokesmokes3"
+        db = Database(paths.DB_FILE)
+        db.remember_channel(third, "youtube", "UCsmokesmokesmokesmokes3", "Smoke three")
+        # Enough to scroll, plus one stream, so all three buttons have
+        # something different to answer. Remembered rather than followed, so
+        # none of it reaches All.
+        db.upsert_videos([
+            VideoRow("youtube", f"grouponly{i:02d}", third, f"Third {i:02d}",
+                     published_at=1_700_000_200 + i, duration_s=300)
+            for i in range(20)
+        ])
+        db.upsert_videos([VideoRow("youtube", "groupstream1", third, "Third stream",
+                                   published_at=1_700_000_300, duration_s=3600,
+                                   live_status="was_live")])
+        db.close()
+        bridge.addChannelToGroup(group_id, third)
+        settle(0.3)
+
+        grid = find(window, "grid")
+        # Measured in the history first, which is the bar this one has to line
+        # up with. Its own y plus how far its content is pushed down is where
+        # the first card sits, whichever way the room above is made.
+        bridge.showHistory()
+        settle(0.4)
+        history_first = read(grid, "y") - read(grid, "contentY")
+
+        bridge.selectGroup(group_id)
+        settle(0.5)
+        wait_until(lambda: read(grid, "count") > 20, 4.0)
+        call(grid, "forceLayout")
+        settle(0.2)
+
+        clip = find(window, "groupBarClip")
+        bar = find(window, "groupBar")
+        ground = find(window, "groupBarGround")
+        self.check("a group has the row of buttons",
+                   clip is not None and bar is not None and read(clip, "visible"))
+        if clip is None or bar is None or ground is None:
+            return
+
+        group_first = read(grid, "y") - read(grid, "contentY")
+        self.check("and its first row starts where the history's does",
+                   abs(group_first - history_first) < 1,
+                   f"history {history_first:.0f}, group {group_first:.0f}")
+        self.check("the buttons are in place before anything is scrolled",
+                   read(bar, "y") == 0, f"y {read(bar, 'y'):.0f}")
+        self.check("with no ground under them, since nothing is behind them",
+                   read(ground, "opacity") == 0, f"opacity {read(ground, 'opacity'):.2f}")
+
+        # All three, on rows that are already stored, so none of this asks
+        # anything of YouTube.
+        both = read(grid, "count")
+        call(find(window, "groupVideos"), "click")
+        settle(0.4)
+        videos = read(grid, "count")
+        call(find(window, "groupStreams"), "click")
+        settle(0.4)
+        streams = read(grid, "count")
+        call(find(window, "groupAll"), "click")
+        settle(0.4)
+        self.check("videos and streams are the two halves of all of it",
+                   videos + streams == both and videos > 0 and streams > 0,
+                   f"all {both}, videos {videos}, streams {streams}")
+        self.check("and all of it comes back", read(grid, "count") == both,
+                   f"count {read(grid, 'count')}")
+        self.check("which half is showing is remembered on the group",
+                   str(read(bridge, "groupShows")) == "all",
+                   str(read(bridge, "groupShows")))
+
+        room = read(grid, "contentHeight") - read(grid, "height")
+        self.check("the group is long enough to scroll", room > 0, f"{room:.0f} px")
+        write(grid, "contentY", 300.0)
+        settle(0.5)
+        self.check("scrolling down takes the buttons out of the way",
+                   read(bar, "y") <= -read(clip, "barHeight") + 1, f"y {read(bar, 'y'):.0f}")
+        self.check("and out of reach with them", not read(bar, "enabled"))
+        self.check("the ground is under them once there is a card behind",
+                   read(ground, "opacity") == 1, f"opacity {read(ground, 'opacity'):.2f}")
+
+        write(grid, "contentY", 250.0)
+        settle(0.5)
+        self.check("turning round brings them back", read(bar, "y") == 0,
+                   f"y {read(bar, 'y'):.0f}")
+
+        write(grid, "contentY", 900.0)
+        settle(0.5)
+        self.check("and down again takes them away again",
+                   read(bar, "y") <= -read(clip, "barHeight") + 1, f"y {read(bar, 'y'):.0f}")
+        write(grid, "contentY", -float(read(grid, "topMargin")))
+        settle(0.5)
+        self.check("back at the top they are in place with no ground",
+                   read(bar, "y") == 0 and read(ground, "opacity") == 0,
+                   f"y {read(bar, 'y'):.0f} opacity {read(ground, 'opacity'):.2f}")
+        if self.shot:
+            screenshot(window, shot_beside(self.shot, "groupbar"))
+
+        bridge.selectGroup(-1)
+        settle(0.4)
+        self.check("and no other view has them",
+                   not read(clip, "visible"))
+
+        # Put back, so what the rest of the walk counts is what it seeded.
+        db = Database(paths.DB_FILE)
+        db.remove_from_group(group_id, third)
+        db.remove_channel(third)
+        db.close()
+        bridge.reload()
+        settle(0.3)
+
     def scrolling(self, bridge, window) -> None:
         """A refresh landing while somebody is reading must not move the page.
 
@@ -1018,6 +1144,8 @@ class Smoke:
         settle(0.4)
         self.check("and All is exactly as it was", read(grid, "count") == 6,
                    f"count {read(grid, 'count')}")
+
+        self.group_bar(bridge, window, group_id)
 
         menu = find(window, "groupMenu")
         write(menu, "groupId", group_id)

@@ -29,7 +29,7 @@ from .. import ids
 from .. import paths, tokens
 from ..config import Config
 from ..cookies import browser_spec
-from ..db import Database
+from ..db import GROUP_SHOWS, GROUP_SHOWS_ALL, GROUP_SHOWS_STREAMS, Database
 from ..imagecache import SECONDS_PER_DAY, plain_source, qml_source
 from ..sources import release as release_source
 from ..sources import progress as mpv_progress
@@ -166,6 +166,9 @@ class Bridge(QObject):
     wizardChanged = Signal()
     recommendedChanged = Signal()
     channelTabChanged = Signal()
+    # Which half of a group is showing. Its own signal rather than
+    # viewChanged, since pressing one of the three is not going anywhere.
+    groupShowsChanged = Signal()
     playlistViewChanged = Signal()
     reportChanged = Signal()
     addChanged = Signal()
@@ -499,6 +502,17 @@ class Bridge(QObject):
             return ("Nothing here yet.\nFollow a channel with the plus beside Channels, "
                     "then press Refresh.")
         if self._view_kind == GROUP:
+            shows = self._db.group_shows(self._view_id)
+            if shows != GROUP_SHOWS_ALL:
+                # Reading half of a group that does have rows in the other
+                # half. Saying it has no channels would be a lie, and the way
+                # out is the row of buttons above rather than managing it.
+                found = next((row for row in self._db.groups()
+                              if row["id"] == self._view_id), None)
+                if found and found["members"]:
+                    what = ("streams" if shows == GROUP_SHOWS_STREAMS else "videos")
+                    return (f"No {what} in this group.\n"
+                            "Press All above to see everything in it.")
             return ("This group has no channels in it yet.\n"
                     "Right click the group and manage it, or right click a video.")
         if not len(self._db.channels(platform="youtube")):
@@ -940,6 +954,13 @@ class Bridge(QObject):
         streams = None
         if self._view_kind == CHANNEL and self._channel_tab in ("videos", "streams"):
             streams = self._channel_tab == "streams"
+        # A group is read the same way, from what that group was last told to
+        # show. A feed or a box still says nothing here and holds both: a
+        # stream of a channel you follow belongs in what you follow.
+        if self._view_kind == GROUP:
+            shows = self._db.group_shows(self._view_id)
+            if shows != GROUP_SHOWS_ALL:
+                streams = shows == GROUP_SHOWS_STREAMS
         self._model.reload(
             hide_watched=self._hide_watched and honour_toggle,
             group_id=self._view_id if self._view_kind == GROUP else None,
@@ -1020,6 +1041,9 @@ class Bridge(QObject):
             # away from.
             self.searchEnded.emit()
         self.viewChanged.emit()
+        # Which half of a group is showing belongs to the group, so arriving
+        # on a different one is the moment the row of buttons is wrong.
+        self.groupShowsChanged.emit()
         # The line above the suggestions is about that page, and arriving on it
         # is one of the two moments it can be wrong.
         self.recommendedChanged.emit()
@@ -1823,6 +1847,35 @@ class Bridge(QObject):
                  "thumbnail": qml_source(row["thumbnail_url"]),
                  "kept": row["origin"] == "channel"}
                 for row in self._db.channel_playlists(self._view_channel)]
+
+    def _get_group_shows(self) -> str:
+        """Which half of the group showing is being looked at, or all of it.
+
+        Answers all anywhere but in a group, so the row of buttons has
+        something to be accented by even while it is on its way out of view.
+        """
+        if self._view_kind != GROUP:
+            return GROUP_SHOWS_ALL
+        return self._db.group_shows(self._view_id)
+
+    groupShows = Property(str, _get_group_shows, notify=groupShowsChanged)
+
+    @Slot(str)
+    def showInGroup(self, which: str) -> None:
+        """Look at all of this group, its videos or its streams.
+
+        Stored on the group, so it is still what it was on the next visit and
+        after a restart. Both readings are of rows already here, so this is a
+        reload and never a request.
+        """
+        if which not in GROUP_SHOWS or self._view_kind != GROUP:
+            return
+        if which == self._db.group_shows(self._view_id):
+            return
+        if not self._db.set_group_shows(self._view_id, which):
+            return
+        self.groupShowsChanged.emit()
+        self.reload()
 
     @Slot(str)
     def showChannelTab(self, which: str) -> None:

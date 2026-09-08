@@ -1087,6 +1087,131 @@ ApplicationWindow {
         }
     }
 
+    // The same row of buttons a group gets, which is not the bar above.
+    //
+    // History keeps its bar in place because the two words there are the whole
+    // page: which history you are reading. A group's three are a filter over a
+    // grid that is scrolled, so they go with the reading and come back the
+    // moment you turn round. They are drawn over the top of the grid, and the
+    // grid holds the same first row offset history has by carrying it as a
+    // content margin instead, so the cards start in exactly the same place in
+    // both. Nothing ever passes under the buttons at rest, since the margin is
+    // as tall as they are; the ground under them appears only once the grid
+    // has been scrolled and there is a card behind them to cover.
+    Item {
+        id: groupBarClip
+        objectName: "groupBarClip"
+        visible: App.viewKind === "group"
+        clip: true
+        z: 3
+        anchors.left: grid.left
+        anchors.right: grid.right
+        anchors.top: grid.top
+        height: barHeight + gap
+
+        readonly property int barHeight: 42
+        readonly property int gap: 8
+        // How far the grid has been scrolled past its own top. Zero at rest,
+        // whatever the content margin is.
+        readonly property real past: Math.max(0, grid.contentY + grid.topMargin)
+        // Pushed out of the way. Set from movement rather than bound to it, so
+        // it survives the scroll stopping halfway.
+        property bool away: false
+        property real lastY: 0
+
+        onVisibleChanged: { away = false; lastY = grid.contentY }
+
+        // Arriving on another group is a fresh page, so the buttons are back
+        // whatever the last one was scrolled to.
+        Connections {
+            target: App
+            function onViewChanged() {
+                groupBarClip.away = false
+                groupBarClip.lastY = grid.contentY
+            }
+        }
+
+        Connections {
+            target: grid
+            function onContentYChanged() {
+                if (!groupBarClip.visible)
+                    return
+                var moved = grid.contentY - groupBarClip.lastY
+                groupBarClip.lastY = grid.contentY
+                // A few pixels of slack, or the settling of a glide counts as
+                // a direction of its own.
+                if (moved > 3 && groupBarClip.past > groupBarClip.barHeight)
+                    groupBarClip.away = true
+                else if (moved < -3)
+                    groupBarClip.away = false
+                if (groupBarClip.past <= 0)
+                    groupBarClip.away = false
+            }
+        }
+
+        Item {
+            id: groupBar
+            objectName: "groupBar"
+            anchors.left: parent.left
+            anchors.right: parent.right
+            height: parent.barHeight + parent.gap
+            // Its own y rather than an anchor, since an anchor cannot be
+            // animated and the point of it is that it slides.
+            y: groupBarClip.away ? -height : 0
+            // Out of the way means out of reach as well, so a press cannot
+            // land on a button that is not on the screen.
+            enabled: !groupBarClip.away
+            Behavior on y { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+
+            // Only once there is a card behind it. At rest it sits in the
+            // margin above the first row, where the window's own ground shows
+            // through and a band of anything else would be a seam.
+            Rectangle {
+                objectName: "groupBarGround"
+                anchors.fill: parent
+                color: Theme.colors.background
+                opacity: groupBarClip.past > 0 ? 1 : 0
+                Behavior on opacity { NumberAnimation { duration: 120 } }
+
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    height: 1
+                    color: Theme.colors.border
+                }
+            }
+
+            Row {
+                objectName: "groupHeader"
+                anchors.left: parent.left
+                anchors.leftMargin: 6
+                anchors.top: parent.top
+                anchors.topMargin: (groupBarClip.barHeight - height) / 2
+                spacing: 8
+
+                FlatButton {
+                    objectName: "groupAll"
+                    text: "All"
+                    accent: App.groupShows === "all"
+                    onClicked: App.showInGroup("all")
+                }
+                FlatButton {
+                    objectName: "groupVideos"
+                    text: "Videos"
+                    accent: App.groupShows === "videos"
+                    onClicked: App.showInGroup("videos")
+                }
+                FlatButton {
+                    objectName: "groupStreams"
+                    text: "Streams"
+                    accent: App.groupShows === "streams"
+                    onClicked: App.showInGroup("streams")
+                }
+            }
+        }
+    }
+
     ChannelPlaylists {
         id: channelPlaylistsView
         objectName: "channelPlaylistsView"
@@ -1120,6 +1245,11 @@ ApplicationWindow {
         anchors.leftMargin: 10
         anchors.rightMargin: 10
         clip: true
+        // A group has its buttons drawn over the grid rather than above it, so
+        // the room they take is content margin here instead. Same number
+        // either way, so the first row of a group and the first row of the
+        // history start at the same height.
+        topMargin: groupBarClip.visible ? groupBarClip.height : 0
 
         // Cards grow with the window instead of snapping between sizes, so a
         // row always fills the width. Two is the fewest columns worth showing,
