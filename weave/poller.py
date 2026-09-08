@@ -148,6 +148,86 @@ UPCOMING_PER_CHECK = 3
 # all in the minutes after a channel announces something.
 NEW_STREAMS_PER_CHECK = 3
 
+# How many rounds in a row the long form feed has to answer 404 before that is
+# believed. The endpoint refuses a burst with a 404 rather than with a busy
+# signal, and a refusal lasts minutes while a missing tab lasts for ever, so
+# one round says nothing. Two rounds are a quarter of an hour apart at the
+# fastest tier, which no burst measured here has outlived.
+LONG_FORM_STRIKES = 2
+
+# How long a channel stays on the mixed feed before the long form tab is
+# offered another chance. A channel that had no long form videos when it was
+# first asked can post one at any time, and nothing else would ever notice.
+VARIANT_RECHECK_S = 7 * 86400
+
+# How many channels on the mixed feed have their Shorts tab read in one tick.
+# The mixed feed says nothing about the kind of what it carries, so this is
+# what tells its rows apart, and it is paced for the same reason the streams
+# probes are: a one off cost across a long list must not arrive as a burst.
+SHORTS_SWEEPS_PER_TICK = 2
+
+# What a 404 on the long form feed leaves behind, since the caller rather than
+# the fetch decides what it meant.
+MISSING_LONG_FORM = "missing-long-form"
+
+
+def _column(row, name: str, default=None):
+    """Read a column that an older row or a hand built one may not carry."""
+    try:
+        value = row[name]
+    except (IndexError, KeyError):
+        return default
+    return default if value is None else value
+
+
+def _on_mixed_feed(row) -> bool:
+    return (_column(row, "feed_variant", "") or "") == rss.CHANNEL
+
+
+def _worth_a_streams_probe(row, tiers) -> bool:
+    """Whether to spend the one request that says if this channel streams.
+
+    Only a channel that is still publishing, or one nothing is stored from at
+    all, which is a first look rather than a dormant one.
+
+    MEASURED on a real list of 466 channels: 301 of the 307 never asked had
+    published nothing in ninety days, and the probes were a fifth of the whole
+    feed ceiling. A dormant channel that starts up again publishes something,
+    which moves it into a faster tier by itself, and it is asked then.
+    """
+    if _column(row, "last_published_at") is None:
+        return True
+    return int(_column(row, "interval_s", tiers.warm_s)) <= tiers.warm_s
+
+
+def _wants_shorts_sweep(row, now: int) -> bool:
+    """Whether this channel's Shorts tab is owed a look.
+
+    Only a channel on the mixed feed is: every other channel is asked for the
+    long form tab, which carries no Shorts at all. Paced by the channel's own
+    interval, so a busy channel is sorted out as often as it is polled and a
+    dormant one is not asked about a tab it barely uses.
+    """
+    if not _on_mixed_feed(row):
+        return False
+    swept = _column(row, "shorts_sweep_at")
+    return not swept or swept <= now - int(_column(row, "interval_s", 0))
+
+
+def _wants_variant_retest(row, now: int) -> bool:
+    """Whether to ask the long form tab of a channel that fell back to the
+    mixed one.
+
+    Not before that channel's Shorts tab has been read once. The rows it
+    stored while it was on the mixed feed are of unknown kind, and the Shorts
+    tab is the only thing that says which of them are Shorts, so they have to
+    be sorted out while it is still known that this channel was ever there.
+    """
+    if not _on_mixed_feed(row) or not _column(row, "shorts_sweep_at"):
+        return False
+    checked = _column(row, "variant_checked_at")
+    return not checked or checked <= now - VARIANT_RECHECK_S
+
 
 class FeedPoller(Worker):
     finished_poll = Signal(int, int, int)   # channels polled, rows touched, failures
@@ -262,7 +342,7 @@ class FeedPoller(Worker):
         last = self._db.get_int("sweep_at", 0)
         if not self._force_all and interval and time.time() - last < interval:
             return 0
-        allowance = budget.allowance(BROWSE, 1)
+        allowance = budget.allowance(BROWSE, 1, background=True)
         if allowance.empty:
             self._budget_notice(BROWSE, allowance)
             return 0
@@ -322,20 +402,41 @@ class FeedPoller(Worker):
         is asked for it every round, which is cheap because most channels do
         not stream.
 
-        The ones nobody has looked at are asked a few at a time. Nothing else
-        reveals that a channel streams, so they have to be asked, but asking
-        all of them at once would double a round and press against the request
-        ceiling, and there is no hurry about a question that is answered once
-        and then remembered for good.
+        The ones nobody has looked at are asked a few at a time, and only if
+        they are still publishing. Nothing else reveals that a channel
+        streams, so they have to be asked, but asking all of them at once
+        would double a round and press against the request ceiling, and there
+        is no hurry about a question that is answered once and then remembered
+        for good.
+
+        MEASURED on a real list: 301 of the 307 channels that had never been
+        asked had published nothing in ninety days, and those probes were a
+        fifth of the whole feed ceiling, spent on channels with nothing to
+        stream. A channel that publishes anything climbs back into a faster
+        tier by that alone, and is asked then.
         """
-        jobs = [(row["key"], row["ext_id"], row["feed_variant"] or rss.VIDEOS)
+        now = int(time.time())
+        # A channel that fell back to the mixed feed is asked for the long
+        # form tab again now and then, rather than being left there for good
+        # on the strength of one 404.
+        jobs = [(row["key"], row["ext_id"],
+                 rss.VIDEOS if _wants_variant_retest(row, now)
+                 else (row["feed_variant"] or rss.VIDEOS))
                 for row in rows]
+        # The mixed feed says nothing about the kind of what it carries, so
+        # the Shorts tab of a channel on it is read as well. A few a tick:
+        # this is a one off cost for most channels and must not burst.
+        jobs += [(row["key"], row["ext_id"], rss.SHORTS) for row in rows
+                 if _wants_shorts_sweep(row, now)
+                 and not _wants_variant_retest(row, now)][:SHORTS_SWEEPS_PER_TICK]
         if not self._cfg.poll_live_feeds:
             return jobs
         streamers = self._db.channels_that_stream()
         unasked = self._db.channels_not_asked_for_streams()
+        tiers = self._cfg.feed_tiers
         wanted = [row for row in rows if row["key"] in streamers]
-        wanted += [row for row in rows if row["key"] in unasked][:LIVE_PROBES_PER_TICK]
+        wanted += [row for row in rows if row["key"] in unasked
+                   and _worth_a_streams_probe(row, tiers)][:LIVE_PROBES_PER_TICK]
         jobs += [(row["key"], row["ext_id"], rss.LIVE) for row in wanted
                  if (row["feed_variant"] or "") != rss.CHANNEL]
         return jobs
@@ -346,25 +447,32 @@ class FeedPoller(Worker):
 
         A 404 on a tab feed is ambiguous. It means the channel has no such tab,
         and it also means the endpoint is refusing us, which it does with a 404
-        rather than with a busy signal. The mixed channel feed is the
-        discriminator: it answers in the first case and refuses in the second,
-        so a fallback only sticks when that call succeeds.
+        rather than with a busy signal, in bursts, and for channels that are
+        perfectly fine. Asking the mixed feed there and then does not tell the
+        two apart: measured on this endpoint, a burst refuses the per tab
+        playlist feeds while the mixed channel feed keeps answering, which is
+        how a hundred healthy channels ended up on the mixed feed for good,
+        and Shorts with them.
 
-        The streams tab is the one case with nothing to fall back to, since a
-        channel that has never streamed genuinely has no such tab. So a 404
-        there returns no result rather than raising, and the caller decides
-        what it meant by looking at whether the same channel's videos feed
-        answered in the same round.
+        So nothing is decided here. A 404 on the long form tab returns no
+        result and says what happened, and the caller counts it against the
+        channel; only a channel that answers 404 in several rounds in a row
+        falls back. Nothing is fetched in its place in the meantime, which
+        costs that channel one round and costs a burst nothing at all.
+
+        The streams and Shorts tabs are the cases with nothing to fall back
+        to, since a channel that has never streamed or never posted a Short
+        genuinely has no such tab. A 404 there returns no result as well, and
+        the caller decides what it meant.
         """
         try:
             return rss.fetch(fetcher, ext_id, kind), 1, None
         except HttpError as exc:
-            if exc.status == 404 and kind == rss.LIVE:
-                return None, 1, None
             if exc.status != 404 or kind == rss.CHANNEL:
                 raise
-            result = rss.fetch(fetcher, ext_id, rss.CHANNEL)
-            return result, 2, rss.CHANNEL
+            if kind == rss.VIDEOS:
+                return None, 1, MISSING_LONG_FORM
+            return None, 1, None
 
     def _phase_rss(self, fetcher: Fetcher, budget: Budget) -> tuple[int, int, int]:
         if self._resting():
@@ -375,8 +483,15 @@ class FeedPoller(Worker):
         if not rows:
             return 0, 0, 0
         jobs = self._feed_jobs(rows)
+        now = int(time.time())
+        # Channels being offered the long form tab again after having fallen
+        # back to the mixed one. A stamp goes on whatever the answer is, so a
+        # channel that really has no such tab is not asked every round.
+        retests = {row["key"] for row in rows if _wants_variant_retest(row, now)}
+        # Channels carrying a 404 from an earlier round. An answer clears it.
+        struck = {row["key"] for row in rows if _column(row, "long_form_404s", 0)}
 
-        allowance = budget.allowance(FEEDS, len(jobs))
+        allowance = budget.allowance(FEEDS, len(jobs), background=True)
         if allowance.empty:
             self._budget_notice(FEEDS, allowance)
             return 0, 0, 0
@@ -407,7 +522,7 @@ class FeedPoller(Worker):
                     break
                 key, kind = futures[future]
                 try:
-                    result, cost, variant = future.result()
+                    result, cost, note = future.result()
                 except (FetchCancelled, ProcessCancelled):
                     break
                 except Exception as exc:
@@ -422,6 +537,51 @@ class FeedPoller(Worker):
                 else:
                     spent += cost
                     pending: list[str] = []
+                    if note == MISSING_LONG_FORM:
+                        # Ambiguous on its own. Counted against the channel,
+                        # and believed only once it has happened in several
+                        # rounds in a row. Counted as a refusal as well, since
+                        # a 404 is what this endpoint says when it is pushing
+                        # back and a round full of them is what the rest is
+                        # there to answer.
+                        refused.append(key)
+                        if self._db.note_long_form_missing(key) >= LONG_FORM_STRIKES:
+                            self._db.set_feed_variant(key, rss.CHANNEL)
+                        if key in retests:
+                            self._db.stamp_variant_checked(key)
+                        # Stamped, though nothing was stored: the channel is
+                        # one round late, and that is the price of not letting
+                        # a refusal rewrite where it is read from. It is not
+                        # one of the channels that answered, since a 404 is
+                        # exactly what the endpoint refusing us looks like and
+                        # the streams verdict below leans on that set.
+                        self._db.mark_polled(key, None)
+                        done += 1
+                        self.progress.emit("feeds", done, total)
+                        continue
+                    if kind == rss.SHORTS:
+                        # Whatever the tab said, the question has been asked.
+                        # A channel with no Shorts tab answers 404, which is
+                        # an answer like any other.
+                        self._db.stamp_shorts_sweep(key)
+                        if result is not None:
+                            # Stored as Shorts, which is what keeps them out
+                            # of the feed. A row already here from the mixed
+                            # feed carries no kind at all, and this is what
+                            # fills that in.
+                            touched += self._db.upsert_videos(result.videos)
+                        done += 1
+                        self.progress.emit("feeds", done, total)
+                        continue
+                    if kind == rss.VIDEOS:
+                        if key in retests:
+                            # The long form tab answers again, so the fallback
+                            # goes and this channel is back to a feed that
+                            # carries no Shorts.
+                            self._db.set_feed_variant(key, None)
+                            self._db.stamp_variant_checked(key)
+                        elif key in struck:
+                            self._db.clear_long_form_strikes(key)
                     if kind == rss.LIVE:
                         if result is None:
                             no_streams.add(key)
@@ -442,8 +602,6 @@ class FeedPoller(Worker):
                         fresh = self._db.unknown_video_keys([v.key for v in result.videos])
                         pending = [v.key for v in result.videos
                                    if v.key in fresh and not v.views]
-                    if variant:
-                        self._db.set_feed_variant(key, variant)
                     touched += self._db.upsert_videos(result.videos)
                     if kind == rss.LIVE and pending:
                         self._db.mark_streams_pending(pending)
@@ -886,10 +1044,13 @@ class ChannelFeedFetcher(Worker):
             except HttpError as exc:
                 if exc.status != 404 or variant == rss.CHANNEL:
                     raise
-                # No long form tab, which the mixed feed answers for.
+                # Either there is no long form tab or the endpoint is refusing
+                # us, and one call cannot tell those apart. The page is opened
+                # either way, from the mixed feed, but nothing is remembered
+                # from it: which feed answers for a channel is decided by the
+                # poller, which sees the same channel round after round.
                 budget.spend(FEEDS)
                 result = rss.fetch(fetcher, self._ext_id, rss.CHANNEL)
-                self._db.set_feed_variant(self._key, rss.CHANNEL)
         except (FetchCancelled, ProcessCancelled):
             fetcher.close()
             return
@@ -1008,7 +1169,7 @@ class OwnerFetcher(Worker):
         if not wanted:
             return
         budget = Budget(self._db, self._cfg.budget_limits, self._cfg.budget_window_s)
-        allowance = budget.allowance(OEMBED, len(wanted))
+        allowance = budget.allowance(OEMBED, len(wanted), background=True)
         if allowance.empty:
             return
         fetcher = Fetcher(self._throttle, cancel=self._cancel)
@@ -1189,7 +1350,7 @@ class LiveWatcher(Worker):
         is kept, so this only ever runs on what has just appeared.
         """
         rows = self._db.streams_to_settle(NEW_STREAMS_PER_CHECK)
-        rows = rows[:budget.allowance(PLAYER, len(rows)).granted]
+        rows = rows[:budget.allowance(PLAYER, len(rows), background=True).granted]
         for row in rows:
             if self._cancel.is_set():
                 return
@@ -1220,7 +1381,7 @@ class LiveWatcher(Worker):
         gone live or been cancelled from being asked about for ever.
         """
         rows = self._db.upcoming_without_start(UPCOMING_PER_CHECK)
-        rows = rows[:budget.allowance(PLAYER, len(rows)).granted]
+        rows = rows[:budget.allowance(PLAYER, len(rows), background=True).granted]
         for row in rows:
             if self._cancel.is_set():
                 return
@@ -1249,7 +1410,7 @@ class LiveWatcher(Worker):
         # rather than skipped: the ones left out keep their old count for one
         # more cycle instead of the whole bar going stale.
         budget = Budget(self._db, self._cfg.budget_limits, self._cfg.budget_window_s)
-        rows = rows[:budget.allowance(PLAYER, len(rows)).granted]
+        rows = rows[:budget.allowance(PLAYER, len(rows), background=True).granted]
         for row in rows:
             if self._cancel.is_set():
                 break
@@ -1617,7 +1778,7 @@ class ChannelAvatarsFetcher(Worker):
 
     def work(self) -> None:
         budget = Budget(self._db, self._cfg.budget_limits, self._cfg.budget_window_s)
-        allowance = budget.allowance(BROWSE, len(self._keys))
+        allowance = budget.allowance(BROWSE, len(self._keys), background=True)
         keys = self._keys[:allowance.granted]
         found = spent = refused = 0
         if keys:

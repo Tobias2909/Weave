@@ -81,6 +81,15 @@ RECOMMENDED_TRUST_S = 6 * 3600
 PLAYLIST_TRUST_S = 6 * 3600
 # Shorter, because a history changes every time something is played.
 HISTORY_TRUST_S = 30 * 60
+# How long a set of search results is worth showing before asking again, and
+# how long the words are kept at all. Searching for the same thing twice is
+# something a person does all the time, and it used to cost a request every
+# time; the second ask is now free for most of a day. Kept far longer than
+# that so the page has something to draw at once while a fresh set arrives,
+# and so a search repeated next week is one request rather than one per page
+# scrolled. What is not repeated in a month goes.
+SEARCH_TRUST_S = 20 * 3600
+SEARCH_KEEP_S = 30 * 86400
 
 # How many channels may be waiting for their details at once. A page fetch each
 # against the same budget as everything else, so opening a group of a hundred
@@ -1198,7 +1207,13 @@ class Bridge(QObject):
 
     @Slot()
     def searchYouTube(self) -> None:
-        """Search YouTube itself, for something that was never in the feed."""
+        """Search YouTube itself, for something that was never in the feed.
+
+        The same words asked twice cost one request, not two. What one page
+        answered is kept, so a search repeated within SEARCH_TRUST_S is drawn
+        from here and nothing is asked at all, and an older one is drawn at
+        once anyway while a fresh set is on its way.
+        """
         if not self._search_text:
             return
         self._search_scope = "youtube"
@@ -1206,7 +1221,19 @@ class Bridge(QObject):
         self._exhausted = False
         if self._view_kind != SEARCH:
             self._set_view(SEARCH, -1)
+        kind = self._db.search_kind(self._search_text)
+        # Shaped exactly as a fresh page is, by the same call, so a set from
+        # here and a set from YouTube cannot look different.
+        stored = self._db.cached_flat(kind)
+        age = self._db.cached_age_s(kind)
+        if stored:
+            self._web_results = self._db.decorate(stored)
+            self._set_status(f"{len(self._web_results)} results from YouTube, read "
+                             f"{fmt.age_text(int(time.time()) - (age or 0))}")
+            self.reload()
         self.viewChanged.emit()
+        if stored and age is not None and age < SEARCH_TRUST_S:
+            return
         self._fetch_results(start=1)
 
     @Slot()
@@ -1248,7 +1275,17 @@ class Bridge(QObject):
         self._set_notice("")
         if query != self._search_text:
             return                          # the words moved on while it ran
-        found = self._db.decorate([dict(row) for row in rows])
+        flat = [dict(row) for row in rows]
+        kind = self._db.search_kind(query)
+        if start <= 1:
+            self._db.replace_cached(kind, flat)
+            # Swept here rather than at startup: a search is the only thing
+            # that adds one of these, so it is also the right moment to drop
+            # the ones nobody has repeated in a month.
+            self._db.forget_old_searches(SEARCH_KEEP_S)
+        else:
+            self._db.append_cached(kind, flat)
+        found = self._db.decorate(flat)
         if start <= 1:
             self._web_results = found
         else:

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 33
+SCHEMA_VERSION = 34
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -379,6 +379,20 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # stores one for a channel nobody is subscribed to is that very tab, so a
     # channel added by hand never had its streams read at all.
     ("channels", "streams", "INTEGER"),
+    # How many rounds in a row the long form feed answered 404 for this
+    # channel. A missing long form tab and the feed endpoint refusing us look
+    # exactly alike, and the endpoint refuses in bursts, so one 404 says
+    # nothing. Counted per round rather than per request, and cleared the
+    # moment the tab answers again.
+    ("channels", "long_form_404s", "INTEGER NOT NULL DEFAULT 0"),
+    # When the long form feed was last asked for a channel that had fallen
+    # back to the mixed one. The fallback is a guess about a tab that may
+    # appear later, so it is re-tested rather than believed for ever.
+    ("channels", "variant_checked_at", "INTEGER"),
+    # When this channel's Shorts tab was last read. Only a channel on the
+    # mixed feed needs it: that feed says nothing about the kind of what it
+    # carries, so the Shorts tab is what tells its rows apart.
+    ("channels", "shorts_sweep_at", "INTEGER"),
 )
 
 
@@ -708,6 +722,10 @@ class Database:
         `force` ignores the intervals but not the limit. The point of the
         limit is that a round is small enough not to look like a burst, and a
         deliberate refresh has the same endpoint on the other end.
+
+        Each row also carries `last_published_at`, which is NULL for a channel
+        nothing is stored from. That is a different thing from a channel that
+        has published nothing lately, and the two want different treatment.
         """
         now = int(time.time())
         params = {
@@ -727,6 +745,7 @@ class Database:
             """
             SELECT * FROM (
                 SELECT c.*,
+                       l.published AS last_published_at,
                        CASE
                            WHEN l.published IS NULL       THEN :frozen_s
                            WHEN l.published >= :hot_cut   THEN :hot_s
@@ -767,9 +786,54 @@ class Database:
             )
             return conn.total_changes - before
 
-    def set_feed_variant(self, key: str, variant: str) -> None:
+    def set_feed_variant(self, key: str, variant: str | None) -> None:
+        """Remember which feed address answers for this channel.
+
+        Clearing it clears the strikes against the long form tab as well. The
+        two are one decision: the tab answered, so nothing is held against it.
+        """
         with self.conn as conn:
-            conn.execute("UPDATE channels SET feed_variant=? WHERE key=?", (variant, key))
+            if variant is None:
+                conn.execute(
+                    "UPDATE channels SET feed_variant=NULL, long_form_404s=0 WHERE key=?",
+                    (key,))
+            else:
+                conn.execute("UPDATE channels SET feed_variant=? WHERE key=?", (variant, key))
+
+    def note_long_form_missing(self, key: str) -> int:
+        """Count one round in which the long form feed answered 404, and say
+        how many rounds in a row that now is.
+
+        A 404 there is ambiguous. The channel may have no long form tab, or
+        the endpoint may be refusing, which it does with a 404, in bursts, and
+        for channels that are perfectly healthy. A burst lasts minutes; a
+        missing tab lasts for ever. Counting rounds is what tells them apart,
+        and it is what keeps a bad afternoon from moving a hundred channels
+        onto the mixed feed, which carries Shorts.
+        """
+        with self.conn as conn:
+            conn.execute(
+                "UPDATE channels SET long_form_404s = COALESCE(long_form_404s, 0) + 1 "
+                "WHERE key=?", (key,))
+            row = conn.execute(
+                "SELECT long_form_404s FROM channels WHERE key=?", (key,)).fetchone()
+        return int(row["long_form_404s"]) if row else 0
+
+    def clear_long_form_strikes(self, key: str) -> None:
+        with self.conn as conn:
+            conn.execute("UPDATE channels SET long_form_404s=0 WHERE key=?", (key,))
+
+    def stamp_variant_checked(self, key: str) -> None:
+        """Note that the long form tab of a fallen back channel was asked,
+        whatever it answered, so it is not asked again for a while."""
+        with self.conn as conn:
+            conn.execute("UPDATE channels SET variant_checked_at=? WHERE key=?",
+                         (int(time.time()), key))
+
+    def stamp_shorts_sweep(self, key: str) -> None:
+        with self.conn as conn:
+            conn.execute("UPDATE channels SET shorts_sweep_at=? WHERE key=?",
+                         (int(time.time()), key))
 
     def channels_that_stream(self, platform: str = "youtube") -> set[str]:
         """Channels whose streams tab is worth asking for.
@@ -1696,6 +1760,20 @@ class Database:
 
     RECOMMENDED = "recommended"
     HISTORY = "history"
+    # One kind per set of words. A search is the same shape of thing as the
+    # suggestions and the history, a snapshot of what one call answered, so it
+    # lives in the same table rather than in a table of its own.
+    SEARCH = "search:"
+
+    @staticmethod
+    def search_kind(query: str) -> str:
+        """The key a set of words is stored under.
+
+        Case and spacing do not change what comes back, so they do not change
+        the key either, and searching for the same thing twice finds the rows
+        already here.
+        """
+        return Database.SEARCH + " ".join(query.lower().split())
 
     def replace_cached(self, kind: str, rows: list[dict]) -> int:
         """Swap in a fresh set. Replacing rather than merging, since these are
@@ -1715,7 +1793,11 @@ class Database:
                   row.get("scheduled_at"), index, now)
                  for index, row in enumerate(rows)],
             )
-        self.set_state(f"{kind}_at", str(now))
+        if not kind.startswith(self.SEARCH):
+            # A stamp per kind, and there is one kind per search, so this
+            # would leave a row of state behind for every set of words ever
+            # typed. The rows carry their own age.
+            self.set_state(f"{kind}_at", str(now))
         return len(rows)
 
     def append_cached(self, kind: str, rows: list[dict]) -> int:
@@ -1745,6 +1827,36 @@ class Database:
                   row.get("scheduled_at"), start + index, now)
                  for index, row in enumerate(rows)],
             )
+            return conn.total_changes - before
+
+    def cached_flat(self, kind: str, limit: int = 400) -> list[dict]:
+        """A cached set as the source handed it over, for decorate() to shape.
+
+        The shaped form is what the grid draws, and cached() answers with that
+        already. This is the other half, for a caller that goes on to join the
+        rows to what is known here in the same way a fresh page is joined, so
+        that a set served from here and a set just fetched are the same thing.
+        """
+        return [dict(row) for row in self.conn.execute(
+            "SELECT ext_id, title, channel_name, channel_ext_id, duration_s, "
+            "       thumbnail_url, views, published_at, live_status, scheduled_at "
+            "FROM cached_videos WHERE kind=? ORDER BY position LIMIT ?",
+            (kind, limit))]
+
+    def forget_old_searches(self, older_than_s: int) -> int:
+        """Drop the searches nobody has repeated in a long time.
+
+        A search is kept so that asking the same thing again costs nothing,
+        which is worth a great deal more than the few kilobytes it holds. It
+        is not kept for ever, because a set of words typed once a year says
+        nothing about what is on YouTube now.
+        """
+        cut = int(time.time()) - max(0, older_than_s)
+        with self.conn as conn:
+            before = conn.total_changes
+            conn.execute(
+                "DELETE FROM cached_videos WHERE kind LIKE ? AND seen_at <= ?",
+                (self.SEARCH + "%", cut))
             return conn.total_changes - before
 
     def cached_count(self, kind: str) -> int:
@@ -1849,8 +1961,23 @@ class Database:
         return dict(row) if row else None
 
     def cached_age_s(self, kind: str) -> int | None:
+        """How long ago this set was read, or None if it never was.
+
+        The two named kinds carry a stamp of their own. A search does not,
+        since there is one kind per set of words and that would leave a row of
+        state behind for every one ever typed, so its age comes from the rows
+        themselves. Which cannot disagree with what is stored, and is the
+        reason this is asked of the database rather than kept in the window.
+        """
         stamp = self.get_int(f"{kind}_at", 0)
-        return None if not stamp else int(time.time()) - stamp
+        if stamp:
+            return int(time.time()) - stamp
+        found = self.conn.execute(
+            "SELECT MAX(seen_at) AS seen FROM cached_videos WHERE kind=?",
+            (kind,)).fetchone()
+        if not found or found["seen"] is None:
+            return None
+        return max(0, int(time.time()) - int(found["seen"]))
 
     # The recommendations under their own names, since that is what the rest
     # of the application calls them.
@@ -1874,10 +2001,11 @@ class Database:
     def decorate(self, rows: list[dict]) -> list[dict]:
         """Turn flat rows from a source into the shape the grid draws.
 
-        Search results are not stored anywhere, so they are joined to what is
-        known here instead: the channel, when there is a row for it, and
-        whether the video has been watched. Two queries whatever the number of
-        rows.
+        A source hands over a flat listing, which is joined to what is known
+        here: the channel, when there is a row for it, and whether the video
+        has been watched. Two queries whatever the number of rows. A set of
+        search results kept from an earlier ask goes through this as well, so
+        that it draws exactly as a set that has just arrived.
 
         The channel id and the name YouTube gave come along untouched, because
         a result put in a box is stored from this row and there is nowhere

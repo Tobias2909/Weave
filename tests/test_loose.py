@@ -1,9 +1,9 @@
 """Videos saved out of the lists that are not the feed.
 
 The suggestions, the watch history and a search of YouTube are snapshots. They
-live in their own tables, or for a search in nothing at all, and they are
-replaced wholesale, so a box could not point at one of them: the video simply
-was not stored. Putting one in a box stores it for good.
+live in the cached tables and are replaced wholesale, so a box could not point
+at one of them: the video is a copy of a listing rather than something stored.
+Putting one in a box stores it for good.
 
 The channel it brings with it is the delicate part. It exists so the card has a
 name and somewhere for a picture to live, and it must not turn into a channel

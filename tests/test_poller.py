@@ -14,7 +14,7 @@ from pathlib import Path
 from PySide6.QtCore import QCoreApplication
 
 from weave import poller
-from weave.budget import Budget
+from weave.budget import FEEDS, Budget
 from weave.config import Config
 from weave.db import Database, FeedTiers, VideoRow
 from weave.ids import ChannelRef
@@ -159,8 +159,49 @@ class FeedJobs(unittest.TestCase):
 
     def test_a_remembered_variant_is_used(self):
         self.db.set_feed_variant("yt:UC1", rss.CHANNEL)
-        jobs = dict(((key, kind) for key, _, kind in self.poller._feed_jobs(self.rows())))
-        self.assertEqual(jobs["yt:UC1"], rss.CHANNEL)
+        jobs = self.poller._feed_jobs(self.rows())
+        self.assertIn(("yt:UC1", "UC1", rss.CHANNEL), jobs)
+
+    def test_a_channel_on_the_mixed_feed_has_its_shorts_tab_read_too(self):
+        # The mixed feed says nothing about the kind of what it carries, so
+        # without this its Shorts arrive looking like ordinary videos and go
+        # straight into the feed.
+        self.db.set_feed_variant("yt:UC1", rss.CHANNEL)
+        jobs = self.poller._feed_jobs(self.rows())
+        self.assertIn(("yt:UC1", "UC1", rss.SHORTS), jobs)
+        self.assertNotIn(("yt:UC2", "UC2", rss.SHORTS), jobs)
+
+    def test_the_shorts_tabs_are_read_a_few_at_a_time(self):
+        for index in range(3, 9):
+            self.db.add_channel(f"yt:UC{index}", "youtube", f"UC{index}", f"C{index}")
+            self.db.set_feed_variant(f"yt:UC{index}", rss.CHANNEL)
+        jobs = self.poller._feed_jobs(self.rows())
+        shorts = [key for key, _, kind in jobs if kind == rss.SHORTS]
+        self.assertEqual(len(shorts), poller.SHORTS_SWEEPS_PER_TICK)
+
+    def test_a_channel_on_the_mixed_feed_is_offered_the_long_form_tab_again(self):
+        # A fallback is a guess about a tab that may appear later, and one
+        # taken during a refusal is simply wrong, so it is re-tested.
+        self.db.set_feed_variant("yt:UC1", rss.CHANNEL)
+        self.db.stamp_shorts_sweep("yt:UC1")
+        jobs = self.poller._feed_jobs(self.rows())
+        self.assertIn(("yt:UC1", "UC1", rss.VIDEOS), jobs)
+        self.assertNotIn(("yt:UC1", "UC1", rss.CHANNEL), jobs)
+
+    def test_the_re_test_waits_for_the_shorts_tab_to_have_been_read(self):
+        # Reading it is what tells the rows that arrived from the mixed feed
+        # apart. Clearing the fallback first would lose the only sign that
+        # this channel was ever on that feed.
+        self.db.set_feed_variant("yt:UC1", rss.CHANNEL)
+        jobs = self.poller._feed_jobs(self.rows())
+        self.assertIn(("yt:UC1", "UC1", rss.CHANNEL), jobs)
+
+    def test_a_re_tested_channel_is_not_asked_again_for_a_week(self):
+        self.db.set_feed_variant("yt:UC1", rss.CHANNEL)
+        self.db.stamp_shorts_sweep("yt:UC1")
+        self.db.stamp_variant_checked("yt:UC1")
+        jobs = self.poller._feed_jobs(self.rows())
+        self.assertIn(("yt:UC1", "UC1", rss.CHANNEL), jobs)
 
 
 class FeedFallback(unittest.TestCase):
@@ -193,11 +234,21 @@ class FeedFallback(unittest.TestCase):
         self.assertEqual((cost, variant), (1, None))
         self.assertEqual(result.kind, rss.VIDEOS)
 
-    def test_a_missing_tab_falls_back_and_is_remembered(self):
+    def test_a_missing_tab_decides_nothing_by_itself(self):
+        # It used to buy the mixed feed there and then and remember it. The
+        # endpoint refuses with a 404 as well, so that handed a hundred
+        # healthy channels to the feed that carries Shorts.
         self.answer({rss.VIDEOS: HttpError(404, "u"),
                      rss.CHANNEL: rss.FeedResult("UC1", "One", [], rss.CHANNEL)})
-        _, cost, variant = self.poller._fetch_one(None, "UC1", rss.VIDEOS)
-        self.assertEqual((cost, variant), (2, rss.CHANNEL))
+        result, cost, note = self.poller._fetch_one(None, "UC1", rss.VIDEOS)
+        self.assertIsNone(result)
+        self.assertEqual((cost, note), (1, poller.MISSING_LONG_FORM))
+
+    def test_a_missing_shorts_tab_answers_with_nothing_rather_than_raising(self):
+        self.answer({rss.SHORTS: HttpError(404, "u")})
+        result, cost, note = self.poller._fetch_one(None, "UC1", rss.SHORTS)
+        self.assertIsNone(result)
+        self.assertEqual((cost, note), (1, None))
 
     def test_a_missing_streams_tab_answers_with_nothing_rather_than_raising(self):
         # There is nothing to fall back to for this one. A channel that has
@@ -209,14 +260,12 @@ class FeedFallback(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual((cost, variant), (1, None))
 
-    def test_a_refusal_is_not_mistaken_for_a_missing_tab(self):
-        # The endpoint answers a burst with a 404 too. The mixed feed is the
-        # discriminator: it answers when the tab is genuinely absent and
-        # refuses when we are the problem, so the fallback only sticks when
-        # that second call succeeds.
-        self.answer({rss.VIDEOS: HttpError(404, "u"), rss.CHANNEL: HttpError(404, "u")})
+    def test_a_refusal_of_the_mixed_feed_itself_is_still_an_error(self):
+        # Nothing to be ambiguous about: the mixed feed is the last address
+        # there is, so a 404 on it is a failure like any other.
+        self.answer({rss.CHANNEL: HttpError(404, "u")})
         with self.assertRaises(HttpError):
-            self.poller._fetch_one(None, "UC1", rss.VIDEOS)
+            self.poller._fetch_one(None, "UC1", rss.CHANNEL)
 
 
 class SweepDetector(unittest.TestCase):
@@ -279,13 +328,18 @@ class SweepDetector(unittest.TestCase):
 
 class BudgetedRound(unittest.TestCase):
     """A round is trimmed to what the endpoint budget allows, and says so
-    rather than quietly doing nothing."""
+    rather than quietly doing nothing.
+
+    A round is work nobody is waiting for, so it stops at BACKGROUND_SHARE of
+    the ceiling rather than at the ceiling, and the rest is there for whatever
+    is pressed. Ten here so the share is a round number.
+    """
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.db = Database(Path(self._tmp.name) / "t.db")
-        self.cfg = Config(raw={"budget": {"feeds": 2}})
-        for n in range(5):
+        self.cfg = Config(raw={"budget": {"feeds": 10}})
+        for n in range(15):
             self.db.add_channel(f"yt:UC{n}", "youtube", f"UC{n}", f"Channel {n}")
         self.poller = poller.FeedPoller(self.db, self.cfg)
         self._real = poller.rss.fetch
@@ -307,7 +361,14 @@ class BudgetedRound(unittest.TestCase):
 
     def test_the_round_shrinks_to_what_is_left(self):
         self.poller._phase_rss(None, self.budget())
-        self.assertEqual(len(self.asked), 2)
+        self.assertEqual(len(self.asked), 8)
+
+    def test_and_it_leaves_the_rest_for_whoever_presses_something(self):
+        # The whole point of the share. A channel page opened right after a
+        # round used to find the ceiling already spent.
+        self.poller._phase_rss(None, self.budget())
+        self.assertTrue(self.budget().allowance(FEEDS, 1).granted)
+        self.assertFalse(self.budget().allowance(FEEDS, 1, background=True).granted)
 
     def test_a_spent_budget_stops_the_round_and_reports_it(self):
         said = []
@@ -320,7 +381,7 @@ class BudgetedRound(unittest.TestCase):
 
     def test_what_was_left_out_is_still_due(self):
         self.poller._phase_rss(None, self.budget())
-        self.assertEqual(len(self.db.channels_due(self.cfg.feed_tiers)), 3)
+        self.assertEqual(len(self.db.channels_due(self.cfg.feed_tiers)), 7)
 
 
 if __name__ == "__main__":

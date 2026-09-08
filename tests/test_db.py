@@ -1,6 +1,7 @@
 import tempfile
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from weave.db import SHORTS_CEILING_S, Database, FeedTiers, VideoRow
@@ -234,6 +235,55 @@ class Channels(DatabaseCase):
         self.assertIsNone(self.db.channels()[0]["feed_variant"])
         self.db.set_feed_variant("yt:UC1", "channel")
         self.assertEqual(self.db.channels()[0]["feed_variant"], "channel")
+
+    def test_and_it_can_be_taken_back(self):
+        # A fallback taken while the endpoint was refusing is simply wrong,
+        # so there has to be a way back to the tab feed.
+        self.db.add_channel("yt:UC1", "youtube", "UC1")
+        self.db.set_feed_variant("yt:UC1", "channel")
+        self.db.set_feed_variant("yt:UC1", None)
+        self.assertIsNone(self.db.channels()[0]["feed_variant"])
+
+    def test_a_404_on_the_long_form_tab_is_counted_rather_than_believed(self):
+        self.db.add_channel("yt:UC1", "youtube", "UC1")
+        self.assertEqual(self.db.channels()[0]["long_form_404s"], 0)
+        self.assertEqual(self.db.note_long_form_missing("yt:UC1"), 1)
+        self.assertEqual(self.db.note_long_form_missing("yt:UC1"), 2)
+
+    def test_the_count_is_wiped_by_an_answer(self):
+        self.db.add_channel("yt:UC1", "youtube", "UC1")
+        self.db.note_long_form_missing("yt:UC1")
+        self.db.clear_long_form_strikes("yt:UC1")
+        self.assertEqual(self.db.channels()[0]["long_form_404s"], 0)
+
+    def test_clearing_the_variant_clears_the_count_with_it(self):
+        # One decision: the tab answered, so nothing is held against it.
+        self.db.add_channel("yt:UC1", "youtube", "UC1")
+        self.db.note_long_form_missing("yt:UC1")
+        self.db.set_feed_variant("yt:UC1", None)
+        self.assertEqual(self.db.channels()[0]["long_form_404s"], 0)
+
+    def test_the_stamps_say_when_each_question_was_last_asked(self):
+        self.db.add_channel("yt:UC1", "youtube", "UC1")
+        row = self.db.channels()[0]
+        self.assertIsNone(row["variant_checked_at"])
+        self.assertIsNone(row["shorts_sweep_at"])
+        self.db.stamp_variant_checked("yt:UC1")
+        self.db.stamp_shorts_sweep("yt:UC1")
+        row = self.db.channels()[0]
+        self.assertTrue(row["variant_checked_at"])
+        self.assertTrue(row["shorts_sweep_at"])
+
+    def test_a_row_of_unknown_kind_can_still_be_named(self):
+        # The mixed feed stores rows that say nothing about their kind, and
+        # the Shorts tab is what fills that in later. A kind already known
+        # wins, since it came from a feed that carries one thing only.
+        self.db.add_channel("yt:UC1", "youtube", "UC1")
+        self.db.upsert_videos([self.video("aaaaaaaaaaa")])
+        self.db.upsert_videos([replace(self.video("aaaaaaaaaaa"), is_short=True)])
+        kind = self.db.conn.execute(
+            "SELECT is_short FROM videos WHERE key='yt:aaaaaaaaaaa'").fetchone()[0]
+        self.assertEqual(kind, 1)
 
     def test_knows_whether_a_channel_ever_produced_a_video(self):
         # This is what separates a broken feed from a channel that is simply

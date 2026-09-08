@@ -59,6 +59,12 @@ _PREFIX = {VIDEOS: "UULF", SHORTS: "UUSH", LIVE: "UULV"}
 _IS_SHORT = {VIDEOS: False, SHORTS: True, LIVE: False, CHANNEL: None}
 
 
+def is_short_kind(kind: str) -> bool | None:
+    """What a feed of this kind says about what it carries. None for the mixed
+    feed, which says nothing, and which is the whole reason for the others."""
+    return _IS_SHORT.get(kind)
+
+
 def playlist_id(channel_id: str, kind: str) -> str:
     """The uploads playlist behind one of a channel's tabs."""
     prefix = _PREFIX[kind]
@@ -135,7 +141,7 @@ def parse(xml: bytes, kind: str = VIDEOS) -> FeedResult:
                              "not a feed") from exc
     feed_channel = _author_channel_id(root)
     feed_title = root.findtext("atom:author/atom:name", namespaces=_NS)
-    is_short = _IS_SHORT.get(kind)
+    is_short = is_short_kind(kind)
 
     videos: list[VideoRow] = []
     for entry in root.findall("atom:entry", _NS):

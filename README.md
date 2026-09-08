@@ -28,8 +28,10 @@ streaming along the top, and a line under a card showing where you stopped.*
 * Left click plays in `mpv`, and Weave watches that `mpv` over its IPC socket to
   learn what was watched, so hide watched means something without a second
   history to keep
-* Shorts never enter the database at all, because each channel has one feed per
-  tab and Weave asks for the long form one
+* Shorts stay out of the feed, because each channel has one feed per tab and
+  Weave asks for the long form one. A channel that has no long form tab is read
+  from its mixed feed instead, and its Shorts tab is then read as well, so what
+  came from it is known for what it is
 * An announced premiere is badged with when it starts and is refused by the
   player rather than handed over to fail
 * Search everything stored as you type, or press enter to search YouTube itself
