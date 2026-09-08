@@ -37,10 +37,13 @@ streaming along the top, and a line under a card showing where you stopped.*
   came from it is known for what it is
 * An announced premiere is badged with when it starts and is refused by the
   player rather than handed over to fail
-* A video behind a channel membership lives in a feed of its own that nothing
-  else carries, so Weave can read it and badge it and refuse to open it, which
-  is off until you switch on `poll_members_feeds`. Turn it on to see what you
-  are missing, leave it off and those videos stay out of the feed as before
+* What is behind a channel membership lives in a feed of its own that nothing
+  else carries. A button on that channel's page reads it, now rather than
+  whenever the poller next comes round, and puts what it finds in a half of its
+  own. Press it again and everything already read stays where it is while
+  nothing more is asked for. Those videos never reach the feed, they are badged
+  wherever they do appear, and a press is refused unless the membership is one
+  you hold
 * Search everything stored as you type, or press enter to search YouTube itself
 * What YouTube suggests, the history it keeps and your own playlists, each in its
   own place and never poured into the feed

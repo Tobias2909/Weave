@@ -80,16 +80,34 @@ class StoringIt(unittest.TestCase):
                                         published_at=1_700_000_000)])
 
     def test_a_video_is_not_members_only_to_begin_with(self):
-        self.assertEqual(self.db.feed()[0]["members_only"], 0)
+        self.assertEqual(self.db.video("yt:aaaaaaaaaaa")["members_only"], 0)
 
     def test_marking_it_sticks(self):
         self.db.set_members_only("yt:aaaaaaaaaaa")
-        self.assertEqual(self.db.feed()[0]["members_only"], 1)
+        self.assertEqual(self.db.video("yt:aaaaaaaaaaa")["members_only"], 1)
 
     def test_and_can_be_taken_back(self):
         self.db.set_members_only("yt:aaaaaaaaaaa")
         self.db.set_members_only("yt:aaaaaaaaaaa", False)
-        self.assertEqual(self.db.feed()[0]["members_only"], 0)
+        self.assertEqual(self.db.video("yt:aaaaaaaaaaa")["members_only"], 0)
+
+    def test_a_marked_one_leaves_the_ordinary_lists(self):
+        # For almost every channel these cannot be opened, so rows nobody can
+        # act on are noise in the feed, in a group and in the videos half.
+        self.assertEqual([r["key"] for r in self.db.feed()], ["yt:aaaaaaaaaaa"])
+        self.db.set_members_only("yt:aaaaaaaaaaa")
+        self.assertEqual(self.db.feed(), [])
+        self.assertEqual(self.db.feed(channel_key=CHANNEL), [])
+
+    def test_and_is_found_in_its_own_half(self):
+        self.db.set_members_only("yt:aaaaaaaaaaa")
+        self.assertEqual([r["key"] for r in self.db.feed(channel_key=CHANNEL, members=True)],
+                         ["yt:aaaaaaaaaaa"])
+
+    def test_which_is_what_decides_the_button(self):
+        self.assertEqual(self.db.channel_members_count(CHANNEL), 0)
+        self.db.set_members_only("yt:aaaaaaaaaaa")
+        self.assertEqual(self.db.channel_members_count(CHANNEL), 1)
 
     def test_a_marked_stream_is_never_settled_again(self):
         self.db.mark_streams_pending(["yt:aaaaaaaaaaa"])
@@ -118,15 +136,16 @@ class OnTheCard(unittest.TestCase):
         self.db.upsert_videos([VideoRow("youtube", "aaaaaaaaaaa", CHANNEL, "Theirs",
                                         published_at=1_700_000_000)])
 
-    def row(self):
-        return FeedModel._build(self.db.feed()[0])
+    def row(self, members=False):
+        rows = self.db.feed(channel_key=CHANNEL, members=members)
+        return FeedModel._build(rows[0])
 
     def test_the_card_is_told_it_is_not_one(self):
         self.assertFalse(self.row()["isMembers"])
 
     def test_and_told_when_it_is(self):
         self.db.set_members_only("yt:aaaaaaaaaaa")
-        self.assertTrue(self.row()["isMembers"])
+        self.assertTrue(self.row(members=True)["isMembers"])
 
     def test_a_listing_with_no_such_column_is_not_a_crash(self):
         # A search result and a playlist entry are built from a listing that
@@ -276,7 +295,8 @@ class AskingForTheMembersTab(unittest.TestCase):
     def make(self, on: bool):
         from weave.config import Config
 
-        cfg = Config(raw={"poll": {"poll_members_feeds": on, "poll_live_feeds": False}})
+        self.db.set_members_wanted("yt:UC1", on)
+        cfg = Config(raw={"poll": {"poll_live_feeds": False}})
         return self.poller_mod.FeedPoller(self.db, cfg), cfg
 
     def answer(self, table):
@@ -292,10 +312,13 @@ class AskingForTheMembersTab(unittest.TestCase):
         rows = self.db.channels_due(made._cfg.feed_tiers, limit=5, force=True)
         return {kind for _key, _ext, kind in made._feed_jobs(rows)}
 
-    def test_it_is_not_asked_for_while_the_setting_is_off(self):
+    def test_no_channel_is_asked_unless_somebody_asked_for_it(self):
+        # There is deliberately no discovery. Looking for the channels that
+        # sell a membership would spend a request per channel in the library
+        # to be told 404 by almost all of them.
         self.assertNotIn(self.rss.MEMBERS, self.kinds_asked(False))
 
-    def test_and_is_once_it_is_on(self):
+    def test_and_one_that_was_asked_for_is(self):
         self.assertIn(self.rss.MEMBERS, self.kinds_asked(True))
 
     def run_round(self, on=True):
@@ -306,13 +329,12 @@ class AskingForTheMembersTab(unittest.TestCase):
     def members_column(self):
         return self.db.channels()[0]["members"]
 
-    def test_a_channel_that_sells_nothing_is_asked_once(self):
+    def test_a_channel_that_sells_nothing_is_remembered_as_such(self):
         self.answer({self.rss.VIDEOS: self.rss.FeedResult("UC1", "One", [], self.rss.VIDEOS),
                      self.rss.MEMBERS: self.HttpError(404, "u")})
         _, _, failures = self.run_round()
         self.assertEqual(failures, 0)
         self.assertEqual(self.members_column(), 0)
-        self.assertNotIn("yt:UC1", self.db.channels_not_asked_for_members())
 
     def test_a_refusal_leaves_the_question_open(self):
         # The endpoint answers a burst with a 404 as well, so a round where
@@ -322,7 +344,6 @@ class AskingForTheMembersTab(unittest.TestCase):
                      self.rss.MEMBERS: self.HttpError(404, "u")})
         self.run_round()
         self.assertIsNone(self.members_column())
-        self.assertIn("yt:UC1", self.db.channels_not_asked_for_members())
 
     def test_one_that_answers_is_remembered_and_its_rows_are_marked(self):
         made = VideoRow("youtube", "aaaaaaaaaaa", "yt:UC1", "Theirs",
@@ -332,8 +353,21 @@ class AskingForTheMembersTab(unittest.TestCase):
                                                            self.rss.MEMBERS)})
         self.run_round()
         self.assertEqual(self.members_column(), 1)
-        self.assertIn("yt:UC1", self.db.channels_with_members())
+        self.assertIn("yt:UC1", self.db.channels_wanting_members())
         self.assertEqual(self.db.video("yt:aaaaaaaaaaa")["members_only"], 1)
+
+    def test_turning_it_off_stops_the_asking_and_keeps_the_rows(self):
+        made = VideoRow("youtube", "aaaaaaaaaaa", "yt:UC1", "Theirs",
+                        published_at=1_700_000_000, members_only=True)
+        self.answer({self.rss.VIDEOS: self.rss.FeedResult("UC1", "One", [], self.rss.VIDEOS),
+                     self.rss.MEMBERS: self.rss.FeedResult("UC1", "One", [made],
+                                                           self.rss.MEMBERS)})
+        self.run_round()
+        self.db.set_members_wanted("yt:UC1", False)
+        self.assertNotIn(self.rss.MEMBERS, self.kinds_asked(False))
+        # Paid for once. They are still what that channel published, and
+        # asking for them again later would cost the same requests over.
+        self.assertEqual(self.db.channel_members_count("yt:UC1"), 1)
 
 
 _FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
@@ -370,9 +404,12 @@ class PressingIt(unittest.TestCase):
     def bridge(self, members: bool):
         from tests.test_play import make_bridge
 
+        # isLocked is the one the press reads: the mark says what a video is,
+        # this says whether it can go anywhere. A membership you hold is
+        # marked and still plays.
         row = {"key": "yt:aaaaaaaaaaa", "title": "Theirs",
                "url": "https://example/watch", "isLive": False, "isUpcoming": False,
-               "scheduledText": "", "isMembers": members}
+               "scheduledText": "", "isMembers": members, "isLocked": members}
         made = make_bridge([row])
         made.said = []
         made._set_notice = lambda text, *_a, **_k: made.said.append(text)
@@ -398,6 +435,15 @@ class PressingIt(unittest.TestCase):
         made = self.bridge(False)
         Bridge.play(made, "yt:aaaaaaaaaaa")
         self.assertEqual(len(made._player.calls), 1)
+
+    def test_and_so_does_one_whose_membership_you_hold(self):
+        from weave.ui.bridge import Bridge
+
+        made = self.bridge(True)
+        made._model._rows["yt:aaaaaaaaaaa"]["isLocked"] = False
+        Bridge.play(made, "yt:aaaaaaaaaaa")
+        self.assertEqual(len(made._player.calls), 1,
+                         "a membership that is held was refused anyway")
 
 
 if __name__ == "__main__":

@@ -655,6 +655,7 @@ class WorkerRuns(unittest.TestCase):
                     "HistoryImporter", "RecommendationsFetcher", "PlaylistsFetcher",
                     "PlaylistItemsFetcher", "SearchFetcher", "LiveWatcher",
                     "ChannelFeedFetcher", "ChannelPlaylistsFetcher",
+                    "ChannelMembersFetcher",
                     "DetailFetcher", "ChannelAvatarsFetcher", "OwnerFetcher",
                     "LengthFiller"}
         # The checkup runs the doctor, which counts its own requests.
@@ -905,6 +906,39 @@ class WorkerRuns(unittest.TestCase):
         worker.run()
         self.assertEqual(said, [])
 
+    def test_the_members_fetcher(self):
+        from weave.sources import rss
+
+        self.db.add_channel("yt:UC5", "youtube", "UC5", "One")
+        made = VideoRow("youtube", "aaaaaaaaaaa", "yt:UC5", "Behind the membership",
+                        published_at=1_700_000_000, members_only=True)
+        self.patch(poller.rss, "fetch",
+                   lambda *a, **k: rss.FeedResult("UC5", "One", [made], rss.MEMBERS))
+        self.patch(poller.livecheck, "check",
+                   lambda *a, **k: poller.livecheck.LiveState("aaaaaaaaaaa", None, False,
+                                                              None, False, True, False))
+        said = self.run_worker(poller.ChannelMembersFetcher(self.db, self.cfg, "yt:UC5", "UC5"))
+        self.assertFalse([word for word in MISTAKES if word in said])
+        self.assertEqual(self.db.video("yt:aaaaaaaaaaa")["members_only"], 1)
+        self.assertEqual(self.db.channel("yt:UC5")["members"], 1)
+        # subscriber_only with nothing to play is a membership nobody holds.
+        self.assertEqual(self.db.channel("yt:UC5")["member_of"], 0)
+
+    def test_the_members_fetcher_knows_a_membership_you_hold(self):
+        from weave.sources import rss
+
+        self.db.add_channel("yt:UC6", "youtube", "UC6", "One")
+        made = VideoRow("youtube", "bbbbbbbbbbb", "yt:UC6", "Behind the membership",
+                        published_at=1_700_000_000, members_only=True)
+        self.patch(poller.rss, "fetch",
+                   lambda *a, **k: rss.FeedResult("UC6", "One", [made], rss.MEMBERS))
+        # Formats came back, which is the thing a member gets and nobody else.
+        self.patch(poller.livecheck, "check",
+                   lambda *a, **k: poller.livecheck.LiveState("bbbbbbbbbbb", None, False,
+                                                              None, False, True, True))
+        self.run_worker(poller.ChannelMembersFetcher(self.db, self.cfg, "yt:UC6", "UC6"))
+        self.assertEqual(self.db.channel("yt:UC6")["member_of"], 1)
+
     def test_the_bridge_puts_down_the_flag_a_crashed_worker_left_up(self):
         """Every worker raises some flag in the bridge while it runs, and each
         one used to be lowered only by that worker's own success or failure
@@ -927,7 +961,8 @@ class WorkerRuns(unittest.TestCase):
 
         holders = ("_poller", "_importer", "_adder", "_details", "_searcher", "_recommended",
                    "_history", "_search", "_tracks", "_station", "_detail", "_cache_job",
-                   "_twitch", "_checkup", "_playlists", "_playlist_items", "_lengths")
+                   "_twitch", "_checkup", "_playlists", "_playlist_items", "_lengths",
+                   "_channel_members")
 
         def make(held: str):
             bridge = Bridge.__new__(Bridge)
@@ -952,9 +987,13 @@ class WorkerRuns(unittest.TestCase):
             bridge._detail_loading = True
             bridge._cache_working = True
             bridge._twitch_status = "asking Twitch for a code"
+            # The members button crashing has to put itself back to off, which
+            # means reaching the database and the view it is drawn on.
+            bridge._view_channel = "yt:UC1"
+            bridge._db = _MembersDb()
             for signal in ("problemsChanged", "statusChanged", "noticeChanged", "busyChanged",
                            "importChanged", "addChanged", "musicChanged", "detailChanged",
-                           "cacheChanged", "twitchChanged"):
+                           "cacheChanged", "twitchChanged", "viewChanged"):
                 setattr(bridge, signal, Recorder())
             return bridge, worker
 
@@ -979,6 +1018,12 @@ class WorkerRuns(unittest.TestCase):
             Bridge._on_worker_crashed(bridge, worker, "x")
             self.assertFalse(bridge._loading_more, held)
             self.assertEqual(bridge._notice, "", held)
+
+        bridge, worker = make("_channel_members")
+        Bridge._on_worker_crashed(bridge, worker, "x")
+        self.assertEqual(bridge._notice, "")
+        self.assertEqual(bridge._db.wanted, [("yt:UC1", False)],
+                         "a crashed members read left the button switched on")
 
         for held in ("_search", "_tracks", "_station"):
             bridge, worker = make(held)
@@ -1036,3 +1081,13 @@ class WorkerRuns(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _MembersDb:
+    """Just enough database for the crashed members read to put itself back."""
+
+    def __init__(self):
+        self.wanted = []
+
+    def set_members_wanted(self, key, wanted):
+        self.wanted.append((key, wanted))

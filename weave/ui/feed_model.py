@@ -19,6 +19,7 @@ ROLES = (
     "key", "title", "channelKey", "channelTitle", "channelAvatar", "thumbnail", "ageText",
     "durationText", "viewsText", "likesText", "watched", "url", "isLive",
     "isUpcoming", "scheduledText", "startsText", "progress", "wasLive", "isMembers",
+    "isLocked",
 )
 
 
@@ -66,11 +67,11 @@ class FeedModel(QAbstractListModel):
     def reload(self, hide_watched: bool = True, group_id: int | None = None,
                channel_key: str | None = None, box_id: int | None = None,
                query: str | None = None, watched_only: bool = False,
-               streams: bool | None = None) -> None:
+               streams: bool | None = None, members: bool = False) -> None:
         self.show(self._db.feed(hide_watched=hide_watched, group_id=group_id,
                                 channel_key=channel_key, box_id=box_id,
                                 query=query, watched_only=watched_only,
-                                streams=streams))
+                                streams=streams, members=members))
 
     def show(self, rows) -> None:
         """Draw these rows, whatever produced them.
@@ -144,6 +145,10 @@ class FeedModel(QAbstractListModel):
         # Asked for the same way, and for the same reason: a search result and
         # a playlist entry are built from a listing that has no such column.
         members_only = row["members_only"] if "members_only" in row.keys() else 0  # noqa: SIM118
+        # Whether the membership behind it is one you hold. The mark and the
+        # refusal are two different things: a member sees the mark and the
+        # video plays, everybody else sees the mark and the press is refused.
+        member_of = row["member_of"] if "member_of" in row.keys() else 0  # noqa: SIM118
         is_upcoming = row["live_status"] == "is_upcoming"
         return {
             "key": row["key"],
@@ -176,6 +181,7 @@ class FeedModel(QAbstractListModel):
             # the way a stream does, and the play path refuses it, because what
             # mpv would be handed is a sentence about joining the channel.
             "isMembers": bool(members_only),
+            "isLocked": bool(members_only) and not member_of,
             "progress": 0.0,
         }
 

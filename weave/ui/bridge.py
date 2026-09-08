@@ -43,6 +43,7 @@ from ..poller import (
     FeedPoller,
     HistoryImporter,
     ChannelFeedFetcher,
+    ChannelMembersFetcher,
     ChannelPlaylistsFetcher,
     ImageCacheJob,
     LiveWatcher,
@@ -300,6 +301,7 @@ class Bridge(QObject):
         self._cache_job: ImageCacheJob | None = None
         self._channel_feed: ChannelFeedFetcher | None = None
         self._channel_lists: ChannelPlaylistsFetcher | None = None
+        self._channel_members: ChannelMembersFetcher | None = None
         # Which half of a channel page is showing. Not part of the view, since
         # walking back and forth between the two is not walking anywhere.
         self._channel_tab = "videos"
@@ -469,6 +471,15 @@ class Bridge(QObject):
             # streamed must not offer a half with nothing on it, and a tab
             # that answers at all often answers with nothing.
             "streams": self._db.channel_stream_count(self._view_channel) if found else 0,
+            # The button is a toggle, and the half it fills only exists once
+            # something is in it. A channel nobody has pressed it on has no
+            # half, and neither has one whose tab answered with nothing.
+            "membersWanted": bool(found.get("members_wanted")),
+            "members": self._db.channel_members_count(self._view_channel) if found else 0,
+            # Whether the tab has ever answered. A channel that sells nothing
+            # stops offering the button rather than offering one that can only
+            # say so again.
+            "sellsMembership": found.get("members") is None or bool(found.get("members")),
         }
 
     def _get_playlist_skipped_text(self) -> str:
@@ -502,6 +513,11 @@ class Bridge(QObject):
             return "Nothing in your YouTube history yet."
         if self._view_kind == BOX:
             return ("This box is empty.\nRight click any video and put it in here.")
+        if self._view_kind == CHANNEL and self._channel_tab == "members":
+            # This half only exists once something has been read into it, so
+            # an empty one means the button was switched off and everything
+            # read before was watched or hidden rather than nothing being here.
+            return "Nothing here from this channel's members tab."
         if self._view_kind == CHANNEL:
             return "No videos stored for this channel yet.\nPress Refresh."
         counts = self._db.counts()
@@ -968,6 +984,9 @@ class Bridge(QObject):
             shows = self._db.group_shows(self._view_id)
             if shows != GROUP_SHOWS_ALL:
                 streams = shows == GROUP_SHOWS_STREAMS
+        # The members half is asked for by name. Everywhere else leaves those
+        # rows out, since for almost every channel they cannot be opened.
+        members = self._view_kind == CHANNEL and self._channel_tab == "members"
         self._model.reload(
             hide_watched=self._hide_watched and honour_toggle,
             group_id=self._view_id if self._view_kind == GROUP else None,
@@ -975,6 +994,7 @@ class Bridge(QObject):
             channel_key=self._view_channel if self._view_kind == CHANNEL else None,
             query=self._search_text if self._view_kind == SEARCH else None,
             streams=streams,
+            members=members,
         )
         self.emptyHintChanged.emit()
         self.groupsChanged.emit()
@@ -1884,9 +1904,63 @@ class Bridge(QObject):
         self.groupShowsChanged.emit()
         self.reload()
 
+    @Slot(str, bool)
+    def wantMembers(self, channel_key: str, wanted: bool) -> None:
+        """Start or stop reading this channel's members tab.
+
+        Pressing it on asks now rather than waiting for the poller to come
+        round to this channel, which can be hours: a button that only sets a
+        flag and shows nothing reads as a button that does not work. Pressing
+        it off keeps every row already read and simply stops asking, so what
+        was paid for once is not thrown away and not fetched again.
+        """
+        if not channel_key:
+            return
+        self._db.set_members_wanted(channel_key, wanted)
+        self.viewChanged.emit()
+        if not wanted:
+            self._set_status("no longer reading that channel's members tab")
+            self.reload()
+            return
+        found = self._db.channel(channel_key)
+        if not found or found.get("platform") != "youtube":
+            return
+        if self._channel_members is not None and self._channel_members.isRunning():
+            return
+        self._set_notice("reading the members tab")
+        self._channel_members = ChannelMembersFetcher(
+            self._db, self._cfg, channel_key, found["ext_id"], self)
+        self._channel_members.fetched.connect(self._on_channel_members)
+        self._channel_members.absent.connect(self._on_no_membership)
+        self._channel_members.failed.connect(
+            lambda _key, message: self._on_members_failed(message))
+        self._launch(self._channel_members)
+
+    def _on_channel_members(self, channel_key: str, stored: int) -> None:
+        self._set_notice("")
+        if self._view_channel == channel_key:
+            self.viewChanged.emit()
+            self.reload()
+        self._set_status(f"read {stored} from that channel's members tab" if stored
+                         else "that channel's members tab holds nothing new")
+
+    def _on_no_membership(self, channel_key: str) -> None:
+        """The tab did not answer, so there is nothing to read and the button
+        goes back to off by itself."""
+        self._set_notice("")
+        if self._view_channel == channel_key:
+            self.viewChanged.emit()
+        self._set_status("that channel sells no membership")
+
+    def _on_members_failed(self, message: str) -> None:
+        self._set_notice("")
+        self._db.set_members_wanted(self._view_channel, False)
+        self.viewChanged.emit()
+        self._set_status(f"could not read the members tab, {message}")
+
     @Slot(str)
     def showChannelTab(self, which: str) -> None:
-        if which not in ("videos", "playlists", "streams") or which == self._channel_tab:
+        if which not in ("videos", "playlists", "streams", "members") or which == self._channel_tab:
             return
         self._channel_tab = which
         self.channelTabChanged.emit()
@@ -2290,12 +2364,14 @@ class Bridge(QObject):
         row = self._model.row_for_key(key)
         if not row:
             return
-        if row.get("isMembers"):
-            # Behind the channel's membership. There is nothing to hand mpv:
-            # what comes back is a sentence about joining the channel, and mpv
-            # would open a window to say so. It is said here instead, because a
-            # press that is simply ignored reads as the application being
-            # broken, which is what the card's own mark is there to prevent.
+        if row.get("isLocked"):
+            # Behind a membership that is not held. There is nothing to hand
+            # mpv: what comes back is a sentence about joining the channel, and
+            # mpv would open a window to say so. It is said here instead,
+            # because a press that is simply ignored reads as the application
+            # being broken, which is what the card's own mark is there to
+            # prevent. A membership that IS held plays like anything else and
+            # keeps only the mark.
             self._set_notice(MEMBERS_NOTICE, 6)
             return
         if row.get("isUpcoming"):
@@ -3037,7 +3113,7 @@ class Bridge(QObject):
         row = self._model.row_for_key(video_key) or {}
         if not self._audio or not row:
             return
-        if row.get("isMembers"):
+        if row.get("isLocked"):
             # The headphone reaches the same address the card does, so it is
             # refused for the same reason.
             self._set_notice(MEMBERS_NOTICE, 6)
@@ -3498,6 +3574,12 @@ class Bridge(QObject):
             self.twitchChanged.emit()
         elif worker in (self._checkup, self._playlists, self._playlist_items):
             self._set_notice("")
+        elif worker is self._channel_members:
+            # The button was pressed and nothing came of it, so it goes back
+            # to off rather than sitting on with an empty half behind it.
+            self._db.set_members_wanted(self._view_channel, False)
+            self._set_notice("")
+            self.viewChanged.emit()
         elif worker is self._lengths:
             # Holds no flag: it is background work nothing is waiting on, and
             # the channel it stopped on is left unstamped so it comes round

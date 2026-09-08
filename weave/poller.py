@@ -137,9 +137,6 @@ class Worker(QThread):
 # Four a tick is 60 a window, which fits, and it settles a list of several
 # hundred channels over a couple of hours without the feed itself slowing down.
 LIVE_PROBES_PER_TICK = 4
-# The same pacing for the members tab. A one off question per channel, so it
-# must not burst any more than the streams one does.
-MEMBERS_PROBES_PER_TICK = 4
 
 # How many announced streams are asked about their start time in one live
 # check. One request each, the answer is kept for good, and the live bar's own
@@ -478,18 +475,14 @@ class FeedPoller(Worker):
                        and _worth_a_one_off_probe(row, tiers)][:LIVE_PROBES_PER_TICK]
             jobs += [(row["key"], row["ext_id"], rss.LIVE) for row in wanted
                      if (row["feed_variant"] or "") != rss.CHANNEL]
-        # The same shape again for the members tab, and paced the same way. A
-        # channel that sells nothing answers 404 once and is never asked again,
-        # so the recurring cost is one request per round for the channels that
-        # do, measured at roughly one in six.
-        if self._cfg.poll_members_feeds:
-            having = self._db.channels_with_members()
-            never = self._db.channels_not_asked_for_members()
-            wanted = [row for row in rows if row["key"] in having]
-            wanted += [row for row in rows if row["key"] in never
-                       and _worth_a_one_off_probe(row, tiers)][:MEMBERS_PROBES_PER_TICK]
-            jobs += [(row["key"], row["ext_id"], rss.MEMBERS) for row in wanted
-                     if (row["feed_variant"] or "") != rss.CHANNEL]
+        # The members tab, for the channels somebody asked for by name. There
+        # is deliberately no discovery: most channels sell nothing, and
+        # looking for the ones that do would spend a request per channel in
+        # the library to be told 404. The button on the channel page is the
+        # whole question, so this list is short by construction.
+        asked = self._db.channels_wanting_members()
+        jobs += [(row["key"], row["ext_id"], rss.MEMBERS) for row in rows
+                 if row["key"] in asked and (row["feed_variant"] or "") != rss.CHANNEL]
         return jobs
 
     def _fetch_one(self, fetcher: Fetcher, ext_id: str, kind: str) -> tuple[object, int, str | None]:
@@ -1192,6 +1185,99 @@ class ChannelFeedFetcher(Worker):
         return self._db.upsert_videos(streams.videos)
 
 
+class ChannelMembersFetcher(Worker):
+    """One channel's members tab, asked for because somebody pressed for it.
+
+    What is behind a channel's membership is in no other feed at all, so a
+    button that only set a flag would show nothing until the poller next came
+    round to that channel, which can be hours. A press asks now.
+
+    It answers three different things at once, which is why it is one worker
+    and not a flag plus a wait. Whether the channel sells a membership at all,
+    which is whether the tab answers. What is in it, which is stored marked.
+    And whether the membership is one you hold, since what is behind it can be
+    opened if it is and the press should only be refused where it cannot go
+    anywhere. That last one is a single look at the newest of them.
+    """
+
+    fetched = Signal(str, int)            # channel key, rows stored
+    failed = Signal(str, str)
+    absent = Signal(str)                  # the channel sells no membership
+
+    def __init__(self, db: Database, cfg: Config, channel_key: str, ext_id: str,
+                 parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._db = db
+        self._cfg = cfg
+        self._key = channel_key
+        self._ext_id = ext_id
+        self._throttle = self._throttle_for(cfg, 1)
+
+    def work(self) -> None:
+        fetcher = Fetcher(self._throttle, cancel=self._cancel)
+        budget = Budget(self._db, self._cfg.budget_limits, self._cfg.budget_window_s)
+        if budget.allowance(FEEDS, 1).empty:
+            fetcher.close()
+            self.failed.emit(self._key, "asked as much as it should for now")
+            return
+        try:
+            budget.spend(FEEDS)
+            try:
+                result = rss.fetch(fetcher, self._ext_id, rss.MEMBERS)
+            except HttpError as exc:
+                if exc.status != 404:
+                    raise
+                # A 404 here is the same ambiguity as everywhere else on this
+                # endpoint: no such tab, or a burst being refused. A person is
+                # waiting, so it is reported as no such tab and remembered
+                # only as the button being switched off again. The poller
+                # decides nothing from one call either.
+                fetcher.close()
+                self._db.set_members_wanted(self._key, False)
+                self._db.set_channel_members(self._key, False)
+                self.absent.emit(self._key)
+                return
+        except (FetchCancelled, ProcessCancelled):
+            fetcher.close()
+            return
+        except Exception as exc:
+            budget.spend(FEEDS, count=0, refused=1)
+            fetcher.close()
+            self.failed.emit(self._key, f"{type(exc).__name__}: {exc}")
+            return
+        fetcher.close()
+        self._db.set_channel_members(self._key, True)
+        stored = self._db.upsert_videos(result.videos)
+        self._read_membership(result, budget)
+        self.fetched.emit(self._key, stored)
+
+    def _read_membership(self, result, budget: Budget) -> None:
+        """Whether this is a membership you hold.
+
+        One look at the newest of them. yt-dlp names the availability either
+        way, so that says nothing on its own; what separates a member from
+        everybody else is whether there are formats to play. Asked once when
+        the button is pressed rather than per video or per round, because it
+        is a thing that changes when somebody joins or leaves and not
+        otherwise, and pressing the button again asks it again.
+        """
+        newest = next((row for row in result.videos), None)
+        if newest is None or budget.allowance(PLAYER, 1).empty:
+            return
+        budget.spend(PLAYER)
+        try:
+            state = livecheck.check(self._cfg, newest.ext_id, self._throttle, self._cancel)
+        except ProcessCancelled:
+            return
+        except livecheck.LiveCheckError:
+            budget.spend(PLAYER, count=0, refused=1)
+            return
+        # It said subscriber_only and had nothing to play, which is what a
+        # membership somebody does not hold looks like. Anything else, and the
+        # press is allowed through.
+        self._db.set_member_of(self._key, not state.members_only or state.playable)
+
+
 class ChannelPlaylistsFetcher(Worker):
     """What one channel's playlists tab lists.
 
@@ -1550,11 +1636,13 @@ class LiveWatcher(Worker):
                 # Left pending. A refusal is not an answer, and asking again
                 # in a minute and a half costs one request.
                 continue
-            if state.members_only:
-                # Behind the channel's membership, so there is no live state to
-                # settle: without one the answer is the same sentence every
-                # time. Marked and settled, which is what stops it being asked
-                # about, and the card and the press read the mark from there.
+            if state.members_only and not state.playable:
+                # Behind the channel's membership and there is nothing to play,
+                # so there is no live state to settle: the answer is the same
+                # sentence every time. Marked and settled, which is what stops
+                # it being asked about, and the card and the press read the
+                # mark from there. A membership that is held gives formats, and
+                # then this is an ordinary stream that happens to be marked.
                 self._db.set_members_only(row["key"])
                 self._db.settle_stream(row["key"])
             elif state.upcoming:
@@ -1586,7 +1674,7 @@ class LiveWatcher(Worker):
             except livecheck.LiveCheckError:
                 budget.spend(PLAYER, count=0, refused=1)
                 continue
-            if state.members_only:
+            if state.members_only and not state.playable:
                 # A start time that cannot be read, on a stream that cannot be
                 # opened. Marking it is what takes it out of the list this
                 # walks, so it is asked once and never again.
@@ -1620,7 +1708,7 @@ class LiveWatcher(Worker):
             except livecheck.LiveCheckError:
                 budget.spend(PLAYER, count=0, refused=1)
                 continue
-            if state.members_only:
+            if state.members_only and not state.playable:
                 # It cannot be watched and its count cannot be read, so it
                 # leaves the bar rather than sitting in it with a number that
                 # will never move again.

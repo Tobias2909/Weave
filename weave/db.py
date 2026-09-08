@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 39
+SCHEMA_VERSION = 40
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -353,6 +353,15 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # tab answers at all. Three states like streams: 1 it has one, 0 asked and
     # it has none, NULL never asked, which is a question and not a no.
     ("channels", "members", "INTEGER"),
+    # Whether to read that tab, decided per channel by the button on the
+    # channel page. Off is the state of every channel that has never been
+    # asked, so nothing is read anywhere until somebody says so, and turning
+    # it off again keeps whatever was read rather than deleting it.
+    ("channels", "members_wanted", "INTEGER NOT NULL DEFAULT 0"),
+    # Whether the membership is one you hold. What is behind it can be opened
+    # if it is, so the press is only refused where it cannot go anywhere.
+    # Learned from one look at the newest of them when the button is pressed.
+    ("channels", "member_of", "INTEGER NOT NULL DEFAULT 0"),
     # Behind a channel's membership. Nothing here can be opened without one,
     # so there is no live state to learn, no length to fill in and nothing to
     # hand mpv. The card says so and the press is refused, rather than the
@@ -992,35 +1001,56 @@ class Database:
             "  AND NOT EXISTS (SELECT 1 FROM videos v WHERE v.channel_key=c.key "
             "                  AND v.live_status IS NOT NULL)", (platform,))}
 
-    def channels_with_members(self, platform: str = "youtube") -> set[str]:
-        """Channels known to sell a membership, so their members tab is worth
-        asking for.
+    def channels_wanting_members(self, platform: str = "youtube") -> set[str]:
+        """Channels whose members tab has been asked for by name.
 
-        Same shape as the streams tab and for the same reason. Most channels
-        sell nothing, measured at roughly one in six of his, and asking all of
-        them every round would spend a request per channel to be told 404.
+        There is no discovery here on purpose. Most channels sell nothing, and
+        looking for the ones that do would spend a request per channel in the
+        library to be told 404. The button on a channel page is the whole
+        question, so the only channels ever asked are the ones somebody
+        pointed at.
         """
         return {row[0] for row in self.conn.execute(
-            "SELECT key FROM channels WHERE platform=? AND tracked=1 AND members=1",
+            "SELECT key FROM channels WHERE platform=? AND tracked=1 AND members_wanted=1",
             (platform,))}
 
-    def channels_not_asked_for_members(self, platform: str = "youtube") -> set[str]:
-        """Channels whose members tab has never been asked for.
+    def set_members_wanted(self, key: str, wanted: bool) -> None:
+        """Start or stop reading this channel's members tab.
 
-        Nothing else reveals that a channel sells a membership. Its videos are
-        in no other feed, and the subscriptions feed does not mark them, so
-        waiting to be told means waiting for ever.
+        Stopping keeps every row already read. They were paid for once, they
+        are still what that channel published, and fetching them again later
+        would cost the same requests over. Hidden is a filter here as it is
+        everywhere else, never a deletion.
         """
-        return {row[0] for row in self.conn.execute(
-            "SELECT key FROM channels WHERE platform=? AND tracked=1 AND members IS NULL",
-            (platform,))}
+        with self.conn as conn:
+            conn.execute("UPDATE channels SET members_wanted=? WHERE key=?",
+                         (1 if wanted else 0, key))
 
     def set_channel_members(self, key: str, members: bool) -> None:
-        """Remember whether this channel has a members tab, so the question is
-        asked once rather than every round."""
+        """Remember whether this channel has a members tab at all, so a channel
+        that sells nothing can stop offering the button."""
         with self.conn as conn:
             conn.execute("UPDATE channels SET members=? WHERE key=?",
                          (1 if members else 0, key))
+
+    def set_member_of(self, key: str, member: bool) -> None:
+        """Remember whether the membership is one you hold, which is what
+        decides whether a press is refused or handed to mpv."""
+        with self.conn as conn:
+            conn.execute("UPDATE channels SET member_of=? WHERE key=?",
+                         (1 if member else 0, key))
+
+    def channel_members_count(self, channel_key: str) -> int:
+        """How many of this channel's stored videos came from its members tab.
+
+        What decides whether the channel page offers that half at all. Nothing
+        read means no button, whether because the button was never pressed or
+        because the tab answered with nothing.
+        """
+        row = self.conn.execute(
+            "SELECT COUNT(*) FROM videos WHERE channel_key=? AND members_only=1",
+            (channel_key,)).fetchone()
+        return int(row[0] or 0)
 
     def channel_stream_count(self, channel_key: str) -> int:
         """How many of this channel's stored videos are streams.
@@ -2762,7 +2792,8 @@ class Database:
     def feed(self, limit: int = 300, hide_watched: bool = True,
              group_id: int | None = None, channel_key: str | None = None,
              box_id: int | None = None, query: str | None = None,
-             watched_only: bool = False, streams: bool | None = None) -> list[sqlite3.Row]:
+             watched_only: bool = False, streams: bool | None = None,
+             members: bool = False) -> list[sqlite3.Row]:
         """The video list for whichever view is showing.
 
         A box orders by the order things were put in it rather than by publish
@@ -2785,6 +2816,11 @@ class Database:
         # An unclassified video still shows. It is hidden only once a channel
         # listing or the redirect test has proven it is a Short.
         where = ["(v.is_short IS NULL OR v.is_short = 0)"]
+        # What is behind a membership is its own half of a channel page and is
+        # nowhere else at all. It is not in the feed, not in a group and not in
+        # the videos half, because for almost every channel it cannot be opened
+        # and rows nobody can act on are noise wherever they are put.
+        where.append("v.members_only = 1" if members else "v.members_only = 0")
         args: list[Any] = []
         join = ""
         order = "v.published_at DESC NULLS LAST, v.first_seen_at DESC"
@@ -2826,7 +2862,8 @@ class Database:
         return list(self.conn.execute(
             f"""
             SELECT v.*, c.title AS channel_title, c.avatar_url,
-                   w.video_key IS NOT NULL AS watched
+                   w.video_key IS NOT NULL AS watched,
+                   c.member_of
             FROM videos v
             JOIN channels c ON c.key = v.channel_key
             {join}

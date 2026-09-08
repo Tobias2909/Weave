@@ -505,18 +505,27 @@ class Smoke:
         settle(0.3)
 
     def members(self, bridge, window) -> None:
-        """A video behind the channel's membership.
+        """A channel's members half.
 
-        There is nothing to hand mpv, so the press is refused and the picture
-        says why before anybody presses it. Marked here by hand, because the
-        only thing that can tell is the live check and it is a request.
+        What is behind a membership is in no other feed, so nothing is read
+        until the button on the channel page is pressed. Pressed here by hand
+        in the database rather than through the button, since the button makes
+        a request and this walk is offline.
+
+        Three things to hold. The rows stay out of the feed and out of the
+        videos half, because for almost every channel they cannot be opened.
+        The half exists only once something is in it. And a press there is
+        refused, with the picture saying so beforehand.
         """
         from weave import paths
         from weave.db import Database
 
+        channel = "yt:UCsmokesmokesmokesmokes1"
         db = Database(paths.DB_FILE)
         with db.conn as conn:
             conn.execute("UPDATE videos SET members_only=1 WHERE key='yt:smokevid004'")
+            conn.execute("UPDATE channels SET members_wanted=1, members=1 WHERE key=?",
+                         (channel,))
         db.close()
         bridge.selectGroup(-1)
         bridge.reload()
@@ -524,6 +533,31 @@ class Smoke:
         grid = find(window, "grid")
         call(grid, "forceLayout")
         settle(0.3)
+        self.check("a members only video is out of the feed",
+                   bridge._model.row_for_key("yt:smokevid004") is None)
+
+        bridge.openChannel(channel)
+        settle(0.5)
+        self.check("and out of the channel's videos half",
+                   bridge._model.row_for_key("yt:smokevid004") is None)
+        tab = find(window, "channelMembersTab")
+        self.check("the channel offers a members half once there is one",
+                   tab is not None and read(tab, "visible") is True,
+                   f"visible {read(tab, 'visible') if tab is not None else 'no button'}")
+        # find rather than item_named: a QQuickWindow has no childItems, so a
+        # visual walk has to start at its content item, and this one is
+        # reachable as a plain child by name.
+        button = find(window, "channelMembers")
+        self.check("and the header carries the button that fills it",
+                   button is not None and read(button, "visible") is True
+                   and "Members" in str(read(button, "text")),
+                   str(read(button, "text")) if button is not None else "no button")
+
+        bridge.showChannelTab("members")
+        settle(0.5)
+        call(grid, "forceLayout")
+        settle(0.3)
+        self.check("the half holds it", bridge._model.row_for_key("yt:smokevid004") is not None)
 
         marked = [found for found in
                   (item_named(card, "membersBadge")
@@ -545,7 +579,18 @@ class Smoke:
                    "members" in str(read(bridge, "notice")).lower(),
                    str(read(bridge, "notice")))
         bridge._set_notice("")
-        settle(0.2)
+        # Put the walk back where it found it, since everything after this
+        # counts the cards in the feed.
+        db = Database(paths.DB_FILE)
+        with db.conn as conn:
+            conn.execute("UPDATE videos SET members_only=0 WHERE key='yt:smokevid004'")
+            conn.execute("UPDATE channels SET members_wanted=0, members=NULL WHERE key=?",
+                         (channel,))
+        db.close()
+        bridge.showChannelTab("videos")
+        bridge.selectGroup(-1)
+        bridge.reload()
+        settle(0.4)
 
     def suggestions(self, bridge, window) -> None:
         """The suggestions page says how old it is and carries its own button.

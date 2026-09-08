@@ -100,6 +100,23 @@ Item {
             anchors.margins: 12
             spacing: 8
 
+            // What is behind this channel's membership. It is in no other
+            // feed at all, so nothing is read until this is pressed, and
+            // pressing it reads now rather than waiting for the poller to
+            // come round to this channel, which can be hours.
+            //
+            // Only where there is a question to ask. A channel already found
+            // to sell nothing stops offering it rather than offering a button
+            // whose only answer is to say so again, and Twitch has no such
+            // thing at all.
+            FlatButton {
+                objectName: "channelMembers"
+                visible: header.info.platform !== "twitch"
+                         && header.info.sellsMembership === true
+                text: header.info.membersWanted ? "Members on" : "Members"
+                accent: header.info.membersWanted === true
+                onClicked: App.wantMembers(header.info.key, !header.info.membersWanted)
+            }
             FlatButton {
                 text: "Groups"
                 onClicked: header.groupsRequested()

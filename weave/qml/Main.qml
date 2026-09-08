@@ -993,6 +993,18 @@ ApplicationWindow {
                 accent: App.channelTab === "streams"
                 onClicked: App.showChannelTab("streams")
             }
+            // Only once something has actually been read. A channel nobody
+            // pressed the button on has no such half, and neither has one
+            // whose tab answered with nothing, so this never appears as an
+            // empty page. Switching the button off again leaves it here, with
+            // what was read before still in it.
+            FlatButton {
+                objectName: "channelMembersTab"
+                visible: App.channelInfo.members > 0
+                text: "Members"
+                accent: App.channelTab === "members"
+                onClicked: App.showChannelTab("members")
+            }
             FlatButton {
                 objectName: "channelPlaylistsTab"
                 text: "Playlists"
