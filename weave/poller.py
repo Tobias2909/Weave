@@ -137,6 +137,9 @@ class Worker(QThread):
 # Four a tick is 60 a window, which fits, and it settles a list of several
 # hundred channels over a couple of hours without the feed itself slowing down.
 LIVE_PROBES_PER_TICK = 4
+# The same pacing for the members tab. A one off question per channel, so it
+# must not burst any more than the streams one does.
+MEMBERS_PROBES_PER_TICK = 4
 
 # How many announced streams are asked about their start time in one live
 # check. One request each, the answer is kept for good, and the live bar's own
@@ -184,8 +187,9 @@ def _on_mixed_feed(row) -> bool:
     return (_column(row, "feed_variant", "") or "") == rss.CHANNEL
 
 
-def _worth_a_streams_probe(row, tiers) -> bool:
-    """Whether to spend the one request that says if this channel streams.
+def _worth_a_one_off_probe(row, tiers) -> bool:
+    """Whether to spend a one off question on this channel, about its streams
+    tab or its members tab.
 
     Only a channel that is still publishing, or one nothing is stored from at
     all, which is a first look rather than a dormant one.
@@ -194,10 +198,21 @@ def _worth_a_streams_probe(row, tiers) -> bool:
     published nothing in ninety days, and the probes were a fifth of the whole
     feed ceiling. A dormant channel that starts up again publishes something,
     which moves it into a faster tier by itself, and it is asked then.
+
+    Judged on the channel's own tier and NEVER on the interval it is actually
+    polled at. Those were the same number until sweep driven polling raised a
+    covered channel's interval to six hours. Read from there, every channel
+    the sweep watches looks dormant, which is the exact opposite of what being
+    in the sweep means, and the probe silently stopped for the liveliest
+    channels in the list. `interval_s` remains the fallback for a caller whose
+    rows do not carry a tier.
     """
     if _column(row, "last_published_at") is None:
         return True
-    return int(_column(row, "interval_s", tiers.warm_s)) <= tiers.warm_s
+    tier = _column(row, "tier_s", None)
+    if tier is None:
+        tier = _column(row, "interval_s", tiers.warm_s)
+    return int(tier) <= tiers.warm_s
 
 
 def _wants_shorts_sweep(row, now: int) -> bool:
@@ -454,16 +469,27 @@ class FeedPoller(Worker):
         jobs += [(row["key"], row["ext_id"], rss.SHORTS) for row in rows
                  if _wants_shorts_sweep(row, now)
                  and not _wants_variant_retest(row, now)][:SHORTS_SWEEPS_PER_TICK]
-        if not self._cfg.poll_live_feeds:
-            return jobs
-        streamers = self._db.channels_that_stream()
-        unasked = self._db.channels_not_asked_for_streams()
         tiers = self._cfg.feed_tiers
-        wanted = [row for row in rows if row["key"] in streamers]
-        wanted += [row for row in rows if row["key"] in unasked
-                   and _worth_a_streams_probe(row, tiers)][:LIVE_PROBES_PER_TICK]
-        jobs += [(row["key"], row["ext_id"], rss.LIVE) for row in wanted
-                 if (row["feed_variant"] or "") != rss.CHANNEL]
+        if self._cfg.poll_live_feeds:
+            streamers = self._db.channels_that_stream()
+            unasked = self._db.channels_not_asked_for_streams()
+            wanted = [row for row in rows if row["key"] in streamers]
+            wanted += [row for row in rows if row["key"] in unasked
+                       and _worth_a_one_off_probe(row, tiers)][:LIVE_PROBES_PER_TICK]
+            jobs += [(row["key"], row["ext_id"], rss.LIVE) for row in wanted
+                     if (row["feed_variant"] or "") != rss.CHANNEL]
+        # The same shape again for the members tab, and paced the same way. A
+        # channel that sells nothing answers 404 once and is never asked again,
+        # so the recurring cost is one request per round for the channels that
+        # do, measured at roughly one in six.
+        if self._cfg.poll_members_feeds:
+            having = self._db.channels_with_members()
+            never = self._db.channels_not_asked_for_members()
+            wanted = [row for row in rows if row["key"] in having]
+            wanted += [row for row in rows if row["key"] in never
+                       and _worth_a_one_off_probe(row, tiers)][:MEMBERS_PROBES_PER_TICK]
+            jobs += [(row["key"], row["ext_id"], rss.MEMBERS) for row in wanted
+                     if (row["feed_variant"] or "") != rss.CHANNEL]
         return jobs
 
     def _fetch_one(self, fetcher: Fetcher, ext_id: str, kind: str) -> tuple[object, int, str | None]:
@@ -536,6 +562,8 @@ class FeedPoller(Worker):
         # no such tab is decided after the round, since the endpoint refuses
         # with a 404 as well.
         no_streams: set[str] = set()
+        # And the same for the members tab, decided the same way afterwards.
+        no_members: set[str] = set()
         total = len(jobs)
         with ThreadPoolExecutor(max_workers=self._cfg.max_concurrency) as pool:
             futures = {pool.submit(self._fetch_one, fetcher, ext_id, kind): (key, kind)
@@ -614,6 +642,18 @@ class FeedPoller(Worker):
                             self._db.stamp_variant_checked(key)
                         elif key in struck:
                             self._db.clear_long_form_strikes(key)
+                    if kind == rss.MEMBERS:
+                        if result is None:
+                            no_members.add(key)
+                            done += 1
+                            self.progress.emit("feeds", done, total)
+                            continue
+                        self._db.set_channel_members(key, True)
+                        # Nothing is asked about these rows the way a stream
+                        # tab entry is. Every one of them is behind the
+                        # membership, the row says so on arrival, and a video
+                        # nobody can open is not owed a question about whether
+                        # it has started.
                     if kind == rss.LIVE:
                         if result is None:
                             no_streams.add(key)
@@ -642,7 +682,7 @@ class FeedPoller(Worker):
                                              result.channel_title)
                     self._db.mark_polled(key, None)
                     polled.add(key)
-                    if (kind != rss.LIVE and not result.videos
+                    if (kind not in (rss.LIVE, rss.MEMBERS) and not result.videos
                             and self._db.channel_has_videos(key)):
                         # Zero entries with no error is what a broken source
                         # looks like. But a channel that has never produced a
@@ -660,6 +700,11 @@ class FeedPoller(Worker):
         # asked again later.
         for key in no_streams & polled:
             self._db.set_channel_streams(key, False)
+        # Same reasoning for the members tab: a 404 alongside an answer from
+        # the same channel means it sells nothing, and a 404 in a round where
+        # that channel answered nothing at all is the endpoint pushing back.
+        for key in no_members & polled:
+            self._db.set_channel_members(key, False)
 
         if fetcher is not None:
             # What went over the wire, retries included, rather than what was

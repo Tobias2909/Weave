@@ -73,6 +73,16 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         # that have been seen streaming are asked, so this is a handful of
         # extra requests rather than a second one per channel.
         "poll_live_feeds": True,
+        # Ask a channel's members feed as well. What is behind a channel's
+        # membership appears in no other feed at all, so without this those
+        # videos are simply absent, which is how it has always been. Off by
+        # default because they cannot be opened without paying the channel,
+        # and a feed full of videos that answer a press with a refusal is
+        # noise unless somebody wants to see what they are missing. Only the
+        # channels found to sell one are asked, measured at roughly one in
+        # six, so turning it on is a handful of extra requests rather than a
+        # second one per channel.
+        "poll_members_feeds": False,
         # Filling in the lengths RSS cannot carry. One channel per tick is one
         # or two browse calls a minute, which sits inside the share background
         # work is allowed, and a channel is answered whole by one call however
@@ -236,6 +246,10 @@ class Config:
     @property
     def poll_live_feeds(self) -> bool:
         return bool(self.get("poll", "poll_live_feeds"))
+
+    @property
+    def poll_members_feeds(self) -> bool:
+        return bool(self.get("poll", "poll_members_feeds"))
 
     @property
     def fill_lengths(self) -> bool:

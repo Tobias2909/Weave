@@ -64,6 +64,12 @@ sweep_stale_s = 1800
 # own tab, so without this one only appears once it has ended. Only channels
 # seen streaming are asked.
 poll_live_feeds = true
+# Ask a channel's members feed as well. What is behind a channel's membership
+# is in no other feed at all, so without this those videos never appear. Off by
+# default, because they cannot be opened without paying the channel, so the
+# card marks them and a press is refused. Turn it on to see what you are
+# missing. Only the channels found to sell a membership are asked.
+poll_members_feeds = false
 # Fill in the lengths RSS cannot carry, a channel at a time, off that channel's
 # own tab listings. RSS carries no duration at all and the subscriptions sweep
 # reaches only the newest thousand videos, so without this the lengths stop

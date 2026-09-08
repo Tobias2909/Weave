@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 38
+SCHEMA_VERSION = 39
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -305,6 +305,10 @@ class VideoRow:
     # Only used to name a channel Weave has never heard of, which a feed can
     # hand over, so it is never written over a name already stored.
     channel_title: str | None = None
+    # Behind the channel's membership. Known at insert time for anything that
+    # came out of the members tab, since that tab carries nothing else, and
+    # never guessed anywhere else.
+    members_only: bool = False
 
     @property
     def key(self) -> str:
@@ -345,6 +349,10 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # and what an ordinary video never looks like there. One question settles
     # it, and this is the note that one is owed.
     ("videos", "stream_pending", "INTEGER"),
+    # Whether this channel sells a membership, which is whether its members
+    # tab answers at all. Three states like streams: 1 it has one, 0 asked and
+    # it has none, NULL never asked, which is a question and not a no.
+    ("channels", "members", "INTEGER"),
     # Behind a channel's membership. Nothing here can be opened without one,
     # so there is no live state to learn, no length to fill in and nothing to
     # hand mpv. The card says so and the press is refused, rather than the
@@ -984,6 +992,36 @@ class Database:
             "  AND NOT EXISTS (SELECT 1 FROM videos v WHERE v.channel_key=c.key "
             "                  AND v.live_status IS NOT NULL)", (platform,))}
 
+    def channels_with_members(self, platform: str = "youtube") -> set[str]:
+        """Channels known to sell a membership, so their members tab is worth
+        asking for.
+
+        Same shape as the streams tab and for the same reason. Most channels
+        sell nothing, measured at roughly one in six of his, and asking all of
+        them every round would spend a request per channel to be told 404.
+        """
+        return {row[0] for row in self.conn.execute(
+            "SELECT key FROM channels WHERE platform=? AND tracked=1 AND members=1",
+            (platform,))}
+
+    def channels_not_asked_for_members(self, platform: str = "youtube") -> set[str]:
+        """Channels whose members tab has never been asked for.
+
+        Nothing else reveals that a channel sells a membership. Its videos are
+        in no other feed, and the subscriptions feed does not mark them, so
+        waiting to be told means waiting for ever.
+        """
+        return {row[0] for row in self.conn.execute(
+            "SELECT key FROM channels WHERE platform=? AND tracked=1 AND members IS NULL",
+            (platform,))}
+
+    def set_channel_members(self, key: str, members: bool) -> None:
+        """Remember whether this channel has a members tab, so the question is
+        asked once rather than every round."""
+        with self.conn as conn:
+            conn.execute("UPDATE channels SET members=? WHERE key=?",
+                         (1 if members else 0, key))
+
     def channel_stream_count(self, channel_key: str) -> int:
         """How many of this channel's stored videos are streams.
 
@@ -1086,7 +1124,7 @@ class Database:
             (
                 r.key, r.platform, r.ext_id, r.channel_key, r.title, r.published_at,
                 r.thumbnail_url, r.duration_s, r.views, r.likes, r.live_status,
-                None if r.is_short is None else int(r.is_short), now,
+                None if r.is_short is None else int(r.is_short), int(r.members_only), now,
             )
             for r in rows
         ]
@@ -1117,8 +1155,8 @@ class Database:
                 """
                 INSERT INTO videos(key, platform, ext_id, channel_key, title, published_at,
                                    thumbnail_url, duration_s, views, likes, live_status,
-                                   is_short, first_seen_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                   is_short, members_only, first_seen_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(key) DO UPDATE SET
                     title         = excluded.title,
                     published_at  = COALESCE(excluded.published_at, videos.published_at),
@@ -1127,7 +1165,13 @@ class Database:
                     views         = COALESCE(excluded.views, videos.views),
                     likes         = COALESCE(excluded.likes, videos.likes),
                     live_status   = COALESCE(excluded.live_status, videos.live_status),
-                    is_short      = COALESCE(videos.is_short, excluded.is_short)
+                    is_short      = COALESCE(videos.is_short, excluded.is_short),
+                    -- Raised, never lowered. The members tab is the only
+                    -- source that can say yes, and every other source is
+                    -- silent rather than saying no, so letting one of those
+                    -- write a zero would unmark a video the moment any other
+                    -- feed mentioned it.
+                    members_only  = MAX(videos.members_only, excluded.members_only)
                 """,
                 payload,
             )

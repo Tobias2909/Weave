@@ -197,6 +197,173 @@ class TheWatcherRecordsIt(unittest.TestCase):
         self.assertEqual((row["live_status"], row["live_viewers"]), ("was_live", None))
 
 
+class TheMembersFeed(unittest.TestCase):
+    """The fourth per channel tab. It is the only address that carries this at
+    all, so without it a members video is simply absent, which is how Weave
+    behaved until now."""
+
+    def test_it_has_an_address_of_its_own(self):
+        from weave.sources import rss
+
+        channel_id = "UCaaaaaaaaaaaaaaaaaaaaaa"
+        self.assertEqual(rss.playlist_id(channel_id, rss.MEMBERS),
+                         "UUMO" + channel_id[2:])
+        self.assertIn("playlist_id=UUMO", rss.feed_url(channel_id, rss.MEMBERS))
+        # The four tabs address four disjoint lists, so no two may share one.
+        made = {rss.playlist_id(channel_id, kind)
+                for kind in (rss.VIDEOS, rss.SHORTS, rss.LIVE, rss.MEMBERS)}
+        self.assertEqual(len(made), 4)
+
+    def test_everything_in_it_is_marked_on_arrival(self):
+        from weave.sources import rss
+
+        parsed = rss.parse(_FEED, rss.MEMBERS)
+        self.assertTrue(parsed.videos)
+        self.assertTrue(all(row.members_only for row in parsed.videos))
+
+    def test_and_nothing_from_any_other_tab_is(self):
+        from weave.sources import rss
+
+        for kind in (rss.VIDEOS, rss.SHORTS, rss.LIVE, rss.CHANNEL):
+            parsed = rss.parse(_FEED, kind)
+            self.assertFalse(any(row.members_only for row in parsed.videos), kind)
+
+
+class KeepingTheMark(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.db = Database(Path(self._tmp.name) / "t.db")
+        self.addCleanup(self.db.close)
+        self.db.add_channel(CHANNEL, "youtube", "UCaaaaaaaaaaaaaaaaaaaaaa", "One")
+
+    def row(self, members_only):
+        return VideoRow("youtube", "aaaaaaaaaaa", CHANNEL, "Theirs",
+                        published_at=1_700_000_000, members_only=members_only)
+
+    def test_a_row_from_the_members_tab_is_stored_marked(self):
+        self.db.upsert_videos([self.row(True)])
+        self.assertEqual(self.db.video("yt:aaaaaaaaaaa")["members_only"], 1)
+
+    def test_and_another_feed_mentioning_it_does_not_unmark_it(self):
+        # Every other source is silent about this rather than saying no, so a
+        # zero from one of them is not an answer. Getting this wrong would
+        # unmark a video the moment anything else listed it.
+        self.db.upsert_videos([self.row(True)])
+        self.db.upsert_videos([self.row(False)])
+        self.assertEqual(self.db.video("yt:aaaaaaaaaaa")["members_only"], 1)
+
+
+class AskingForTheMembersTab(unittest.TestCase):
+    """Whether the tab is asked for at all, and what a 404 on it means."""
+
+    def setUp(self):
+        from weave import poller
+        from weave.budget import Budget
+        from weave.net import HttpError
+        from weave.sources import rss
+
+        self.poller_mod, self.Budget, self.rss = poller, Budget, rss
+        self.HttpError = HttpError
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.db = Database(Path(self._tmp.name) / "t.db")
+        self.addCleanup(self.db.close)
+        self.db.add_channel("yt:UC1", "youtube", "UC1", "One")
+        self._real = poller.rss.fetch
+        self.addCleanup(setattr, poller.rss, "fetch", self._real)
+
+    def make(self, on: bool):
+        from weave.config import Config
+
+        cfg = Config(raw={"poll": {"poll_members_feeds": on, "poll_live_feeds": False}})
+        return self.poller_mod.FeedPoller(self.db, cfg), cfg
+
+    def answer(self, table):
+        def fake(fetcher, ext_id, kind=self.rss.VIDEOS):
+            found = table[kind]
+            if isinstance(found, Exception):
+                raise found
+            return found
+        self.poller_mod.rss.fetch = fake
+
+    def kinds_asked(self, on: bool):
+        made, _ = self.make(on)
+        rows = self.db.channels_due(made._cfg.feed_tiers, limit=5, force=True)
+        return {kind for _key, _ext, kind in made._feed_jobs(rows)}
+
+    def test_it_is_not_asked_for_while_the_setting_is_off(self):
+        self.assertNotIn(self.rss.MEMBERS, self.kinds_asked(False))
+
+    def test_and_is_once_it_is_on(self):
+        self.assertIn(self.rss.MEMBERS, self.kinds_asked(True))
+
+    def run_round(self, on=True):
+        made, cfg = self.make(on)
+        budget = self.Budget(self.db, cfg.budget_limits, cfg.budget_window_s)
+        return made._phase_rss(None, budget)
+
+    def members_column(self):
+        return self.db.channels()[0]["members"]
+
+    def test_a_channel_that_sells_nothing_is_asked_once(self):
+        self.answer({self.rss.VIDEOS: self.rss.FeedResult("UC1", "One", [], self.rss.VIDEOS),
+                     self.rss.MEMBERS: self.HttpError(404, "u")})
+        _, _, failures = self.run_round()
+        self.assertEqual(failures, 0)
+        self.assertEqual(self.members_column(), 0)
+        self.assertNotIn("yt:UC1", self.db.channels_not_asked_for_members())
+
+    def test_a_refusal_leaves_the_question_open(self):
+        # The endpoint answers a burst with a 404 as well, so a round where
+        # the channel answered nothing at all decides nothing.
+        self.answer({self.rss.VIDEOS: self.HttpError(404, "u"),
+                     self.rss.CHANNEL: self.HttpError(404, "u"),
+                     self.rss.MEMBERS: self.HttpError(404, "u")})
+        self.run_round()
+        self.assertIsNone(self.members_column())
+        self.assertIn("yt:UC1", self.db.channels_not_asked_for_members())
+
+    def test_one_that_answers_is_remembered_and_its_rows_are_marked(self):
+        made = VideoRow("youtube", "aaaaaaaaaaa", "yt:UC1", "Theirs",
+                        published_at=1_700_000_000, members_only=True)
+        self.answer({self.rss.VIDEOS: self.rss.FeedResult("UC1", "One", [], self.rss.VIDEOS),
+                     self.rss.MEMBERS: self.rss.FeedResult("UC1", "One", [made],
+                                                           self.rss.MEMBERS)})
+        self.run_round()
+        self.assertEqual(self.members_column(), 1)
+        self.assertIn("yt:UC1", self.db.channels_with_members())
+        self.assertEqual(self.db.video("yt:aaaaaaaaaaa")["members_only"], 1)
+
+
+_FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015"
+      xmlns:media="http://search.yahoo.com/mrss/"
+      xmlns="http://www.w3.org/2005/Atom">
+ <yt:channelId>UCaaaaaaaaaaaaaaaaaaaaaa</yt:channelId>
+ <title>Members-only videos</title>
+ <author><name>One</name>
+  <uri>https://www.youtube.com/channel/UCaaaaaaaaaaaaaaaaaaaaaa</uri></author>
+ <entry>
+  <id>yt:video:aaaaaaaaaaa</id>
+  <yt:videoId>aaaaaaaaaaa</yt:videoId>
+  <yt:channelId>UCaaaaaaaaaaaaaaaaaaaaaa</yt:channelId>
+  <title>Behind the membership</title>
+  <author><name>One</name>
+   <uri>https://www.youtube.com/channel/UCaaaaaaaaaaaaaaaaaaaaaa</uri></author>
+  <published>2026-09-07T12:00:00+00:00</published>
+  <media:group>
+   <media:thumbnail url="https://i.ytimg.com/vi/aaaaaaaaaaa/hqdefault.jpg"/>
+   <media:community>
+    <media:starRating count="200"/>
+    <media:statistics views="0"/>
+   </media:community>
+  </media:group>
+ </entry>
+</feed>
+"""
+
+
 class PressingIt(unittest.TestCase):
     """The press is refused in both places that reach the same address."""
 

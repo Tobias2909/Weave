@@ -10,6 +10,7 @@ prefix of the channel id gives the playlist behind a tab, and that playlist has
 its own feed:
 
   UULF   long form videos          UUSH   Shorts          UULV   streams
+  UUMO   members only
 
 Those are disjoint. Asking for UULF is therefore the whole Shorts filter, for
 free and in advance, which is why nothing here has to classify anything after
@@ -51,12 +52,27 @@ VIDEOS = "videos"
 SHORTS = "shorts"
 LIVE = "live"
 CHANNEL = "channel"
+# What is behind the channel's membership. It appears in no other feed at all,
+# measured: a members video is absent from the long form tab, absent from the
+# streams tab, and the subscriptions feed reports availability as NA for every
+# entry over a thousand of them. This address is the only way to know it
+# exists. Everything in it is members only by definition, so a row from here
+# needs nothing asked about it to be marked.
+MEMBERS = "members"
 
-_PREFIX = {VIDEOS: "UULF", SHORTS: "UUSH", LIVE: "UULV"}
+_PREFIX = {VIDEOS: "UULF", SHORTS: "UUSH", LIVE: "UULV", MEMBERS: "UUMO"}
 
 # What a feed says about the kind of what it carries. The mixed feed says
 # nothing, which is the whole reason for preferring the others.
-_IS_SHORT = {VIDEOS: False, SHORTS: True, LIVE: False, CHANNEL: None}
+_IS_SHORT = {VIDEOS: False, SHORTS: True, LIVE: False, MEMBERS: False, CHANNEL: None}
+
+# The tabs whose rows are behind the membership.
+_MEMBERS_ONLY = frozenset({MEMBERS})
+
+
+def is_members_kind(kind: str) -> bool:
+    """Whether a feed of this kind carries only what a member can open."""
+    return kind in _MEMBERS_ONLY
 
 
 def is_short_kind(kind: str) -> bool | None:
@@ -142,6 +158,7 @@ def parse(xml: bytes, kind: str = VIDEOS) -> FeedResult:
     feed_channel = _author_channel_id(root)
     feed_title = root.findtext("atom:author/atom:name", namespaces=_NS)
     is_short = is_short_kind(kind)
+    members_only = is_members_kind(kind)
 
     videos: list[VideoRow] = []
     for entry in root.findall("atom:entry", _NS):
@@ -178,6 +195,7 @@ def parse(xml: bytes, kind: str = VIDEOS) -> FeedResult:
             # average is a hardcoded 5.00 and useless. count is the like count.
             likes=_int_attr(rating, "count"),
             is_short=is_short,
+            members_only=members_only,
         ))
 
     return FeedResult(channel_id=feed_channel, channel_title=feed_title,
