@@ -91,8 +91,20 @@ def click_entry(menu, label: str) -> bool:
     return False
 
 
+# Bumped every time the walk waits, which is the only thing it does between
+# presses, so a watchdog can tell a walk that is working from one that has
+# hung. Read through beat(), never assigned from outside.
+_beats = 0
+
+
+def beat() -> int:
+    return _beats
+
+
 def settle(seconds: float) -> None:
     """Let the event loop run for a while."""
+    global _beats
+    _beats += 1
     end = time.monotonic() + seconds
     app = QCoreApplication.instance()
     while time.monotonic() < end:
@@ -286,13 +298,21 @@ def seed() -> None:
 # ---- the walk ----------------------------------------------------------------
 
 class Smoke:
-    def __init__(self, shot: str | None) -> None:
+    def __init__(self, shot: str | None, loud: bool = False) -> None:
         self.shot = shot
+        # Say each answer as it is found rather than only in the report at the
+        # end. A walk that dies takes an unprinted report with it, and a
+        # segfault in the middle of one left no output at all to work from,
+        # which is the worst possible thing for a harness to do.
+        self.loud = loud
         self.checks: list[tuple[str, bool, str]] = []
         self.warnings: Warnings | None = None
 
     def check(self, name: str, ok: bool, detail: str = "") -> None:
         self.checks.append((name, bool(ok), detail))
+        if self.loud:
+            print(f"[{'ok' if ok else 'FAIL'}] {name}" + (f"  {detail}" if detail else ""),
+                  flush=True)
 
     def music(self, bridge, window) -> None:
         """The music page: two rows a section, the page behind them, and a
@@ -943,10 +963,11 @@ class Smoke:
 
         clip = find(window, "groupBarClip")
         bar = find(window, "groupBar")
+        edge = find(window, "groupBarEdge")
         ground = find(window, "groupBarGround")
         self.check("a group has the row of buttons",
                    clip is not None and bar is not None and read(clip, "visible"))
-        if clip is None or bar is None or ground is None:
+        if clip is None or bar is None or ground is None or edge is None:
             return
 
         group_first = read(grid, "y") - read(grid, "contentY")
@@ -955,8 +976,17 @@ class Smoke:
                    f"history {history_first:.0f}, group {group_first:.0f}")
         self.check("the buttons are in place before anything is scrolled",
                    read(bar, "y") == 0, f"y {read(bar, 'y'):.0f}")
-        self.check("with no ground under them, since nothing is behind them",
-                   read(ground, "opacity") == 0, f"opacity {read(ground, 'opacity'):.2f}")
+        self.check("with no line under them, since nothing is behind them",
+                   read(edge, "opacity") == 0, f"opacity {read(edge, 'opacity'):.2f}")
+        # The ground behind the buttons is the window's own, held still against
+        # the window rather than sliding with them, so the strip is the colour
+        # the window is painted at that height whatever the theme washes it
+        # with. A flat colour here was the base under the wash and looked it.
+        self.check("their ground is the window's own, lined up with it",
+                   abs(read(ground, "y") + read(clip, "y") + read(bar, "y")) < 1
+                   and abs(read(ground, "x") + read(clip, "x")) < 1,
+                   f"ground at {read(ground, 'x'):.0f},{read(ground, 'y'):.0f} "
+                   f"clip at {read(clip, 'x'):.0f},{read(clip, 'y'):.0f}")
 
         # All three, on rows that are already stored, so none of this asks
         # anything of YouTube.
@@ -985,8 +1015,12 @@ class Smoke:
         self.check("scrolling down takes the buttons out of the way",
                    read(bar, "y") <= -read(clip, "barHeight") + 1, f"y {read(bar, 'y'):.0f}")
         self.check("and out of reach with them", not read(bar, "enabled"))
-        self.check("the ground is under them once there is a card behind",
-                   read(ground, "opacity") == 1, f"opacity {read(ground, 'opacity'):.2f}")
+        self.check("the line is under them once there is a card behind",
+                   read(edge, "opacity") == 1, f"opacity {read(edge, 'opacity'):.2f}")
+        self.check("and their ground is still held against the window",
+                   abs(read(ground, "y") + read(clip, "y") + read(bar, "y")) < 1,
+                   f"ground {read(ground, 'y'):.0f} clip {read(clip, 'y'):.0f} "
+                   f"bar {read(bar, 'y'):.0f}")
 
         write(grid, "contentY", 250.0)
         settle(0.5)
@@ -999,9 +1033,9 @@ class Smoke:
                    read(bar, "y") <= -read(clip, "barHeight") + 1, f"y {read(bar, 'y'):.0f}")
         write(grid, "contentY", -float(read(grid, "topMargin")))
         settle(0.5)
-        self.check("back at the top they are in place with no ground",
-                   read(bar, "y") == 0 and read(ground, "opacity") == 0,
-                   f"y {read(bar, 'y'):.0f} opacity {read(ground, 'opacity'):.2f}")
+        self.check("back at the top they are in place with no line",
+                   read(bar, "y") == 0 and read(edge, "opacity") == 0,
+                   f"y {read(bar, 'y'):.0f} opacity {read(edge, 'opacity'):.2f}")
         if self.shot:
             screenshot(window, shot_beside(self.shot, "groupbar"))
 
@@ -1430,11 +1464,32 @@ def shot_beside(path: str, suffix: str) -> str:
     return str(where.with_name(f"{where.stem}-{suffix}{where.suffix}"))
 
 
-def boot(walk, hold_s: float = 6.0) -> int:
-    """Start the real application, hand the window to `walk`, then quit."""
+# How long the walk may go without waiting for anything before it is called
+# hung, and the outermost bound whatever it does.
+QUIET_LIMIT_S = 90.0
+WHOLE_LIMIT_S = 900.0
+
+
+def boot(walk, quiet_s: float = QUIET_LIMIT_S, whole_s: float = WHOLE_LIMIT_S) -> int:
+    """Start the real application, hand the window to `walk`, then quit.
+
+    The walk runs inside one event loop callback, so it quits the application
+    itself when it is done and the timer here is only for a walk that never
+    finishes. That timer used to be a flat deadline of thirty seconds, and the
+    walk grew past it: it then fired in the MIDDLE of a walk, and everything
+    after that point ran while the application was already quitting. A
+    grabWindow() in that state took the whole process down with a fault inside
+    the scene graph, which cost hours and looked like a bug in the pictures.
+
+    So it is a watchdog on the heartbeat rather than a deadline. Every wait the
+    walk does bumps a counter; a walk still counting is left alone however long
+    it takes, and only one that has gone quiet is cut off. There is still an
+    outermost bound, for a walk stuck in a loop that waits for ever.
+    """
     from weave.app import run
 
     outcome = {"error": ""}
+    state = {"beats": -1, "quiet_since": time.monotonic(), "started": time.monotonic()}
 
     def on_ready(engine, bridge, window):
         def go():
@@ -1444,9 +1499,24 @@ def boot(walk, hold_s: float = 6.0) -> int:
                 outcome["error"] = f"{type(exc).__name__}: {exc}"
             QTimer.singleShot(200, QCoreApplication.instance().quit)
 
+        def look():
+            now = time.monotonic()
+            if beat() != state["beats"]:
+                state["beats"] = beat()
+                state["quiet_since"] = now
+            quiet = now - state["quiet_since"]
+            whole = now - state["started"]
+            if quiet > quiet_s or whole > whole_s:
+                outcome["error"] = (f"the walk stopped answering after {whole:.0f}s "
+                                    f"({quiet:.0f}s quiet)")
+                watchdog.stop()
+                QCoreApplication.instance().quit()
+
         QTimer.singleShot(50, go)
-        # A stuck walk must not hang forever.
-        QTimer.singleShot(int(hold_s * 1000 * 5), QCoreApplication.instance().quit)
+        watchdog = QTimer()
+        watchdog.setInterval(2000)
+        watchdog.timeout.connect(look)
+        watchdog.start()
 
     code = run([sys.argv[0]], on_ready=on_ready)
     if outcome["error"]:
@@ -1491,7 +1561,7 @@ def main() -> int:
     if not args.no_seed:
         seed()
 
-    smoke = Smoke(args.screenshot)
+    smoke = Smoke(args.screenshot, loud=not args.json)
     code = boot(smoke.run)
     warnings = smoke.warnings.lines if smoke.warnings else ["the window never came up"]
     failed = [name for name, ok, _ in smoke.checks if not ok]
@@ -1500,8 +1570,8 @@ def main() -> int:
     if args.json:
         print(json.dumps(report))
     else:
-        for name, ok, detail in smoke.checks:
-            print(f"[{'ok' if ok else 'FAIL'}] {name}" + (f"  {detail}" if detail else ""))
+        # The answers were said as they were found, so only what could not be
+        # said until the end is printed here.
         for line in warnings:
             print(f"warning: {line}")
         print(f"{len(smoke.checks) - len(failed)} of {len(smoke.checks)} checks passed, "

@@ -21,6 +21,7 @@ ApplicationWindow {
     flags: Qt.Window | Qt.FramelessWindowHint
 
     ThemeBackground {
+        id: windowGround
         anchors.fill: parent
         z: -1
     }
@@ -1163,23 +1164,43 @@ ApplicationWindow {
             enabled: !groupBarClip.away
             Behavior on y { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
 
-            // Only once there is a card behind it. At rest it sits in the
-            // margin above the first row, where the window's own ground shows
-            // through and a band of anything else would be a seam.
-            Rectangle {
+            // The window's own ground, held still against the window while
+            // the buttons over it slide, so the strip they sit in is painted
+            // exactly what the window is painted at that height and a card
+            // passing under them is hidden without a seam.
+            //
+            // A flat Theme.colors.background here was wrong and looked it.
+            // That role is the base colour UNDER the gradient wash, and on a
+            // washed theme, which is twelve of the fourteen shipped, the
+            // window at this height is a colour the wash decides and not that
+            // one. It only showed once the grid had been scrolled and the
+            // ground came in, which is what he saw.
+            //
+            // Sized and placed off the window's own ground rather than off the
+            // window, because inside an ApplicationWindow a child's parent is
+            // the content item and the toolbar is the window's header, so the
+            // two differ by the height of that bar.
+            ThemeBackground {
                 objectName: "groupBarGround"
-                anchors.fill: parent
-                color: Theme.colors.background
+                x: -(groupBarClip.x + groupBar.x)
+                y: -(groupBarClip.y + groupBar.y)
+                width: windowGround.width
+                height: windowGround.height
+            }
+
+            // A line under the buttons once there is a card behind them, so
+            // the row reads as something over the grid rather than a gap in
+            // it. Nothing to divide while the strip above the first card is
+            // empty, which is what it is at rest.
+            Rectangle {
+                objectName: "groupBarEdge"
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: Theme.colors.border
                 opacity: groupBarClip.past > 0 ? 1 : 0
                 Behavior on opacity { NumberAnimation { duration: 120 } }
-
-                Rectangle {
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.bottom: parent.bottom
-                    height: 1
-                    color: Theme.colors.border
-                }
             }
 
             Row {
