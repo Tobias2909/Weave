@@ -292,3 +292,80 @@ class WhatARoundSaysAboutItself(unittest.TestCase):
         self.run_round()
         self.assertEqual(self.banners(), [])
         self.assertEqual(self.db.requests_in_window(FEEDS, backoff.WINDOW_S), (1, 0))
+
+
+class ARefusalEpisodeStrandsNothing(unittest.TestCase):
+    """A 404 on the long form tab means the channel has no such tab, or the
+    endpoint is refusing us, and it says both the same way.
+
+    It cannot be read one channel at a time, because which of the two it is
+    is a property of the round. Strikes used to be recorded inside the loop,
+    before the round could be weighed, so an episode struck every channel it
+    touched and two such rounds moved them onto the mixed feed with Shorts
+    behind them. Measured on a real library during one episode: thirty
+    channels carrying a strike and forty six moved over, against two the week
+    before, while the whole round was thirty requests.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.db = Database(Path(self._tmp.name) / "t.db")
+        self.addCleanup(self.db.close)
+        self.cfg = Config(raw={"poll": {"poll_live_feeds": False}})
+        self.poller = poller.FeedPoller(self.db, self.cfg, force_all=True)
+        self._real = poller.rss.fetch
+        self.addCleanup(setattr, poller.rss, "fetch", self._real)
+
+    def channels(self, count):
+        for index in range(count):
+            self.db.add_channel(f"yt:UC{index:020d}", "youtube", f"UC{index:020d}", f"C{index}")
+
+    def answer(self, refuse):
+        def fake(fetcher, ext_id, kind=rss.VIDEOS):
+            if ext_id in refuse and kind == rss.VIDEOS:
+                raise HttpError(404, "u")
+            return rss.FeedResult(ext_id, "C", [], kind)
+        poller.rss.fetch = fake
+
+    def run_round(self):
+        budget = Budget(self.db, self.cfg.budget_limits, self.cfg.budget_window_s)
+        return self.poller._phase_rss(None, budget)
+
+    def struck(self):
+        return [row["key"] for row in self.db.channels()
+                if (row["long_form_404s"] or 0) > 0]
+
+    def stranded(self):
+        return [row["key"] for row in self.db.channels() if row["feed_variant"] == "channel"]
+
+    def test_a_round_the_endpoint_is_refusing_counts_nothing_against_anybody(self):
+        self.channels(10)
+        self.answer({f"UC{i:020d}" for i in range(8)})     # 8 of 10, well past the quarter
+        self.run_round()
+        self.assertEqual(self.struck(), [], "a refusal was counted against the channels")
+        self.assertEqual(self.stranded(), [])
+
+    def test_and_two_such_rounds_still_strand_nobody(self):
+        self.channels(10)
+        self.answer({f"UC{i:020d}" for i in range(8)})
+        self.run_round()
+        self.run_round()
+        self.assertEqual(self.stranded(), [],
+                         "an episode moved channels onto the mixed feed")
+
+    def test_but_one_channel_answering_that_way_in_a_healthy_round_still_counts(self):
+        # The Shorts only channel this rule exists for. One of ten is well
+        # under the quarter that reads as the endpoint pushing back.
+        self.channels(10)
+        self.answer({"UC" + "0" * 20})
+        self.run_round()
+        self.assertEqual(self.struck(), ["yt:UC" + "0" * 20])
+        self.assertEqual(self.stranded(), [])
+
+    def test_and_two_healthy_rounds_move_it_to_the_mixed_feed(self):
+        self.channels(10)
+        self.answer({"UC" + "0" * 20})
+        self.run_round()
+        self.run_round()
+        self.assertEqual(self.stranded(), ["yt:UC" + "0" * 20])

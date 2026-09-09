@@ -239,14 +239,30 @@ Rectangle {
 
             // A thin edge in the platform's colour. Enough to tell them apart
             // at a glance without taking any room.
-            Rectangle {
+            // It asked for the card's corners and could not have them: Qt
+            // clamps a corner to half the width, so three pixels can only ever
+            // curve by one and a half and the ends stayed square against a
+            // corner eight pixels round.
+            //
+            // So the shape is the card's own, drawn full size with the card's
+            // radius, and only the first three pixels of it are let through.
+            // Clipping is rectangular, which is exactly what is wanted here,
+            // and the corners come out following the card because they are the
+            // card's corners.
+            Item {
+                objectName: "platformMark"
                 anchors.left: parent.left
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 width: 3
-                topLeftRadius: streamCard.radius
-                bottomLeftRadius: streamCard.radius
-                color: streamCard.mark
+                clip: true
+
+                Rectangle {
+                    width: streamCard.width
+                    height: streamCard.height
+                    radius: streamCard.radius
+                    color: streamCard.mark
+                }
             }
 
             Column {

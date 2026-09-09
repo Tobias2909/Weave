@@ -555,6 +555,9 @@ class FeedPoller(Worker):
         # no such tab is decided after the round, since the endpoint refuses
         # with a 404 as well.
         no_streams: set[str] = set()
+        # Channels whose long form tab answered 404. What that meant is decided
+        # after the round rather than per channel, see below.
+        missing: list[str] = []
         # And the same for the members tab, decided the same way afterwards.
         no_members: set[str] = set()
         total = len(jobs)
@@ -586,22 +589,19 @@ class FeedPoller(Worker):
                     spent += cost
                     pending: list[str] = []
                     if note == MISSING_LONG_FORM:
-                        # Ambiguous on its own. Counted against the channel,
-                        # and believed only once it has happened in several
-                        # rounds in a row. Counted as a refusal as well, since
-                        # a 404 is what this endpoint says when it is pushing
-                        # back and a round full of them is what the rest is
-                        # there to answer. Except for a channel already on
-                        # the mixed feed being offered the tab again: it has
-                        # answered that way in several rounds already, so a
-                        # Shorts only channel saying so once more a week is
-                        # an answer, not the endpoint refusing.
+                        # Ambiguous on its own, and nothing is decided here.
+                        # Counted as a refusal, since a 404 is what this
+                        # endpoint says when it is pushing back and a round
+                        # full of them is what the rest is there to answer.
+                        # Except for a channel already on the mixed feed being
+                        # offered the tab again: it has answered that way in
+                        # several rounds already, so a Shorts only channel
+                        # saying so once more a week is an answer, not the
+                        # endpoint refusing. What it meant for the channel is
+                        # weighed after the round, where the round can be seen.
                         if key not in retests:
                             refused.append(key)
-                        if self._db.note_long_form_missing(key) >= LONG_FORM_STRIKES:
-                            self._db.set_feed_variant(key, rss.CHANNEL)
-                        if key in retests:
-                            self._db.stamp_variant_checked(key)
+                        missing.append(key)
                         # Stamped, though nothing was stored: the channel is
                         # one round late, and that is the price of not letting
                         # a refusal rewrite where it is read from. It is not
@@ -686,6 +686,26 @@ class FeedPoller(Worker):
                 done += 1
                 self.progress.emit("feeds", done, total)
 
+        # What a 404 on the long form tab meant. The channel has no such tab,
+        # or the endpoint is refusing us, and it says both the same way, so it
+        # cannot be read one channel at a time: it is a property of the round.
+        #
+        # In a round that looks like the endpoint pushing back, nothing is
+        # counted against any channel at all. Strikes were being recorded
+        # inside the loop, before the round could be weighed, so an episode of
+        # refusals struck every channel it touched and two such rounds moved
+        # them onto the mixed feed in their dozens, with Shorts coming in
+        # behind them. Measured on his library during one such episode: thirty
+        # channels carrying a strike and forty six moved over, against two the
+        # week before, while the whole round was thirty requests.
+        pushed_back = backoff.pushing_back(total, len(refused))
+        if not pushed_back:
+            for key in missing:
+                if self._db.note_long_form_missing(key) >= LONG_FORM_STRIKES:
+                    self._db.set_feed_variant(key, rss.CHANNEL)
+                if key in retests:
+                    self._db.stamp_variant_checked(key)
+
         # A streams tab that 404s while the same channel's videos feed
         # answered is a channel that does not stream, and it is not asked
         # again. One that 404s in a round where that channel answered nothing
@@ -707,8 +727,7 @@ class FeedPoller(Worker):
         # After the spend, so this round's refusals count towards the decision
         # rather than only the rounds before it.
         self._weigh_refusals()
-        if (backoff.pushing_back(total, len(refused))
-                and not self._db.resting_until(FEEDS)):
+        if pushed_back and not self._db.resting_until(FEEDS):
             # Said only when the round looks like the endpoint pushing back.
             # One channel in thirty not answering is a Shorts only channel
             # without a long form tab, or one bad connection, and a banner
