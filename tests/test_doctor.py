@@ -7,12 +7,15 @@ exactly like a scraper with nothing to say.
 
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 from weave import doctor
 from weave.config import Config
 from weave.db import Database, VideoRow
+
+from . import support
 
 
 class Verdict(unittest.TestCase):
@@ -234,3 +237,78 @@ class Schedule(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WhereTheRequestsGo(unittest.TestCase):
+    """The small table on How things are. A ceiling on its own does not say
+    whether a number is alarming, so the usual figure is beside it.
+
+    MEASURED on a real library: the feeds endpoint read a median of 164 per
+    quarter hour on one day, peaking at 284 of a 300 ceiling, and 28 two days
+    later. The page showed nothing but the live figure against the ceiling, so
+    neither day looked any different from the other."""
+
+    def setUp(self):
+        self.db = support.scratch_db(self)
+        self.cfg = Config(raw={})
+
+    def spend(self, endpoint, minutes_ago, count, refused=0):
+        minute = int(time.time()) // 60 - minutes_ago
+        with self.db.conn as conn:
+            conn.execute(
+                "INSERT INTO request_budget(endpoint, minute, count, refused) VALUES(?,?,?,?) "
+                "ON CONFLICT(endpoint, minute) DO UPDATE SET count=count+excluded.count, "
+                "refused=refused+excluded.refused", (endpoint, minute, count, refused))
+
+    def row(self, endpoint, days=1):
+        found = [row for row in doctor.traffic(self.db, self.cfg, days=days)
+                 if row["endpoint"] == endpoint]
+        return found[0]
+
+    def test_every_endpoint_with_a_ceiling_is_listed_even_when_idle(self):
+        listed = {row["endpoint"] for row in doctor.traffic(self.db, self.cfg)}
+        self.assertEqual(listed, set(self.cfg.budget_limits))
+
+    def test_it_says_what_this_window_has_cost(self):
+        self.spend("feeds", 2, 20)
+        self.spend("feeds", 40, 500)          # outside the window
+        self.assertEqual(self.row("feeds")["sent"], 20)
+
+    def test_the_usual_figure_is_the_median_of_the_windows_that_had_traffic(self):
+        # A window where the app was not running writes no row at all, so idle
+        # time cannot drag the figure down.
+        for hour in range(1, 6):
+            self.spend("feeds", hour * 60, 10)
+        self.spend("feeds", 6 * 60, 400)
+        self.assertEqual(self.row("feeds")["usual"], 10)
+        self.assertEqual(self.row("feeds")["most"], 400)
+
+    def test_at_the_ceiling_is_a_failure(self):
+        self.spend("browse", 1, self.cfg.budget_limits["browse"])
+        self.assertEqual(self.row("browse")["state"], doctor.FAIL)
+
+    def test_well_past_the_usual_figure_is_worth_a_look(self):
+        for hour in range(1, 8):
+            self.spend("feeds", hour * 60, 20)
+        self.spend("feeds", 1, 100)
+        row = self.row("feeds")
+        self.assertEqual(row["state"], doctor.WARN)
+        self.assertLess(row["sent"], row["limit"])
+
+    def test_a_quiet_endpoint_doubling_says_nothing(self):
+        # Two to four is not a story, and warning about it would teach anybody
+        # reading this page to ignore it.
+        for hour in range(1, 8):
+            self.spend("dislikes", hour * 60, 2)
+        self.spend("dislikes", 1, 4)
+        self.assertEqual(self.row("dislikes")["state"], doctor.OK)
+
+    def test_refusals_are_worth_a_look(self):
+        self.spend("feeds", 1, 10, refused=5)
+        self.assertEqual(self.row("feeds")["state"], doctor.WARN)
+
+    def test_the_busiest_endpoint_is_first(self):
+        self.spend("player", 1, 5)
+        self.spend("feeds", 1, 50)
+        listed = [row["endpoint"] for row in doctor.traffic(self.db, self.cfg)]
+        self.assertEqual(listed[:2], ["feeds", "player"])

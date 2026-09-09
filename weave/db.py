@@ -1673,6 +1673,51 @@ class Database:
             (first,),
         ))
 
+    def request_shape(self, window_s: int, days: int = 7) -> list[sqlite3.Row]:
+        """What each endpoint usually costs in one window, and its worst.
+
+        The point is a number to compare the live one against. A ceiling on
+        its own does not say whether 200 requests is normal or alarming, and
+        MEASURED on a real library it can be either: the feeds endpoint sat at
+        a median of 164 per quarter hour on one day, peaking at 284 of a 300
+        ceiling, and at a median of 28 two days later once sweep driven
+        polling landed. The same page showed nothing but the live figure
+        against the ceiling, so neither day looked any different.
+
+        The median of the windows in which anything was asked, not the mean
+        over all of them: a window where the app was not running writes no row
+        at all, so idle time cannot drag the figure down, and one very busy
+        quarter of an hour cannot drag it up. Bucketed by the same window the
+        budget itself uses, so the usual figure and the live one are in the
+        same unit and can be read side by side.
+        """
+        minutes = max(1, window_s // 60)
+        cut = (int(time.time()) - max(1, days) * 86400) // 60
+        return list(self.conn.execute(
+            """
+            WITH windows AS (
+                SELECT endpoint, minute / :minutes AS bucket,
+                       SUM(count) AS sent, SUM(refused) AS refused
+                  FROM request_budget
+                 WHERE minute >= :cut
+                 GROUP BY endpoint, bucket
+            ),
+            ranked AS (
+                SELECT endpoint, sent,
+                       ROW_NUMBER() OVER (PARTITION BY endpoint ORDER BY sent) AS rank,
+                       COUNT(*) OVER (PARTITION BY endpoint) AS windows
+                  FROM windows
+            )
+            SELECT endpoint,
+                   windows,
+                   MAX(CASE WHEN rank = (windows + 1) / 2 THEN sent END) AS usual,
+                   MAX(sent) AS most
+              FROM ranked
+             GROUP BY endpoint
+            """,
+            {"minutes": minutes, "cut": cut},
+        ))
+
     def prune_request_budget(self, older_than_s: int = 86400) -> int:
         cutoff = (int(time.time()) - max(0, older_than_s)) // 60
         with self.conn as conn:

@@ -186,6 +186,74 @@ Item {
                 }
 
                 Label {
+                    text: "Where the requests go"
+                    color: Theme.colors.text
+                    font.pixelSize: 15
+                    font.weight: Font.DemiBold
+                }
+
+                Label {
+                    width: body.width
+                    text: App.trafficWindowText
+                    color: Theme.colors.textMuted
+                    font.pixelSize: 11
+                    wrapMode: Text.Wrap
+                }
+
+                // Small on purpose. Four numbers per endpoint answer the whole
+                // question: what it is costing now, what that normally looks
+                // like, the worst it has been, and what it is allowed.
+                Repeater {
+                    objectName: "trafficRows"
+                    model: App.traffic
+                    Row {
+                        width: body.width
+                        spacing: 12
+                        Label {
+                            width: 70
+                            text: modelData.endpoint
+                            color: Theme.colors.text
+                            font.pixelSize: 12
+                        }
+                        Label {
+                            width: 54
+                            horizontalAlignment: Text.AlignRight
+                            text: modelData.sent
+                            // Coloured only when there is something to say. A
+                            // column of accent on every row would read as a
+                            // link and bury the one line that matters.
+                            color: modelData.state === "ok" ? Theme.colors.text
+                                                            : view.markColour(modelData.state)
+                            font.pixelSize: 12
+                            font.weight: Font.DemiBold
+                        }
+                        Label {
+                            width: 110
+                            text: modelData.usualText
+                            color: Theme.colors.textMuted
+                            font.pixelSize: 12
+                        }
+                        Label {
+                            width: 90
+                            text: modelData.most ? "peak " + modelData.most : ""
+                            color: Theme.colors.textMuted
+                            font.pixelSize: 12
+                        }
+                        Label {
+                            width: 80
+                            text: modelData.limitText
+                            color: Theme.colors.textMuted
+                            font.pixelSize: 12
+                        }
+                        Label {
+                            text: modelData.refused ? modelData.refused + " refused" : ""
+                            color: Theme.colors.error
+                            font.pixelSize: 12
+                        }
+                    }
+                }
+
+                Label {
                     text: "When each channel is asked"
                     color: Theme.colors.text
                     font.pixelSize: 15

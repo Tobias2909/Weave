@@ -641,6 +641,10 @@ class Bridge(QObject):
         for step in imagecache.CEILING_STEPS_MB], notify=cacheChanged)
     schedule = Property("QVariantList", lambda self: self._get_schedule(),
                         notify=checksChanged)
+    traffic = Property("QVariantList", lambda self: self._get_traffic(),
+                       notify=checksChanged)
+    trafficWindowText = Property(str, lambda self: self._get_traffic_window_text(),
+                                 notify=checksChanged)
     playlists = Property("QVariantList", _get_playlists, notify=playlistsChanged)
     keptPlaylists = Property("QVariantList", _get_kept_playlists, notify=playlistsChanged)
     playlistView = Property("QVariantMap", _get_playlist_view, notify=playlistViewChanged)
@@ -1553,6 +1557,26 @@ class Bridge(QObject):
         self.playlistsChanged.emit()
         if self._view_kind == PLAYLIST and self._view_playlist == playlist_id:
             self.reload()
+
+    def _get_traffic(self) -> list:
+        """Where the requests go, for the small table on How things are."""
+        from .. import doctor
+
+        rows = doctor.traffic(self._db, self._cfg)
+        for row in rows:
+            row["usualText"] = "no history yet" if not row["usual"] else f"usually {row['usual']}"
+            row["limitText"] = "no ceiling" if not row["limit"] else f"of {row['limit']}"
+        return rows
+
+    def _get_traffic_window_text(self) -> str:
+        from .. import doctor
+
+        minutes = max(1, self._cfg.budget_window_s // 60)
+        days = doctor.TRAFFIC_DAYS
+        span = "day" if days == 1 else f"{days} days"
+        return (f"What each endpoint has cost in the last {minutes} min, beside what it usually "
+                f"costs in {minutes} min and the most it has, over the last {span}. A figure well "
+                f"past the usual one is worth a look long before the ceiling is reached.")
 
     def _get_schedule(self) -> list:
         from .. import doctor

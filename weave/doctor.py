@@ -460,6 +460,59 @@ def run(cfg: Config, db: Database, network: bool = True) -> Report:
     return report
 
 
+# How far back the usual figure is read. One day rather than a week, and that
+# is a real trade off: a week is a steadier number, and it is also the wrong
+# number for days after anything changes. MEASURED on a real library the day
+# sweep driven polling landed, the feeds endpoint read 126 per quarter hour
+# over two days and 54 over one, against 28 that day. The question this
+# answers is whether the window in front of you is unusual for how the app
+# behaves NOW, so it reads the recent behaviour and says so on the page.
+TRAFFIC_DAYS = 1
+
+
+def traffic(db: Database, cfg: Config, days: int = TRAFFIC_DAYS) -> list[dict]:
+    """Where the requests go: what each endpoint has cost this window, what it
+    usually costs, and what it is allowed.
+
+    The ceiling alone does not say whether a number is alarming. Both halves
+    together do: 34 against a usual 28 is the app working, and 250 against a
+    usual 28 is something to look at even though the ceiling is 300 and
+    nothing has been refused yet.
+    """
+    window_s = cfg.budget_window_s
+    limits = cfg.budget_limits
+    now = {row["endpoint"]: (int(row["count"] or 0), int(row["refused"] or 0))
+           for row in db.request_totals(window_s)}
+    shape = {row["endpoint"]: row for row in db.request_shape(window_s, days=days)}
+    out = []
+    for endpoint in sorted(set(limits) | set(now) | set(shape),
+                           key=lambda name: (-now.get(name, (0, 0))[0], name)):
+        sent, refused = now.get(endpoint, (0, 0))
+        seen = shape.get(endpoint)
+        usual = int(seen["usual"] or 0) if seen else 0
+        most = int(seen["most"] or 0) if seen else 0
+        limit = int(limits.get(endpoint, 0))
+        state = OK
+        if limit and sent >= limit:
+            state = FAIL
+        elif refused and sent and refused / sent > 0.2:
+            state = WARN
+        elif usual and sent > 2 * usual and sent > 10:
+            # Twice what it usually is, and enough of it to mean anything. A
+            # quiet endpoint doubling from two to four says nothing.
+            state = WARN
+        out.append({
+            "endpoint": endpoint,
+            "sent": sent,
+            "refused": refused,
+            "usual": usual,
+            "most": most,
+            "limit": limit,
+            "state": state,
+        })
+    return out
+
+
 def schedule(db: Database, cfg: Config, limit: int = 40) -> list[dict]:
     """When each channel was last asked and when it is next due.
 
