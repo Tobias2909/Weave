@@ -29,8 +29,10 @@ stale event about one that was just replaced.
 from __future__ import annotations
 
 import ctypes
+import functools
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -48,6 +50,41 @@ SOCKET_NAME = "weave-music.sock"
 CURRENT, NEXT = "current", "next"
 
 _OBSERVED = ("time-pos", "duration", "pause", "idle-active", "paused-for-cache")
+
+
+# When mpv's loadfile grew the argument that says where in the playlist to put
+# the entry. Before it, the options string is the third argument; after it, the
+# third is that index and the options are fourth. The two shapes are mutually
+# exclusive, measured against a real player both ways: 0.41 takes the index one
+# and answers the other with "invalid parameter".
+_INDEX_ARG_SINCE = (0, 38)
+
+
+@functools.cache
+def loadfile_takes_an_index() -> bool:
+    """Whether this mpv's loadfile has that argument.
+
+    Worth asking rather than assuming, because getting it wrong does not
+    quietly lose the start position, it makes the whole load fail: nothing
+    plays and nothing says why. Debian and Ubuntu still ship 0.37, so a build
+    runner found this on the day it was first asked to run these tests.
+
+    Asked once per process, and only the first time a start position is used,
+    so an ordinary load costs nothing. Anything unreadable is treated as a
+    current mpv, since that is what the next one will be.
+    """
+    binary = shutil.which("mpv")
+    if binary is None:
+        return True
+    try:
+        answer = subprocess.run([binary, "--version"], capture_output=True,
+                                text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return True
+    found = re.search(r"mpv\s+v?(\d+)\.(\d+)", answer or "")
+    if not found:
+        return True
+    return (int(found.group(1)), int(found.group(2))) >= _INDEX_ARG_SINCE
 
 
 def mpv_command(volume: float, socket_path: os.PathLike | str,
@@ -191,7 +228,11 @@ class MusicEngine(QObject):
             return
         command = ["loadfile", url, "replace"]
         if start and start > 0:
-            command += [-1, f"start=+{start:.3f}"]
+            # Where the options go moved in mpv 0.38. Handing the wrong shape
+            # to a player is not a lost start position, it is a load that never
+            # happens at all, so the shape is chosen rather than assumed.
+            option = f"start=+{start:.3f}"
+            command += [-1, option] if loadfile_takes_an_index() else [option]
         self._ipc.send(command, role=CURRENT)
 
     def append(self, url: str) -> None:

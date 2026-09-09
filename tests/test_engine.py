@@ -59,6 +59,62 @@ class TheCommand(unittest.TestCase):
         self.assertIn("--volume=55", command)
         self.assertIn("--input-ipc-server=/run/x.sock", command)
 
+    def test_a_start_position_is_shaped_for_the_mpv_in_front_of_it(self):
+        """Where loadfile's options go moved in mpv 0.38.
+
+        Handing the wrong shape to a player is not a start position quietly
+        lost, it is a load that never happens: nothing plays and nothing says
+        why. Debian and Ubuntu still ship 0.37, and a build runner on 0.37 is
+        what found this.
+        """
+        from unittest import mock
+
+        from weave import engine as engine_module
+
+        sent = []
+
+        class Ipc:
+            def send(self, command, role=None):
+                sent.append(command)
+
+        made = MusicEngine()
+        made._ipc = Ipc()
+        made.ensure = lambda: True
+        for takes_index, want in ((True, [-1, "start=+2.500"]), (False, ["start=+2.500"])):
+            sent.clear()
+            with mock.patch.object(engine_module, "loadfile_takes_an_index",
+                                   return_value=takes_index):
+                made.load("/tmp/a.wav", start=2.5)
+            self.assertEqual(sent, [["loadfile", "/tmp/a.wav", "replace", *want]],
+                             f"loadfile_takes_an_index={takes_index}")
+
+    def test_and_a_load_with_no_start_is_the_same_either_way(self):
+        from unittest import mock
+
+        from weave import engine as engine_module
+
+        sent = []
+
+        class Ipc:
+            def send(self, command, role=None):
+                sent.append(command)
+
+        made = MusicEngine()
+        made._ipc = Ipc()
+        made.ensure = lambda: True
+        for takes_index in (True, False):
+            sent.clear()
+            with mock.patch.object(engine_module, "loadfile_takes_an_index",
+                                   return_value=takes_index):
+                made.load("/tmp/a.wav")
+            self.assertEqual(sent, [["loadfile", "/tmp/a.wav", "replace"]])
+
+    @unittest.skipUnless(shutil.which("mpv"), "mpv is not installed")
+    def test_the_installed_mpv_answers_which_shape_it_wants(self):
+        from weave.engine import loadfile_takes_an_index
+
+        self.assertIsInstance(loadfile_takes_an_index(), bool)
+
     @unittest.skipUnless(shutil.which("mpv"), "mpv is not installed")
     def test_it_lets_mpv_find_its_own_audio_output(self):
         # The tests name one so they can run on a machine with no sound card.
@@ -136,8 +192,12 @@ class Playing(unittest.TestCase):
         self.assertTrue(any(abs(d - 4.0) < 0.2 for d in self.durations))
 
     def test_a_start_position_goes_with_the_load(self):
+        # Against the real player, so it proves the shape as well as the
+        # intent. This is the one that went red on a runner carrying mpv 0.37.
         self.engine.load(self.a, start=2.5)
-        self.assertTrue(_spin(5, lambda: len(self.positions) >= 1))
+        self.assertTrue(_spin(5, lambda: len(self.positions) >= 1),
+                        "nothing played at all, which is what the wrong "
+                        "loadfile shape looks like")
         self.assertGreaterEqual(self.positions[0], 2.4)
 
     def test_the_next_entry_is_told_apart_from_the_current_one(self):
