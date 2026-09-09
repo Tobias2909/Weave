@@ -128,24 +128,33 @@ class SnappingToASong(unittest.TestCase):
     def sought(self):
         return [where for what, where in self.engine.calls if what == "seek"]
 
-    def test_a_press_before_a_song_lands_on_it(self):
-        self.player.seekToTick(100 / 904)
+    # The songs begin at 0, 312 and 637 of 904.
+    def test_a_press_goes_to_whichever_is_nearest(self):
+        self.player.seekToTick(100 / 904)          # 100 from the first, 212 from the next
+        self.assertEqual(self.sought(), [0.0])
+
+    def test_and_that_can_be_forwards(self):
+        self.player.seekToTick(260 / 904)          # 260 from the first, 52 from the next
+        self.assertEqual(self.sought(), [312.0])
+
+    def test_a_press_just_past_a_song_goes_back_to_its_start(self):
+        # The whole point of the change. Landing a moment late used to skip
+        # the entire song that had just begun.
+        self.player.seekToTick((312 + 20) / 904)
         self.assertEqual(self.sought(), [312.0])
 
     def test_a_press_on_the_very_start_stays_there(self):
         self.player.seekToTick(0.0)
         self.assertEqual(self.sought(), [0.0])
 
-    def test_a_press_just_past_a_mark_does_not_skip_to_the_one_after(self):
-        # A press that lands a pixel late is still a press on that mark.
-        self.player.seekToTick((312 + 0.2) / 904)
-        self.assertEqual(self.sought(), [312.0])
-
     def test_a_press_past_the_last_of_them_lands_on_the_last(self):
-        # There is nothing further to snap to, and answering with nothing
-        # reads as a press that did not work.
         self.player.seekToTick(1.0)
         self.assertEqual(self.sought(), [637.0])
+
+    def test_two_the_same_distance_away_is_the_earlier_one(self):
+        # The half that has not been heard.
+        self.player.seekToTick(((0 + 312) / 2) / 904)
+        self.assertEqual(self.sought(), [0.0])
 
     def test_a_track_with_no_songs_is_seeked_to_plainly(self):
         self.player._chapters.clear()

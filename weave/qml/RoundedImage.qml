@@ -27,6 +27,11 @@ Item {
         asynchronous: true
         cache: true
         fillMode: root.fillMode
+        // PreserveAspectCrop paints outside the item unless it is told not to,
+        // which the masked path never notices because the mask cuts it back.
+        // The fallback has no mask, so without this a picture whose shape does
+        // not match its box hangs over whatever is beside it.
+        clip: true
         // Drawn by the effect below when there is one to draw it.
         visible: !root.masked
         layer.enabled: root.masked

@@ -901,13 +901,14 @@ class AudioPlayer(QObject):
 
         The marks on the bar say where each one begins, and hitting one of them
         by hand on a bar a few hundred pixels wide is luck. This goes to the
-        first that begins at or after the point asked for, so a rough press
-        lands exactly.
+        nearest one, forwards or back, so a press that falls just past the
+        start of a song goes to the start of that song rather than skipping the
+        whole of it.
 
-        Past the last of them there is nothing further to snap to, so it goes
-        to that last one, and a track with no songs in it is seeked to plainly
-        rather than doing nothing, since a press that answers with nothing
-        reads as one that did not work.
+        A track with no songs in it is seeked to plainly rather than doing
+        nothing, since a press that answers with nothing reads as one that did
+        not work. Two marks the same distance away is the beginning of the
+        earlier one, which is the half that has not been heard.
         """
         if self._dur <= 0 or self._idle:
             return
@@ -918,9 +919,7 @@ class AudioPlayer(QObject):
             self.seek(along)
             return
         wanted = along * self._dur
-        # A hair of slack, or a press on a mark snaps to the one after it.
-        target = next((start for start in starts if start >= wanted - 0.5), starts[-1])
-        self._engine.seek(target)
+        self._engine.seek(min(starts, key=lambda start: abs(start - wanted)))
 
     @Slot(int)
     def nudgeVolume(self, steps: int) -> None:
