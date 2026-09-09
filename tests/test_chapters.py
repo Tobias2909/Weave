@@ -59,6 +59,60 @@ class ReadingThem(unittest.TestCase):
             self.assertEqual(parse_chapters(text), (), text)
 
 
+class SnappingToASong(unittest.TestCase):
+    """The right button seeks to a song start rather than between two."""
+
+    def setUp(self):
+        from tests.test_audio import FakeEngine
+        from weave.audio import AudioPlayer
+        from weave.config import Config
+
+        self.engine = FakeEngine()
+        self.player = AudioPlayer(Config(raw={}), engine=self.engine)
+        self.player._queue = [{"key": "yt:aaaaaaaaaaa", "title": "An album",
+                               "url": "https://example/watch"}]
+        self.player._order = [0]
+        self.player._at = 0
+        self.player._chapters["yt:aaaaaaaaaaa"] = parse_chapters(REAL)
+        self.player._dur = 904.0
+        self.player._idle = False
+
+    def sought(self):
+        return [where for what, where in self.engine.calls if what == "seek"]
+
+    def test_a_press_before_a_song_lands_on_it(self):
+        self.player.seekToTick(100 / 904)
+        self.assertEqual(self.sought(), [312.0])
+
+    def test_a_press_on_the_very_start_stays_there(self):
+        self.player.seekToTick(0.0)
+        self.assertEqual(self.sought(), [0.0])
+
+    def test_a_press_just_past_a_mark_does_not_skip_to_the_one_after(self):
+        # A press that lands a pixel late is still a press on that mark.
+        self.player.seekToTick((312 + 0.2) / 904)
+        self.assertEqual(self.sought(), [312.0])
+
+    def test_a_press_past_the_last_of_them_lands_on_the_last(self):
+        # There is nothing further to snap to, and answering with nothing
+        # reads as a press that did not work.
+        self.player.seekToTick(1.0)
+        self.assertEqual(self.sought(), [637.0])
+
+    def test_a_track_with_no_songs_is_seeked_to_plainly(self):
+        self.player._chapters.clear()
+        self.player.seekToTick(0.5)
+        self.assertEqual(self.sought(), [452.0])
+
+    def test_nothing_happens_with_no_length_or_nothing_playing(self):
+        self.player._dur = 0.0
+        self.player.seekToTick(0.5)
+        self.player._dur = 904.0
+        self.player._idle = True
+        self.player.seekToTick(0.5)
+        self.assertEqual(self.sought(), [])
+
+
 class OnThePlayer(unittest.TestCase):
     """What the bar and the line under the title are given."""
 

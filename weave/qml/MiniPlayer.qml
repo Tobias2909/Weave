@@ -160,6 +160,15 @@ Rectangle {
         TapHandler {
             onTapped: function (point) { Audio.seek(point.position.x / scrubber.width) }
         }
+        // The right button lands on a song rather than between two. Hitting a
+        // mark by hand on a bar a few hundred pixels wide is luck, so a rough
+        // press with this button is enough.
+        TapHandler {
+            acceptedButtons: Qt.RightButton
+            onTapped: function (point) {
+                Audio.seekToTick(point.position.x / scrubber.width)
+            }
+        }
         DragHandler {
             id: scrubDrag
             target: null

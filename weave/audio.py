@@ -595,9 +595,17 @@ class AudioPlayer(QObject):
         self._next_resolvers.append(resolver)
         resolver.start()
 
-    def _on_next_resolved(self, key: str, address: str) -> None:
+    def _on_next_resolved(self, key: str, address: str,
+                          chapters: list | None = None) -> None:
         """Whatever the queue looks like by now, the address is worth keeping.
-        It is only handed to mpv if that track is still the one coming up."""
+        It is only handed to mpv if that track is still the one coming up.
+
+        The songs inside it are worth keeping for the same reason, and they
+        would otherwise be thrown away here: PySide hands a slot only as many
+        arguments as it takes, so a shorter one drops them without a word.
+        """
+        if chapters:
+            self._chapters[key] = tuple(chapters)
         wanted = self._next_index()
         entry = self._queue[wanted] if wanted is not None else {}
         if not entry.get("live"):
@@ -867,6 +875,33 @@ class AudioPlayer(QObject):
     def seek(self, fraction: float) -> None:
         if self._dur > 0 and not self._idle:
             self._engine.seek(max(0.0, min(1.0, fraction)) * self._dur)
+
+    @Slot(float)
+    def seekToTick(self, along: float) -> None:
+        """Seek, but land on the start of a song rather than between two.
+
+        The marks on the bar say where each one begins, and hitting one of them
+        by hand on a bar a few hundred pixels wide is luck. This goes to the
+        first that begins at or after the point asked for, so a rough press
+        lands exactly.
+
+        Past the last of them there is nothing further to snap to, so it goes
+        to that last one, and a track with no songs in it is seeked to plainly
+        rather than doing nothing, since a press that answers with nothing
+        reads as one that did not work.
+        """
+        if self._dur <= 0 or self._idle:
+            return
+        along = max(0.0, min(1.0, along))
+        found = self._chapters.get(self._current().get("key") or "")
+        starts = [one["start"] for one in found or () if one["start"] < self._dur]
+        if not starts:
+            self.seek(along)
+            return
+        wanted = along * self._dur
+        # A hair of slack, or a press on a mark snaps to the one after it.
+        target = next((start for start in starts if start >= wanted - 0.5), starts[-1])
+        self._engine.seek(target)
 
     @Slot(int)
     def nudgeVolume(self, steps: int) -> None:

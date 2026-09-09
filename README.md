@@ -1,6 +1,7 @@
 <h1><img src="weave/share/weave-128.png" width="40" height="40" align="absmiddle" alt=""> Weave</h1>
 
 [![tests](https://github.com/Tobias2909/Weave/actions/workflows/tests.yml/badge.svg)](https://github.com/Tobias2909/Weave/actions/workflows/tests.yml)
+[![release](https://img.shields.io/github/v/release/Tobias2909/Weave)](https://github.com/Tobias2909/Weave/releases/latest)
 
 A personal YouTube and Twitch client for Linux. Weave shows what the channels
 you track have posted, sorted into groups you make yourself, and hands playback
@@ -52,7 +53,9 @@ streaming along the top, and a line under a card showing where you stopped.*
   own place and never poured into the feed
 * A track that is really a whole record has its songs marked on the player bar,
   and the line under the title names the one playing rather than the upload.
-  Hovering the bar names the song under the pointer, and the time there.
+  Hovering the bar names the song under the pointer, and the time there, and a
+  press with the right button lands on the start of a song rather than between
+  two.
   YouTube carries them as chapters and they arrive in the same call that finds
   the address, so they cost nothing
 * A detail panel that follows what `mpv` is playing, with views, likes, an
