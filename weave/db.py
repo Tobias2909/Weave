@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 41
+SCHEMA_VERSION = 42
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -56,6 +56,15 @@ KIND_RETEST_S = 3600
 
 NOT_A_SHORT = ("(v.is_short = 0 OR (v.is_short IS NULL "
                "AND COALESCE(c.feed_variant, '') <> 'channel'))")
+
+# A video that YouTube no longer serves. Nothing announces this: a row arrives
+# in a feed like any other and the video is taken down afterwards, leaving a
+# card that cannot be played and whose picture is a 404 for ever. The picture
+# is what finds it, since that request is being made anyway. Marked rather
+# than deleted, because a video can be in a hand picked box and can be marked
+# watched, and deleting the row would quietly take it out of the one and lose
+# the other.
+STILL_THERE = "v.unavailable_at IS NULL"
 
 # The channel a video points at when nothing knows which channel it came from.
 # A history row carries no channel whatsoever, measured, and a video row has to
@@ -278,6 +287,7 @@ CREATE TABLE IF NOT EXISTS watched (
 # owed one, since by then the tab listing knows how long it ran.
 _OWED_A_LENGTH = (
     "v.duration_s IS NULL AND COALESCE(v.is_short, 0) = 0 "
+    "AND v.unavailable_at IS NULL "
     "AND COALESCE(v.live_status, '') <> 'is_live' "
     "AND NOT (COALESCE(v.live_status, '') = 'is_upcoming' "
     "         AND COALESCE(v.scheduled_at, CAST(strftime('%s', 'now') AS INTEGER) + 1) "
@@ -496,6 +506,11 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # mixed feed needs it: that feed says nothing about the kind of what it
     # carries, so the Shorts tab is what tells its rows apart.
     ("channels", "shorts_sweep_at", "INTEGER"),
+    # When this video was found to be gone from YouTube. See STILL_THERE. No
+    # existing row is filled in here by the upgrade, because nothing knows yet
+    # which ones they are; each is found the next time its picture is asked
+    # for, which costs one request apiece and then never again.
+    ("videos", "unavailable_at", "INTEGER"),
 )
 
 
@@ -1375,6 +1390,7 @@ class Database:
             JOIN channels c ON c.key = v.channel_key
             WHERE v.is_short IS NULL
               AND COALESCE(c.feed_variant, '') = 'channel'
+              AND v.unavailable_at IS NULL
               AND COALESCE(v.kind_checked_at, 0) <= ?
             ORDER BY v.published_at DESC NULLS LAST, v.first_seen_at DESC
             LIMIT ?
@@ -1400,6 +1416,32 @@ class Database:
             conn.executemany("UPDATE videos SET kind_checked_at=? WHERE key=?",
                              [(now, key) for key in keys])
             return conn.total_changes - before
+
+    def mark_unavailable(self, ext_id: str) -> bool:
+        """Write down that a video is gone from YouTube, returning whether this
+        is news. See STILL_THERE for what finds it and why it is not deleted.
+
+        Only ever set, never cleared, and cleared by nothing else either. A
+        video that comes back stays marked until the row is gone, which is the
+        safe way round: the alternative is asking after every gone video for
+        ever on the chance that one of them returns.
+        """
+        ext_id = (ext_id or "").strip()
+        if not ext_id:
+            return False
+        with self.conn as conn:
+            changed = conn.execute(
+                "UPDATE videos SET unavailable_at = ? "
+                "WHERE ext_id = ? AND unavailable_at IS NULL",
+                (int(time.time()), ext_id)).rowcount
+        return changed > 0
+
+    def unavailable_count(self) -> int:
+        """How many stored videos have been found to be gone. Reported rather
+        than left silent, so a feed that is short by one is explained."""
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM videos WHERE unavailable_at IS NOT NULL").fetchone()
+        return int(row["n"]) if row else 0
 
     def channels_with_unsorted_rows(self) -> set[str]:
         """Channels on the mixed feed that still hold a row of unknown kind.
@@ -1913,7 +1955,7 @@ class Database:
                       JOIN channels c ON c.key = v.channel_key
                       LEFT JOIN watched w ON w.video_key = v.key
                      WHERE m.group_id = g.id AND w.video_key IS NULL
-                       AND {NOT_A_SHORT}) AS unwatched
+                       AND {NOT_A_SHORT} AND {STILL_THERE}) AS unwatched
             FROM groups g
             ORDER BY g.position, g.id
             """
@@ -3017,7 +3059,7 @@ class Database:
         # A row of unknown kind shows unless it can only have come from a feed
         # that carries Shorts, in which case it waits for the kind test. See
         # NOT_A_SHORT.
-        where = [NOT_A_SHORT]
+        where = [NOT_A_SHORT, STILL_THERE]
         # What is behind a membership has a half of its own on the channel
         # page, and is left out everywhere else by default, because for almost
         # every channel it cannot be opened and rows nobody can act on are

@@ -169,7 +169,10 @@ def _numbers(db: Database, cfg: Config) -> str:
         f", followed {one('SELECT COUNT(*) FROM channels WHERE tracked=1')}"
         f", in All {one('SELECT COUNT(*) FROM channels WHERE in_all=1')}",
         f"videos {one('SELECT COUNT(*) FROM videos')}"
-        f", streams {one('SELECT COUNT(*) FROM videos WHERE live_status IS NOT NULL')}",
+        f", streams {one('SELECT COUNT(*) FROM videos WHERE live_status IS NOT NULL')}"
+        # Videos taken down since they were stored. Left out of every list, so
+        # without a line here a feed that is short by one says nothing at all.
+        f", gone {one('SELECT COUNT(*) FROM videos WHERE unavailable_at IS NOT NULL')}",
         f"groups {one('SELECT COUNT(*) FROM groups')}"
         f", boxes {one('SELECT COUNT(*) FROM boxes')}"
         f", playlists {one('SELECT COUNT(*) FROM playlists')}",

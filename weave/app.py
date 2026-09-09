@@ -127,8 +127,12 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
     # through it.
     # The ceiling is the one from the settings page when one was chosen there,
     # and the config's otherwise.
-    imagecache.install(engine, paths.IMAGE_CACHE, db.image_max_mb(cfg.image_max_mb),
-                       cfg.image_days)
+    pictures = imagecache.install(engine, paths.IMAGE_CACHE,
+                                  db.image_max_mb(cfg.image_max_mb), cfg.image_days)
+    # A thumbnail that answers 404 is a video that is gone, and the picture is
+    # the only part of the app that ever finds that out. The reporter emits
+    # from a pool thread, so this crosses to the window queued.
+    pictures.reporter.missing.connect(bridge.pictureMissing)
     context = engine.rootContext()
     context.setContextProperty("App", bridge)
     context.setContextProperty("Theme", theme)

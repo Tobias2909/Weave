@@ -481,6 +481,15 @@ def _cmd_cache(args) -> int:
               f"over the ceiling, {(freed + more) / 1024 / 1024:.1f} MB")
         return 0
 
+    if args.forget:
+        # The record goes back further than any fix does, so a failure that was
+        # dealt with days ago still reads as a hundred failures now. Emptying
+        # it also drops the markers, which is what gives every picture in it
+        # another try rather than waiting out its window.
+        gone = imagecache.forget(directory)
+        print(f"forgot {gone[0]} recorded failures and {gone[1]} pictures given up on")
+        return 0
+
     if args.problems:
         rows = imagecache.failures(directory)
         if not rows:
@@ -491,12 +500,19 @@ def _cmd_cache(args) -> int:
 
         kinds = collections.Counter(reason for _when, reason, _url in rows)
         newest = datetime.datetime.fromtimestamp(rows[-1][0]).strftime("%Y %m %d %H:%M")
-        print(f"{len(rows)} recorded failures, most recent {newest}")
+        distinct = imagecache.grouped(rows)
+        # The count of pictures first, because it is the number that says how
+        # much is wrong. A dead address is asked for again on every visit to
+        # the view it sits on, so a handful of them reads as hundreds of
+        # failures and looks far worse than it is.
+        print(f"{len(distinct)} pictures failed to load, {len(rows)} recorded "
+              f"attempts, most recent {newest}")
         for reason, count in kinds.most_common():
             print(f"  {count:>5}  {reason}")
-        print("\nthe last few")
-        for _when, reason, url in rows[-5:]:
-            print(f"  {reason:<24} {url[:70]}")
+        print("\nthe pictures, most recently seen last")
+        for when, reason, url, count in distinct[-10:]:
+            seen = datetime.datetime.fromtimestamp(when).strftime("%m %d %H:%M")
+            print(f"  {seen}  {reason:<18} x{count:<4} {url[:64]}")
         return 0
 
     total = imagecache.size_bytes(directory)
@@ -765,6 +781,8 @@ def main() -> int:
     cache.add_argument("--clear", action="store_true", help="drop everything")
     cache.add_argument("--problems", action="store_true",
                        help="show pictures that failed to load")
+    cache.add_argument("--forget", action="store_true",
+                       help="empty the record of pictures that failed, and try them again")
     cache.set_defaults(func=_cmd_cache)
 
     checkup = subparsers.add_parser(

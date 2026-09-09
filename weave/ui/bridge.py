@@ -303,6 +303,14 @@ class Bridge(QObject):
         self._notice_timer = QTimer(self)
         self._notice_timer.setSingleShot(True)
         self._notice_timer.timeout.connect(lambda: self._set_notice(""))
+        # A scroll can turn up several gone videos at once, and each of them
+        # would otherwise rebuild the grid under the pointer. They are written
+        # down as they arrive and the view is redrawn once, shortly after the
+        # last of them.
+        self._loss_timer = QTimer(self)
+        self._loss_timer.setSingleShot(True)
+        self._loss_timer.setInterval(2000)
+        self._loss_timer.timeout.connect(self.reload)
         # Named apart from the music search results, which live on the same
         # object under a name that used to be _results as well.
         self._web_results: list[dict] = []
@@ -951,6 +959,20 @@ class Bridge(QObject):
         counts = self._db.counts()
         return (f"{counts['channels']} channels, {counts['videos']} videos, "
                 f"{counts['watched']} watched")
+
+    @Slot(str)
+    def pictureMissing(self, ext_id: str) -> None:
+        """A thumbnail answered 404, which means the video behind it is gone.
+
+        Connected to the image cache's reporter, which emits from the pool
+        thread the pictures are fetched on, so this arrives queued and the
+        writing happens here on the window's own thread.
+
+        The row is marked rather than deleted, and only a row that was not
+        marked already redraws anything.
+        """
+        if self._db.mark_unavailable(ext_id):
+            self._loss_timer.start()
 
     # ---- the current view ------------------------------------------------
 
