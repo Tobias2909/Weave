@@ -100,6 +100,23 @@ def count_text(value: int | None) -> str:
     return f"{value / 1_000_000_000:.1f}B".replace(".0B", "B")
 
 
+def every_text(seconds: int | None) -> str:
+    """A polling interval as a person would say it. Clock form is for a video,
+    not for how often something is asked, where 0:15:00 reads as a length."""
+    seconds = int(seconds or 0)
+    if seconds <= 0:
+        return ""
+    if seconds % 86400 == 0:
+        days = seconds // 86400
+        return "every day" if days == 1 else f"every {days} days"
+    if seconds % 3600 == 0:
+        hours = seconds // 3600
+        return "every hour" if hours == 1 else f"every {hours} h"
+    if seconds % 60 == 0:
+        return f"every {seconds // 60} min"
+    return f"every {seconds} s"
+
+
 def duration_text(seconds: int | None) -> str:
     """Clock form. Empty when the duration is not known yet, which is the
     normal state for a video that RSS found but no sweep has reached."""

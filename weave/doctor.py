@@ -262,11 +262,25 @@ def _database(db: Database, report: Report) -> None:
         report.add("lengths", OK, "every video has one")
 
 
+def sweep_fresh(db: Database, cfg: Config) -> bool:
+    """Whether the subscriptions sweep can be leaned on right now.
+
+    It decides how often every covered channel is asked on its own, so three
+    places wanted the answer and two of them had grown their own copy of it.
+    One place, because a schedule that disagrees with the poller about this is
+    worse than no schedule at all.
+    """
+    if not cfg.sweep_limit or not cfg.sweep_stale_s:
+        return False
+    swept_at = db.get_int("sweep_at", 0)
+    return bool(swept_at) and int(time.time()) - swept_at < cfg.sweep_stale_s
+
+
 def _schedule(db: Database, cfg: Config, report: Report) -> None:
     tiers = cfg.feed_tiers
     swept_at = db.get_int("sweep_at", 0)
     age = int(time.time()) - swept_at
-    fresh = bool(cfg.sweep_limit and swept_at and age < cfg.sweep_stale_s)
+    fresh = sweep_fresh(db, cfg)
     due = len(db.channels_due(tiers, limit=100000, sweep_fresh=fresh))
     total = len(db.channels(platform="youtube"))
     per_hour = cfg.channels_per_tick * (3600 / max(1, cfg.tick_interval_s))
@@ -532,21 +546,42 @@ def schedule(db: Database, cfg: Config, limit: int = 40) -> list[dict]:
 
     Ordered the way the poller will actually take them, so the top of this list
     is what the next few ticks will do.
+
+    **The sweep is taken into account here exactly as the poller takes it into
+    account**, which it was not before: this asked for the tiered intervals
+    only, so a channel that posts often read as due every quarter of an hour
+    while the poller was really leaving it six hours. On a real subscription
+    list that was 146 of 466 channels, wrong by as much as a factor of 24.
+
+    Two intervals travel out of here, and they are not the same thing. `tier_s`
+    is how often the channel POSTS, which is what names it; `interval_s` is how
+    often it is ASKED, which is what the waiting is measured against. Reading
+    the name off the second one would be wrong in a way that looks right,
+    because a covered channel lands on 21600 and that is also the quiet tier,
+    so every busy channel the sweep covers would be labelled quiet.
     """
     tiers = cfg.feed_tiers
     now = int(time.time())
-    rows = db.channels_due(tiers, limit=limit, force=True)
+    rows = db.channels_due(tiers, limit=limit, force=True,
+                           sweep_fresh=sweep_fresh(db, cfg))
     out = []
     for row in rows:
+        tier_s = int(row["tier_s"])
         interval = int(row["interval_s"])
         last = row["last_polled_at"]
         tier = {tiers.hot_s: "posts often", tiers.warm_s: "posts sometimes",
-                tiers.cold_s: "quiet", tiers.frozen_s: "dormant"}.get(interval, "")
+                tiers.cold_s: "quiet", tiers.frozen_s: "dormant"}.get(tier_s, "")
         out.append({
             "key": row["key"],
             "title": row["title"] or row["ext_id"],
             "tier": tier,
+            "tier_s": tier_s,
             "interval_s": interval,
+            # Whether the sweep is what is holding this channel back, rather
+            # than its own tier. Worth saying outright, since otherwise a
+            # channel that posts often and is asked every six hours reads as a
+            # mistake.
+            "covered": interval != tier_s,
             "last_polled_at": last,
             "due_in_s": 0 if not last else max(0, last + interval - now),
             "error": row["last_error"] or "",

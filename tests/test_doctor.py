@@ -235,6 +235,113 @@ class Schedule(unittest.TestCase):
         self.assertEqual(doctor.schedule(self.db, self.cfg)[0]["error"], "HTTPError: 404")
 
 
+class WhatTheSweepHoldsBack(unittest.TestCase):
+    """The schedule has to answer the way the poller does.
+
+    It used to ask for the tiered intervals only, so a channel that posts often
+    read as due every quarter of an hour while the poller was really leaving it
+    six hours. On a real subscription list that was 146 of 466 channels.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self._tmp.name) / "t.db")
+        self.cfg = Config(raw={})
+        self.db.add_channel("yt:UC1", "youtube", "UC1", "One")
+        # Posted yesterday, so it is in the hottest tier on its own.
+        self.db.upsert_videos([VideoRow(platform="youtube", ext_id="aaaaaaaaaaa",
+                                        channel_key="yt:UC1", title="A video",
+                                        published_at=int(time.time()) - 86400)])
+        self.db.mark_polled("yt:UC1")
+
+    def tearDown(self):
+        self.db.close()
+        self._tmp.cleanup()
+
+    def cover(self):
+        """Name the channel in the sweep, and say the sweep answered now."""
+        self.db.mark_sweep_seen(["yt:UC1"])
+        self.db.set_state("sweep_at", str(int(time.time())))
+
+    def only(self):
+        return doctor.schedule(self.db, self.cfg)[0]
+
+    def test_uncovered_it_is_on_its_own_tier(self):
+        row = self.only()
+        self.assertEqual(row["tier"], "posts often")
+        self.assertEqual(row["interval_s"], self.cfg.feed_tiers.hot_s)
+        self.assertFalse(row["covered"])
+
+    def test_covered_it_is_asked_every_few_hours_instead(self):
+        self.cover()
+        row = self.only()
+        self.assertEqual(row["interval_s"], self.cfg.feed_tiers.covered_s)
+        self.assertTrue(row["covered"])
+
+    def test_and_it_is_still_called_a_channel_that_posts_often(self):
+        # THE TRAP. covered_s and cold_s are both 21600, so reading the name
+        # off the interval would call every busy channel the sweep covers
+        # quiet. The name comes from the tier, the waiting from the interval.
+        self.cover()
+        row = self.only()
+        self.assertEqual(row["tier"], "posts often")
+        self.assertEqual(row["tier_s"], self.cfg.feed_tiers.hot_s)
+
+    def test_the_wait_is_measured_against_the_interval_it_is_really_on(self):
+        self.cover()
+        row = self.only()
+        self.assertGreater(row["due_in_s"], self.cfg.feed_tiers.hot_s)
+
+    def test_a_stale_sweep_puts_it_back_on_its_tier(self):
+        # What happens when yt-dlp breaks or the cookies die. The feed keeps
+        # moving and the schedule says so rather than describing the old plan.
+        self.cover()
+        self.db.set_state("sweep_at",
+                          str(int(time.time()) - self.cfg.sweep_stale_s - 60))
+        row = self.only()
+        self.assertEqual(row["interval_s"], self.cfg.feed_tiers.hot_s)
+        self.assertFalse(row["covered"])
+
+
+class IsTheSweepFresh(unittest.TestCase):
+    """One rule, because the poller and the schedule both act on it."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self._tmp.name) / "t.db")
+        self.cfg = Config(raw={})
+
+    def tearDown(self):
+        self.db.close()
+        self._tmp.cleanup()
+
+    def test_never_swept_is_not_fresh(self):
+        self.assertFalse(doctor.sweep_fresh(self.db, self.cfg))
+
+    def test_just_swept_is_fresh(self):
+        self.db.set_state("sweep_at", str(int(time.time())))
+        self.assertTrue(doctor.sweep_fresh(self.db, self.cfg))
+
+    def test_swept_too_long_ago_is_not(self):
+        self.db.set_state("sweep_at", str(int(time.time()) - self.cfg.sweep_stale_s - 1))
+        self.assertFalse(doctor.sweep_fresh(self.db, self.cfg))
+
+    def test_the_sweep_turned_off_is_not(self):
+        self.db.set_state("sweep_at", str(int(time.time())))
+        off = Config(raw={"poll": {"sweep_limit": 0}})
+        self.assertFalse(doctor.sweep_fresh(self.db, off))
+
+    def test_the_poller_asks_the_same_question(self):
+        # Two copies of this rule had already grown. A third would have been
+        # the one that drifted.
+        from weave.poller import FeedPoller
+        self.db.set_state("sweep_at", str(int(time.time())))
+        worker = FeedPoller.__new__(FeedPoller)
+        worker._db = self.db
+        worker._cfg = self.cfg
+        self.assertEqual(worker._sweep_fresh(), doctor.sweep_fresh(self.db, self.cfg))
+
+
 if __name__ == "__main__":
     unittest.main()
 

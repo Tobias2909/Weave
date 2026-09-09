@@ -1613,6 +1613,11 @@ class Bridge(QObject):
                                else fmt.age_text(row["last_polled_at"]) or "just now")
             row["dueText"] = ("now" if not row["due_in_s"]
                               else fmt.duration_text(row["due_in_s"]))
+            # How often it is really asked, and where that number came from.
+            # A channel that posts often but is covered by the sweep is asked
+            # every six hours, which looks like a fault until it says why.
+            row["everyText"] = fmt.every_text(row["interval_s"])
+            row["whyText"] = "held by the sweep" if row["covered"] else ""
         return rows
 
     @Slot()

@@ -98,6 +98,8 @@ Item {
 
         Flickable {
             id: sheet
+            // Named so a probe can scroll to the foot of the page, where the
+            // schedule is. The rest of the view is already reachable by name.
             objectName: "debugSheet"
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -263,7 +265,11 @@ Item {
                 Label {
                     width: body.width
                     text: "In the order the poller will take them, so the top of this list is "
-                          + "what the next few minutes will do."
+                          + "what the next few minutes will do. How often a channel posts is "
+                          + "what names it; how often it is asked is the interval beside that. "
+                          + "While the subscriptions sweep is answering it finds anything new "
+                          + "first, so a channel it covers is asked on its own only every few "
+                          + "hours whatever its own rate would be."
                     color: Theme.colors.textMuted
                     font.pixelSize: 11
                     wrapMode: Text.Wrap
@@ -282,13 +288,26 @@ Item {
                             elide: Text.ElideRight
                         }
                         Label {
-                            width: 130
+                            width: 120
                             text: modelData.tier
                             color: Theme.colors.textMuted
                             font.pixelSize: 12
                         }
                         Label {
-                            width: 140
+                            width: 96
+                            text: modelData.everyText
+                            color: Theme.colors.textMuted
+                            font.pixelSize: 12
+                        }
+                        Label {
+                            width: 108
+                            text: modelData.whyText
+                            color: Theme.colors.accent
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                        }
+                        Label {
+                            width: 130
                             text: "asked " + modelData.lastText
                             color: Theme.colors.textMuted
                             font.pixelSize: 12

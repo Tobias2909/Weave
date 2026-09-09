@@ -141,5 +141,28 @@ class DurationText(unittest.TestCase):
         self.assertEqual(fmt.duration_text(7325), "2:02:05")
 
 
+class HowOftenSomethingIsAsked(unittest.TestCase):
+    """Clock form is for a length. A polling interval written that way reads
+    as one, which is why 0:15:00 was the wrong thing to show."""
+
+    def test_the_shipped_intervals(self):
+        self.assertEqual(fmt.every_text(900), "every 15 min")
+        self.assertEqual(fmt.every_text(3600), "every hour")
+        self.assertEqual(fmt.every_text(21600), "every 6 h")
+        self.assertEqual(fmt.every_text(86400), "every day")
+
+    def test_the_plurals_read_properly(self):
+        self.assertEqual(fmt.every_text(172800), "every 2 days")
+        self.assertEqual(fmt.every_text(7200), "every 2 h")
+
+    def test_anything_odd_still_says_something(self):
+        self.assertEqual(fmt.every_text(90), "every 90 s")
+
+    def test_nothing_is_nothing(self):
+        for value in (0, None, -5):
+            with self.subTest(value=value):
+                self.assertEqual(fmt.every_text(value), "")
+
+
 if __name__ == "__main__":
     unittest.main()

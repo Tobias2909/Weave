@@ -313,12 +313,19 @@ def _cmd_schedule(args) -> int:
     if not rows:
         print("no channels tracked")
         return 0
-    print(f"{'channel':<34} {'asked how often':<16} {'last asked':<14} {'next':<10} error")
+    # Two columns and not one: the first says how often the channel POSTS,
+    # which is what the tier is, and the second how often it is ASKED. They
+    # part company whenever the subscriptions sweep is covering the channel,
+    # and printing only the first read as an interval nothing kept to.
+    print(f"{'channel':<34} {'posts':<16} {'asked':<13} {'why':<18} "
+          f"{'last asked':<14} {'next':<10} error")
     for row in rows:
         last = ("never" if not row["last_polled_at"]
                 else fmt.age_text(row["last_polled_at"]) or "just now")
         due = "now" if not row["due_in_s"] else fmt.duration_text(row["due_in_s"])
-        print(f"{row['title'][:33]:<34} {row['tier']:<16} {last:<14} {due:<10} "
+        why = "held by the sweep" if row["covered"] else ""
+        print(f"{row['title'][:33]:<34} {row['tier']:<16} "
+              f"{fmt.every_text(row['interval_s']):<13} {why:<18} {last:<14} {due:<10} "
               f"{row['error'][:40]}")
     return 0
 

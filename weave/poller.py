@@ -454,10 +454,14 @@ class FeedPoller(Worker):
         because yt-dlp broke or the cookies died, every channel is back on its
         tiered interval, so the feed keeps moving with nothing to notice but
         the doctor saying so.
+
+        The rule itself lives with the doctor, because the page that says when
+        each channel is next asked has to answer this the same way the poller
+        does or it describes a schedule nothing follows.
         """
-        if not self._cfg.sweep_limit or not self._cfg.sweep_stale_s:
-            return False
-        return time.time() - self._db.get_int("sweep_at", 0) < self._cfg.sweep_stale_s
+        from . import doctor
+
+        return doctor.sweep_fresh(self._db, self._cfg)
 
     # ---- phase 3 ---------------------------------------------------------
 
