@@ -1036,6 +1036,78 @@ class Smoke:
                        read(label, "width") >= read(label, "implicitWidth") - 1,
                        f"{read(label, 'width'):.0f} of {read(label, 'implicitWidth'):.0f}")
 
+    def live_cards(self, bridge, window) -> None:
+        """The streamer's face on a live card, and what a long title does.
+
+        It used to sit in the row with the name, in a column that is centred
+        and grows with what is in it, so a title needing two lines pushed the
+        face to within two pixels of the top of the card, inside a corner eight
+        pixels round and over the coloured edge. Nothing can move it now, which
+        is what this measures, with the worst title the card can be given.
+        """
+        from weave import paths
+        from weave.db import Database
+
+        # An address rather than a file, because qml_source blanks anything
+        # that is not http and an empty avatar draws nothing to measure. It
+        # never answers, which is fine: what is being measured is where the
+        # face sits, not what is in it.
+        art = "https://pictures.invalid/live-face.jpg"
+        db = Database(paths.DB_FILE)
+        rows = []
+        for index, title in enumerate(
+                ["Short one",
+                 "A much longer stream title that will certainly wrap onto two lines"]):
+            login = f"streamer{index}"
+            db.add_channel(f"twitch:{login}", "twitch", login, f"Streamer {index}", art)
+            rows.append({"channel_key": f"twitch:{login}", "login": login,
+                         "display_name": f"Streamer {index}", "title": title,
+                         "game": "A game", "viewers": 900 + index,
+                         "started_at": 1, "thumbnail_url": art})
+        db.replace_live("twitch", rows)
+        db.close()
+        # The bar shows only once a check has answered and only while it is
+        # unrolled. Neither is true by itself in a walk that never asks
+        # anything, so both are said here rather than waited for.
+        bridge._live_ready = True
+        bridge._live_collapsed = False
+        bridge.liveChanged.emit()
+        settle(1.0)
+        self.check("the live bar unrolls for them",
+                   float(read(find(window, "liveBar"), "height")) > 100,
+                   f"{read(find(window, 'liveBar'), 'height'):.0f} px tall")
+
+        root = window.contentItem()
+        faces = [one for one in items_named_like(root, "streamAvatarRing")
+                 if read(one, "visible")]
+        self.check("a live card carries the streamer's face", len(faces) == 2,
+                   f"{len(faces)} of them")
+        self.check("and it is worth seeing rather than a dot",
+                   all(float(read(one, "width")) >= 26 for one in faces),
+                   ", ".join(f"{read(one, 'width'):.0f}" for one in faces))
+
+        worst = 0.0
+        card_height = 0.0
+        radius = 0.0
+        for one in faces:
+            card = one.parent().parent()          # the ring's picture, then the card
+            top = one.mapToItem(card, 0, 0).y()
+            bottom = top + float(read(one, "height"))
+            card_height = float(read(card, "height"))
+            radius = float(read(card, "radius"))
+            worst = max(worst, radius - top, bottom - (card_height - radius))
+        self.check("and no title can push it onto the card's edge",
+                   worst <= 0.5,
+                   f"{worst:.1f} px into a {radius:.0f} px corner of a "
+                   f"{card_height:.0f} px card")
+
+        db = Database(paths.DB_FILE)
+        db.replace_live("twitch", [])
+        db.close()
+        bridge._live_ready = False
+        bridge.liveChanged.emit()
+        settle(0.4)
+
     def following(self, bridge, window) -> None:
         """Following a channel by name, which the plus above the list offers.
 
@@ -1791,6 +1863,7 @@ class Smoke:
         self.strangers(bridge, window)
         self.channel_playlists(bridge, window)
         self.bar(bridge, window)
+        self.live_cards(bridge, window)
         self.following(bridge, window)
         self.boxes(bridge, window)
         self.wizard(bridge, window)

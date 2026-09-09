@@ -169,6 +169,41 @@ Rectangle {
                 width: streamCard.pictureWidth
                 height: streamCard.pictureHeight
 
+                // The streamer, on the corner of their own picture.
+                //
+                // It used to sit in the row with the name, where it was at the
+                // mercy of the title. That column is centred and grows with
+                // what is in it, so a title needing two lines took it to
+                // sixty nine of the card's seventy four and pushed the face to
+                // two pixels from the top, inside a corner eight pixels round
+                // and over the coloured edge. A longer one pushed it outside
+                // altogether.
+                //
+                // Here nothing can move it, it costs the words no width, and
+                // it is half again the size it was. The ring is the card's own
+                // colour, so it reads against whatever the picture happens to
+                // be, which is the same thing every other client does with it.
+                Rectangle {
+                    objectName: "streamAvatarRing"
+                    visible: modelData.avatar !== ""
+                    anchors.left: parent.left
+                    anchors.bottom: parent.bottom
+                    anchors.margins: 4
+                    width: 30
+                    height: 30
+                    radius: 15
+                    color: streamCard.color
+                    z: 2
+
+                    RoundedImage {
+                        objectName: "streamAvatar"
+                        anchors.fill: parent
+                        anchors.margins: 2
+                        circle: true
+                        source: modelData.avatar
+                    }
+                }
+
                 RoundedImage {
                     anchors.fill: parent
                     radius: 6
@@ -226,16 +261,8 @@ Rectangle {
                     width: parent.width
                     spacing: 6
 
-                    RoundedImage {
-                        width: 20
-                        height: 20
-                        circle: true
-                        visible: modelData.avatar !== ""
-                        source: modelData.avatar
-                    }
-
                     Label {
-                        width: parent.width - (modelData.avatar !== "" ? 26 : 0)
+                        width: parent.width
                         anchors.verticalCenter: parent.verticalCenter
                         text: modelData.name
                         color: Theme.colors.text
