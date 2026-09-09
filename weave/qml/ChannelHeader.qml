@@ -94,7 +94,7 @@ Item {
                 property: "spent"
                 from: 0
                 to: 1
-                duration: 25000
+                duration: 20000
                 onFinished: App.clearMembersNote()
             }
 

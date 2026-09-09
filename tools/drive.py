@@ -584,7 +584,7 @@ class Smoke:
         self.check("and one you hold says it will play",
                    words is not None and "holds" in str(read(words, "text")),
                    str(read(words, "text")) if words is not None else "nothing said")
-        # The answer takes itself away after twenty five seconds, and the bar
+        # The answer takes itself away after twenty seconds, and the bar
         # along its foot IS that timer rather than a second one kept beside it,
         # so what is drawn and the moment the words go cannot drift apart.
         bar = find(window, "membersNoteBar")
