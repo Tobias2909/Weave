@@ -93,6 +93,70 @@ Rectangle {
             }
         }
 
+        // What sits under the pointer, named, the way YouTube and mpv both do
+        // it. A bar with marks on it is only half the answer without this: the
+        // marks say a song begins there and nothing says which one.
+        //
+        // Above the bar rather than below, which means outside this bar's own
+        // height. Nothing clips it and the bar is drawn over the grid already,
+        // so it simply hangs over what is behind it.
+        Rectangle {
+            id: peek
+            objectName: "chapterPeek"
+
+            readonly property real along: scrubber.width > 0
+                ? Math.max(0, Math.min(1, scrubHover.point.position.x / scrubber.width))
+                : 0
+            // Asked of the player rather than worked out here, so the name
+            // under the pointer and the name under the title come from one
+            // rule and cannot disagree about the same second. The list is
+            // named as well as asked, because a binding on a function call
+            // alone would never be evaluated again on a change of track.
+            readonly property var songs: Audio.chapters
+            readonly property string song: peek.songs.length > 0
+                                           ? Audio.songAt(peek.along) : ""
+            readonly property string when: bar.clock(peek.along * Audio.length)
+
+            visible: scrubHover.hovered && Audio.length > 0
+            z: 20
+            width: Math.max(peekWhen.implicitWidth, peekSong.implicitWidth) + 16
+            height: (peek.song !== "" ? peekSong.implicitHeight + 2 : 0)
+                    + peekWhen.implicitHeight + 10
+            // Centred on the pointer, and kept inside the window at both ends
+            // rather than hanging off the edge at the start of a track.
+            x: Math.max(4, Math.min(scrubber.width - width - 4,
+                                    scrubHover.point.position.x - width / 2))
+            y: -height - 6
+            radius: 6
+            color: Theme.colors.surfaceRaised
+            border.width: 1
+            border.color: Theme.colors.border
+
+            Column {
+                anchors.centerIn: parent
+                spacing: 2
+
+                Label {
+                    id: peekSong
+                    objectName: "chapterPeekSong"
+                    visible: peek.song !== ""
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: peek.song
+                    color: Theme.colors.text
+                    font.pixelSize: 11
+                    font.weight: Font.DemiBold
+                }
+                Label {
+                    id: peekWhen
+                    objectName: "chapterPeekTime"
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: peek.when
+                    color: Theme.colors.textMuted
+                    font.pixelSize: 11
+                }
+            }
+        }
+
         TapHandler {
             onTapped: function (point) { Audio.seek(point.position.x / scrubber.width) }
         }

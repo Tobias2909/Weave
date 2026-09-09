@@ -99,11 +99,29 @@ class OnThePlayer(unittest.TestCase):
         self.at(900)
         self.assertEqual(self.player._get_current_chapter(), "silhouetted")
 
+    def test_the_pointer_over_the_bar_asks_the_same_rule(self):
+        # The name under the pointer and the name under the title come from
+        # one rule, or the two would disagree about the same second.
+        self.at(0)
+        self.assertEqual(self.player.songAt(0.0), "k.m.")
+        self.assertEqual(self.player.songAt(312 / 904 + 0.001), "Sebastian")
+        self.assertEqual(self.player.songAt(1.0), "silhouetted")
+
+    def test_a_fraction_off_either_end_is_pulled_back_onto_the_bar(self):
+        self.at(0)
+        self.assertEqual(self.player.songAt(-4.0), "k.m.")
+        self.assertEqual(self.player.songAt(9.0), "silhouetted")
+
+    def test_and_it_says_nothing_before_a_length_is_known(self):
+        self.at(0, length=0)
+        self.assertEqual(self.player.songAt(0.5), "")
+
     def test_a_track_with_none_names_none(self):
         self.player._chapters.clear()
         self.at(400)
         self.assertEqual(self.player._get_current_chapter(), "")
         self.assertEqual(self.player._get_chapters(), [])
+        self.assertEqual(self.player.songAt(0.5), "")
 
     def test_one_that_starts_past_the_end_is_left_off(self):
         # A length that disagrees with the chapters is a live stream's sliding

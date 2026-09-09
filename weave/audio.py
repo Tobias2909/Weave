@@ -323,20 +323,40 @@ class AudioPlayer(QObject):
                  "at": max(0.0, min(1.0, one["start"] / self._dur))}
                 for one in found if one["start"] < self._dur]
 
-    def _get_current_chapter(self) -> str:
-        """Which of them is playing. The last one that has begun, so a track
-        with no chapter over the very start of it says nothing rather than
-        naming the one that comes after."""
+    def _song_at(self, seconds: float) -> str:
+        """Which song of this track is the one at that moment.
+
+        The last one that has begun, so a track whose first chapter starts
+        part way in says nothing over the beginning rather than naming the one
+        that comes after. One rule, used by the line under the title and by
+        what the pointer says over the bar, so the two can never disagree
+        about the same second.
+        """
         found = self._chapters.get(self._current().get("key") or "")
         if not found:
             return ""
         name = ""
         for one in found:
-            if one["start"] <= self._pos + 0.5:
+            if one["start"] <= seconds:
                 name = one["title"]
             else:
                 break
         return name
+
+    def _get_current_chapter(self) -> str:
+        # Half a second of slack, because a position arrives a moment after the
+        # song it belongs to has started and naming the one before it for that
+        # moment reads as the line lagging.
+        return self._song_at(self._pos + 0.5)
+
+    @Slot(float, result=str)
+    def songAt(self, along: float) -> str:
+        """The song at that fraction of the track, for the pointer over the
+        bar. A fraction rather than a time, because the bar is drawn in
+        fractions and the length lives here."""
+        if self._dur <= 0:
+            return ""
+        return self._song_at(max(0.0, min(1.0, along)) * self._dur)
 
     def _get_volume(self) -> int:
         # What was asked for, not what a fade happens to be passing through.

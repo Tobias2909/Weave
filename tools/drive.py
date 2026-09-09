@@ -552,6 +552,22 @@ class Smoke:
                    width > 0 and all(abs(x - want * width) < 2 for x, want in placed),
                    ", ".join(f"{x:.0f} wanted {want * width:.0f}" for x, want in placed))
 
+        # What the pointer says over the bar. The hover itself cannot be made
+        # here, since the offscreen platform delivers no synthetic input, so
+        # what is checked is that it is built, sits where it should, and reads
+        # from the same rule as the line under the title.
+        peek = find(window, "chapterPeek")
+        self.check("the bar has something to say under the pointer",
+                   peek is not None and float(read(peek, "height")) > 0)
+        self.check("and it hangs above the bar rather than under it",
+                   float(read(peek, "y")) + float(read(peek, "height")) <= 0,
+                   f"y {read(peek, 'y'):.0f} height {read(peek, 'height'):.0f}")
+        self.check("and is kept inside the window at the very start of a track",
+                   float(read(peek, "x")) >= 4, f"x {read(peek, 'x'):.0f}")
+        self.check("and names the song at the point it is over, from one rule",
+                   str(read(peek, "song")) == str(bridge._audio.songAt(read(peek, "along"))),
+                   f"{read(peek, 'song')!r} against {bridge._audio.songAt(read(peek, 'along'))!r}")
+
         line = find(window, "musicSecondLine")
         self.check("the line under the title names the song, not the upload",
                    str(read(line, "text")) == "Three", str(read(line, "text")))
@@ -570,6 +586,8 @@ class Smoke:
                 if read(one, "visible")]
         self.check("a track with no songs in it carries no marks", not left,
                    f"{len(left)} left over")
+        self.check("and the pointer has no song to name over it",
+                   str(read(peek, "song")) == "", str(read(peek, "song")))
         self.check("and its line says who it is by instead",
                    str(read(line, "text")) == "Somebody", str(read(line, "text")))
 
