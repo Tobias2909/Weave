@@ -2816,11 +2816,23 @@ class Database:
         # An unclassified video still shows. It is hidden only once a channel
         # listing or the redirect test has proven it is a Short.
         where = ["(v.is_short IS NULL OR v.is_short = 0)"]
-        # What is behind a membership is its own half of a channel page and is
-        # nowhere else at all. It is not in the feed, not in a group and not in
-        # the videos half, because for almost every channel it cannot be opened
-        # and rows nobody can act on are noise wherever they are put.
-        where.append("v.members_only = 1" if members else "v.members_only = 0")
+        # What is behind a membership has a half of its own on the channel
+        # page, and is left out everywhere else by default, because for almost
+        # every channel it cannot be opened and rows nobody can act on are
+        # noise wherever they are put.
+        #
+        # A group is the exception, and deliberately: a group is a list
+        # somebody built by hand, so a channel in one is a channel they want to
+        # watch, and what they turned the button on for belongs there with the
+        # rest of it. Only while the button is on. Turning it off quiets those
+        # rows everywhere but their own half, which is also where they stay
+        # rather than being deleted.
+        if members:
+            where.append("v.members_only = 1")
+        elif group_id is not None:
+            where.append("(v.members_only = 0 OR c.members_wanted = 1)")
+        else:
+            where.append("v.members_only = 0")
         args: list[Any] = []
         join = ""
         order = "v.published_at DESC NULLS LAST, v.first_seen_at DESC"

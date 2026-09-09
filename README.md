@@ -40,10 +40,11 @@ streaming along the top, and a line under a card showing where you stopped.*
 * What is behind a channel membership lives in a feed of its own that nothing
   else carries. A button on that channel's page reads it, now rather than
   whenever the poller next comes round, and puts what it finds in a half of its
-  own. Press it again and everything already read stays where it is while
+  own, and in any group that channel is in, since a group is a list built by
+  hand. Press it again and everything already read stays where it is while
   nothing more is asked for. Those videos never reach the feed, they are badged
   wherever they do appear, and a press is refused unless the membership is one
-  you hold
+  you hold. Whatever the answer was, the channel page says it
 * Search everything stored as you type, or press enter to search YouTube itself
 * What YouTube suggests, the history it keeps and your own playlists, each in its
   own place and never poured into the feed

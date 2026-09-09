@@ -118,6 +118,17 @@ MUSIC_SEARCH_LABEL = "Search results"
 # reason.
 MEMBERS_NOTICE = "that one is for members of the channel"
 
+# What the channel page says after the members button has been pressed. Said
+# there rather than only in the bar at the foot, because the bar clears itself
+# and this is an answer about the page being looked at. Three answers, because
+# there are three things that can be true and they want different words.
+MEMBERS_NONE_YET = ("No membership videos on this channel at the moment.\n"
+                    "Press Members again to look again later.")
+MEMBERS_HELD = ("This membership is one your account holds, so these play "
+                "like any other video.")
+MEMBERS_NOT_HELD = ("These are behind a membership your account does not hold, "
+                    "so they are listed but cannot be opened.")
+
 # One shelf shown in full, which is where the tile at the end of a shelf goes.
 # A place with the same shape as a track list, so the mouse buttons walk on and
 # off it, but nothing is fetched for it. It is the shelf that is already held.
@@ -302,6 +313,13 @@ class Bridge(QObject):
         self._channel_feed: ChannelFeedFetcher | None = None
         self._channel_lists: ChannelPlaylistsFetcher | None = None
         self._channel_members: ChannelMembersFetcher | None = None
+        # What the last press of the members button found, and which channel
+        # it was about. Said on the channel page rather than only in the bar,
+        # because the bar clears itself and the answer is about the page you
+        # are looking at. Kept here rather than stored: it is about a press,
+        # and pressing again is how you ask again.
+        self._members_note = ""
+        self._members_note_channel = ""
         # Which half of a channel page is showing. Not part of the view, since
         # walking back and forth between the two is not walking anywhere.
         self._channel_tab = "videos"
@@ -476,10 +494,10 @@ class Bridge(QObject):
             # half, and neither has one whose tab answered with nothing.
             "membersWanted": bool(found.get("members_wanted")),
             "members": self._db.channel_members_count(self._view_channel) if found else 0,
-            # Whether the tab has ever answered. A channel that sells nothing
-            # stops offering the button rather than offering one that can only
-            # say so again.
-            "sellsMembership": found.get("members") is None or bool(found.get("members")),
+            # What the last press found. Empty until something is pressed, and
+            # only ever about the channel being looked at.
+            "membersNote": (self._members_note
+                            if self._members_note_channel == self._view_channel else ""),
         }
 
     def _get_playlist_skipped_text(self) -> str:
@@ -994,6 +1012,9 @@ class Bridge(QObject):
             channel_key=self._view_channel if self._view_kind == CHANNEL else None,
             query=self._search_text if self._view_kind == SEARCH else None,
             streams=streams,
+            # A group holds them too, while the button is on. That rule lives
+            # in the query beside the one that keeps them out of everywhere
+            # else, so no caller can forget half of it.
             members=members,
         )
         self.emptyHintChanged.emit()
@@ -1917,6 +1938,8 @@ class Bridge(QObject):
         if not channel_key:
             return
         self._db.set_members_wanted(channel_key, wanted)
+        self._members_note = ""
+        self._members_note_channel = ""
         self.viewChanged.emit()
         if not wanted:
             self._set_status("no longer reading that channel's members tab")
@@ -1936,26 +1959,45 @@ class Bridge(QObject):
             lambda _key, message: self._on_members_failed(message))
         self._launch(self._channel_members)
 
+    def _say_about_members(self, channel_key: str, note: str) -> None:
+        """Put an answer on the channel page itself."""
+        self._members_note = note
+        self._members_note_channel = channel_key
+        self.viewChanged.emit()
+
     def _on_channel_members(self, channel_key: str, stored: int) -> None:
         self._set_notice("")
+        held = bool((self._db.channel(channel_key) or {}).get("member_of"))
+        count = self._db.channel_members_count(channel_key)
+        if not count:
+            # The tab answered, and with nothing in it. A channel can sell a
+            # membership and have published nothing behind it.
+            note = MEMBERS_NONE_YET
+        elif held:
+            note = MEMBERS_HELD
+        else:
+            note = MEMBERS_NOT_HELD
+        self._say_about_members(channel_key, note)
         if self._view_channel == channel_key:
-            self.viewChanged.emit()
             self.reload()
         self._set_status(f"read {stored} from that channel's members tab" if stored
                          else "that channel's members tab holds nothing new")
 
     def _on_no_membership(self, channel_key: str) -> None:
-        """The tab did not answer, so there is nothing to read and the button
-        goes back to off by itself."""
+        """The tab did not answer, so there is nothing to read.
+
+        The button stays where it is. A channel can open a membership later,
+        and a button that vanishes without a word looks like one that broke.
+        """
         self._set_notice("")
-        if self._view_channel == channel_key:
-            self.viewChanged.emit()
+        self._say_about_members(channel_key, MEMBERS_NONE_YET)
         self._set_status("that channel sells no membership")
 
     def _on_members_failed(self, message: str) -> None:
         self._set_notice("")
         self._db.set_members_wanted(self._view_channel, False)
-        self.viewChanged.emit()
+        self._say_about_members(self._view_channel,
+                                f"That did not work.\n{message}\nPress Members to try again.")
         self._set_status(f"could not read the members tab, {message}")
 
     @Slot(str)

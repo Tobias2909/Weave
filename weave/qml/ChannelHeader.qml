@@ -39,6 +39,35 @@ Item {
             }
         }
 
+        // What the last press of the members button found, over the banner
+        // where the eye already is. It is about a press, so it is here only
+        // after one and only on the channel it was about.
+        Rectangle {
+            objectName: "membersNote"
+            visible: (header.info.membersNote || "") !== ""
+            anchors.centerIn: parent
+            width: Math.min(parent.width - 60, noteText.implicitWidth + 32)
+            height: noteText.implicitHeight + 20
+            radius: 8
+            color: Qt.rgba(Qt.color(Theme.colors.surfaceRaised).r,
+                           Qt.color(Theme.colors.surfaceRaised).g,
+                           Qt.color(Theme.colors.surfaceRaised).b, 0.94)
+            border.width: 1
+            border.color: Theme.colors.border
+
+            Label {
+                id: noteText
+                objectName: "membersNoteText"
+                anchors.centerIn: parent
+                width: Math.min(header.width - 92, implicitWidth)
+                text: header.info.membersNote || ""
+                color: Theme.colors.text
+                font.pixelSize: 12
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.Wrap
+            }
+        }
+
         Row {
             anchors.left: parent.left
             anchors.bottom: parent.bottom
@@ -111,8 +140,11 @@ Item {
             // thing at all.
             FlatButton {
                 objectName: "channelMembers"
+                // It stays whatever the answer was. A channel can open a
+                // membership later, and a button that disappears without a
+                // word looks like one that broke rather than one with nothing
+                // to do. What it found is said on the banner instead.
                 visible: header.info.platform !== "twitch"
-                         && header.info.sellsMembership === true
                 text: header.info.membersWanted ? "Members on" : "Members"
                 accent: header.info.membersWanted === true
                 onClicked: App.wantMembers(header.info.key, !header.info.membersWanted)

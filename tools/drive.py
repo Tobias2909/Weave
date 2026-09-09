@@ -553,6 +553,53 @@ class Smoke:
                    and "Members" in str(read(button, "text")),
                    str(read(button, "text")) if button is not None else "no button")
 
+        # A channel that sells nothing keeps the button and says why on the
+        # banner. It used to lose the button instead, which says nothing about
+        # what happened and looks like a button that broke.
+        bridge._on_no_membership(channel)
+        settle(0.4)
+        note = find(window, "membersNote")
+        words = find(window, "membersNoteText")
+        self.check("a channel with no membership keeps its button",
+                   read(button, "visible") is True)
+        self.check("and says so over its banner",
+                   note is not None and read(note, "visible") is True
+                   and "No membership videos" in str(read(words, "text")),
+                   str(read(words, "text")) if words is not None else "nothing said")
+        self.check("and offers to look again",
+                   words is not None and "again" in str(read(words, "text")).lower())
+
+        # And when there is one, whether it can be opened is the thing worth
+        # saying, since that is what decides whether a press goes anywhere.
+        bridge._on_channel_members(channel, 1)
+        settle(0.4)
+        self.check("one you cannot open says that instead",
+                   words is not None and "cannot be opened" in str(read(words, "text")),
+                   str(read(words, "text")) if words is not None else "nothing said")
+        db = Database(paths.DB_FILE)
+        db.set_member_of(channel, True)
+        db.close()
+        bridge._on_channel_members(channel, 1)
+        settle(0.4)
+        self.check("and one you hold says it will play",
+                   words is not None and "holds" in str(read(words, "text")),
+                   str(read(words, "text")) if words is not None else "nothing said")
+        bridge._members_note = ""
+        bridge.viewChanged.emit()
+        settle(0.3)
+        self.check("and the answer goes when there is nothing to answer",
+                   read(note, "visible") is False)
+        # Put the membership back to one nobody holds, which is what the press
+        # below is about. Holding one is what makes the press work, and that is
+        # checked where mpv is checked rather than by starting a player here.
+        db = Database(paths.DB_FILE)
+        db.set_member_of(channel, False)
+        db.close()
+        bridge.reload()
+        settle(0.3)
+        call(grid, "forceLayout")
+        settle(0.3)
+
         bridge.showChannelTab("members")
         settle(0.5)
         call(grid, "forceLayout")
@@ -584,8 +631,8 @@ class Smoke:
         db = Database(paths.DB_FILE)
         with db.conn as conn:
             conn.execute("UPDATE videos SET members_only=0 WHERE key='yt:smokevid004'")
-            conn.execute("UPDATE channels SET members_wanted=0, members=NULL WHERE key=?",
-                         (channel,))
+            conn.execute("UPDATE channels SET members_wanted=0, members=NULL, "
+                         "member_of=0 WHERE key=?", (channel,))
         db.close()
         bridge.showChannelTab("videos")
         bridge.selectGroup(-1)

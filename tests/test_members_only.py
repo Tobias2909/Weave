@@ -126,6 +126,53 @@ class StoringIt(unittest.TestCase):
                          "a members only announcement was asked about again")
 
 
+class WhereTheyShow(unittest.TestCase):
+    """Their own half always, a group while the button is on, nowhere else."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.db = Database(Path(self._tmp.name) / "t.db")
+        self.addCleanup(self.db.close)
+        self.db.add_channel(CHANNEL, "youtube", "UCaaaaaaaaaaaaaaaaaaaaaa", "One")
+        self.db.upsert_videos([
+            VideoRow("youtube", "aaaaaaaaaaa", CHANNEL, "Behind the membership",
+                     published_at=1_700_000_001, members_only=True),
+            VideoRow("youtube", "bbbbbbbbbbb", CHANNEL, "An ordinary one",
+                     published_at=1_700_000_000),
+        ])
+        self.group = self.db.create_group("A group")
+        self.db.add_to_group(self.group, CHANNEL)
+        self.db.set_members_wanted(CHANNEL, True)
+
+    def in_group(self):
+        return {row["ext_id"] for row in self.db.feed(group_id=self.group)}
+
+    def test_a_group_holds_them_while_the_button_is_on(self):
+        # A group is a list built by hand, so a channel in one is a channel
+        # somebody wants to watch and what they asked for belongs there.
+        self.assertEqual(self.in_group(), {"aaaaaaaaaaa", "bbbbbbbbbbb"})
+
+    def test_and_stops_once_it_is_off(self):
+        self.db.set_members_wanted(CHANNEL, False)
+        self.assertEqual(self.in_group(), {"bbbbbbbbbbb"})
+
+    def test_but_they_are_kept_and_still_in_their_own_half(self):
+        self.db.set_members_wanted(CHANNEL, False)
+        self.assertEqual({row["ext_id"] for row in
+                          self.db.feed(channel_key=CHANNEL, members=True)},
+                         {"aaaaaaaaaaa"})
+
+    def test_the_feed_never_holds_them_either_way(self):
+        self.assertEqual({row["ext_id"] for row in self.db.feed()}, {"bbbbbbbbbbb"})
+        self.db.set_members_wanted(CHANNEL, False)
+        self.assertEqual({row["ext_id"] for row in self.db.feed()}, {"bbbbbbbbbbb"})
+
+    def test_and_neither_does_the_videos_half(self):
+        self.assertEqual({row["ext_id"] for row in self.db.feed(channel_key=CHANNEL)},
+                         {"bbbbbbbbbbb"})
+
+
 class OnTheCard(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -396,6 +443,83 @@ _FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
  </entry>
 </feed>
 """
+
+
+class WhatThePressSays(unittest.TestCase):
+    """The channel page answers a press, whatever the answer is.
+
+    The button used to disappear when a channel sold nothing, which says
+    nothing about why and looks like a button that broke. It stays, since a
+    channel can open a membership later, and the page says what was found.
+    """
+
+    def setUp(self):
+        from weave.ui.bridge import Bridge
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.db = Database(Path(self._tmp.name) / "t.db")
+        self.addCleanup(self.db.close)
+        self.db.add_channel(CHANNEL, "youtube", "UCaaaaaaaaaaaaaaaaaaaaaa", "One")
+        self.Bridge = Bridge
+        bridge = Bridge.__new__(Bridge)
+        bridge._db = self.db
+        bridge._view_channel = CHANNEL
+        bridge._view_kind = "channel"
+        bridge._members_note = ""
+        bridge._members_note_channel = ""
+        bridge._set_notice = lambda *_a, **_k: None
+        bridge._set_status = lambda *_a, **_k: None
+        bridge.reload = lambda: None
+        bridge.viewChanged = _Quiet()
+        self.bridge = bridge
+
+    def note(self):
+        return self.Bridge._get_channel_info(self.bridge).get("membersNote", "")
+
+    def stored(self, members_only=True):
+        self.db.upsert_videos([VideoRow("youtube", "aaaaaaaaaaa", CHANNEL, "Theirs",
+                                        published_at=1, members_only=members_only)])
+
+    def test_nothing_is_said_before_anything_is_pressed(self):
+        self.assertEqual(self.note(), "")
+
+    def test_a_channel_that_sells_nothing_says_so_and_offers_to_look_again(self):
+        self.Bridge._on_no_membership(self.bridge, CHANNEL)
+        self.assertIn("No membership videos", self.note())
+        self.assertIn("again", self.note())
+
+    def test_a_membership_you_hold_says_they_will_play(self):
+        self.stored()
+        self.db.set_member_of(CHANNEL, True)
+        self.Bridge._on_channel_members(self.bridge, CHANNEL, 1)
+        self.assertIn("holds", self.note())
+
+    def test_and_one_you_do_not_says_they_cannot_be_opened(self):
+        self.stored()
+        self.Bridge._on_channel_members(self.bridge, CHANNEL, 1)
+        self.assertIn("cannot be opened", self.note())
+
+    def test_a_tab_that_answered_with_nothing_reads_the_same_as_none(self):
+        self.Bridge._on_channel_members(self.bridge, CHANNEL, 0)
+        self.assertIn("No membership videos", self.note())
+
+    def test_it_is_only_about_the_channel_it_was_pressed_on(self):
+        self.Bridge._on_no_membership(self.bridge, CHANNEL)
+        self.bridge._view_channel = "yt:UCbbbbbbbbbbbbbbbbbbbbbb"
+        self.assertEqual(self.note(), "")
+
+    def test_and_pressing_again_clears_the_last_answer(self):
+        self.Bridge._on_no_membership(self.bridge, CHANNEL)
+        self.bridge._cfg = None
+        self.bridge._channel_members = None
+        self.Bridge.wantMembers(self.bridge, CHANNEL, False)
+        self.assertEqual(self.note(), "")
+
+
+class _Quiet:
+    def emit(self, *_a):
+        pass
 
 
 class PressingIt(unittest.TestCase):
