@@ -104,6 +104,45 @@ class ToolVersions(unittest.TestCase):
             self.assertIsNone(doctor._version(["x", "--version"]))
 
 
+class WhichMpv(unittest.TestCase):
+    """The report says which mpv is in front of it, and which shape of command
+    it is being asked in. The two behave differently on exactly one thing, and
+    a report that does not say which is in front of it cannot explain a
+    difference between two machines."""
+
+    def line(self, said):
+        report = doctor.Report()
+        doctor._mpv_age(said, report)
+        return [check for check in report.checks if check.name == "mpv"][0]
+
+    def test_a_current_one_is_reported_as_it_says_itself(self):
+        found = self.line("mpv v0.41.0 Copyright")
+        self.assertEqual(found.state, doctor.OK)
+        self.assertIn("0.41.0", found.detail)
+
+    def test_an_older_one_says_which_shape_it_is_asked_in(self):
+        found = self.line("mpv 0.37.0 Copyright")
+        self.assertIn("older loadfile shape", found.detail)
+
+    def test_and_is_not_a_warning_since_nothing_is_worse_off(self):
+        # Weave asks each player the way it understands, so an older one
+        # resumes a track exactly as well. Warning about it would be crying
+        # wolf at somebody whose distribution chose the version for them.
+        self.assertEqual(self.line("mpv 0.37.0 Copyright").state, doctor.OK)
+
+    def test_one_that_will_not_say_is_taken_at_face_value(self):
+        self.assertEqual(self.line("some other player").state, doctor.OK)
+
+    def test_the_cut_is_the_one_the_engine_uses(self):
+        # Read from the engine rather than written down twice, or this line
+        # and the code that shapes the command could disagree about the same
+        # player.
+        from weave.engine import _INDEX_ARG_SINCE
+
+        self.assertEqual(_INDEX_ARG_SINCE, (0, 38))
+        self.assertIn("0.38", self.line("mpv 0.37.0 Copyright").detail)
+
+
 class WhichPlayer(unittest.TestCase):
     """The report says which mpv a video is handed to, resolved rather than as
     configured. Started from the start menu, Weave used to fall back to plain

@@ -18,9 +18,11 @@ playing, and moves on with no gap.
 
 from __future__ import annotations
 
+import json
 import random
 import threading
 import time
+from dataclasses import dataclass
 from urllib.parse import parse_qs, urlparse
 
 from PySide6.QtCore import (
@@ -71,16 +73,63 @@ ADDRESS_MARGIN_S = 600.0
 REPEAT_OFF, REPEAT_ALL, REPEAT_ONE = 0, 1, 2
 
 
+@dataclass(frozen=True)
+class Resolved:
+    """What one resolve came back with. The address is the point of it; the
+    chapters ride along in the same call and cost nothing."""
+
+    address: str
+    chapters: tuple[dict, ...] = ()
+
+
+def parse_chapters(text: str) -> tuple[dict, ...]:
+    """The chapters yt-dlp printed, if the video has any.
+
+    A video with none prints NA, and the address is another line of the same
+    output, so the whole of it is looked at rather than a line counted off.
+    Anything without a title or a start is dropped: a mark on the bar that
+    cannot be named is worse than no mark.
+    """
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("["):
+            continue
+        try:
+            found = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(found, list):
+            continue
+        out = []
+        for one in found:
+            if not isinstance(one, dict):
+                continue
+            title = str(one.get("title") or "").strip()
+            start = one.get("start_time")
+            end = one.get("end_time")
+            if not title or not isinstance(start, (int, float)):
+                continue
+            out.append({"title": title, "start": float(start),
+                        "end": float(end) if isinstance(end, (int, float)) else 0.0})
+        return tuple(out)
+    return ()
+
+
 def resolve_address(cfg: Config, url: str, live: bool,
-                    cancel: threading.Event | None = None) -> str:
-    """One entry to one playable address, blocking. Takes a few seconds."""
+                    cancel: threading.Event | None = None) -> Resolved:
+    """One entry to one playable address, blocking. Takes a few seconds.
+
+    The chapters come back in the same call, which is the whole reason they
+    are worth having: a video that is really an album has its tracks marked in
+    them, and asking separately would be another few seconds per song.
+    """
     command = ["yt-dlp", "--no-warnings", *cookie_args(cfg),
                "-f", LIVE_FORMAT if live else MUSIC_FORMAT,
-               "--get-url", url]
+               "--get-url", "--print", "%(chapters)j", url]
     result = run_process(command, cancel=cancel, timeout=180)
     for line in result.stdout.splitlines():
         if line.startswith("http"):
-            return line
+            return Resolved(line, parse_chapters(result.stdout))
     tail = (result.stderr or "").strip().splitlines()
     raise _NoAddress((tail[-1] if tail else "no stream came back")[:200])
 
@@ -129,7 +178,7 @@ class AddressCache:
 class _Resolver(QThread):
     """Turns one entry into a playable address."""
 
-    resolved = Signal(str, str)
+    resolved = Signal(str, str, list)
     failed = Signal(str, str)
 
     def __init__(self, cfg: Config, key: str, url: str, live: bool,
@@ -146,13 +195,13 @@ class _Resolver(QThread):
 
     def run(self) -> None:
         try:
-            address = resolve_address(self._cfg, self._url, self._live, self._cancel)
+            found = resolve_address(self._cfg, self._url, self._live, self._cancel)
         except Cancelled:
             return
         except (FileNotFoundError, Timeout, _NoAddress) as exc:
             self.failed.emit(self.key, str(exc) or "could not resolve the track")
             return
-        self.resolved.emit(self.key, address)
+        self.resolved.emit(self.key, found.address, list(found.chapters))
 
 
 class AudioPlayer(QObject):
@@ -178,6 +227,12 @@ class AudioPlayer(QObject):
         self._resolver: _Resolver | None = None
         self._next_resolvers: list[_Resolver] = []
         self._addresses = AddressCache()
+        # What each track's chapters are, by track key. A video that is really
+        # an album marks its songs in them, and they came free with the address
+        # that was resolved to play it. Kept for the life of the process rather
+        # than expiring with the address, since where a song starts is not
+        # something that goes stale.
+        self._chapters: dict[str, tuple[dict, ...]] = {}
         # Which queue index mpv holds as its next entry, if any.
         self._appended: int | None = None
 
@@ -254,6 +309,35 @@ class AudioPlayer(QObject):
     def _get_length(self) -> int:
         return int(self._dur)
 
+    def _get_chapters(self) -> list:
+        """Where this track's songs begin, for the marks on the bar.
+
+        Handed over with each start already a fraction of the whole, because
+        the bar is drawn in fractions and a length of zero is a real state
+        here, right up until mpv reports one.
+        """
+        found = self._chapters.get(self._current().get("key") or "")
+        if not found or self._dur <= 0:
+            return []
+        return [{"title": one["title"], "start": one["start"],
+                 "at": max(0.0, min(1.0, one["start"] / self._dur))}
+                for one in found if one["start"] < self._dur]
+
+    def _get_current_chapter(self) -> str:
+        """Which of them is playing. The last one that has begun, so a track
+        with no chapter over the very start of it says nothing rather than
+        naming the one that comes after."""
+        found = self._chapters.get(self._current().get("key") or "")
+        if not found:
+            return ""
+        name = ""
+        for one in found:
+            if one["start"] <= self._pos + 0.5:
+                name = one["title"]
+            else:
+                break
+        return name
+
     def _get_volume(self) -> int:
         # What was asked for, not what a fade happens to be passing through.
         return round(self._level * 100)
@@ -310,6 +394,10 @@ class AudioPlayer(QObject):
     position = Property(float, _get_position, notify=progressChanged)
     elapsed = Property(int, _get_elapsed, notify=progressChanged)
     length = Property(int, _get_length, notify=progressChanged)
+    # Bound to progress rather than to the track, because the length arrives
+    # from mpv after the track does and the marks cannot be placed without it.
+    chapters = Property("QVariantList", _get_chapters, notify=progressChanged)
+    currentChapter = Property(str, _get_current_chapter, notify=progressChanged)
     volume = Property(int, _get_volume, notify=stateChanged)
     shuffle = Property(bool, _get_shuffle, notify=stateChanged)
     repeat = Property(int, _get_repeat, notify=stateChanged)
@@ -412,7 +500,12 @@ class AudioPlayer(QObject):
         self._resolver.failed.connect(self._on_resolve_failed)
         self._resolver.start()
 
-    def _on_resolved(self, key: str, address: str) -> None:
+    def _on_resolved(self, key: str, address: str, chapters: list | None = None) -> None:
+        # Kept whoever it was for. A resolve that arrives after the choice has
+        # moved on still learned where that track's songs are, and it will be
+        # wanted the moment anybody goes back to it.
+        if chapters:
+            self._chapters[key] = tuple(chapters)
         entry = self._current()
         if entry.get("key") != key:
             return                       # a later choice overtook this one

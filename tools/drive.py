@@ -504,6 +504,85 @@ class Smoke:
         bridge.closeDetail()
         settle(0.3)
 
+    def chapters(self, bridge, window) -> None:
+        """A track that is really an album, marked on the bar.
+
+        A YouTube video is often a whole record with its songs as chapters
+        rather than published one by one. Without them the bar is one long
+        block with nothing to say that it is six songs, and the name above it
+        is the name of the upload. They come back in the same call that
+        resolves the address, so they cost nothing.
+
+        Put in by hand here. Getting them for real is a request, and the walk
+        is offline; that the call brings them back is proved against yt-dlp
+        itself, and what this checks is that they reach the bar and the line.
+        """
+        real = [
+            {"title": "One", "start": 0.0, "end": 312.0},
+            {"title": "Two", "start": 312.0, "end": 637.0},
+            {"title": "Three", "start": 637.0, "end": 904.0},
+        ]
+        audio = bridge._audio
+        audio._queue = [{"key": "yt:albumaaaaa", "title": "A whole record",
+                         "artist": "Somebody", "url": "https://example/watch"}]
+        audio._order = [0]
+        audio._at = 0
+        audio._chapters["yt:albumaaaaa"] = tuple(real)
+        audio._dur = 904.0
+        audio._pos = 700.0
+        audio._idle = False
+        audio.trackChanged.emit()
+        audio.progressChanged.emit()
+        audio.stateChanged.emit()
+        settle(0.6)
+
+        root = window.contentItem()
+        track = find(window, "musicScrubTrack")
+        marks = [one for one in items_named_like(root, "chapterMark")
+                 if read(one, "visible")]
+        # The one at the very start is where the bar begins, so a mark there
+        # would be a line drawn on the edge of it.
+        self.check("a track that is an album is marked where its songs start",
+                   len(marks) == 2, f"{len(marks)} marks for {len(real)} songs")
+        width = float(read(track, "width")) if track is not None else 0.0
+        placed = [(float(read(one, "x")), song["start"] / 904.0)
+                  for one, song in zip(sorted(marks, key=lambda m: read(m, "x")),
+                                       real[1:], strict=False)]
+        self.check("and each mark is as far along as its song is",
+                   width > 0 and all(abs(x - want * width) < 2 for x, want in placed),
+                   ", ".join(f"{x:.0f} wanted {want * width:.0f}" for x, want in placed))
+
+        line = find(window, "musicSecondLine")
+        self.check("the line under the title names the song, not the upload",
+                   str(read(line, "text")) == "Three", str(read(line, "text")))
+        audio._pos = 400.0
+        audio.progressChanged.emit()
+        settle(0.3)
+        self.check("and follows the playhead into the next one",
+                   str(read(line, "text")) == "Two", str(read(line, "text")))
+
+        # A track with none of them is the ordinary case and must not change.
+        audio._chapters.clear()
+        audio.progressChanged.emit()
+        audio.trackChanged.emit()
+        settle(0.4)
+        left = [one for one in items_named_like(root, "chapterMark")
+                if read(one, "visible")]
+        self.check("a track with no songs in it carries no marks", not left,
+                   f"{len(left)} left over")
+        self.check("and its line says who it is by instead",
+                   str(read(line, "text")) == "Somebody", str(read(line, "text")))
+
+        audio._queue = []
+        audio._order = []
+        audio._at = -1
+        audio._dur = 0.0
+        audio._pos = 0.0
+        audio._idle = True
+        audio.trackChanged.emit()
+        audio.stateChanged.emit()
+        settle(0.3)
+
     def members(self, bridge, window) -> None:
         """A channel's members half.
 
@@ -1659,6 +1738,7 @@ class Smoke:
         self.updates(bridge, window)
         self.announcements(bridge, window)
         self.members(bridge, window)
+        self.chapters(bridge, window)
         self.suggestions(bridge, window)
         self.strangers(bridge, window)
         self.channel_playlists(bridge, window)

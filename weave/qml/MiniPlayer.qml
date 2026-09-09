@@ -44,6 +44,7 @@ Rectangle {
 
         Rectangle {
             id: progressTrack
+            objectName: "musicScrubTrack"
             anchors.top: parent.top
             anchors.left: parent.left
             anchors.right: parent.right
@@ -55,6 +56,30 @@ Rectangle {
                 width: parent.width * Audio.position
                 height: parent.height
                 color: Theme.colors.accent
+            }
+
+            // Where each song in this track begins. A video that is really an
+            // album carries them, and without them its bar is one long block
+            // with no way to tell that it is six songs. Drawn over the played
+            // part as well, in the ground colour, so a mark is a gap in the
+            // bar at every point of it rather than something that disappears
+            // as the bar catches up with it.
+            //
+            // The delegate cannot see anything declared around it, so what it
+            // needs comes from the view it is in and from the model row.
+            Repeater {
+                model: Audio.chapters
+
+                Rectangle {
+                    objectName: "chapterMark"
+                    required property var modelData
+
+                    visible: modelData.at > 0 && modelData.at < 1
+                    x: progressTrack.width * modelData.at
+                    width: 2
+                    height: progressTrack.height
+                    color: Theme.colors.background
+                }
             }
 
             Rectangle {
@@ -303,10 +328,22 @@ Rectangle {
                 elide: Text.ElideRight
             }
             Label {
+                objectName: "musicSecondLine"
                 Layout.fillWidth: true
-                text: Audio.loading ? "loading"
-                                    : (Audio.track.artist ? Audio.track.artist : "")
-                color: Theme.colors.textMuted
+                // Which song of it is playing, when the track is really
+                // several. That is the more useful of the two by a distance
+                // while it is true, and the name above already says what the
+                // whole thing is, so it takes the line rather than crowding
+                // in beside the artist.
+                text: {
+                    if (Audio.loading)
+                        return "loading"
+                    if (Audio.currentChapter !== "")
+                        return Audio.currentChapter
+                    return Audio.track.artist ? Audio.track.artist : ""
+                }
+                color: Audio.currentChapter !== "" && !Audio.loading
+                       ? Theme.colors.text : Theme.colors.textMuted
                 font.pixelSize: 11
                 elide: Text.ElideRight
             }

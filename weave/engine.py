@@ -60,6 +60,17 @@ _OBSERVED = ("time-pos", "duration", "pause", "idle-active", "paused-for-cache")
 _INDEX_ARG_SINCE = (0, 38)
 
 
+def mpv_numbers(text: str) -> tuple[int, int] | None:
+    """The major and minor out of what mpv says when asked its version.
+
+    Shared with the doctor, so the line that reports the version and the code
+    that shapes a command around it cannot come to different conclusions about
+    the same player.
+    """
+    found = re.search(r"mpv\s+v?(\d+)\.(\d+)", text or "")
+    return (int(found.group(1)), int(found.group(2))) if found else None
+
+
 @functools.cache
 def loadfile_takes_an_index() -> bool:
     """Whether this mpv's loadfile has that argument.
@@ -81,10 +92,8 @@ def loadfile_takes_an_index() -> bool:
                                 text=True, timeout=5).stdout
     except (OSError, subprocess.SubprocessError):
         return True
-    found = re.search(r"mpv\s+v?(\d+)\.(\d+)", answer or "")
-    if not found:
-        return True
-    return (int(found.group(1)), int(found.group(2))) >= _INDEX_ARG_SINCE
+    numbers = mpv_numbers(answer)
+    return numbers is None or numbers >= _INDEX_ARG_SINCE
 
 
 def mpv_command(volume: float, socket_path: os.PathLike | str,

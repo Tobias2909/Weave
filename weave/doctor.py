@@ -105,12 +105,38 @@ def _tools(report: Report) -> None:
                 report.add(name, OK, "node")
                 continue
         found = _version(command)
-        if found:
+        if found and name == "mpv":
+            _mpv_age(found, report)
+        elif found:
             report.add(name, OK, found[:60])
         elif needed:
             report.add(name, FAIL, "not installed", f"{why}. Install {command[0]}")
         else:
             report.add(name, WARN, "not installed", why)
+
+
+def _mpv_age(said: str, report: Report) -> None:
+    """Which mpv this is, and which shape of command it is being asked in.
+
+    Where loadfile's options go moved in mpv 0.38, and handing a player the
+    wrong shape does not lose a start position, it makes the whole load fail,
+    so a resumed track would not play at all. Weave asks each player the way it
+    understands, so neither is worse off and this is not a warning.
+
+    It is said out loud because Debian and Ubuntu still package 0.37, the two
+    behave differently on the one thing, and a report that does not say which
+    is in front of it cannot explain a difference between two machines. Reading
+    it here rather than deciding it again keeps this line and the code that
+    shapes the command from ever disagreeing about the same player.
+    """
+    from .engine import _INDEX_ARG_SINCE, mpv_numbers
+
+    numbers = mpv_numbers(said)
+    if numbers is None or numbers >= _INDEX_ARG_SINCE:
+        report.add("mpv", OK, said[:60])
+        return
+    wanted = ".".join(str(part) for part in _INDEX_ARG_SINCE)
+    report.add("mpv", OK, f"{said[:44]}, before {wanted}, older loadfile shape")
 
 
 def _player(cfg: Config, report: Report) -> None:
