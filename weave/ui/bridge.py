@@ -1564,7 +1564,9 @@ class Bridge(QObject):
 
         rows = doctor.traffic(self._db, self._cfg)
         for row in rows:
-            row["usualText"] = "no history yet" if not row["usual"] else f"usually {row['usual']}"
+            row["usualText"] = ("no history yet" if not row["windows"]
+                                else "usually none" if not row["usual"]
+                                else f"usually {row['usual']}")
             row["limitText"] = "no ceiling" if not row["limit"] else f"of {row['limit']}"
         return rows
 
@@ -1575,8 +1577,10 @@ class Bridge(QObject):
         days = doctor.TRAFFIC_DAYS
         span = "day" if days == 1 else f"{days} days"
         return (f"What each endpoint has cost in the last {minutes} min, beside what it usually "
-                f"costs in {minutes} min and the most it has, over the last {span}. A figure well "
-                f"past the usual one is worth a look long before the ceiling is reached.")
+                f"costs and the most it has cost in an unbroken {minutes} min of asking, over the "
+                f"last {span}. Measured over spells of asking rather than slices of the clock, "
+                f"since the app is not always running. A figure well past the usual one is worth "
+                f"a look long before the ceiling is reached.")
 
     def _get_schedule(self) -> list:
         from .. import doctor

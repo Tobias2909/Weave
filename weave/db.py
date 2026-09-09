@@ -1688,43 +1688,82 @@ class Database:
         The point is a number to compare the live one against. A ceiling on
         its own does not say whether 200 requests is normal or alarming, and
         MEASURED on a real library it can be either: the feeds endpoint sat at
-        a median of 164 per quarter hour on one day, peaking at 284 of a 300
-        ceiling, and at a median of 28 two days later once sweep driven
-        polling landed. The same page showed nothing but the live figure
-        against the ceiling, so neither day looked any different.
+        a median of 164 requests per quarter hour on one day, peaking at 284
+        of a 300 ceiling, and at 28 two days later once sweep driven polling
+        landed. The page showed nothing but the live figure against the
+        ceiling, so neither day looked any different from the other.
 
-        The median of the windows in which anything was asked, not the mean
-        over all of them: a window where the app was not running writes no row
-        at all, so idle time cannot drag the figure down, and one very busy
-        quarter of an hour cannot drag it up. Bucketed by the same window the
-        budget itself uses, so the usual figure and the live one are in the
-        same unit and can be read side by side.
+        A window here is `span` MINUTES OF THE APP RUNNING, not a slice of the
+        clock, and that distinction is the whole correctness of this. The first
+        version cut the log into clock aligned slices and took the median, and
+        it read about a third low on every busy endpoint. A slice only holds
+        the minutes the app was actually asking, every start and stop leaves a
+        stub, and MEASURED on a real log only 12 of 49 slices in a day and 56
+        of 242 in five days were covered end to end, the median slice holding
+        **8 of its 15 minutes**. So it was measuring two thirds of a window and
+        comparing it against a whole one, which told him he was over the usual
+        figure everywhere while feeds was in fact running at a third of it.
+
+        So the minutes that carry any request at all are numbered, and the sum
+        is taken over every run of `span` consecutive numbers, which is a
+        window's worth of asking wherever it happens to fall. A window never
+        straddles a pause: the minutes are grouped into stretches of asking
+        first and a window has to fit inside one. Letting them stitch was tried
+        and the feeds peak came out at 315 against a ceiling of 300, which
+        cannot have happened — it had joined the busy head of one session to
+        the tail of another. Both figures come from that one population, so the
+        usual and the worst cannot disagree about what a window means.
+
+        `span` is `window_s` in minutes plus one, matching the inclusive range
+        the live figure is read over, so the two are the same unit by
+        construction rather than by seven percent.
         """
-        minutes = max(1, window_s // 60)
+        minutes = max(1, window_s // 60) + 1
         cut = (int(time.time()) - max(1, days) * 86400) // 60
         return list(self.conn.execute(
             """
-            WITH windows AS (
-                SELECT endpoint, minute / :minutes AS bucket,
-                       SUM(count) AS sent, SUM(refused) AS refused
-                  FROM request_budget
-                 WHERE minute >= :cut
-                 GROUP BY endpoint, bucket
+            WITH running AS (
+                SELECT minute, ROW_NUMBER() OVER (ORDER BY minute) AS place,
+                       -- Gaps and islands: consecutive minutes share this, so
+                       -- it names the stretch of asking a minute belongs to.
+                       minute - ROW_NUMBER() OVER (ORDER BY minute) AS stretch
+                  FROM (SELECT DISTINCT minute FROM request_budget WHERE minute >= :cut)
             ),
-            ranked AS (
-                SELECT endpoint, sent,
-                       ROW_NUMBER() OVER (PARTITION BY endpoint ORDER BY sent) AS rank,
+            seen AS (
+                SELECT DISTINCT endpoint FROM request_budget WHERE minute >= :cut
+            ),
+            spread AS (
+                SELECT seen.endpoint, running.place, running.stretch,
+                       COALESCE(logged.count, 0) AS count
+                  FROM seen
+                  CROSS JOIN running
+                  LEFT JOIN request_budget logged
+                         ON logged.endpoint = seen.endpoint
+                        AND logged.minute = running.minute
+            ),
+            rolled AS (
+                SELECT endpoint,
+                       SUM(count) OVER win AS total,
+                       COUNT(*)   OVER win AS covered
+                  FROM spread
+                WINDOW win AS (PARTITION BY endpoint, stretch ORDER BY place
+                               ROWS BETWEEN :back PRECEDING AND CURRENT ROW)
+            ),
+            whole AS (
+                SELECT endpoint, total,
+                       ROW_NUMBER() OVER (PARTITION BY endpoint ORDER BY total) AS rank,
                        COUNT(*) OVER (PARTITION BY endpoint) AS windows
-                  FROM windows
+                  FROM rolled
+                 WHERE covered = :minutes
             )
             SELECT endpoint,
                    windows,
-                   MAX(CASE WHEN rank = (windows + 1) / 2 THEN sent END) AS usual,
-                   MAX(sent) AS most
-              FROM ranked
+                   MAX(CASE WHEN rank = (windows + 1) / 2 THEN total END) AS usual,
+                   MAX(total) AS most
+              FROM whole
              GROUP BY endpoint
             """,
-            {"minutes": minutes, "cut": cut},
+            {"cut": cut, "minutes": minutes, "back": minutes - 1},
         ))
 
     def prune_request_budget(self, older_than_s: int = REQUEST_LOG_KEEP_S) -> int:

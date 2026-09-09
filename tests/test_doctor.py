@@ -260,6 +260,12 @@ class WhereTheRequestsGo(unittest.TestCase):
                 "ON CONFLICT(endpoint, minute) DO UPDATE SET count=count+excluded.count, "
                 "refused=refused+excluded.refused", (endpoint, minute, count, refused))
 
+    def spell(self, endpoint, from_minutes_ago, minutes, count):
+        """An unbroken spell of asking, which is what a window is measured
+        over. Anything shorter than a window is not one at all."""
+        for back in range(from_minutes_ago, from_minutes_ago - minutes, -1):
+            self.spend(endpoint, back, count)
+
     def row(self, endpoint, days=1):
         found = [row for row in doctor.traffic(self.db, self.cfg, days=days)
                  if row["endpoint"] == endpoint]
@@ -274,22 +280,60 @@ class WhereTheRequestsGo(unittest.TestCase):
         self.spend("feeds", 40, 500)          # outside the window
         self.assertEqual(self.row("feeds")["sent"], 20)
 
-    def test_the_usual_figure_is_the_median_of_the_windows_that_had_traffic(self):
-        # A window where the app was not running writes no row at all, so idle
-        # time cannot drag the figure down.
-        for hour in range(1, 6):
-            self.spend("feeds", hour * 60, 10)
-        self.spend("feeds", 6 * 60, 400)
-        self.assertEqual(self.row("feeds")["usual"], 10)
-        self.assertEqual(self.row("feeds")["most"], 400)
+    def test_a_window_is_a_spell_of_asking_and_not_a_slice_of_the_clock(self):
+        # The bug this replaced. Slicing the clock counted the stubs that every
+        # start and stop leaves as if they were whole windows: measured on a
+        # real log, 12 of 49 slices in a day were covered end to end and the
+        # median slice held 8 of its 15 minutes, so the figure read about a
+        # third low and the page said he was over it everywhere.
+        self.spell("feeds", 300, 40, 10)
+        row = self.row("feeds")
+        self.assertEqual(row["usual"], 160)          # 16 minutes at 10 each
+        self.assertEqual(row["most"], 160)
+
+    def test_a_spell_too_short_to_fill_a_window_says_nothing(self):
+        # Reporting it would be the old bug again, in miniature.
+        self.spell("feeds", 300, 8, 10)
+        row = self.row("feeds")
+        self.assertEqual(row["usual"], 0)
+        self.assertEqual(row["windows"], 0)
+
+    def test_knowing_it_is_nothing_is_not_the_same_as_not_knowing(self):
+        # An endpoint that fires once an hour honestly usually costs zero in a
+        # quarter of an hour, and the page must not call that missing history.
+        self.spell("browse", 300, 60, 0)
+        self.spend("browse", 299, 3)
+        row = self.row("browse")
+        self.assertEqual(row["usual"], 0)
+        self.assertGreater(row["windows"], 0)
+
+    def test_the_usual_figure_is_the_median_of_those_windows(self):
+        self.spell("feeds", 500, 40, 10)             # windows of 160
+        self.spell("feeds", 300, 40, 40)             # windows of 640
+        self.spell("feeds", 100, 40, 20)             # windows of 320
+        self.assertEqual(self.row("feeds")["usual"], 320)
+        self.assertEqual(self.row("feeds")["most"], 640)
+
+    def test_a_window_never_straddles_a_pause(self):
+        # Two busy spells with a gap between them must not be joined into one
+        # window that never happened. Letting them stitch put the feeds peak
+        # at 315 against a ceiling of 300 on a real log.
+        self.spell("feeds", 300, 10, 100)
+        self.spell("feeds", 200, 10, 100)
+        self.assertEqual(self.row("feeds")["usual"], 0)
+        self.assertEqual(self.row("feeds")["most"], 0)
+
+    def test_idle_time_cannot_drag_the_figure_down(self):
+        # A minute the app was not running writes no row, so it is not a zero.
+        self.spell("feeds", 1000, 40, 10)
+        self.assertEqual(self.row("feeds")["usual"], 160)
 
     def test_at_the_ceiling_is_a_failure(self):
         self.spend("browse", 1, self.cfg.budget_limits["browse"])
         self.assertEqual(self.row("browse")["state"], doctor.FAIL)
 
     def test_well_past_the_usual_figure_is_worth_a_look(self):
-        for hour in range(1, 8):
-            self.spend("feeds", hour * 60, 20)
+        self.spell("feeds", 300, 40, 1)              # usually 16 a window
         self.spend("feeds", 1, 100)
         row = self.row("feeds")
         self.assertEqual(row["state"], doctor.WARN)
@@ -298,8 +342,7 @@ class WhereTheRequestsGo(unittest.TestCase):
     def test_a_quiet_endpoint_doubling_says_nothing(self):
         # Two to four is not a story, and warning about it would teach anybody
         # reading this page to ignore it.
-        for hour in range(1, 8):
-            self.spend("dislikes", hour * 60, 2)
+        self.spell("dislikes", 300, 40, 1)
         self.spend("dislikes", 1, 4)
         self.assertEqual(self.row("dislikes")["state"], doctor.OK)
 
