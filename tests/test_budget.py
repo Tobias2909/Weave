@@ -9,10 +9,13 @@ count survives the restart.
 """
 
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
+from weave import poller
 from weave.budget import FEEDS, Budget
+from weave.config import Config
 from weave.db import Database
 
 from . import support
@@ -92,6 +95,29 @@ class Persistence(BudgetCase):
         self.db.conn.commit()
         self.assertEqual(self.db.prune_request_budget(86400), 1)
         self.assertEqual(self.db.requests_in_window(FEEDS, 900), (0, 0))
+
+    def test_it_keeps_a_month_by_default_and_not_a_day(self):
+        # The page reads the usual figure out of this table, so a day would
+        # leave nothing to compare a window against. The budget itself only
+        # ever looks at the last window and does not care either way.
+        now = int(time.time()) // 60
+        with self.db.conn as conn:
+            conn.executemany(
+                "INSERT INTO request_budget(endpoint, minute, count) VALUES(?,?,?)",
+                [(FEEDS, now - 60 * 24 * days, 1) for days in (2, 20, 40)])
+        self.assertEqual(self.db.prune_request_budget(), 1)
+        left = {row[0] for row in self.db.conn.execute("SELECT minute FROM request_budget")}
+        self.assertEqual(len(left), 2)
+
+    def test_the_poller_prunes_once_a_day_and_not_once_a_tick(self):
+        # A session restarted twenty times must not run it twenty times.
+        made = poller.FeedPoller(self.db, Config(raw={}))
+        calls = []
+        self.db.prune_request_budget = lambda *args: calls.append(1)
+        made._prune_request_log()
+        made._prune_request_log()
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(self.db.get_int("request_prune_at", 0))
 
 
 class Reporting(BudgetCase):

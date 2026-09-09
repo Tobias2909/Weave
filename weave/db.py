@@ -39,6 +39,15 @@ SHORTS_CEILING_S = 180
 # four newest, two were Shorts and two were ordinary videos. Showing them all
 # puts Shorts in the feed and hiding them all loses real videos, so neither is
 # a rule; the kind test in sources/kind.py is what settles it, within a tick.
+# How long the per minute request log is kept. The budget itself only ever
+# reads the last window, but the usual figure on the How things are page is the
+# median of the windows in which anything was asked, so the log is the only
+# record of what normal looks like. A month leaves room to widen that figure
+# past a day later on and still caps the table: MEASURED at a real rate of
+# 1157 rows a day, a month is ~35k rows and ~750 KB, where a year unpruned is
+# ~422k rows and ~9 MB against a whole database of 4.6 MB.
+REQUEST_LOG_KEEP_S = 30 * 86400
+
 # How long a row whose kind the site would not say is left alone before it is
 # asked about again. An unclear answer is a refusal, a consent page or a 5xx,
 # none of which is over in a minute, and a held row costs nothing while it
@@ -1718,7 +1727,13 @@ class Database:
             {"minutes": minutes, "cut": cut},
         ))
 
-    def prune_request_budget(self, older_than_s: int = 86400) -> int:
+    def prune_request_budget(self, older_than_s: int = REQUEST_LOG_KEEP_S) -> int:
+        """Drop request counters older than this, returning how many went.
+
+        The default was a day, which is what the budget needs and NOT what the
+        page needs: the usual figure there is read from this table, so a day
+        would leave nothing to compare a window against. See REQUEST_LOG_KEEP_S.
+        """
         cutoff = (int(time.time()) - max(0, older_than_s)) // 60
         with self.conn as conn:
             before = conn.total_changes
