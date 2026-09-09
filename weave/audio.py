@@ -306,8 +306,26 @@ class AudioPlayer(QObject):
     def _get_elapsed(self) -> int:
         return int(self._pos)
 
+    def _get_is_live(self) -> bool:
+        """Whether what is playing is a broadcast rather than a recording.
+
+        Read from the entry, which knew before anything was resolved, and
+        never from what mpv reports. mpv answers a live stream's duration with
+        the length of the HLS window it is holding, about fourteen seconds,
+        which is a real number about the wrong thing.
+        """
+        return bool(self._current().get("live"))
+
     def _get_length(self) -> int:
-        return int(self._dur)
+        """How long this is, and nothing for a broadcast.
+
+        A live stream has no length. mpv says fourteen seconds because that is
+        the window it is buffering, and taken at face value the bar filled and
+        reset every fourteen seconds, the clock counted to 0:14, and the word
+        live went out the moment the sound came in. Answering with nothing is
+        what every one of those already reads as live.
+        """
+        return 0 if self._get_is_live() else int(self._dur)
 
     def _get_chapters(self) -> list:
         """Where this track's songs begin, for the marks on the bar.
@@ -414,6 +432,7 @@ class AudioPlayer(QObject):
     position = Property(float, _get_position, notify=progressChanged)
     elapsed = Property(int, _get_elapsed, notify=progressChanged)
     length = Property(int, _get_length, notify=progressChanged)
+    isLive = Property(bool, _get_is_live, notify=trackChanged)
     # Bound to progress rather than to the track, because the length arrives
     # from mpv after the track does and the marks cannot be placed without it.
     chapters = Property("QVariantList", _get_chapters, notify=progressChanged)

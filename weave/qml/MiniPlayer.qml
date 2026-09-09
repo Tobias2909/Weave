@@ -34,7 +34,9 @@ Rectangle {
     // than needing a three pixel target.
     Item {
         id: scrubber
-        visible: Audio.length > 0
+        // Nothing to scrub through on a broadcast. It is not that its length
+        // is unknown, it is that it does not have one.
+        visible: !Audio.isLive && Audio.length > 0
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
@@ -472,13 +474,18 @@ Rectangle {
         }
 
         Label {
-            visible: Audio.length > 0
+            visible: !Audio.isLive && Audio.length > 0
             text: bar.clock(Audio.elapsed) + " / " + bar.clock(Audio.length)
             color: Theme.colors.textMuted
             font.pixelSize: 11
         }
         Label {
-            visible: Audio.length === 0
+            objectName: "musicLiveWord"
+            // Said because the entry is a broadcast, never because a length
+            // has not arrived yet. Read the other way it claimed live for the
+            // second at the start of every ordinary track, and went out again
+            // on a real one the moment mpv reported the window it was holding.
+            visible: Audio.isLive
             text: "live"
             color: Theme.colors.live
             font.pixelSize: 11

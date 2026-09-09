@@ -59,6 +59,54 @@ class ReadingThem(unittest.TestCase):
             self.assertEqual(parse_chapters(text), (), text)
 
 
+class ABroadcastHasNoLength(unittest.TestCase):
+    """mpv answers a live stream's duration with the length of the window it
+    is holding, about fourteen seconds. That is a real number about the wrong
+    thing, and taken at face value the bar filled and reset every fourteen
+    seconds while the word live went out as soon as the sound came in."""
+
+    def setUp(self):
+        from tests.test_audio import FakeEngine
+        from weave.audio import AudioPlayer
+        from weave.config import Config
+
+        self.player = AudioPlayer(Config(raw={}), engine=FakeEngine())
+        self.player._order = [0]
+        self.player._at = 0
+        self.player._idle = False
+
+    def queue(self, live):
+        self.player._queue = [{"key": "source:1", "title": "A radio",
+                               "url": "https://example/watch", "live": live}]
+
+    def test_a_broadcast_says_so_from_the_entry_not_from_mpv(self):
+        self.queue(live=True)
+        # What mpv reports for a live stream, measured.
+        self.player._dur = 14.98
+        self.assertTrue(self.player._get_is_live())
+        self.assertEqual(self.player._get_length(), 0,
+                         "the window mpv is holding was taken for a length")
+
+    def test_and_an_ordinary_track_keeps_its_length(self):
+        self.queue(live=False)
+        self.player._dur = 254.0
+        self.assertFalse(self.player._get_is_live())
+        self.assertEqual(self.player._get_length(), 254)
+
+    def test_a_track_whose_length_has_not_arrived_is_not_a_broadcast(self):
+        # The word used to be read off the length, so it claimed live for the
+        # second at the start of every ordinary track.
+        self.queue(live=False)
+        self.player._dur = 0.0
+        self.assertFalse(self.player._get_is_live())
+        self.assertEqual(self.player._get_length(), 0)
+
+    def test_nothing_playing_is_not_a_broadcast_either(self):
+        self.player._queue = []
+        self.player._at = -1
+        self.assertFalse(self.player._get_is_live())
+
+
 class SnappingToASong(unittest.TestCase):
     """The right button seeks to a song start rather than between two."""
 

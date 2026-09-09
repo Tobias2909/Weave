@@ -591,6 +591,36 @@ class Smoke:
         self.check("and its line says who it is by instead",
                    str(read(line, "text")) == "Somebody", str(read(line, "text")))
 
+        # A broadcast has no length, and mpv says it has fourteen seconds
+        # because that is the window it is holding. Believed, the bar filled
+        # and reset every fourteen seconds and the word live went out the
+        # moment the sound came in.
+        audio._queue = [{"key": "source:1", "title": "A radio", "artist": "",
+                         "url": "https://example/watch", "live": True}]
+        audio._dur = 14.98
+        audio._pos = 7.0
+        audio.trackChanged.emit()
+        audio.progressChanged.emit()
+        settle(0.5)
+        word = find(window, "musicLiveWord")
+        self.check("a broadcast is not given a length by the window mpv holds",
+                   read(audio, "isLive") is True and read(audio, "length") == 0,
+                   f"isLive {read(audio, 'isLive')} length {read(audio, 'length')}")
+        self.check("so it says live rather than counting to fourteen seconds",
+                   read(word, "visible") is True)
+        self.check("and has no bar to drag, since there is nowhere to drag to",
+                   read(find(window, "musicScrubTrack"), "visible") is False)
+
+        audio._queue[0]["live"] = False
+        audio._dur = 254.0
+        audio.trackChanged.emit()
+        audio.progressChanged.emit()
+        settle(0.5)
+        self.check("an ordinary track keeps its length and its bar",
+                   read(audio, "length") == 254 and read(word, "visible") is False
+                   and read(find(window, "musicScrubTrack"), "visible") is True,
+                   f"length {read(audio, 'length')}")
+
         audio._queue = []
         audio._order = []
         audio._at = -1
