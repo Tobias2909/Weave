@@ -320,6 +320,11 @@ class Bridge(QObject):
         # and pressing again is how you ask again.
         self._members_note = ""
         self._members_note_channel = ""
+        # Bumped every time an answer is given, even when it is the same answer
+        # as last time. The words alone cannot say "asked again", so pressing
+        # the button twice and being told the same thing would otherwise leave
+        # the second answer running out the first one's clock.
+        self._members_note_at = 0
         # Which half of a channel page is showing. Not part of the view, since
         # walking back and forth between the two is not walking anywhere.
         self._channel_tab = "videos"
@@ -498,6 +503,9 @@ class Bridge(QObject):
             # only ever about the channel being looked at.
             "membersNote": (self._members_note
                             if self._members_note_channel == self._view_channel else ""),
+            # Which answer this is, so the same words said twice still read as
+            # a fresh one and get their own full time on screen.
+            "membersNoteAt": self._members_note_at,
         }
 
     def _get_playlist_skipped_text(self) -> str:
@@ -1959,10 +1967,25 @@ class Bridge(QObject):
             lambda _key, message: self._on_members_failed(message))
         self._launch(self._channel_members)
 
+    @Slot()
+    def clearMembersNote(self) -> None:
+        """Take the answer off the banner.
+
+        Called by the bar that draws its own time running out, so the moment it
+        fills and the moment the words go are the same event rather than two
+        timers that can drift apart.
+        """
+        if not self._members_note:
+            return
+        self._members_note = ""
+        self._members_note_channel = ""
+        self.viewChanged.emit()
+
     def _say_about_members(self, channel_key: str, note: str) -> None:
         """Put an answer on the channel page itself."""
         self._members_note = note
         self._members_note_channel = channel_key
+        self._members_note_at += 1
         self.viewChanged.emit()
 
     def _on_channel_members(self, channel_key: str, stored: int) -> None:

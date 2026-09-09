@@ -584,10 +584,33 @@ class Smoke:
         self.check("and one you hold says it will play",
                    words is not None and "holds" in str(read(words, "text")),
                    str(read(words, "text")) if words is not None else "nothing said")
-        bridge._members_note = ""
-        bridge.viewChanged.emit()
+        # The answer takes itself away after twenty five seconds, and the bar
+        # along its foot IS that timer rather than a second one kept beside it,
+        # so what is drawn and the moment the words go cannot drift apart.
+        bar = find(window, "membersNoteBar")
+        started = float(read(note, "spent"))
+        settle(1.2)
+        moved = float(read(note, "spent"))
+        self.check("the answer draws its own time running out",
+                   bar is not None and moved > started and moved < 1,
+                   f"{started:.3f} to {moved:.3f} of the way")
+        self.check("and the bar is as far along as the time is",
+                   abs(float(read(bar, "width"))
+                       - (float(read(note, "width")) - 4) * moved) < 6,
+                   f"bar {read(bar, 'width'):.0f} px of {read(note, 'width'):.0f}")
+
+        # Being told the same thing twice is still being told it again, and the
+        # words alone cannot say so, so the second answer would otherwise run
+        # out the first one's clock and vanish early.
+        bridge._on_no_membership(channel)
+        settle(0.4)
+        self.check("and the same answer again starts its time over",
+                   float(read(note, "spent")) < moved,
+                   f"{moved:.3f} then {read(note, 'spent'):.3f}")
+
+        bridge.clearMembersNote()
         settle(0.3)
-        self.check("and the answer goes when there is nothing to answer",
+        self.check("and the answer goes when its time is up",
                    read(note, "visible") is False)
         # Put the membership back to one nobody holds, which is what the press
         # below is about. Holding one is what makes the press work, and that is

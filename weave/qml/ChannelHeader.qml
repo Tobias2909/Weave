@@ -43,11 +43,22 @@ Item {
         // where the eye already is. It is about a press, so it is here only
         // after one and only on the channel it was about.
         Rectangle {
+            id: noteCard
             objectName: "membersNote"
-            visible: (header.info.membersNote || "") !== ""
+
+            // Read once into a property of its own, so the animation below has
+            // something to react to and the label is not the only thing that
+            // knows the words changed.
+            readonly property string words: header.info.membersNote || ""
+            // How much of its time has gone, 0 to 1. The bar IS the timer:
+            // what is drawn and the moment the words go are the same thing,
+            // rather than an animation beside a timer that can drift from it.
+            property real spent: 0
+
+            visible: words !== ""
             anchors.centerIn: parent
             width: Math.min(parent.width - 60, noteText.implicitWidth + 32)
-            height: noteText.implicitHeight + 20
+            height: noteText.implicitHeight + 24
             radius: 8
             color: Qt.rgba(Qt.color(Theme.colors.surfaceRaised).r,
                            Qt.color(Theme.colors.surfaceRaised).g,
@@ -55,16 +66,64 @@ Item {
             border.width: 1
             border.color: Theme.colors.border
 
+            // Which answer this is. The words cannot say "asked again" on
+            // their own, so pressing the button twice and being told the same
+            // thing would leave the second answer running out the first one's
+            // clock and vanishing early.
+            readonly property int said: header.info.membersNoteAt || 0
+
+            // Restarted rather than merely started, so every answer gets its
+            // own full time whether or not it reads like the last one.
+            onSaidChanged: {
+                noteCard.spent = 0
+                if (noteCard.words !== "")
+                    countdown.restart()
+            }
+
+            onWordsChanged: {
+                if (noteCard.words === "") {
+                    countdown.stop()
+                    noteCard.spent = 0
+                }
+            }
+
+            NumberAnimation {
+                id: countdown
+                objectName: "membersNoteCountdown"
+                target: noteCard
+                property: "spent"
+                from: 0
+                to: 1
+                duration: 25000
+                onFinished: App.clearMembersNote()
+            }
+
             Label {
                 id: noteText
                 objectName: "membersNoteText"
-                anchors.centerIn: parent
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.top: parent.top
+                anchors.topMargin: 10
                 width: Math.min(header.width - 92, implicitWidth)
-                text: header.info.membersNote || ""
+                text: noteCard.words
                 color: Theme.colors.text
                 font.pixelSize: 12
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.Wrap
+            }
+
+            // The time running out, along the foot of the card. Inside the
+            // border rather than over it, and rounded at the left end only, so
+            // it reads as filling the card rather than as a line drawn on it.
+            Rectangle {
+                objectName: "membersNoteBar"
+                anchors.left: parent.left
+                anchors.bottom: parent.bottom
+                anchors.margins: 2
+                height: 3
+                width: (parent.width - 4) * Math.max(0, Math.min(1, noteCard.spent))
+                radius: 1.5
+                color: Theme.colors.accent
             }
         }
 

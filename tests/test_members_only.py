@@ -468,6 +468,7 @@ class WhatThePressSays(unittest.TestCase):
         bridge._view_kind = "channel"
         bridge._members_note = ""
         bridge._members_note_channel = ""
+        bridge._members_note_at = 0
         bridge._set_notice = lambda *_a, **_k: None
         bridge._set_status = lambda *_a, **_k: None
         bridge.reload = lambda: None
@@ -507,6 +508,23 @@ class WhatThePressSays(unittest.TestCase):
     def test_it_is_only_about_the_channel_it_was_pressed_on(self):
         self.Bridge._on_no_membership(self.bridge, CHANNEL)
         self.bridge._view_channel = "yt:UCbbbbbbbbbbbbbbbbbbbbbb"
+        self.assertEqual(self.note(), "")
+
+    def test_the_same_answer_twice_is_still_a_fresh_one(self):
+        # The words cannot say "asked again" on their own, and the card's
+        # countdown restarts on this number rather than on the text, or a
+        # second answer that reads like the first would run out its clock.
+        self.Bridge._on_no_membership(self.bridge, CHANNEL)
+        first = self.Bridge._get_channel_info(self.bridge)["membersNoteAt"]
+        self.Bridge._on_no_membership(self.bridge, CHANNEL)
+        second = self.Bridge._get_channel_info(self.bridge)
+        self.assertEqual(second["membersNote"], self.note())
+        self.assertGreater(second["membersNoteAt"], first)
+
+    def test_the_answer_can_be_taken_away_when_its_time_is_up(self):
+        # What the bar along its foot calls when it fills.
+        self.Bridge._on_no_membership(self.bridge, CHANNEL)
+        self.Bridge.clearMembersNote(self.bridge)
         self.assertEqual(self.note(), "")
 
     def test_and_pressing_again_clears_the_last_answer(self):
