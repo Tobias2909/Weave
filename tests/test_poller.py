@@ -160,6 +160,9 @@ class FeedJobs(unittest.TestCase):
 
     def test_a_remembered_variant_is_used(self):
         self.db.set_feed_variant("yt:UC1", rss.CHANNEL)
+        # Stamped, so this round is not one of the weekly re-tests, which
+        # would ask for the long form tab instead and is its own test below.
+        self.db.stamp_variant_checked("yt:UC1")
         jobs = self.poller._feed_jobs(self.rows())
         self.assertIn(("yt:UC1", "UC1", rss.CHANNEL), jobs)
 
@@ -168,17 +171,24 @@ class FeedJobs(unittest.TestCase):
         # without this its Shorts arrive looking like ordinary videos and go
         # straight into the feed.
         self.db.set_feed_variant("yt:UC1", rss.CHANNEL)
+        self.db.stamp_variant_checked("yt:UC1")
         jobs = self.poller._feed_jobs(self.rows())
         self.assertIn(("yt:UC1", "UC1", rss.SHORTS), jobs)
         self.assertNotIn(("yt:UC2", "UC2", rss.SHORTS), jobs)
 
-    def test_the_shorts_tabs_are_read_a_few_at_a_time(self):
+    def test_every_channel_on_the_mixed_feed_is_swept_in_its_own_round(self):
+        # This was capped at two a tick, and the cap was the bug. A round is
+        # ordered by how far past due a channel is, so the two slots went to
+        # the most dormant channels while the ones actually posting Shorts
+        # waited hours with their rows unsorted. It is not extra volume: a
+        # channel qualifies once per its own interval either way.
         for index in range(3, 9):
             self.db.add_channel(f"yt:UC{index}", "youtube", f"UC{index}", f"C{index}")
             self.db.set_feed_variant(f"yt:UC{index}", rss.CHANNEL)
+            self.db.stamp_variant_checked(f"yt:UC{index}")
         jobs = self.poller._feed_jobs(self.rows())
         shorts = [key for key, _, kind in jobs if kind == rss.SHORTS]
-        self.assertEqual(len(shorts), poller.SHORTS_SWEEPS_PER_TICK)
+        self.assertEqual(len(shorts), 6)
 
     def test_a_channel_on_the_mixed_feed_is_offered_the_long_form_tab_again(self):
         # A fallback is a guess about a tab that may appear later, and one
@@ -189,13 +199,28 @@ class FeedJobs(unittest.TestCase):
         self.assertIn(("yt:UC1", "UC1", rss.VIDEOS), jobs)
         self.assertNotIn(("yt:UC1", "UC1", rss.CHANNEL), jobs)
 
-    def test_the_re_test_waits_for_the_shorts_tab_to_have_been_read(self):
-        # Reading it is what tells the rows that arrived from the mixed feed
-        # apart. Clearing the fallback first would lose the only sign that
-        # this channel was ever on that feed.
+    def test_the_re_test_waits_for_the_rows_of_unknown_kind_to_be_settled(self):
+        # Being on the mixed feed is the only record that those rows could be
+        # Shorts. Clearing the fallback first would leave a Short in the feed
+        # for good, so they are settled and the channel leaves afterwards.
         self.db.set_feed_variant("yt:UC1", rss.CHANNEL)
-        jobs = self.poller._feed_jobs(self.rows())
+        self.db.upsert_videos([VideoRow("youtube", "aaaaaaaaaaa", "yt:UC1", "Unknown")])
+        unsorted = self.db.channels_with_unsorted_rows()
+        self.assertEqual(unsorted, {"yt:UC1"})
+        jobs = self.poller._feed_jobs(self.rows(), unsorted)
         self.assertIn(("yt:UC1", "UC1", rss.CHANNEL), jobs)
+        self.assertNotIn(("yt:UC1", "UC1", rss.VIDEOS), jobs)
+
+    def test_the_re_test_no_longer_waits_for_a_sweep_it_may_never_get(self):
+        # The deadlock. It used to wait for the channel's Shorts tab to have
+        # been read, and MEASURED on a real library 14 of the 44 channels on
+        # the mixed feed never had been, because the sweep was capped and the
+        # cap went to dormant channels. Those 14 could never leave the mixed
+        # feed, so they kept pouring rows of unknown kind into the feed.
+        self.db.set_feed_variant("yt:UC1", rss.CHANNEL)
+        self.assertFalse(self.db.channels()[0]["shorts_sweep_at"])
+        jobs = self.poller._feed_jobs(self.rows(), self.db.channels_with_unsorted_rows())
+        self.assertIn(("yt:UC1", "UC1", rss.VIDEOS), jobs)
 
     def test_a_re_tested_channel_is_not_asked_again_for_a_week(self):
         self.db.set_feed_variant("yt:UC1", rss.CHANNEL)

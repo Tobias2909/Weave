@@ -124,13 +124,25 @@ class Fetcher:
                     time.sleep(min(delay, 30.0))
         raise last if last else HttpError(0, url)
 
-    def head_status(self, url: str, cookies: dict[str, str] | None = None) -> tuple[str, str]:
-        """Fetch without following redirects, returning the status and the
-        Location header. Used by tests that read a redirect as an answer rather
-        than as something to follow."""
+    def head_status(self, url: str, cookies: dict[str, str] | None = None) -> tuple[int, str]:
+        """Ask for the headers alone, without following redirects, returning
+        the status and the Location.
+
+        For a caller that reads the redirect itself as the answer rather than
+        as somewhere to go, which is how a Short is told from an ordinary
+        video. A HEAD rather than a GET because the body would be a megabyte
+        of player HTML that nothing here reads, and no retries because there
+        is nothing worth asking twice: an unclear answer is left unanswered
+        and the row it was about is asked again in a later round.
+
+        Counted in `sent` like every other request, so a budget is charged for
+        what actually went over the wire.
+        """
         with self.throttle.slot():
-            response = self._session.get(url, timeout=self.timeout, allow_redirects=False,
-                                         cookies=cookies or {})
+            with self._count:
+                self.sent += 1
+            response = self._session.head(url, timeout=self.timeout, allow_redirects=False,
+                                          cookies=cookies or {})
         return response.status_code, response.headers.get("Location", "")
 
     def close(self) -> None:

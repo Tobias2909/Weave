@@ -30,13 +30,14 @@ import random
 import threading
 import time
 import traceback
+from collections.abc import Collection
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Signal
 
 from . import backoff, imagecache, tokens
-from .budget import BROWSE, DISLIKES, FEEDS, OEMBED, PLAYER, TWITCH, Budget
+from .budget import BROWSE, DISLIKES, FEEDS, OEMBED, PLAYER, SHORTS, TWITCH, Budget
 from .config import Config
 from .db import Database
 from .ids import channel_key
@@ -50,6 +51,7 @@ from .sources import comments as comment_source
 from .sources import dislikes as dislike_source
 from .sources import flatlist, lengths, livecheck, oembed, rss, subs, sweep, twitch
 from .sources import history as history_source
+from .sources import kind as kind_source
 from .sources import playlists as playlist_source
 from .sources import recommended as recommended_source
 from .sources import release as release_source
@@ -160,11 +162,13 @@ LONG_FORM_STRIKES = 2
 # first asked can post one at any time, and nothing else would ever notice.
 VARIANT_RECHECK_S = 7 * 86400
 
-# How many channels on the mixed feed have their Shorts tab read in one tick.
-# The mixed feed says nothing about the kind of what it carries, so this is
-# what tells its rows apart, and it is paced for the same reason the streams
-# probes are: a one off cost across a long list must not arrive as a burst.
-SHORTS_SWEEPS_PER_TICK = 2
+# How many rows of unknown kind are asked about in one tick. Only a channel
+# on the mixed feed has any, and only the ones its Shorts tab did not name, so
+# in a settled library this is nothing at all. MEASURED on a real one during
+# the worst of it: twenty five rows held back and nineteen arriving in a day,
+# so five a tick clears a backlog in minutes and is never the reason anything
+# waits.
+KIND_TESTS_PER_TICK = 5
 
 # What a 404 on the long form feed leaves behind, since the caller rather than
 # the fetch decides what it meant.
@@ -226,16 +230,26 @@ def _wants_shorts_sweep(row, now: int) -> bool:
     return not swept or swept <= now - int(_column(row, "interval_s", 0))
 
 
-def _wants_variant_retest(row, now: int) -> bool:
+def _wants_variant_retest(row, now: int, unsorted: Collection[str] = ()) -> bool:
     """Whether to ask the long form tab of a channel that fell back to the
     mixed one.
 
-    Not before that channel's Shorts tab has been read once. The rows it
-    stored while it was on the mixed feed are of unknown kind, and the Shorts
-    tab is the only thing that says which of them are Shorts, so they have to
-    be sorted out while it is still known that this channel was ever there.
+    Not while that channel still holds a row of unknown kind. Those rows were
+    stored from the mixed feed, and being on the mixed feed is the only record
+    that they could be Shorts at all: clear the fallback first and a Short
+    among them shows for good. So they are sorted out first and the channel
+    leaves afterwards.
+
+    This used to wait for the channel's Shorts tab to have been read, which
+    is not the same thing and deadlocked. MEASURED on a real library: 14 of
+    the 44 channels on the mixed feed had never had that tab read, because the
+    sweep was capped at two a tick and the cap was spent on whichever channels
+    were most overdue, which are the dormant ones. A channel that never gets
+    a sweep never gets a retest either, so it stayed on the mixed feed for
+    good and kept pouring rows of unknown kind into the feed. What the rows
+    need is an answer, from the Shorts tab or from the kind test, not a stamp.
     """
-    if not _on_mixed_feed(row) or not _column(row, "shorts_sweep_at"):
+    if not _on_mixed_feed(row) or _column(row, "key") in unsorted:
         return False
     checked = _column(row, "variant_checked_at")
     return not checked or checked <= now - VARIANT_RECHECK_S
@@ -268,6 +282,12 @@ class FeedPoller(Worker):
             if not self._cancel.is_set():
                 polled, rss_touched, failures = self._phase_rss(fetcher, budget)
                 touched += rss_touched
+            # Straight after the feeds, and in the same tick, because a row of
+            # unknown kind is held out of the feed until this answers. The
+            # Shorts tab has already had its say by now, so what is left is
+            # only what one request per row can settle.
+            if not self._cancel.is_set():
+                touched += self._phase_kinds(fetcher, budget)
             touched += self._phase_details_again()
         except (FetchCancelled, ProcessCancelled):
             pass
@@ -416,6 +436,66 @@ class FeedPoller(Worker):
             return False
         return time.time() - self._db.get_int("sweep_at", 0) < self._cfg.sweep_stale_s
 
+    # ---- phase 3 ---------------------------------------------------------
+
+    def _phase_kinds(self, fetcher: Fetcher, budget: Budget) -> int:
+        """Settle the kind of the rows the feed is holding back.
+
+        A row from the mixed channel feed arrives of no stated kind, and the
+        feed holds it back rather than showing it, since that feed carries
+        Shorts and ordinary videos alike. The channel's Shorts tab names the
+        Shorts among them for one request, which is why it is read in the same
+        round; what it cannot do is say that the rest are ordinary videos, so
+        those would wait for ever. This asks about them one at a time.
+
+        Cheap for two reasons. Length settles what it can for free first, and
+        only a channel stuck on the mixed feed has rows here at all, so the
+        whole phase does nothing once those channels are back on their own
+        tabs. It also asks www.youtube.com rather than the feed host, on its
+        own budget line, so it can neither be starved by a round of feeds nor
+        starve one.
+
+        An unclear answer settles nothing. See sources/kind.py: a refusal, a
+        consent page and a 5xx all look alike from here, and marking a row
+        wrongly either puts a Short in the feed for good or loses an ordinary
+        video for good, so the row keeps its stamp and is asked again later.
+        """
+        settled = self._db.settle_kinds_by_length()
+        rows = self._db.videos_owed_a_kind(limit=KIND_TESTS_PER_TICK)
+        if not rows:
+            return settled
+        allowance = budget.allowance(SHORTS, len(rows), background=True)
+        if allowance.empty:
+            self._budget_notice(SHORTS, allowance)
+            return settled
+        rows = rows[:allowance.granted]
+        asked = 0
+        unanswered: list[str] = []
+        for row in rows:
+            if self._cancel.is_set():
+                break
+            asked += 1
+            try:
+                short = kind_source.is_short(fetcher, row["ext_id"])
+            except (FetchCancelled, ProcessCancelled):
+                break
+            except Exception:
+                # Nothing is reported to the window here. A row waiting for
+                # its kind is invisible rather than broken, and the endpoint
+                # that answers this is not the one anybody is waiting on.
+                short = None
+            if short is None:
+                unanswered.append(row["key"])
+                continue
+            self._db.set_video_kind(row["key"], short)
+            settled += 1
+        self._db.stamp_kind_tried(unanswered)
+        # Counted per row rather than off the Fetcher's own counter, which is
+        # what the feed phase does because a feed is retried. This is not:
+        # head_status asks once, so a row asked about is a request sent.
+        budget.spend(SHORTS, asked, refused=len(unanswered))
+        return settled
+
     def _phase_details_again(self) -> int:
         """Apply the sweep's durations and live flags a second time.
 
@@ -431,7 +511,8 @@ class FeedPoller(Worker):
 
     # ---- phase 2 ---------------------------------------------------------
 
-    def _feed_jobs(self, rows: list) -> list[tuple[str, str, str]]:
+    def _feed_jobs(self, rows: list,
+                   unsorted: Collection[str] = ()) -> list[tuple[str, str, str]]:
         """One job per feed to fetch, as key, channel id and which tab.
 
         Streams live in their own tab, so a channel not asked for that tab
@@ -457,15 +538,30 @@ class FeedPoller(Worker):
         # form tab again now and then, rather than being left there for good
         # on the strength of one 404.
         jobs = [(row["key"], row["ext_id"],
-                 rss.VIDEOS if _wants_variant_retest(row, now)
+                 rss.VIDEOS if _wants_variant_retest(row, now, unsorted)
                  else (row["feed_variant"] or rss.VIDEOS))
                 for row in rows]
         # The mixed feed says nothing about the kind of what it carries, so
-        # the Shorts tab of a channel on it is read as well. A few a tick:
-        # this is a one off cost for most channels and must not burst.
+        # the Shorts tab of a channel on it is read in the same round, which
+        # is what names its Shorts before anybody sees them.
+        #
+        # Every such channel in the round, not a couple of them. This was
+        # capped at two a tick to keep a one off cost off the endpoint, and
+        # the cap cost more than it saved: the round is ordered by how far
+        # past due a channel is, so the two slots went to the most dormant
+        # channels, and MEASURED on a real library, in one tick ten channels
+        # on the mixed feed were polled and two were swept, while 24 of the 30
+        # sweeps that had happened went to channels that post nothing. The
+        # eight left out waited six hours with their rows unsorted.
+        #
+        # It is not extra volume either. A channel qualifies once per its own
+        # interval whether the cap is there or not, so the same 44 channels
+        # cost the same 44 requests every six hours; the cap only moved them
+        # into a round where they no longer helped. The round itself is the
+        # bound, at channels_per_tick, and the budget trims it after this.
         jobs += [(row["key"], row["ext_id"], rss.SHORTS) for row in rows
                  if _wants_shorts_sweep(row, now)
-                 and not _wants_variant_retest(row, now)][:SHORTS_SWEEPS_PER_TICK]
+                 and not _wants_variant_retest(row, now, unsorted)]
         tiers = self._cfg.feed_tiers
         if self._cfg.poll_live_feeds:
             streamers = self._db.channels_that_stream()
@@ -527,12 +623,17 @@ class FeedPoller(Worker):
                                      sweep_fresh=self._sweep_fresh())
         if not rows:
             return 0, 0, 0
-        jobs = self._feed_jobs(rows)
+        # Channels on the mixed feed that still hold a row of unknown kind.
+        # None of those may be offered its long form tab yet, see
+        # _wants_variant_retest.
+        unsorted = self._db.channels_with_unsorted_rows()
+        jobs = self._feed_jobs(rows, unsorted)
         now = int(time.time())
         # Channels being offered the long form tab again after having fallen
         # back to the mixed one. A stamp goes on whatever the answer is, so a
         # channel that really has no such tab is not asked every round.
-        retests = {row["key"] for row in rows if _wants_variant_retest(row, now)}
+        retests = {row["key"] for row in rows
+                   if _wants_variant_retest(row, now, unsorted)}
         # Channels carrying a 404 from an earlier round. An answer clears it.
         struck = {row["key"] for row in rows if _column(row, "long_form_404s", 0)}
 

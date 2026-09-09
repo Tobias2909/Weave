@@ -19,10 +19,34 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 40
+SCHEMA_VERSION = 41
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
+
+# Whether a row belongs in a list of videos. Needs `videos v` and `channels c`
+# joined.
+#
+# A row of unknown kind still shows, unless the only feed it can have come from
+# carries Shorts. Every per tab feed is one kind, so NULL from one of those is
+# a video RSS never described and it belongs in the list. The mixed channel
+# feed carries both and says which of neither, so NULL from a channel on it is
+# held back until the kind test answers, which takes a tick.
+#
+# Held back rather than hidden, and that distinction is the whole point.
+# MEASURED on a real library: eleven of the top hundred rows in All were of
+# unknown kind, every one of them from a channel on the mixed feed, and of the
+# four newest, two were Shorts and two were ordinary videos. Showing them all
+# puts Shorts in the feed and hiding them all loses real videos, so neither is
+# a rule; the kind test in sources/kind.py is what settles it, within a tick.
+# How long a row whose kind the site would not say is left alone before it is
+# asked about again. An unclear answer is a refusal, a consent page or a 5xx,
+# none of which is over in a minute, and a held row costs nothing while it
+# waits.
+KIND_RETEST_S = 3600
+
+NOT_A_SHORT = ("(v.is_short = 0 OR (v.is_short IS NULL "
+               "AND COALESCE(c.feed_variant, '') <> 'channel'))")
 
 # The channel a video points at when nothing knows which channel it came from.
 # A history row carries no channel whatsoever, measured, and a video row has to
@@ -339,6 +363,7 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # is the default; a channel with no long form tab falls back to the mixed
     # channel feed and is remembered so the discovery is not repeated.
     ("channels", "feed_variant", "TEXT"),
+    ("videos", "kind_checked_at", "INTEGER"),
     # Taken out of All by hand, which is a decision rather than a state. Every
     # other way in_all is written raises it, and without this the next
     # subscription import would quietly put back exactly the channels somebody
@@ -1120,8 +1145,9 @@ class Database:
             return None
         found = dict(row)
         found["video_count"] = int(self.conn.execute(
-            "SELECT COUNT(*) FROM videos WHERE channel_key=? "
-            "AND (is_short IS NULL OR is_short = 0)", (key,)).fetchone()[0])
+            "SELECT COUNT(*) FROM videos v "
+            "JOIN channels c ON c.key = v.channel_key "
+            f"WHERE v.channel_key=? AND {NOT_A_SHORT}", (key,)).fetchone()[0])
         return found
 
     def channel_details_are_stale(self, key: str, interval_s: int = 604800) -> bool:
@@ -1304,6 +1330,81 @@ class Database:
                 (SHORTS_CEILING_S,),
             )
             return conn.total_changes - before
+
+    def settle_kinds_by_length(self) -> int:
+        """Mark every row of unknown kind that is too long to be a Short.
+
+        Free, and it runs before anything is asked over the network. The fill
+        paths do this as they write; this catches a row whose length arrived
+        by some other route, and a row nobody would otherwise ever settle.
+        """
+        with self.conn as conn:
+            return conn.execute(
+                "UPDATE videos SET is_short=0 WHERE is_short IS NULL AND duration_s > ?",
+                (SHORTS_CEILING_S,)).rowcount
+
+    def videos_owed_a_kind(self, limit: int = 5, retest_s: int = KIND_RETEST_S
+                           ) -> list[sqlite3.Row]:
+        """Rows that are held out of the feed for having no kind, newest first.
+
+        Only rows from a channel on the mixed feed. A row of unknown kind from
+        a channel that is read per tab shows anyway, so nothing is waiting on
+        it and a request spent there would buy nothing.
+
+        Newest first because that is the end of the list anybody looks at, so
+        the rows a person would see are the rows that get answered first.
+
+        A row the test could not settle carries a stamp and is left alone for
+        `retest_s`, since whatever stopped the answer is not usually over in a
+        minute and a held row is not doing any harm while it waits.
+        """
+        cut = int(time.time()) - max(0, retest_s)
+        return list(self.conn.execute(
+            """
+            SELECT v.key, v.ext_id, v.title, v.channel_key
+            FROM videos v
+            JOIN channels c ON c.key = v.channel_key
+            WHERE v.is_short IS NULL
+              AND COALESCE(c.feed_variant, '') = 'channel'
+              AND COALESCE(v.kind_checked_at, 0) <= ?
+            ORDER BY v.published_at DESC NULLS LAST, v.first_seen_at DESC
+            LIMIT ?
+            """,
+            (cut, max(1, limit)),
+        ))
+
+    def set_video_kind(self, key: str, short: bool) -> None:
+        """Store what the kind test said about one row."""
+        with self.conn as conn:
+            conn.execute("UPDATE videos SET is_short=?, kind_checked_at=? WHERE key=?",
+                         (1 if short else 0, int(time.time()), key))
+
+    def stamp_kind_tried(self, keys: Iterable[str]) -> int:
+        """Remember that these rows were asked about and not answered, so the
+        same unanswerable row is not asked again every single tick."""
+        keys = list(keys)
+        if not keys:
+            return 0
+        now = int(time.time())
+        with self.conn as conn:
+            before = conn.total_changes
+            conn.executemany("UPDATE videos SET kind_checked_at=? WHERE key=?",
+                             [(now, key) for key in keys])
+            return conn.total_changes - before
+
+    def channels_with_unsorted_rows(self) -> set[str]:
+        """Channels on the mixed feed that still hold a row of unknown kind.
+
+        What decides whether such a channel may be offered its long form tab
+        again. While it is on the mixed feed it is known that its unknown rows
+        could be Shorts; once it is off it, that record is gone and a Short
+        among them would show for good. So the sorting happens first and the
+        channel leaves afterwards.
+        """
+        return {row[0] for row in self.conn.execute(
+            "SELECT DISTINCT v.channel_key FROM videos v "
+            "JOIN channels c ON c.key = v.channel_key "
+            "WHERE v.is_short IS NULL AND COALESCE(c.feed_variant, '') = 'channel'")}
 
     def videos_without_a_length(self, channel_key: str, limit: int = 1000) -> set[str]:
         """The ids of this channel's stored videos that have no length, so a
@@ -1704,15 +1805,16 @@ class Database:
     def groups(self) -> list[dict]:
         """Groups with their member and unwatched counts, in display order."""
         return [dict(row) for row in self.conn.execute(
-            """
+            f"""
             SELECT g.id, g.name, g.position, g.shows,
                    (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id) AS members,
                    (SELECT COUNT(*)
                       FROM videos v
                       JOIN group_members m ON m.channel_key = v.channel_key
+                      JOIN channels c ON c.key = v.channel_key
                       LEFT JOIN watched w ON w.video_key = v.key
                      WHERE m.group_id = g.id AND w.video_key IS NULL
-                       AND (v.is_short IS NULL OR v.is_short = 0)) AS unwatched
+                       AND {NOT_A_SHORT}) AS unwatched
             FROM groups g
             ORDER BY g.position, g.id
             """
@@ -2776,7 +2878,7 @@ class Database:
             "SELECT COUNT(*) FROM videos v "
             "JOIN channels c ON c.key = v.channel_key AND c.tracked = 1 AND c.in_all = 1 "
             "LEFT JOIN watched w ON w.video_key = v.key "
-            "WHERE w.video_key IS NULL AND (v.is_short IS NULL OR v.is_short = 0)"
+            f"WHERE w.video_key IS NULL AND {NOT_A_SHORT}"
         ).fetchone()[0])
 
     # What tells a stream from a video here. A stream that has ended keeps its
@@ -2813,9 +2915,10 @@ class Database:
         video must not do. Naming a box, a group, a channel or a search asks
         for something particular and answers with it whatever the channel is.
         """
-        # An unclassified video still shows. It is hidden only once a channel
-        # listing or the redirect test has proven it is a Short.
-        where = ["(v.is_short IS NULL OR v.is_short = 0)"]
+        # A row of unknown kind shows unless it can only have come from a feed
+        # that carries Shorts, in which case it waits for the kind test. See
+        # NOT_A_SHORT.
+        where = [NOT_A_SHORT]
         # What is behind a membership has a half of its own on the channel
         # page, and is left out everywhere else by default, because for almost
         # every channel it cannot be opened and rows nobody can act on are

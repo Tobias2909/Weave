@@ -95,6 +95,13 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "feeds": 300,
         "browse": 40,
         "player": 60,
+        # Whether one video is a Short, asked of www.youtube.com rather than of
+        # the feed host, so it neither spends nor is spent by the feed ceiling.
+        # It only has anything to do for a channel stuck on the mixed feed,
+        # which says nothing about the kind of what it carries: measured on a
+        # real library, nineteen rows in a day at the worst of it and none at
+        # all once those channels are back on their own tabs.
+        "shorts": 120,
         # One small answer each, 868 bytes measured, and asked once in the
         # life of a video. It only has anything to do for a video nothing
         # else here knows the owner of, which the history is full of.
@@ -269,7 +276,7 @@ class Config:
 
     @property
     def budget_limits(self) -> dict[str, int]:
-        keys = ("feeds", "browse", "player", "oembed", "dislikes", "twitch")
+        keys = ("feeds", "browse", "player", "shorts", "oembed", "dislikes", "twitch")
         return {key: max(0, int(self.get("budget", key))) for key in keys}
 
     @property
