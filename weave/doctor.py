@@ -105,7 +105,30 @@ def _tools(report: Report) -> None:
         else:
             report.add(name, WARN, "not installed", why)
     _js_runtime(report)
+    _solver(report)
     _music_library(report)
+
+
+def _solver(report: Report) -> None:
+    """Whether yt-dlp has the script that answers YouTube's challenge.
+
+    A JavaScript runtime with nothing to run is the same as no runtime, and
+    the two are packaged apart: Arch makes `yt-dlp-ejs` a hard dependency of
+    yt-dlp while a pip install of yt-dlp brings none. Without it a signed in
+    request answers "The page needs to be reloaded" and the same request
+    without cookies is fine, which reads as a broken login and is not one.
+    """
+    from .sources.ytdlp import INSTALL_SOLVER, solver
+
+    have, said = solver()
+    # None is a question that does not apply, a frozen build with its own
+    # copy, and reads the same way as having one.
+    if have is not False:
+        report.add("the challenge solver", OK, said)
+    else:
+        report.add("the challenge solver", FAIL, said,
+                   f"Anything signed in fails while the plain feed keeps working. To fix it, "
+                   f"{INSTALL_SOLVER}. It has to go in the same environment as yt-dlp itself")
 
 
 def _js_runtime(report: Report) -> None:
@@ -310,8 +333,9 @@ def playback(cfg: Config, report: Report, url: str = PROBE_TRACK,
         address = resolve_address(cfg, url, live=False).address
     except Exception as exc:
         report.add("the address", FAIL, f"{type(exc).__name__}: {exc}",
-                   "yt-dlp could not turn the track into a stream. Check the cookie "
-                   "source above, and that yt-dlp and a JavaScript runtime are there")
+                   "yt-dlp could not turn the track into a stream. The cookie source, the "
+                   "JavaScript runtime and the challenge solver above are the three things "
+                   "it needs")
         return
     report.add("the address", OK, f"{address.split('?')[0][:56]}")
 

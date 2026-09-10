@@ -18,7 +18,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Property, QObject, Qt, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import (Property, QObject, QRunnable, Qt, QThreadPool, QTimer, QUrl,
+                            Signal, Slot)
 from PySide6.QtGui import QDesktopServices, QGuiApplication
 
 from .. import __version__
@@ -159,6 +160,36 @@ CHANNEL_PLAYLISTS_TRUST_S = 24 * 60 * 60
 # The pages of the walk through, counted from the welcome one, so the number
 # reads as how far there is to go rather than as a page number.
 WIZARD_LAST = 4
+
+
+class _ChallengeProbe(QObject, QRunnable):
+    """Asks what a signed in request is missing, off the interface thread.
+
+    Finding out runs a small program, so it is asked on the thread pool the
+    way a picture is and the answer arrives as a signal. A `QRunnable` is not
+    a `QObject`, which is why this is both.
+    """
+
+    answered = Signal(str)
+
+    def __init__(self) -> None:
+        QObject.__init__(self)
+        QRunnable.__init__(self)
+        # The bridge holds it for as long as the window lives, so the pool
+        # must not delete it once it has run.
+        self.setAutoDelete(False)
+
+    def run(self) -> None:
+        from ..sources.ytdlp import challenge_missing
+
+        try:
+            trouble = challenge_missing()
+        except Exception as exc:
+            # A hint on a banner is not worth a crash, and the failure path
+            # quotes yt-dlp itself when a press actually goes wrong.
+            print(f"the challenge probe could not answer, {type(exc).__name__}: {exc}")
+            trouble = ""
+        self.answered.emit(trouble)
 
 
 class Bridge(QObject):
@@ -416,6 +447,12 @@ class Bridge(QObject):
         stale = ytmusic.too_old()
         if stale:
             self._problems.append(f"the music area needs a newer library, {stale}")
+        # Asked a moment after the window is up, and on the pool rather than
+        # here, since finding out runs a small program and neither launching
+        # nor the interface may wait on it.
+        self._challenge = _ChallengeProbe()
+        self._challenge.answered.connect(self._on_challenge_answered)
+        QTimer.singleShot(2000, lambda: QThreadPool.globalInstance().start(self._challenge))
 
         # A stream watched live is judged once it has ended, so the answer
         # arrives on the pass after the one that read its length.
@@ -2838,11 +2875,25 @@ class Bridge(QObject):
         """Given after construction, since the player needs the config the
         bridge already holds."""
         self._audio = audio
+        # This signal has to reach something. Unconnected, a track that will
+        # not play emits into nowhere and the window says the same thing for
+        # a dead cookie, a missing solver and a broken sound card, which is
+        # nothing at all.
+        audio.failed.connect(self._on_audio_failed)
         self._player.nowPlaying.connect(lambda *_a: self._audio.pause_for_video())
         # Whether the heart is lit depends on the song playing as much as on
         # which songs are kept, so a new song has to say so too. Without this
         # the heart kept whatever it read for the song before.
         audio.trackChanged.connect(self.favoritesChanged.emit)
+
+    def _on_audio_failed(self, message: str) -> None:
+        """A track that would not play. It goes to the banner and not only to
+        the status line, because the line is gone in a few seconds and the
+        thing it says is usually a package that has to be installed."""
+        if message not in self._problems:
+            self._problems.append(message)
+            self.problemsChanged.emit()
+        self._set_status(message)
 
     @Slot()
     def showMusic(self) -> None:
@@ -2884,7 +2935,7 @@ class Bridge(QObject):
         self._home = MusicHome(self._cfg, self)
         self._home.shelves.connect(self._on_shelves)
         self._home.failed.connect(
-            lambda message: self._set_status(f"could not load the shelves, {message}"))
+            lambda message: self._music_trouble(f"could not load the shelves, {message}"))
         self._launch(self._home)
 
     @Slot(str, int)
@@ -3373,7 +3424,21 @@ class Bridge(QObject):
     def _on_search_failed(self, message: str) -> None:
         self._searching = False
         self.musicChanged.emit()
-        self._set_status(f"could not search, {message}")
+        self._music_trouble(f"could not search, {message}")
+
+    def _music_trouble(self, message: str) -> None:
+        """Say it, and keep saying it when it is something to install.
+
+        The status line is gone in a few seconds, which is right for a
+        search that found nothing and wrong for a machine that is missing a
+        package. A press can arrive by several routes and any of them can
+        carry that, so they all come through here.
+        """
+        self._set_status(message)
+        if any(mark in message for mark in ("yt-dlp-ejs", "JavaScript runtime")):
+            if message not in self._problems:
+                self._problems.append(message)
+                self.problemsChanged.emit()
 
     # ---- the detail panel ------------------------------------------------
 
@@ -4000,6 +4065,19 @@ class Bridge(QObject):
         self._db.set_watched(key, progress, "mpv")
         self.reload()
         self._set_status(f"marked watched at {int(progress * 100)} percent")
+
+    def _on_challenge_answered(self, trouble: str) -> None:
+        """What a signed in request is missing, said up front.
+
+        Missing a runtime or the solver script, the feed still fills from RSS
+        and everything past it fails, which reads as an account problem. The
+        message names the package and the line that installs it, and empty
+        means there is nothing to say.
+        """
+        if not trouble or trouble in self._problems:
+            return
+        self._problems.append(trouble)
+        self.problemsChanged.emit()
 
     def _on_player_failed(self, message: str) -> None:
         # Nothing is starting after all, so the chip goes at once instead of

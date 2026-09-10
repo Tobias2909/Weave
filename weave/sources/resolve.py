@@ -22,7 +22,7 @@ from ..ids import CHANNEL_ID, ChannelRef, channel_key
 from ..net import Throttle
 from ..process import Cancelled, Result, Timeout
 from ..process import run as run_process
-from .ytdlp import with_js_runtime
+from .ytdlp import prepare
 
 # Asking for zero items returns the playlist level fields and downloads no
 # entries at all, which is what keeps this to about half a second.
@@ -81,7 +81,7 @@ def resolve(ref: ChannelRef, throttle: Throttle | None = None,
         return ResolvedChannel(ref.platform, ref.value, None)
 
     def run() -> Result:
-        return run_process(with_js_runtime([*_COMMAND, ref.url]),
+        return run_process(prepare([*_COMMAND, ref.url]),
                            cancel=cancel, timeout=timeout)
 
     try:

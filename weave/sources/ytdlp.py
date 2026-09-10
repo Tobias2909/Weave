@@ -17,6 +17,7 @@ import functools
 import shutil
 import subprocess
 import threading
+from pathlib import Path
 
 from ..net import Throttle
 from ..process import Cancelled, Result, Timeout
@@ -57,13 +58,80 @@ def js_runtime_args() -> list[str]:
     return []
 
 
-def with_js_runtime(command: list[str]) -> list[str]:
-    """One yt-dlp command line, with the runtime argument in it. For the two
-    callers that run yt-dlp without going through `run`."""
-    extra = js_runtime_args()
-    if not extra or not command:
+@functools.cache
+def solver() -> tuple[bool | None, str]:
+    """Whether yt-dlp has the script that answers YouTube's challenge.
+
+    A runtime with nothing to run is the same as no runtime. The solver is
+    the separate `yt-dlp-ejs` package, which Arch makes a hard dependency of
+    yt-dlp and other places do not, and without it an authenticated request
+    comes back as "The page needs to be reloaded" while the same request
+    without cookies is fine. MEASURED by hiding the package on a machine
+    where everything worked: that exact error, and the address again the
+    moment it was back.
+
+    Asked of the interpreter in yt-dlp's own shebang rather than this one.
+    They are the same only by accident: yt-dlp can be a distribution package
+    while Weave runs from a virtual environment of its own. None when the
+    question does not apply, which is a frozen build carrying its own copy.
+    """
+    found = shutil.which("yt-dlp")
+    if not found:
+        return None, "yt-dlp is not installed"
+    try:
+        first = Path(found).read_text(errors="replace").splitlines()[0]
+    except (OSError, IndexError, UnicodeDecodeError):
+        return None, "not a script, so it carries its own"
+    if not first.startswith("#!") or "python" not in first:
+        return None, "not a script, so it carries its own"
+    interpreter = _interpreter(first)
+    try:
+        done = subprocess.run(
+            [interpreter, "-c",
+             "import yt_dlp_ejs as e; print(getattr(e, '__version__', 'installed'))"],
+            capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        # It is a python script and its python could not be run, so whether
+        # the solver is there is unknown. Unknown is reported as missing on
+        # purpose. Naming a package that turns out to be present costs one
+        # line that can be ignored, and staying quiet costs a machine where
+        # nothing signed in works and nothing anywhere says why.
+        return False, "whether yt-dlp-ejs is installed could not be read"
+    if done.returncode == 0:
+        return True, f"yt-dlp-ejs {(done.stdout or '').strip() or 'installed'}"
+    return False, "yt-dlp-ejs is not installed"
+
+
+def _interpreter(shebang: str) -> str:
+    """The program named by a shebang line.
+
+    The FIRST word after the marker, not the last. A shebang carries flags,
+    Fedora writing its scripts `#!/usr/bin/python3 -sP`, so the last word can
+    be `-sP`. Running a flag as a program raises OSError, which this module
+    reads as not knowing whether the solver is there, so the wrong end of
+    this line turns a plain answer into no answer at all.
+    """
+    words = shebang[2:].strip().split()
+    if not words:
+        return ""
+    # `#!/usr/bin/env python3` names the program in the second word.
+    if Path(words[0]).name == "env" and len(words) > 1:
+        return next((word for word in words[1:] if not word.startswith("-")), words[1])
+    return words[0]
+
+
+def prepare(command: list[str]) -> list[str]:
+    """One yt-dlp command line with the JavaScript runtime named on it, for
+    the callers that run yt-dlp without going through `run`.
+
+    The machine's yt-dlp is the one that runs, always. Weave does not carry
+    a second copy to stand in for one without a solver, since a second copy
+    goes stale unless somebody upgrades it and a sentence naming the missing
+    package does the same job.
+    """
+    if not command:
         return command
-    return [command[0], *extra, *command[1:]]
+    return [command[0], *js_runtime_args(), *command[1:]]
 
 
 @functools.cache
@@ -89,7 +157,7 @@ def run(command: list[str], error: type[Exception], what: str,
     every one of them needs it and one of them forgetting is a machine where
     half the program works.
     """
-    command = with_js_runtime(command)
+    command = prepare(command)
     try:
         if throttle is not None:
             with throttle.slot():
@@ -118,7 +186,103 @@ def blame(result: Result, error: type[Exception], what: str) -> Exception:
     detail = tail[-1] if tail else f"{what} came back empty"
     if "cookies" in detail.lower() or "sign in" in detail.lower():
         return error(LOGIN_TROUBLE)
-    return error(detail[:200])
+    return error(explain(detail, result.stderr or ""))
+
+
+# What to type. The package is on PyPI and in some distributions, and it has
+# to land in the same environment as the yt-dlp that reads it, which is what
+# the pip line does by installing into yt-dlp's own python, per account.
+INSTALL_SOLVER = ("run python3 -m pip install --user yt-dlp-ejs, or take it from your "
+                  "distribution if it packages one")
+INSTALL_RUNTIME = "install deno, or node"
+
+
+# What yt-dlp says when the challenge could not be solved. The warnings are
+# where the reason lives; the error that follows them names none of it. All
+# MEASURED against 2026.08.19 with the solver hidden and an empty cache:
+#
+#   WARNING: [youtube] [jsc] Remote components challenge solver script (deno)
+#            and NPM package (deno) were skipped
+#   WARNING: [youtube] <id>: Signature solving failed: Some formats may be
+#            missing. Ensure you have a supported JavaScript runtime and
+#            challenge solver script distribution installed
+#   WARNING: [youtube] <id>: n challenge solving failed: ...
+#   ERROR:   [youtube] <id>: Requested format is not available
+#
+# and with cookies and a warm cache the error instead reads "The page needs
+# to be reloaded". Two different errors, one cause, so the warnings are what
+# this looks for and the errors are only the last resort.
+CHALLENGE_MARKS = ("challenge solving failed", "signature solving failed",
+                   "challenge solver", "js challenge", "needs to be reloaded",
+                   "requested format is not available")
+
+
+def challenge_trouble(stderr: str) -> str:
+    """The line in yt-dlp's own words that says the challenge went unsolved,
+    or empty when it said no such thing."""
+    for line in (stderr or "").splitlines():
+        low = line.lower()
+        if any(mark in low for mark in CHALLENGE_MARKS):
+            return line.strip().removeprefix("WARNING:").removeprefix("ERROR:").strip()
+    return ""
+
+
+def challenge_advice() -> str:
+    """Why the challenge went unanswered, and what to do about it.
+
+    Both halves have to be there and neither is named by the error YouTube
+    sends, which is why this exists. "The page needs to be reloaded" on its
+    own reads as a cookie problem and is not one.
+    """
+    have, _ = solver()
+    if have is not True:
+        # Not proven present is enough. yt-dlp has already said the
+        # challenge went unanswered, and the solver is the usual reason,
+        # so naming it beats staying quiet because a probe was unsure.
+        return f"YouTube's challenge went unanswered, {INSTALL_SOLVER}"
+    if not js_runtime_args() and not shutil.which("deno"):
+        return f"YouTube's challenge went unanswered with no JavaScript runtime, {INSTALL_RUNTIME}"
+    return "YouTube's challenge went unanswered"
+
+
+# How much of yt-dlp's own line is quoted after the advice. The advice is
+# never what gives way: a banner elides the end, so the half a person acts on
+# goes in front and the quote is what gets shortened.
+QUOTED = 160
+
+
+def explain(said: str, stderr: str) -> str:
+    """One sentence for a yt-dlp run that produced nothing.
+
+    The last line of stderr is what yt-dlp finished with, and on its own it
+    can be the least useful line of the lot, so where the challenge is what
+    went wrong the thing to install goes in front of it. Both callers compose
+    it here, because the same sentence written twice was capped at two
+    different lengths and one of them cut the quote mid word.
+    """
+    said = said.strip().removeprefix("ERROR:").removeprefix("WARNING:").strip()
+    if not challenge_trouble(stderr):
+        return said[:200]
+    return f"{challenge_advice()}. yt-dlp said {said[:QUOTED]}"
+
+
+def challenge_missing() -> str:
+    """What a signed in request is missing, or empty when it is missing
+    nothing.
+
+    YouTube answers an authenticated request with a challenge, and the two
+    things that answer it are a JavaScript runtime and the solver script.
+    Missing either, the feed still fills from RSS and everything past it
+    fails, which reads as an account problem and is not one. Said on the way
+    in rather than waiting for a press, since a press may never come.
+    """
+    have, said = solver()
+    if have is False:
+        return f"{said}, so anything signed in fails. To fix it, {INSTALL_SOLVER}"
+    if not js_runtime_args() and not shutil.which("deno"):
+        return ("no JavaScript runtime was found, so anything signed in fails. "
+                f"To fix it, {INSTALL_RUNTIME}")
+    return ""
 
 
 def complained(result: Result) -> bool:

@@ -171,13 +171,21 @@ of most other distributions.
 |---|---|
 | The application | `python`, `pyside6`, `python-requests`, `python-platformdirs` |
 | Playback | `mpv` |
-| Adding a channel, and anything beyond RSS | `yt-dlp`, plus `deno` for the challenges it has to solve. `nodejs` or `bun` also work and Weave names them for yt-dlp, which reaches for `deno` on its own |
+| Adding a channel, and anything beyond RSS | `yt-dlp` and `yt-dlp-ejs`, plus `deno` for the challenges it has to solve. `nodejs` or `bun` also work and Weave names them for yt-dlp, which reaches for `deno` on its own |
 | Twitch playback | `streamlink` |
 | The music area | `python-ytmusicapi` 1.12.2 or newer |
 
 Older `python-ytmusicapi` releases read a field YouTube no longer sends, so
 pressing a song fails inside the library itself. `weave doctor` says which one
 is installed and whether it is old enough to matter.
+
+`yt-dlp-ejs` is the script that answers YouTube's challenge, and it has to live
+in the same place as the `yt-dlp` that reads it. Some distributions install it
+alongside `yt-dlp` and some package it not at all, so where yours does not,
+`python3 -m pip install --user yt-dlp-ejs` puts it where `yt-dlp` will find it.
+Without it everything signed in fails while the plain feed keeps working, and
+`weave doctor` says so in those words rather than leaving you with the message
+YouTube sends, which names nothing.
 
 ## Install
 

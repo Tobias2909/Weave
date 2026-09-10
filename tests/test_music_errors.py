@@ -123,3 +123,160 @@ class TheSentence(unittest.TestCase):
             ytmusic.radio("/nowhere", "abc")
         self.assertEqual(str(caught.exception),
                          "the browser profile holds no YouTube login")
+
+
+class WhatTheWindowShows(unittest.TestCase):
+    """A failure nobody is listening to is the same as no failure.
+
+    AudioPlayer.failed was connected to nothing, so a track that would not
+    play said the same thing for a dead login, a missing solver and a broken
+    sound card: nothing at all, anywhere in the window.
+    """
+
+    def setUp(self):
+        from PySide6.QtCore import QCoreApplication, QObject, Signal
+
+        self.app = QCoreApplication.instance() or QCoreApplication([])
+
+        class Player(QObject):
+            failed = Signal(str)
+            trackChanged = Signal()
+
+            def pause_for_video(self):
+                pass
+
+        from weave.ui.bridge import Bridge
+
+        self.Bridge = Bridge
+        self.bridge = Bridge.__new__(Bridge)
+        QObject.__init__(self.bridge)
+        self.bridge._problems = []
+        self.bridge._status = ""
+        self.player = Player()
+
+        class Video(QObject):
+            nowPlaying = Signal(str)
+
+        self.bridge._player = Video()
+
+    def test_a_track_that_will_not_play_reaches_the_banner(self):
+        self.Bridge.attach_audio(self.bridge, self.player)
+        self.player.failed.emit("the track could not be played, install something")
+        self.assertEqual(self.bridge._problems,
+                         ["the track could not be played, install something"])
+
+    def test_and_the_status_line_as_well(self):
+        self.Bridge.attach_audio(self.bridge, self.player)
+        self.player.failed.emit("no")
+        self.assertEqual(self.bridge._status, "no")
+
+
+class WhatTheWindowSaysUnprompted(unittest.TestCase):
+    """The challenge needs two things and names neither when it fails, so
+    the window says which is missing without waiting to be pressed."""
+
+    def setUp(self):
+        from PySide6.QtCore import QCoreApplication, QObject
+
+        self.app = QCoreApplication.instance() or QCoreApplication([])
+        from weave.sources import ytdlp
+        from weave.ui.bridge import Bridge
+
+        self.ytdlp, self.Bridge = ytdlp, Bridge
+        self.addCleanup(setattr, ytdlp, "solver", ytdlp.solver)
+        self.addCleanup(setattr, ytdlp, "js_runtime_args", ytdlp.js_runtime_args)
+        self.addCleanup(setattr, ytdlp, "challenge_missing", ytdlp.challenge_missing)
+        self.bridge = Bridge.__new__(Bridge)
+        QObject.__init__(self.bridge)
+        self.bridge._problems = []
+
+    def note(self):
+        # Both halves: the sentence the probe composes off the thread, and
+        # the bridge putting it on the banner once.
+        self.Bridge._on_challenge_answered(                       # noqa: SLF001
+            self.bridge, self.ytdlp.challenge_missing())
+        return self.bridge._problems
+
+    def test_a_missing_solver_is_on_the_banner_before_anything_is_pressed(self):
+        self.ytdlp.solver = lambda: (False, "yt-dlp-ejs is not installed")
+        said = self.note()
+        self.assertEqual(len(said), 1)
+        self.assertIn("pip install --user yt-dlp-ejs", said[0])
+
+    def test_it_is_said_once_and_not_on_every_look(self):
+        self.ytdlp.solver = lambda: (False, "yt-dlp-ejs is not installed")
+        self.note()
+        self.assertEqual(len(self.note()), 1)
+
+    def test_a_machine_with_both_is_left_in_peace(self):
+        self.ytdlp.solver = lambda: (True, "yt-dlp-ejs 0.8.0")
+        self.ytdlp.js_runtime_args = lambda: ["--js-runtimes", "node:/usr/bin/node"]
+        self.assertEqual(self.note(), [])
+
+    def test_the_asking_happens_off_the_interface_thread(self):
+        """Finding out runs a small program, and on the interface thread that
+        is a window that stops answering for as long as it takes."""
+        from PySide6.QtCore import QRunnable
+
+        from weave.ui.bridge import _ChallengeProbe                # noqa: SLF001
+
+        self.assertTrue(issubclass(_ChallengeProbe, QRunnable))
+        probe = _ChallengeProbe()
+        self.ytdlp.solver = lambda: (False, "yt-dlp-ejs is not installed")
+        said = []
+        probe.answered.connect(said.append)
+        probe.run()
+        self.assertEqual(len(said), 1)
+        self.assertIn("pip install --user yt-dlp-ejs", said[0])
+
+    def test_a_probe_that_cannot_answer_says_nothing_and_does_not_take_the_app(self):
+        from weave.ui.bridge import _ChallengeProbe                # noqa: SLF001
+
+        def boom():
+            raise OSError("no")
+
+        self.ytdlp.challenge_missing = boom
+        probe = _ChallengeProbe()
+        said = []
+        probe.answered.connect(said.append)
+        probe.run()
+        self.assertEqual(said, [""])
+
+
+class EveryRouteToTheBanner(unittest.TestCase):
+    """A song can be pressed by several routes and any of them can come back
+    with something to install. The station and the shelves used to reach the
+    status line only, which is gone in seconds."""
+
+    def setUp(self):
+        from PySide6.QtCore import QCoreApplication, QObject
+
+        self.app = QCoreApplication.instance() or QCoreApplication([])
+        from weave.ui.bridge import Bridge
+
+        self.Bridge = Bridge
+        self.bridge = Bridge.__new__(Bridge)
+        QObject.__init__(self.bridge)
+        self.bridge._problems = []
+        self.bridge._status = ""
+        self.bridge._searching = True
+
+    def fail(self, message):
+        self.Bridge._on_search_failed(self.bridge, message)
+        return self.bridge._problems
+
+    def test_something_to_install_is_kept_on_the_banner(self):
+        said = self.fail("run python3 -m pip install --user yt-dlp-ejs")
+        self.assertEqual(len(said), 1)
+        self.assertIn("yt-dlp-ejs", said[0])
+
+    def test_a_missing_runtime_too(self):
+        self.assertEqual(len(self.fail("no JavaScript runtime was found")), 1)
+
+    def test_an_ordinary_miss_stays_on_the_status_line(self):
+        self.assertEqual(self.fail("nothing matched"), [])
+        self.assertIn("nothing matched", self.bridge._status)
+
+    def test_the_same_thing_twice_is_one_line_not_two(self):
+        self.fail("run python3 -m pip install --user yt-dlp-ejs")
+        self.assertEqual(len(self.fail("run python3 -m pip install --user yt-dlp-ejs")), 1)

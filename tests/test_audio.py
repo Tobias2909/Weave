@@ -663,3 +663,76 @@ class Addresses(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WhyATrackWouldNotPlay(unittest.TestCase):
+    """The sentence a person is left with.
+
+    All of these are yt-dlp's real output, MEASURED 2026-09-10 and 09-11
+    against 2026.08.19 with the challenge solver hidden. Two different
+    errors come out of one cause depending on the cookies and what is in
+    yt-dlp's cache, and neither of them names the cause.
+    """
+
+    WARM = ("ERROR: [youtube] dQw4w9WgXcQ: The page needs to be reloaded.")
+    COLD = (
+        "WARNING: [youtube] [jsc] Remote components challenge solver script (deno) and NPM "
+        "package (deno) were skipped. These may be required to solve JS challenges.\n"
+        "WARNING: [youtube] dQw4w9WgXcQ: Signature solving failed: Some formats may be "
+        "missing. Ensure you have a supported JavaScript runtime and challenge solver "
+        "script distribution installed.\n"
+        "ERROR: [youtube] dQw4w9WgXcQ: Requested format is not available. Use "
+        "--list-formats for a list of available formats")
+
+    def setUp(self):
+        from weave.sources import ytdlp
+
+        self.ytdlp = ytdlp
+        self.addCleanup(setattr, ytdlp, "solver", ytdlp.solver)
+        ytdlp.solver = lambda: (False, "yt-dlp-ejs is not installed")
+
+    def why(self, stderr):
+        from weave.audio import _why
+
+        return _why(stderr)
+
+    def test_the_error_that_names_the_cookies_is_answered(self):
+        said = self.why(self.WARM)
+        self.assertIn("pip install --user yt-dlp-ejs", said)
+
+    def test_and_the_one_that_names_a_format(self):
+        # This is the shape a fresh machine produces, and the one that got
+        # through the net the first time: nothing in the error says
+        # challenge, runtime or solver.
+        said = self.why(self.COLD)
+        self.assertIn("pip install --user yt-dlp-ejs", said)
+
+    def test_the_advice_comes_first(self):
+        # The banner elides at the end.
+        said = self.why(self.COLD)
+        self.assertLess(said.index("pip install"), said.index("yt-dlp said"))
+
+    def test_yt_dlp_s_own_words_are_kept_too(self):
+        self.assertIn("Requested format is not available", self.why(self.COLD))
+
+    def test_an_ordinary_failure_is_left_as_it_was(self):
+        said = self.why("ERROR: [youtube] abc: Video unavailable")
+        self.assertEqual(said, "[youtube] abc: Video unavailable")
+
+    def test_nothing_said_at_all(self):
+        self.assertEqual(self.why(""), "no stream came back")
+
+    def test_the_warnings_are_not_thrown_away_before_they_can_be_read(self):
+        """--no-warnings deletes the only three lines that explain this and
+        leaves the one that explains nothing.
+
+        Read off the code with the comments taken out, so that the comment
+        saying why the flag is absent cannot itself trip the guard.
+        """
+        import inspect
+
+        from weave import audio
+
+        code = "\n".join(line.split("#")[0]
+                         for line in inspect.getsource(audio.resolve_address).splitlines())
+        self.assertNotIn("--no-warnings", code)

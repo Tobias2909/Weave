@@ -250,6 +250,9 @@ class TheHeartFollowsTheSong(unittest.TestCase):
         class Player:
             def __init__(self):
                 self.trackChanged = Wire()
+                # The window listens to this now. A player that cannot fail
+                # is not one the bridge will take.
+                self.failed = Wire()
 
             def pause_for_video(self):
                 pass

@@ -38,7 +38,7 @@ from PySide6.QtCore import (
 
 from .config import Config
 from .cookies import args as cookie_args
-from .sources.ytdlp import with_js_runtime
+from .sources.ytdlp import explain, prepare
 from .engine import CURRENT, NEXT, MusicEngine
 from .imagecache import plain_source
 from .process import Cancelled, Timeout
@@ -124,15 +124,26 @@ def resolve_address(cfg: Config, url: str, live: bool,
     are worth having: a video that is really an album has its tracks marked in
     them, and asking separately would be another few seconds per song.
     """
-    command = with_js_runtime(["yt-dlp", "--no-warnings", *cookie_args(cfg),
-                               "-f", LIVE_FORMAT if live else MUSIC_FORMAT,
-                               "--get-url", "--print", "%(chapters)j", url])
+    # Warnings are NOT suppressed here, deliberately. When YouTube's
+    # challenge goes unsolved, yt-dlp says why in warnings and then fails
+    # with an error that says nothing, "Requested format is not available",
+    # so suppressing them on this command throws away the only account of
+    # the cause there is. A test fails if the flag comes back.
+    command = prepare(["yt-dlp", *cookie_args(cfg),
+                       "-f", LIVE_FORMAT if live else MUSIC_FORMAT,
+                       "--get-url", "--print", "%(chapters)j", url])
     result = run_process(command, cancel=cancel, timeout=180)
     for line in result.stdout.splitlines():
         if line.startswith("http"):
             return Resolved(line, parse_chapters(result.stdout))
-    tail = (result.stderr or "").strip().splitlines()
-    raise _NoAddress((tail[-1] if tail else "no stream came back")[:200])
+    raise _NoAddress(_why(result.stderr or ""))
+
+
+def _why(stderr: str) -> str:
+    """One sentence for a resolve that produced no address, composed from the
+    last line yt-dlp wrote."""
+    lines = stderr.strip().splitlines()
+    return explain(lines[-1] if lines else "no stream came back", stderr)
 
 
 def address_expiry(address: str) -> float | None:
