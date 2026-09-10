@@ -192,9 +192,15 @@ python -m weave
 Or install it as a normal program.
 
 ```sh
-pipx install git+https://github.com/Tobias2909/Weave
+pipx install --system-site-packages "weave[music] @ git+https://github.com/Tobias2909/Weave"
 weave-app
 ```
+
+The music extra is what pins the library the music area needs. Without it
+nothing is installed for the music area and whatever the system already holds
+is used, which can be old enough that every song fails inside the library
+itself. The system site packages flag is what lets the large Qt package come
+from your distribution instead of being downloaded again.
 
 Weave draws its own window frame, so a panel takes the name and the icon from a
 desktop entry rather than from the window. Write that entry and the icons into
