@@ -38,6 +38,7 @@ from PySide6.QtCore import (
 
 from .config import Config
 from .cookies import args as cookie_args
+from .sources.ytdlp import with_js_runtime
 from .engine import CURRENT, NEXT, MusicEngine
 from .imagecache import plain_source
 from .process import Cancelled, Timeout
@@ -123,9 +124,9 @@ def resolve_address(cfg: Config, url: str, live: bool,
     are worth having: a video that is really an album has its tracks marked in
     them, and asking separately would be another few seconds per song.
     """
-    command = ["yt-dlp", "--no-warnings", *cookie_args(cfg),
-               "-f", LIVE_FORMAT if live else MUSIC_FORMAT,
-               "--get-url", "--print", "%(chapters)j", url]
+    command = with_js_runtime(["yt-dlp", "--no-warnings", *cookie_args(cfg),
+                               "-f", LIVE_FORMAT if live else MUSIC_FORMAT,
+                               "--get-url", "--print", "%(chapters)j", url])
     result = run_process(command, cancel=cancel, timeout=180)
     for line in result.stdout.splitlines():
         if line.startswith("http"):

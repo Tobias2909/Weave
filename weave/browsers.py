@@ -90,6 +90,11 @@ class Profile:
     # It is here because the checks print it and a number is worth more than
     # nothing when the named ones are missing.
     count: int = 0
+    # When the browser last sent YouTube its session cookies. Zero when the
+    # jar could not say. This, and not the file's timestamp, is what tells a
+    # profile somebody browses in from one that merely exists: a browser
+    # writes to its jar for any site at all.
+    used_at: int = 0
     readable: bool = True
     # Whether this is the profile the browser itself opens. Read from
     # installs.ini, which is the only file that knows: profiles.ini can carry
@@ -115,15 +120,29 @@ class Profile:
         return f"{self.family}, {self.name}"
 
     @property
+    def idle_days(self) -> int | None:
+        """How long since this browser last spoke to YouTube, or None when
+        the jar would not say."""
+        if not self.used_at:
+            return None
+        return max(0, int((time.time() - self.used_at) // 86400))
+
+    @property
     def state(self) -> str:
         """The rest of the line in the window: whether it can be used, and
-        how long ago the browser last wrote to it."""
+        how long since it was last used on YouTube."""
         if not self.readable:
             return "the jar could not be read"
         if not self.signed_in:
             return "not signed in to YouTube"
-        days = max(0, int((time.time() - self.written_at) // 86400))
-        when = "written today" if days < 1 else f"written {days} days ago"
+        idle = self.idle_days
+        if idle is None:
+            days = max(0, int((time.time() - self.written_at) // 86400))
+            when = "written today" if days < 1 else f"written {days} days ago"
+        elif idle < 1:
+            when = "YouTube open today"
+        else:
+            when = f"YouTube last open {idle} days ago"
         return when if self.fresh else f"signed in but stale, {when}"
 
 
@@ -131,6 +150,7 @@ class _Jar(NamedTuple):
     names: frozenset[str]
     count: int
     readable: bool
+    used_at: int = 0
 
 
 def _read_jar(path: Path) -> _Jar:
@@ -147,15 +167,26 @@ def _read_jar(path: Path) -> _Jar:
         try:
             with contextlib.closing(sqlite3.connect(copy)) as jar:
                 rows = jar.execute(
-                    "SELECT name FROM moz_cookies WHERE host LIKE '%youtube.com'")
+                    "SELECT name, lastAccessed FROM moz_cookies "
+                    "WHERE host LIKE '%youtube.com'").fetchall()
                 names = {row[0] for row in rows}
-                # Only the names that mean something are kept. A real jar
-                # carries a couple of hundred and nothing reads the rest.
-                return _Jar(frozenset(names & _NAMED), len(names), True)
+                # When the browser last sent the session cookies, which is
+                # when it last spoke to YouTube. MEASURED across three real
+                # profiles: the file's own timestamp said all three had been
+                # written today or lately, while this said 0.5 days, 9 days
+                # and 119 days, and only the first one could still resolve a
+                # video. A profile signed in months ago and never opened
+                # since holds every cookie and no working session, and the
+                # player endpoint answers it with "The page needs to be
+                # reloaded" while a browse call still works.
+                used = max((row[1] or 0) for row in rows
+                           if row[0] in _NAMED) if names & _NAMED else 0
+                return _Jar(frozenset(names & _NAMED), len(names), True,
+                            int(used / 1_000_000))
         finally:
             copy.unlink(missing_ok=True)
     except (OSError, sqlite3.Error):
-        return _Jar(frozenset(), 0, False)
+        return _Jar(frozenset(), 0, False, 0)
 
 
 def _ini(path: Path) -> configparser.ConfigParser:
@@ -207,6 +238,7 @@ def _from_ini(family: str, root: Path) -> list[Profile]:
             written_at=int(jar.stat().st_mtime),
             cookies=read.names,
             count=read.count,
+            used_at=read.used_at,
             readable=read.readable,
             launched=raw.strip() in launched,
         ))
@@ -224,7 +256,8 @@ def _from_directories(family: str, root: Path) -> list[Profile]:
         read = _read_jar(jar)
         out.append(Profile(family=family, name=jar.parent.name, path=jar.parent,
                            written_at=int(jar.stat().st_mtime), cookies=read.names,
-                           count=read.count, readable=read.readable))
+                           count=read.count, used_at=read.used_at,
+                           readable=read.readable))
     return out
 
 
@@ -237,7 +270,7 @@ def describe(path: Path, family: str = "") -> Profile:
     written = int(jar.stat().st_mtime) if jar.exists() else 0
     return Profile(family=family or "Firefox family", name=path.name, path=path,
                    written_at=written, cookies=read.names, count=read.count,
-                   readable=read.readable and jar.exists())
+                   used_at=read.used_at, readable=read.readable and jar.exists())
 
 
 def roots() -> list[tuple[str, Path]]:
@@ -274,16 +307,16 @@ def found(where: list[tuple[str, Path]] | None = None) -> list[Profile]:
     """Every profile with a cookie jar, best first.
 
     Signed in beats signed out, because a profile without a login answers
-    nothing this program asks. After that the one the browser itself opens,
-    then whichever was written to most recently, since the rotating tokens
-    only stay fresh in a browser somebody is using.
+    nothing this program asks. Then whichever spoke to YouTube most recently,
+    since a session only stays valid in a browser somebody is using, and only
+    then the one the browser itself opens.
     """
     out: list[Profile] = []
     for family, root in (roots() if where is None else where):
         profiles = _from_ini(family, root) or _from_directories(family, root)
         out.extend(profiles)
-    out.sort(key=lambda p: (p.signed_in, p.fresh, p.launched, p.written_at),
-             reverse=True)
+    out.sort(key=lambda p: (p.signed_in, p.fresh, p.used_at or p.written_at,
+                            p.launched, p.written_at), reverse=True)
     return out
 
 

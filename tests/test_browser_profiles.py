@@ -26,20 +26,27 @@ SIGNED_IN = ("SID", "__Secure-1PSID", "__Secure-1PSIDTS", "__Secure-3PSIDTS", "P
 STALE = ("SID", "__Secure-1PSID")
 
 
-def make_jar(where: Path, names=SIGNED_IN) -> Path:
-    """A profile directory with a cookie jar of the real shape in it."""
+def make_jar(where: Path, names=SIGNED_IN, used_days_ago: float = 0.0) -> Path:
+    """A profile directory with a cookie jar of the real shape in it.
+
+    lastAccessed is in microseconds, as Firefox writes it, and it is what
+    says when that browser last spoke to YouTube.
+    """
     where.mkdir(parents=True, exist_ok=True)
     jar = where / browsers.JAR
+    used = int((time.time() - used_days_ago * 86400) * 1_000_000)
     conn = sqlite3.connect(jar)
     with conn:
         conn.execute("CREATE TABLE moz_cookies "
-                     "(id INTEGER PRIMARY KEY, host TEXT, name TEXT, value TEXT)")
-        conn.executemany("INSERT INTO moz_cookies(host, name, value) VALUES(?, ?, ?)",
-                         [(".youtube.com", name, "x") for name in names])
+                     "(id INTEGER PRIMARY KEY, host TEXT, name TEXT, value TEXT, "
+                     "lastAccessed INTEGER)")
+        conn.executemany("INSERT INTO moz_cookies(host, name, value, lastAccessed) "
+                         "VALUES(?, ?, ?, ?)",
+                         [(".youtube.com", name, "x", used) for name in names])
         # A jar carries a great deal that is nothing to do with YouTube, and
         # none of it should be counted or looked at.
-        conn.execute("INSERT INTO moz_cookies(host, name, value) "
-                     "VALUES('.example.com', 'SID', 'x')")
+        conn.execute("INSERT INTO moz_cookies(host, name, value, lastAccessed) "
+                     "VALUES('.example.com', 'SID', 'x', ?)", (used,))
     conn.close()
     return where
 
@@ -126,14 +133,28 @@ class Finding(unittest.TestCase):
         self.assertFalse(found[0].readable)
         self.assertIn("could not be read", found[0].state)
 
-    def test_the_state_says_when_the_browser_last_wrote(self):
-        make_jar(self.root / "old.default")
+    def test_the_state_says_when_youtube_was_last_open_there(self):
+        # And not when the file was written. MEASURED on three real
+        # profiles: the file said all of them had been touched lately while
+        # the cookies said 0.5, 9 and 119 days, and only the first could
+        # still resolve a video.
+        make_jar(self.root / "old.default", used_days_ago=40)
         jar = self.root / "old.default" / browsers.JAR
-        long_ago = time.time() - 40 * 86400
         import os
 
-        os.utime(jar, (long_ago, long_ago))
-        self.assertEqual(browsers.found(self.where())[0].state, "written 40 days ago")
+        os.utime(jar, None)
+        found = browsers.found(self.where())[0]
+        self.assertEqual(found.idle_days, 40)
+        self.assertEqual(found.state, "YouTube last open 40 days ago")
+
+    def test_a_profile_opened_today_says_so(self):
+        make_jar(self.root / "live.default")
+        self.assertEqual(browsers.found(self.where())[0].state, "YouTube open today")
+
+    def test_the_one_that_was_used_most_recently_wins(self):
+        make_jar(self.root / "a.stale", used_days_ago=119)
+        make_jar(self.root / "b.live", used_days_ago=0)
+        self.assertEqual(browsers.best(self.where()).name, "b.live")
 
     def test_a_login_nobody_has_refreshed_says_so(self):
         make_jar(self.root / "stale.default", names=STALE)

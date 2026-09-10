@@ -171,7 +171,7 @@ of most other distributions.
 |---|---|
 | The application | `python`, `pyside6`, `python-requests`, `python-platformdirs` |
 | Playback | `mpv` |
-| Adding a channel, and anything beyond RSS | `yt-dlp`, plus `deno` or `nodejs` for the challenges it has to solve |
+| Adding a channel, and anything beyond RSS | `yt-dlp`, plus `deno` for the challenges it has to solve. `nodejs` or `bun` also work and Weave names them for yt-dlp, which reaches for `deno` on its own |
 | Twitch playback | `streamlink` |
 | The music area | `python-ytmusicapi` 1.12.2 or newer |
 

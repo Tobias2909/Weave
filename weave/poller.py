@@ -53,6 +53,7 @@ from .sources import dislikes as dislike_source
 from .sources import flatlist, lengths, livecheck, oembed, rss, subs, sweep, twitch
 from .sources import history as history_source
 from .sources import kind as kind_source
+from .sources.ytdlp import with_js_runtime
 from .sources import playlists as playlist_source
 from .sources import recommended as recommended_source
 from .sources import release as release_source
@@ -2042,9 +2043,10 @@ class MusicHome(Worker):
         """
         from .cookies import args as cookie_args
 
-        command = ["yt-dlp", "--no-warnings", "--flat-playlist", "--playlist-end", "24",
-                   *cookie_args(self._cfg),
-                   "--print", "%(id)s\t%(title)s\t%(channel)s", ":ytrec"]
+        command = with_js_runtime(
+            ["yt-dlp", "--no-warnings", "--flat-playlist", "--playlist-end", "24",
+             *cookie_args(self._cfg),
+             "--print", "%(id)s\t%(title)s\t%(channel)s", ":ytrec"])
         try:
             result = run_process(command, timeout=120)
         except Exception:
@@ -2179,8 +2181,9 @@ class SourceDetails(Worker):
     def work(self) -> None:
         from .cookies import args as cookie_args
 
-        command = ["yt-dlp", "--no-warnings", "--simulate", *cookie_args(self._cfg),
-                   "--print", "%(title)s\t%(thumbnail)s", self._url]
+        command = with_js_runtime(
+            ["yt-dlp", "--no-warnings", "--simulate", *cookie_args(self._cfg),
+             "--print", "%(title)s\t%(thumbnail)s", self._url])
         try:
             result = run_process(command, cancel=self._cancel, timeout=120)
         except Exception:

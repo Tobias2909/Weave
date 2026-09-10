@@ -91,16 +91,10 @@ def _tools(report: Report) -> None:
     for name, command, needed, why in (
         ("yt-dlp", ["yt-dlp", "--version"], True,
          "Everything past the plain feed goes through it"),
-        ("a JavaScript runtime", ["deno", "--version"], True,
-         "yt-dlp solves YouTube's challenges with deno or node"),
         ("mpv", ["mpv", "--version"], False,
          "Videos are handed to it, and music plays through a second one with no window"),
         ("streamlink", ["streamlink", "--version"], False, "Only Twitch playback needs it"),
     ):
-        if shutil.which(command[0]) is None and name == "a JavaScript runtime":
-            if shutil.which("node") is not None:
-                report.add(name, OK, "node")
-                continue
         found = _version(command)
         if found and name == "mpv":
             _mpv_age(found, report)
@@ -110,7 +104,40 @@ def _tools(report: Report) -> None:
             report.add(name, FAIL, "not installed", f"{why}. Install {command[0]}")
         else:
             report.add(name, WARN, "not installed", why)
+    _js_runtime(report)
     _music_library(report)
+
+
+def _js_runtime(report: Report) -> None:
+    """Which JavaScript runtime YouTube's challenge will be solved with.
+
+    Not simply whether one is installed. **yt-dlp enables deno and nothing
+    else by default**, so a machine with node alone has a runtime yt-dlp will
+    not touch unless it is named, and the failure that follows names neither:
+    an authenticated call answers "The page needs to be reloaded" while the
+    same call without cookies works. Weave names it now, and this line says
+    so, because the two together are the whole of that story.
+    """
+    from .sources.ytdlp import js_runtime_args
+
+    if shutil.which("deno"):
+        report.add("a JavaScript runtime", OK, _version(["deno", "--version"]) or "deno")
+        return
+    named = js_runtime_args()
+    if named:
+        report.add("a JavaScript runtime", OK,
+                   f"{named[-1].split(':')[0]}, named for yt-dlp because it enables "
+                   f"only deno by itself")
+        return
+    if shutil.which("node") or shutil.which("bun"):
+        report.add("a JavaScript runtime", FAIL,
+                   "one is installed and this yt-dlp cannot be told to use it",
+                   "Install deno, which is the one yt-dlp reaches for on its own")
+        return
+    report.add("a JavaScript runtime", FAIL, "not installed",
+               "YouTube answers a signed in request with a challenge, and solving it "
+               "needs deno or node. Without one, playback and the music area fail while "
+               "the feed keeps working")
 
 
 def _music_library(report: Report) -> None:
@@ -226,14 +253,21 @@ def _cookies(cfg: Config, report: Report) -> None:
         report.add("browser profile", FAIL, f"no {browsers.JAR} under {source.path}",
                    alternatives())
         return
-    age_days = (time.time() - profile.written_at) / 86400
-    # The rotating tokens are only refreshed in the browser that is being
-    # used, so a profile nobody browses in rots without ever looking broken.
+    # When that browser last spoke to YouTube, not when the file was last
+    # touched. A browser writes to its jar for any site at all, so the file's
+    # own timestamp says a profile nobody has watched anything in is fresh.
+    # A session that is not kept warm is refused by the player endpoint with
+    # "The page needs to be reloaded" while a browse call still answers, so
+    # this is the line that explains music that will not start.
+    idle = profile.idle_days
+    age_days = idle if idle is not None else (time.time() - profile.written_at) / 86400
     state = OK if age_days < 14 else WARN
-    report.add("browser profile", state, f"{source.path.name}, cookies written "
-               f"{age_days:.0f} days ago",
-               "" if state == OK else "Nothing has written to that profile lately. "
-                                      f"{alternatives()}")
+    said = (f"{source.path.name}, YouTube last open {age_days:.0f} days ago"
+            if idle is not None else
+            f"{source.path.name}, cookies written {age_days:.0f} days ago")
+    report.add("browser profile", state, said,
+               "" if state == OK else "A session nobody keeps warm stops being accepted. "
+                                      f"Open YouTube in that browser once. {alternatives()}")
     if not profile.signed_in:
         report.add("YouTube login", FAIL, "no session cookies in that profile",
                    "Sign in to YouTube in that browser. " + alternatives())
