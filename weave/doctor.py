@@ -12,18 +12,15 @@ the network, and they can be left out.
 
 from __future__ import annotations
 
-import contextlib
 import shutil
-import sqlite3
 import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import __version__, backoff, paths
+from . import __version__, backoff, browsers, cookies, paths
 from .budget import FEEDS
 from .config import Config
-from .cookies import browser_spec
 from .db import Database
 from .sources import release as release_source
 
@@ -181,52 +178,43 @@ def _config(cfg: Config, report: Report) -> None:
 
 
 def _cookies(cfg: Config, report: Report) -> None:
-    spec = browser_spec(cfg)
-    report.add("cookie source", OK, spec)
-    _, _, profile = spec.partition(":")
-    if not profile:
+    source = cookies.resolve(cfg)
+    report.add("cookie source", OK, source.text)
+    others = [p for p in browsers.found() if p.path != source.path]
+
+    def alternatives() -> str:
+        """What else is on this machine, for a line that has to suggest
+        something. Signed in first, since that is the useful end of it."""
+        if not others:
+            return "No other Firefox family profile with cookies was found here"
+        shown = ", ".join(f"{p.label} ({p.state})" for p in others[:3])
+        return f"Also here: {shown}. Pick one in Settings"
+
+    if source.path is None:
         report.add("browser profile", WARN, "yt-dlp will look for one itself",
-                   "Set browser_profile in the config if it picks the wrong one")
+                   alternatives())
         return
-    path = Path(profile)
-    jar = path / "cookies.sqlite"
-    if not jar.exists():
-        report.add("browser profile", FAIL, f"no cookies.sqlite under {path}",
-                   "Point browser_profile at the profile directory you actually browse in")
+    profile = browsers.describe(source.path)
+    if not profile.readable:
+        report.add("browser profile", FAIL, f"no {browsers.JAR} under {source.path}",
+                   alternatives())
         return
-    age_days = (time.time() - jar.stat().st_mtime) / 86400
-    # The rotating tokens are only refreshed in the browser that is being used,
-    # so a profile nobody browses in rots without ever looking broken.
+    age_days = (time.time() - profile.written_at) / 86400
+    # The rotating tokens are only refreshed in the browser that is being
+    # used, so a profile nobody browses in rots without ever looking broken.
     state = OK if age_days < 14 else WARN
-    report.add("browser profile", state, f"{path.name}, cookies written "
+    report.add("browser profile", state, f"{source.path.name}, cookies written "
                f"{age_days:.0f} days ago",
-               "" if state == OK else "Nothing has written to that profile lately. If you "
-                                      "switched browsers, point browser_profile at the new one")
-    try:
-        copy = paths.CACHE_DIR / "doctor-cookies.sqlite"
-        copy.parent.mkdir(parents=True, exist_ok=True)
-        copy.write_bytes(jar.read_bytes())
-        try:
-            # Closed before the copy is removed, or the connection lingers on
-            # a file that is gone and says so on the console at shutdown.
-            with contextlib.closing(sqlite3.connect(copy)) as jar_copy:
-                names = {row[0] for row in jar_copy.execute(
-                    "SELECT name FROM moz_cookies WHERE host LIKE '%youtube.com'")}
-        finally:
-            copy.unlink(missing_ok=True)
-    except Exception as exc:
-        report.add("YouTube login", WARN, f"could not read the jar, {exc}")
-        return
-    wanted = {"SID", "__Secure-1PSID", "__Secure-3PSID"}
-    rotating = {"__Secure-1PSIDTS", "__Secure-3PSIDTS"}
-    if not names & wanted:
+               "" if state == OK else "Nothing has written to that profile lately. "
+                                      f"{alternatives()}")
+    if not profile.signed_in:
         report.add("YouTube login", FAIL, "no session cookies in that profile",
-                   "Sign in to YouTube in that browser")
-    elif not names & rotating:
+                   "Sign in to YouTube in that browser. " + alternatives())
+    elif not profile.fresh:
         report.add("YouTube login", WARN, "signed in, but the rotating tokens are missing",
                    "Open YouTube in that browser once")
     else:
-        report.add("YouTube login", OK, f"{len(names)} YouTube cookies")
+        report.add("YouTube login", OK, f"{profile.count} YouTube cookies")
 
 
 def _database(db: Database, report: Report) -> None:

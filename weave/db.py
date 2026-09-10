@@ -659,6 +659,19 @@ class Database:
     def set_image_max_mb(self, megabytes: int) -> None:
         self.set_state("image_max_mb", str(max(16, int(megabytes))))
 
+    def browser_profile(self) -> str:
+        """The cookie profile picked in the window, or empty when none was.
+
+        Here rather than in config.toml for the same reason as the cache
+        ceiling: the file stays something a person wrote and can still read,
+        and a choice made by clicking is state. What it means when it is
+        empty belongs to weave/cookies.py, which owns the whole order.
+        """
+        return self.get_state("browser_profile") or ""
+
+    def set_browser_profile(self, path: str) -> None:
+        self.set_state("browser_profile", path.strip())
+
     def set_state(self, key: str, value: str) -> None:
         with self.conn as conn:
             conn.execute(

@@ -425,23 +425,61 @@ Item {
 
                             Label {
                                 width: view.wordWidth
-                                height: 20
+                                height: 28
                                 text: "Cookies"
                                 color: Theme.colors.textMuted
                                 font.pixelSize: 12
                                 verticalAlignment: Text.AlignVCenter
                             }
 
-                            Label {
-                                objectName: "cookieSource"
-                                width: connections.width - view.wordWidth - 8
-                                height: 20
-                                text: App.cookieSource
-                                color: Theme.colors.text
-                                font.pixelSize: 12
-                                elide: Text.ElideMiddle
-                                verticalAlignment: Text.AlignVCenter
+                            FlatButton {
+                                id: cookieButton
+                                objectName: "cookieProfile"
+                                text: App.cookieChoice + "  \u25be"
+                                // Looked for again as the menu opens, so a
+                                // browser signed in to a moment ago is in
+                                // the list rather than after a restart.
+                                onClicked: {
+                                    App.refreshCookieProfiles()
+                                    cookieMenu.popup(cookieButton, 0, cookieButton.height + 2)
+                                }
+
+                                ThemedMenu {
+                                    id: cookieMenu
+                                    objectName: "cookieProfileMenu"
+                                    implicitWidth: 430
+
+                                    Repeater {
+                                        model: App.cookieChoices
+
+                                        ThemedMenuItem {
+                                            required property var modelData
+
+                                            // The tick marks the one in
+                                            // force, and the rest of the
+                                            // line says whether the profile
+                                            // is any use before it is picked.
+                                            text: modelData.label
+                                                  + (modelData.current ? "   \u2713" : "")
+                                                  + (modelData.state
+                                                     ? "      " + modelData.state : "")
+                                            onTriggered: {
+                                                App.setCookieProfile(modelData.path)
+                                                cookieMenu.dismiss()
+                                            }
+                                        }
+                                    }
+                                }
                             }
+                        }
+
+                        Label {
+                            objectName: "cookieSource"
+                            width: parent.width
+                            text: App.cookieSource
+                            color: Theme.colors.textMuted
+                            font.pixelSize: 11
+                            elide: Text.ElideMiddle
                         }
 
                         Row {
@@ -471,9 +509,11 @@ Item {
                         Label {
                             width: parent.width
                             text: "Only the parts past the plain feed need cookies, and they are "
-                                  + "read from the browser profile rather than stored here. A "
-                                  + "Google account can carry more than one YouTube identity, and "
-                                  + "the music requests have to say which."
+                                  + "read from a browser profile rather than stored here. "
+                                  + "Automatic prefers a profile that is signed in, and Firefox "
+                                  + "forks such as Zen or Floorp are only found because this list "
+                                  + "looks for them. A Google account can carry more than one "
+                                  + "YouTube identity, and the music requests have to say which."
                             color: Theme.colors.textMuted
                             font.pixelSize: 11
                             wrapMode: Text.Wrap

@@ -39,6 +39,7 @@ from PySide6.QtCore import QObject, QThread, Signal
 from . import backoff, imagecache, tokens
 from .budget import BROWSE, DISLIKES, FEEDS, OEMBED, PLAYER, SHORTS, TWITCH, Budget
 from .config import Config
+from .cookies import profile_path as cookie_profile
 from .db import Database
 from .ids import channel_key
 from .imagecache import qml_source
@@ -1975,7 +1976,7 @@ class MusicSearch(Worker):
         from .sources import ytmusic
 
         try:
-            tracks = ytmusic.search(self._cfg.browser_profile_path, self._query)
+            tracks = ytmusic.search(cookie_profile(self._cfg), self._query)
         except ytmusic.MusicError as exc:
             self.failed.emit(str(exc))
             return
@@ -2001,7 +2002,7 @@ class MusicHome(Worker):
         from .sources import ytmusic
 
         try:
-            found = ytmusic.home(self._cfg.browser_profile_path)
+            found = ytmusic.home(cookie_profile(self._cfg))
         except ytmusic.MusicError as exc:
             self.failed.emit(str(exc))
             return
@@ -2022,7 +2023,7 @@ class MusicHome(Worker):
         from .sources import ytmusic
 
         try:
-            found = ytmusic.playlists(self._cfg.browser_profile_path, limit=40)
+            found = ytmusic.playlists(cookie_profile(self._cfg), limit=40)
         except ytmusic.MusicError:
             return {"title": "Your playlists", "items": []}
         return {"title": "Your playlists", "items": [{
@@ -2085,7 +2086,7 @@ class MusicHistoryReader(Worker):
         from .sources import ytmusic
 
         try:
-            rows = ytmusic.history(self._cfg.browser_profile_path)
+            rows = ytmusic.history(cookie_profile(self._cfg))
         except Exception as exc:
             self.failed.emit(str(exc))
             return
@@ -2128,7 +2129,7 @@ class TrackList(Worker):
         from .sources import ytmusic
 
         try:
-            found = ytmusic.radio(self._cfg.browser_profile_path, self._playlist_id)
+            found = ytmusic.radio(cookie_profile(self._cfg), self._playlist_id)
         except ytmusic.MusicError as exc:
             self.failed.emit(str(exc))
             return
@@ -2141,7 +2142,7 @@ class TrackList(Worker):
         from .sources import ytmusic
 
         try:
-            found, offered = ytmusic.playlist_tracks(self._cfg.browser_profile_path,
+            found, offered = ytmusic.playlist_tracks(cookie_profile(self._cfg),
                                                      self._playlist_id)
         except ytmusic.MusicError as exc:
             self.failed.emit(str(exc))

@@ -53,10 +53,22 @@ class _Quiet:
     info = warning = error = debug
 
 
-def cookie_header(profile_path: str) -> str:
+def cookie_header(profile_path: str | None) -> str:
+    """The few cookies the music requests need, out of the browser jar.
+
+    A profile path that is not there is a sentence rather than a traceback:
+    yt-dlp raises FileNotFoundError for a missing profile directory, and this
+    is called from a worker whose only way of saying anything is a MusicError.
+    None means nothing here knows where the profile is, which is yt-dlp's cue
+    to look for one itself.
+    """
     from yt_dlp.cookies import extract_cookies_from_browser
 
-    jar = extract_cookies_from_browser("firefox", os.path.expanduser(profile_path), _Quiet())
+    where = os.path.expanduser(profile_path) if profile_path else None
+    try:
+        jar = extract_cookies_from_browser("firefox", where, _Quiet())
+    except (OSError, ValueError) as exc:
+        raise MusicError(f"the browser profile could not be read, {exc}") from exc
     pairs = {c.name: c.value for c in jar
              if "youtube.com" in (c.domain or "") and c.name in ESSENTIAL_COOKIES}
     if "__Secure-3PAPISID" not in pairs:
@@ -93,7 +105,7 @@ def configure(identity: str | None) -> None:
 PAGE_ID_PATTERN = re.compile(r'"DELEGATED_SESSION_ID"\s*:\s*"(\d{5,40})"')
 
 
-def page_id(profile_path: str, force: bool = False) -> str | None:
+def page_id(profile_path: str | None, force: bool = False) -> str | None:
     """Read the identity out of the music page, once per run."""
     global _page_id, _page_id_looked_for
     if _configured_identity:
@@ -118,7 +130,7 @@ def page_id(profile_path: str, force: bool = False) -> str | None:
     return _page_id
 
 
-def client(profile_path: str):
+def client(profile_path: str | None):
     """A signed in client. Built fresh rather than kept, because the
     authorization header is stamped with the time it was made."""
     from ytmusicapi import YTMusic
@@ -191,7 +203,7 @@ def to_tracks(items: list) -> list[Track]:
     return out
 
 
-def search(profile_path: str, query: str, limit: int = 25) -> list[Track]:
+def search(profile_path: str | None, query: str, limit: int = 25) -> list[Track]:
     if not query.strip():
         return []
     try:
@@ -202,7 +214,7 @@ def search(profile_path: str, query: str, limit: int = 25) -> list[Track]:
         raise MusicError(f"{type(exc).__name__}: {exc}") from exc
 
 
-def playlists(profile_path: str, limit: int = 40) -> list[dict]:
+def playlists(profile_path: str | None, limit: int = 40) -> list[dict]:
     try:
         found = client(profile_path).get_library_playlists(limit=limit)
     except MusicError:
@@ -214,7 +226,7 @@ def playlists(profile_path: str, limit: int = 40) -> list[dict]:
             for p in found or [] if p.get("playlistId")]
 
 
-def playlist_tracks(profile_path: str, playlist_id: str,
+def playlist_tracks(profile_path: str | None, playlist_id: str,
                     limit: int = 200) -> tuple[list[Track], int]:
     """The playable tracks, and how many were offered.
 
@@ -236,7 +248,7 @@ def playlist_tracks(profile_path: str, playlist_id: str,
     return to_tracks(offered), len(offered)
 
 
-def history(profile_path: str, limit: int = 200) -> list[dict]:
+def history(profile_path: str | None, limit: int = 200) -> list[dict]:
     """What the music service remembers having played.
 
     Measured against a real account, this answers with a couple of hundred
@@ -267,7 +279,7 @@ def history(profile_path: str, limit: int = 200) -> list[dict]:
     return out
 
 
-def radio(profile_path: str, video_id: str, limit: int = 40) -> list[Track]:
+def radio(profile_path: str | None, video_id: str, limit: int = 40) -> list[Track]:
     """A station built from one track, which is where most listening starts
     when there is no library to speak of."""
     try:
@@ -279,7 +291,7 @@ def radio(profile_path: str, video_id: str, limit: int = 40) -> list[Track]:
     return to_tracks((found or {}).get("tracks") or [])
 
 
-def home(profile_path: str, limit: int = 6) -> list[dict]:
+def home(profile_path: str | None, limit: int = 6) -> list[dict]:
     """The shelves YouTube Music opens on.
 
     Most of them are playlists rather than songs, so an entry says which it is

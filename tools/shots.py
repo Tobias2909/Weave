@@ -467,14 +467,31 @@ def stub_network() -> None:
     def invented_votes(_fetcher, _video_id):
         return dislike_source.Votes(likes=9_412, dislikes=214, views=184_320)
 
-    from weave import cookies
-    from weave.ui import bridge as bridge_module
+    from weave import browsers, cookies
+
+    invented = cookies.Source(spec="firefox:~/.mozilla/firefox/weave.default",
+                              path=Path("~/.mozilla/firefox/weave.default"),
+                              origin="picked here")
 
     def invented_profile(_cfg):
-        return "firefox:~/.mozilla/firefox/weave.default"
+        return invented
 
-    cookies.browser_spec = invented_profile
-    bridge_module.browser_spec = invented_profile
+    def invented_browsers(*_args):
+        # A settled looking machine, and none of his own browsers. The
+        # states are the ones the menu draws differently.
+        return [
+            browsers.Profile(family="Firefox", name="weave.default",
+                             path=Path("~/.mozilla/firefox/weave.default"),
+                             written_at=int(NOW), cookies=browsers.SESSION_COOKIES
+                             | browsers.ROTATING_COOKIES, count=163, launched=True),
+            browsers.Profile(family="Zen", name="Default (release)",
+                             path=Path("~/.zen/weave.default"),
+                             written_at=int(NOW - 40 * 86400)),
+        ]
+
+    cookies.resolve = invented_profile
+    browsers.found = invented_browsers
+    browsers.best = lambda *_: invented_browsers()[0]
 
     net.Fetcher.get_bytes = no_request
     process.run = no_process

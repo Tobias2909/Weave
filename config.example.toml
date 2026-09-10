@@ -3,7 +3,10 @@
 
 [youtube]
 # Where yt-dlp reads cookies from. Either a path to a Firefox family profile
-# directory, or "auto" to let yt-dlp discover a browser by itself.
+# directory, or "auto", which prefers a profile that is signed in over one
+# that is not. Settings and the setup wizard offer the profiles found on this
+# machine, and a choice made there wins over this line, so this is only worth
+# writing for a profile in a place nothing looks, such as another drive.
 # Chromium family browsers work through yt-dlp but are untested here, because
 # they need the desktop keyring to derive a decryption key.
 browser_profile = "auto"

@@ -158,6 +158,53 @@ Popup {
             }
 
             // ---- page 1, the subscription list
+            // Which browser first, since the import is read with its cookies
+            // and the wrong one is the usual reason it comes back empty.
+            Row {
+                visible: root.step === 1
+                spacing: 8
+
+                Label {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Cookies"
+                    color: Theme.colors.textMuted
+                    font.pixelSize: 13
+                }
+
+                FlatButton {
+                    id: wizardCookieButton
+                    objectName: "wizardCookieProfile"
+                    text: App.cookieChoice + "  \u25be"
+                    onClicked: {
+                        App.refreshCookieProfiles()
+                        wizardCookieMenu.popup(wizardCookieButton, 0,
+                                               wizardCookieButton.height + 2)
+                    }
+
+                    ThemedMenu {
+                        id: wizardCookieMenu
+                        objectName: "wizardCookieMenu"
+                        implicitWidth: 430
+
+                        Repeater {
+                            model: App.cookieChoices
+
+                            ThemedMenuItem {
+                                required property var modelData
+
+                                text: modelData.label
+                                      + (modelData.current ? "   \u2713" : "")
+                                      + (modelData.state ? "      " + modelData.state : "")
+                                onTriggered: {
+                                    App.setCookieProfile(modelData.path)
+                                    wizardCookieMenu.dismiss()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             Row {
                 visible: root.step === 1
                 spacing: 8
@@ -191,10 +238,10 @@ Popup {
                 // wrong. A failure adds the reason underneath.
                 text: App.importState === "failed"
                       ? "The list is read with the cookies of a browser profile signed in to "
-                        + "YouTube. Weave is reading " + App.cookieSource + ". If that profile "
-                        + "is signed out, or the browser is holding the file open, the import "
-                        + "fails exactly like this. Sign in there, close the browser and try "
-                        + "again."
+                        + "YouTube. Weave is reading " + App.cookieSource + ". If that is the "
+                        + "wrong browser, pick another one above. If that profile is signed "
+                        + "out, or the browser is holding the file open, the import fails "
+                        + "exactly like this. Sign in there, close the browser and try again."
                       : "Read with the cookies of " + App.cookieSource
                 color: App.importState === "failed" ? Theme.colors.text : Theme.colors.textMuted
                 font.pixelSize: 12

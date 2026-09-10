@@ -25,10 +25,9 @@ from .. import __version__
 from .. import format as fmt
 from .. import imagecache
 from .. import palette, themes
-from .. import ids
+from .. import browsers, cookies, ids
 from .. import paths, tokens
 from ..config import Config
-from ..cookies import browser_spec
 from ..db import GROUP_SHOWS, GROUP_SHOWS_ALL, GROUP_SHOWS_STREAMS, Database
 from ..imagecache import SECONDS_PER_DAY, plain_source, qml_source
 from ..sources import release as release_source
@@ -179,6 +178,7 @@ class Bridge(QObject):
     searchRestored = Signal(str)
     checksChanged = Signal()
     cacheChanged = Signal()
+    cookiesChanged = Signal()
     startingChanged = Signal()
     updateChanged = Signal()
     wizardChanged = Signal()
@@ -265,6 +265,9 @@ class Bridge(QObject):
         self._results: list = []
         self._searching = False
         self._home: MusicHome | None = None
+        # Filled the first time the cookie menu is looked at, dropped
+        # when it is refreshed. Finding them reads every jar on the box.
+        self._cookie_profiles: list | None = None
         self._shelves: list = []
         self._shelves_age = 0
         self._tracks: TrackList | None = None
@@ -588,9 +591,54 @@ class Bridge(QObject):
         return self._cache_line
 
     def _get_cookie_source(self) -> str:
-        """Where yt-dlp is told to look for cookies. The checks answer this
-        from the same call, so the two cannot disagree."""
-        return browser_spec(self._cfg)
+        """Where yt-dlp is told to look for cookies, and who said so. The
+        checks answer this from the same call, so the two cannot disagree."""
+        return cookies.resolve(self._cfg).text
+
+    def _profiles(self) -> list:
+        """The Firefox family profiles on this machine, read once and kept.
+
+        Finding them copies every jar, which is cheap but not free, and they
+        do not appear while a menu is open. refreshCookieProfiles is what
+        looks again, and the menu asks for that before it opens.
+        """
+        if self._cookie_profiles is None:
+            self._cookie_profiles = browsers.found()
+        return self._cookie_profiles
+
+    def _get_cookie_choice(self) -> str:
+        """The button's own text: which profile is in force, in the words the
+        menu uses for it."""
+        picked = self._db.browser_profile()
+        if not picked:
+            return "Automatic"
+        for profile in self._profiles():
+            if str(profile.path) == picked:
+                return profile.label
+        # Picked, and not among the ones found. A profile can be on a drive
+        # that is not mounted today, and the name it was picked by is still
+        # the truthful answer to which one is in force.
+        return Path(picked).name
+
+    def _get_cookie_choices(self) -> list:
+        """What the menu offers. Automatic first, because it is what a fresh
+        install runs on and what a person picks to undo a choice."""
+        auto = cookies.resolve(self._cfg) if not self._db.browser_profile() else None
+        rows = [{
+            "path": "",
+            "label": "Automatic",
+            "state": auto.origin if auto is not None else "whatever is found here",
+            "current": not self._db.browser_profile(),
+        }]
+        picked = self._db.browser_profile()
+        for profile in self._profiles():
+            rows.append({
+                "path": str(profile.path),
+                "label": profile.label,
+                "state": profile.state,
+                "current": str(profile.path) == picked,
+            })
+        return rows
 
     def _get_music_identity(self) -> str:
         """Which YouTube identity the music requests speak as.
@@ -692,9 +740,11 @@ class Bridge(QObject):
     twitchStatus = Property(str, _get_twitch_status, notify=twitchChanged)
     twitchNeedsLogin = Property(bool, _get_twitch_needs_login, notify=twitchChanged)
     twitchConnected = Property(bool, _get_twitch_connected, notify=twitchChanged)
-    # The config is read once at startup, so neither of these can change while
-    # the window is open.
-    cookieSource = Property(str, _get_cookie_source, constant=True)
+    # Where the cookies come from can be changed here, so it says when it
+    # does. The identity is read from the config once at startup and cannot.
+    cookieSource = Property(str, _get_cookie_source, notify=cookiesChanged)
+    cookieChoice = Property(str, _get_cookie_choice, notify=cookiesChanged)
+    cookieChoices = Property("QVariantList", _get_cookie_choices, notify=cookiesChanged)
     musicIdentity = Property(str, _get_music_identity, constant=True)
 
     def _get_live_collapsed(self) -> bool:
@@ -1764,6 +1814,35 @@ class Bridge(QObject):
         self.cacheChanged.emit()
         self._run_cache_job(ImageCacheJob.PRUNE if held > megabytes * 1024 * 1024
                             else ImageCacheJob.MEASURE)
+
+    @Slot()
+    def refreshCookieProfiles(self) -> None:
+        """Look for browser profiles again. Called as the menu opens, so a
+        browser signed in to while the window was open is offered."""
+        self._cookie_profiles = None
+        self.cookiesChanged.emit()
+
+    @Slot(str)
+    def setCookieProfile(self, path: str) -> None:
+        """Choose which browser profile the cookies are read from.
+
+        An empty path means automatic, which is the order in weave/cookies.py
+        with nothing picked. The identity cache is dropped with it: a
+        different profile can be a different account, and the page id read
+        for the old one would speak as somebody who is not signed in here.
+        """
+        path = (path or "").strip()
+        if path == self._db.browser_profile():
+            return
+        self._db.set_browser_profile(path)
+        cookies.remember(path)
+        from ..sources import ytmusic
+
+        ytmusic.configure(self._cfg.music_identity)
+        self._shelves = []
+        self.cookiesChanged.emit()
+        self.musicChanged.emit()
+        self._set_status(f"Cookies now read from {self._get_cookie_choice()}")
 
     def _run_cache_job(self, what: str) -> None:
         if self._cache_job is not None and self._cache_job.isRunning():

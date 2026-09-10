@@ -12,7 +12,7 @@ import sqlite3
 import sys
 import time
 
-from . import config, desktop, ids, imagecache, paths, themes, tokens
+from . import config, cookies, desktop, ids, imagecache, paths, themes, tokens
 from . import format as fmt
 from .budget import Budget
 from .db import Database
@@ -638,13 +638,13 @@ def _cmd_music(_args) -> int:
 
     cfg = config.load()
     ytmusic.configure(cfg.music_identity)
-    identity = ytmusic.page_id(cfg.browser_profile_path, force=True)
+    identity = ytmusic.page_id(cookies.profile_path(cfg), force=True)
     source = "pinned in the config" if cfg.music_identity not in ("", "auto") else "read from the page"
     print(f"identity {identity or 'none, this account has only one'} ({source})")
     try:
-        who = ytmusic.client(cfg.browser_profile_path).get_account_info()
+        who = ytmusic.client(cookies.profile_path(cfg)).get_account_info()
         print(f"speaking as {who.get('accountName')}")
-        print(f"{len(ytmusic.playlists(cfg.browser_profile_path, limit=200))} playlists visible")
+        print(f"{len(ytmusic.playlists(cookies.profile_path(cfg), limit=200))} playlists visible")
     except Exception as exc:
         print(f"could not reach YouTube Music, {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1

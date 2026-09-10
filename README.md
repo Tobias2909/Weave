@@ -330,10 +330,12 @@ missing one is fine.
 | Pictures | `~/.cache/weave/images/` |
 
 Cookies are only needed for the parts that go beyond RSS. Weave reads them the
-way `yt-dlp` does, from a browser profile you point it at. Firefox family
-browsers work with nothing extra. Chromium family browsers need the desktop
-keyring and are untested here. None of your data is in the repository and none of
-it is ever sent anywhere.
+way `yt-dlp` does, from a browser profile. Settings and the setup wizard list
+the Firefox family profiles found on this machine and say which of them is
+signed in, so a fork such as Zen or Floorp can be chosen even though `yt-dlp`
+on its own would never find one. Chromium family browsers need the desktop
+keyring and are untested here. None of your data is in the repository and none
+of it is ever sent anywhere.
 
 ## Tests
 

@@ -184,15 +184,6 @@ class Config:
         return str(self.get("youtube", "music_identity")).strip()
 
     @property
-    def browser_profile_path(self) -> str:
-        """Where the cookies live, as a path. Falls back to the symlink the mpv
-        setup maintains, which is what auto resolves to elsewhere."""
-        configured = self.browser_profile
-        if configured and configured != "auto":
-            return configured
-        return "~/.config/mpv/browser-profile"
-
-    @property
     def twitch_client_id(self) -> str:
         return str(self.get("twitch", "client_id")).strip()
 
