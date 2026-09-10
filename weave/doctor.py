@@ -110,6 +110,33 @@ def _tools(report: Report) -> None:
             report.add(name, FAIL, "not installed", f"{why}. Install {command[0]}")
         else:
             report.add(name, WARN, "not installed", why)
+    _music_library(report)
+
+
+def _music_library(report: Report) -> None:
+    """Which ytmusicapi is in front of us, if any.
+
+    Said out loud for the same reason mpv's version is. The music area is one
+    library away from the rest of the program, distributions ship whatever
+    they froze, and an old one fails in a way that reads like a broken account
+    rather than a package that is behind: pressing a song came back as
+    KeyError: 'endpoint' on a laptop while the same press worked here.
+    """
+    from .sources import ytmusic
+
+    have = ytmusic.installed()
+    if not have:
+        report.add("ytmusicapi", WARN, "not installed",
+                   "Only the music area needs it. Install python-ytmusicapi")
+        return
+    said = ".".join(str(part) for part in have)
+    stale = ytmusic.too_old()
+    if stale:
+        report.add("ytmusicapi", FAIL, said,
+                   "A station or a playlist fails with a KeyError in its own parser. "
+                   "Update it")
+    else:
+        report.add("ytmusicapi", OK, said)
 
 
 def _mpv_age(said: str, report: Report) -> None:

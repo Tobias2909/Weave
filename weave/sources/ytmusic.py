@@ -28,6 +28,59 @@ ESSENTIAL_COOKIES = {
 }
 
 
+# The oldest ytmusicapi whose watch parser survives a station.  Everything
+# before it reads ["tabRenderer"]["endpoint"]["browseEndpoint"] straight out
+# of the payload, and YouTube stopped putting an endpoint on that tab, so
+# pressing a song came back as a bare KeyError: 'endpoint'.  MEASURED against
+# the released wheels 2026-09-10: 1.9.1, 1.10.3 and 1.11.1 all carry the bare
+# reading, 1.12.2 asks for it with nav(..., none_if_absent) and gets None.
+NEEDED = (1, 12, 2)
+
+
+def installed() -> tuple[int, ...]:
+    """The ytmusicapi version, as numbers. Empty when it is not installed at
+    all, which is a different thing and says so where it is asked."""
+    try:
+        from ytmusicapi import __version__ as version
+    except Exception:
+        return ()
+    out = []
+    for part in str(version).split("."):
+        # Leading digits only, and stop at the first piece that has none.
+        # A pre release is 1.13.0rc1 and a development build 1.13.0.dev3, and
+        # both have to compare as the release they are working towards rather
+        # than as some larger number made of the letters' digits.
+        digits = ""
+        for char in part:
+            if not char.isdigit():
+                break
+            digits += char
+        if not digits:
+            break
+        out.append(int(digits))
+    return tuple(out)
+
+
+def too_old() -> str:
+    """What is wrong with the installed ytmusicapi, in a sentence, or empty
+    when there is nothing wrong with it."""
+    have = installed()
+    if not have or have >= NEEDED:
+        return ""
+    return (f"ytmusicapi {'.'.join(str(n) for n in have)} is installed and "
+            f"{'.'.join(str(n) for n in NEEDED)} or newer is needed")
+
+
+def _blame(what: str, exc: Exception) -> MusicError:
+    """One sentence naming the call that failed, since every music failure
+    reaches a person as one line in the window and "KeyError: 'endpoint'" on
+    its own says nothing about which of them broke or why. An old library is
+    named as such, because that answer is a version and not a bug here."""
+    said = f"{what} said {type(exc).__name__}: {exc}"
+    stale = too_old()
+    return MusicError(f"{said}. {stale}" if stale else said)
+
+
 class MusicError(RuntimeError):
     pass
 
@@ -211,7 +264,7 @@ def search(profile_path: str | None, query: str, limit: int = 25) -> list[Track]
     except MusicError:
         raise
     except Exception as exc:
-        raise MusicError(f"{type(exc).__name__}: {exc}") from exc
+        raise _blame("search", exc) from exc
 
 
 def playlists(profile_path: str | None, limit: int = 40) -> list[dict]:
@@ -220,7 +273,7 @@ def playlists(profile_path: str | None, limit: int = 40) -> list[dict]:
     except MusicError:
         raise
     except Exception as exc:
-        raise MusicError(f"{type(exc).__name__}: {exc}") from exc
+        raise _blame("the playlist list", exc) from exc
     return [{"id": str(p.get("playlistId") or ""), "title": str(p.get("title") or ""),
              "count": p.get("count"), "thumbnail": _thumb(p)}
             for p in found or [] if p.get("playlistId")]
@@ -243,7 +296,7 @@ def playlist_tracks(profile_path: str | None, playlist_id: str,
     except MusicError:
         raise
     except Exception as exc:
-        raise MusicError(f"{type(exc).__name__}: {exc}") from exc
+        raise _blame("the playlist", exc) from exc
     offered = (found or {}).get("tracks") or []
     return to_tracks(offered), len(offered)
 
@@ -262,7 +315,7 @@ def history(profile_path: str | None, limit: int = 200) -> list[dict]:
     except MusicError:
         raise
     except Exception as exc:
-        raise MusicError(f"{type(exc).__name__}: {exc}") from exc
+        raise _blame("the listening history", exc) from exc
     out: list[dict] = []
     for item in (found or [])[:limit]:
         video_id = str(item.get("videoId") or "").strip()
@@ -287,7 +340,7 @@ def radio(profile_path: str | None, video_id: str, limit: int = 40) -> list[Trac
     except MusicError:
         raise
     except Exception as exc:
-        raise MusicError(f"{type(exc).__name__}: {exc}") from exc
+        raise _blame("the station", exc) from exc
     return to_tracks((found or {}).get("tracks") or [])
 
 
@@ -302,7 +355,7 @@ def home(profile_path: str | None, limit: int = 6) -> list[dict]:
     except MusicError:
         raise
     except Exception as exc:
-        raise MusicError(f"{type(exc).__name__}: {exc}") from exc
+        raise _blame("the shelves", exc) from exc
 
     out = []
     for shelf in shelves or []:
