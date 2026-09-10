@@ -45,11 +45,20 @@ from . import paths
 
 SOCKET_NAME = "weave-music.sock"
 
+# Where mpv writes its own account of the run. One session's worth: mpv
+# truncates it every time it starts.
+LOG_FILE = paths.CACHE_DIR / "music-mpv.log"
+
 # The two roles an entry in mpv's playlist can have. Weave keeps its own queue
 # and hands mpv only what is playing and what comes next.
 CURRENT, NEXT = "current", "next"
 
 _OBSERVED = ("time-pos", "duration", "pause", "idle-active", "paused-for-cache")
+
+# The stamp and the source at the head of a line in mpv's log file, as in
+# "[   0.001][e][cplayer] Error parsing option". Only what follows it is worth
+# putting in front of a person.
+_MESSAGE = re.compile(r"^\[[^\]]*\]\[[^\]]*\]\[[^\]]*\]\s*")
 
 
 # When mpv's loadfile grew the argument that says where in the playlist to put
@@ -97,7 +106,7 @@ def loadfile_takes_an_index() -> bool:
 
 
 def mpv_command(volume: float, socket_path: os.PathLike | str,
-                ao: str | None = None) -> list[str]:
+                ao: str | None = None, log: os.PathLike | str | None = None) -> list[str]:
     """The plain player, never the video wrapper, with none of the mpv
     configuration on this machine loaded. The wrapper carries shaders, overlays
     and a socket of its own, all of which would be wrong here.
@@ -122,6 +131,12 @@ def mpv_command(volume: float, socket_path: os.PathLike | str,
         f"--volume={max(0, min(100, round(volume)))}",
         "--audio-client-name=weave",
         *([f"--ao={ao}"] if ao else []),
+        # Where mpv writes what it would have said. It runs with no terminal,
+        # and MEASURED against 0.41: an option this build does not know goes
+        # to stdout when there is a terminal and nowhere at all when there is
+        # not, while the log file has it either way. Without this a player
+        # that refuses to start is only ever "did not open its socket".
+        *([f"--log-file={log}"] if log else []),
     ]
 
 
@@ -173,6 +188,7 @@ class MusicEngine(QObject):
         self._volume = 70.0
         # Only the tests name one. See mpv_command.
         self._ao = ao
+        self._log = LOG_FILE
 
     # ---- lifecycle -------------------------------------------------------
 
@@ -186,7 +202,11 @@ class MusicEngine(QObject):
             return True
         self.quit()
         try:
-            command = mpv_command(self._volume, self._socket_path, self._ao)
+            self._log.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        try:
+            command = mpv_command(self._volume, self._socket_path, self._ao, self._log)
         except FileNotFoundError as exc:
             self.gone.emit(str(exc))
             return False
@@ -208,10 +228,29 @@ class MusicEngine(QObject):
         self._ipc.lost.connect(self._on_lost)
         self._ipc.start()
         if not self._ipc.connected.wait(5.0):
-            self.gone.emit("mpv did not open its socket")
+            self.gone.emit(f"mpv did not open its socket{self.complaint()}")
             self.quit()
             return False
         return True
+
+    def complaint(self, lines: int = 2) -> str:
+        """The last thing mpv said, ready to append to a sentence.
+
+        Empty when it said nothing, which is the usual case and reads as the
+        sentence it is appended to. An unknown option and a sound device that
+        will not open both land here, and both look identical from the socket
+        side.
+        """
+        try:
+            said = self._log.read_text(errors="replace").splitlines()
+        except OSError:
+            return ""
+        # Only what mpv called an error or worse. The rest of the file is the
+        # verbose account of a run, which is the wrong thing to put in a
+        # window, and the last of them is the one that stopped it.
+        kept = [_MESSAGE.sub("", line).strip() for line in said
+                if "][e]" in line or "][f]" in line]
+        return f": {' '.join(kept[-lines:])[:200]}" if kept else ""
 
     def quit(self) -> None:
         ipc, process = self._ipc, self._process

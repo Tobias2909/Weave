@@ -33,6 +33,13 @@ class TheCommandLine(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
+    def test_the_music_playback_check_is_reachable(self):
+        # It plays a real track, so the test only proves the subcommand is
+        # wired and takes its arguments.
+        done = _run(self.home, "music", "play", "--help")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("--seconds", done.stdout)
+
     def test_a_fresh_home_lists_no_channels(self):
         done = _run(self.home, "channels")
         self.assertEqual(done.returncode, 0, done.stderr)

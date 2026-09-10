@@ -244,6 +244,93 @@ def _cookies(cfg: Config, report: Report) -> None:
         report.add("YouTube login", OK, f"{profile.count} YouTube cookies")
 
 
+# Something short, public and certain to exist, for a check that has to play
+# a real sound. The same video the README uses.
+PROBE_TRACK = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+
+def playback(cfg: Config, report: Report, url: str = PROBE_TRACK,
+             seconds: float = 6.0) -> None:
+    """Walk the whole music chain and say which step of it fails.
+
+    Nothing else does. The window shows one line when a track will not play,
+    and every step behind that line looks the same from there: an address
+    that was never resolved, a player that would not start, a player that
+    started and could not open the sound card. So this asks each of them in
+    order and stops at the first that will not answer, which is the only
+    thing anybody wants to know when the press does nothing.
+
+    It plays for real, briefly. A silent output would hide exactly the case
+    where the machine's sound is what is broken.
+    """
+    from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer
+
+    from . import engine as music
+    from .audio import resolve_address
+
+    binary = shutil.which("mpv")
+    if binary is None:
+        report.add("mpv", FAIL, "not installed", "The music plays through a second mpv")
+        return
+    try:
+        address = resolve_address(cfg, url, live=False).address
+    except Exception as exc:
+        report.add("the address", FAIL, f"{type(exc).__name__}: {exc}",
+                   "yt-dlp could not turn the track into a stream. Check the cookie "
+                   "source above, and that yt-dlp and a JavaScript runtime are there")
+        return
+    report.add("the address", OK, f"{address.split('?')[0][:56]}")
+
+    app = QCoreApplication.instance() or QCoreApplication([])
+    player = music.MusicEngine()
+    trouble: list[str] = []
+    player.gone.connect(trouble.append)
+    player.ended.connect(lambda why: trouble.append(f"mpv ended the track, {why}")
+                         if why and why != "eof" else None)
+    if not player.ensure():
+        report.add("the player", FAIL, trouble[0] if trouble else "mpv would not start",
+                   "The music player is a plain mpv with no window and no config")
+        return
+    report.add("the player", OK, "started and answered on its socket")
+
+    reached: list[float] = []
+    player.positionChanged.connect(reached.append)
+    player.load(address)
+    player.set_pause(False)
+
+    loop = QEventLoop()
+    deadline = QTimer()
+    deadline.setSingleShot(True)
+    deadline.timeout.connect(loop.quit)
+    deadline.start(int(seconds * 1000))
+    watch = QTimer()
+    watch.setInterval(100)
+    # Half a second of sound is proof enough that the whole chain works, and
+    # nobody wants to sit through more of it than that.
+    watch.timeout.connect(lambda: loop.quit() if (reached and reached[-1] > 0.5)
+                          or trouble else None)
+    watch.start()
+    loop.exec()
+    watch.stop()
+    deadline.stop()
+    del app
+
+    played = reached[-1] if reached else 0.0
+    # Whatever mpv itself called an error, which is the only account of a
+    # sound card that would not open.
+    said = getattr(player, "complaint", lambda: "")()
+    player.quit()
+    if played > 0.5:
+        report.add("playing", OK, f"{played:.1f} s of sound came out of mpv")
+    elif trouble:
+        report.add("playing", FAIL, f"{trouble[-1]}{said}",
+                   "mpv took the address and could not play it. A machine with no "
+                   "working sound output fails exactly here")
+    else:
+        report.add("playing", FAIL, f"nothing played within {seconds:.0f} s{said}",
+                   "mpv took the address and never reported a position")
+
+
 def _database(db: Database, report: Report) -> None:
     size = paths.DB_FILE.stat().st_size / 1_048_576 if paths.DB_FILE.exists() else 0
     counts = db.counts()

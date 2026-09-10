@@ -408,6 +408,14 @@ class Bridge(QObject):
         self._player.failed.connect(self._on_player_failed)
         if self._player.error:
             self._problems.append(self._player.error)
+        # A music library that is too old fails inside itself, one press at a
+        # time, and reads as a broken account. Said once on the way in, where
+        # a person sees it without having to run the checks.
+        from ..sources import ytmusic
+
+        stale = ytmusic.too_old()
+        if stale:
+            self._problems.append(f"the music area needs a newer library, {stale}")
 
         # A stream watched live is judged once it has ended, so the answer
         # arrives on the pass after the one that read its length.

@@ -173,7 +173,11 @@ of most other distributions.
 | Playback | `mpv` |
 | Adding a channel, and anything beyond RSS | `yt-dlp`, plus `deno` or `nodejs` for the challenges it has to solve |
 | Twitch playback | `streamlink` |
-| The music area | `python-ytmusicapi` |
+| The music area | `python-ytmusicapi` 1.12.2 or newer |
+
+Older `python-ytmusicapi` releases read a field YouTube no longer sends, so
+pressing a song fails inside the library itself. `weave doctor` says which one
+is installed and whether it is old enough to matter.
 
 ## Install
 

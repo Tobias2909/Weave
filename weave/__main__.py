@@ -293,6 +293,31 @@ def _cmd_doctor(args) -> int:
     cfg = config.load()
     db = Database(paths.DB_FILE)
     report = doctor.run(cfg, db, network=not args.offline)
+    return _print_report(report)
+
+
+def _cmd_music_play(args) -> int:
+    """Play one track through the music chain, printing each step.
+
+    Pressing a song either plays or does nothing, and when it does nothing
+    the window has one line for four different failures. This says which.
+    """
+    from . import doctor
+
+    cfg = config.load()
+    report = doctor.Report()
+    doctor.playback(cfg, report, args.url or doctor.PROBE_TRACK, args.seconds)
+    code = _print_report(report)
+    if code:
+        from .engine import LOG_FILE
+
+        print(f"\nmpv's own account of the run is in {LOG_FILE}")
+    return code
+
+
+def _print_report(report) -> int:
+    from . import doctor
+
     for check in report.checks:
         print(f"[{_MARKS[check.state]}] {check.name:<22} {check.detail}")
         if check.fix and check.state != doctor.OK:
@@ -771,7 +796,13 @@ def main() -> int:
     subparsers.add_parser("live", help="show who is live right now").set_defaults(func=_cmd_live)
 
     music = subparsers.add_parser("music", help="check which YouTube identity is in use")
-    music.add_subparsers(dest="action")
+    music_actions = music.add_subparsers(dest="action")
+    playing = music_actions.add_parser(
+        "play", help="play one track and say which step of the chain fails")
+    playing.add_argument("--url", default=None, help="a video to try, instead of the usual one")
+    playing.add_argument("--seconds", type=float, default=6.0,
+                         help="how long to wait for sound")
+    playing.set_defaults(func=_cmd_music_play)
     music.set_defaults(func=_cmd_music)
 
     theme_parser = subparsers.add_parser("themes", help="list, choose or copy a theme")

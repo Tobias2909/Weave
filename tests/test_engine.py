@@ -17,6 +17,7 @@ import os
 import shutil
 import struct
 import tempfile
+from pathlib import Path
 import time
 import unittest
 import wave
@@ -123,6 +124,36 @@ class TheCommand(unittest.TestCase):
         self.assertFalse([one for one in mpv_command(55, "/run/x.sock")
                           if one.startswith("--ao")])
         self.assertIn("--ao=null", mpv_command(55, "/run/x.sock", ao="null"))
+
+
+class WhenItWillNotStart(unittest.TestCase):
+    """What a player that refuses says. It runs with no terminal, so unless
+    its own words are kept the window can only report the silence, and a
+    build that does not know one of the options Weave passes looks exactly
+    like a machine with no sound."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.engine = MusicEngine(socket_path=os.path.join(self.dir, "m.sock"))
+        self.engine._log = Path(self.dir) / "mpv.log"       # noqa: SLF001
+        self.addCleanup(self.engine.quit)
+        self.said = []
+        self.engine.gone.connect(self.said.append)
+
+    def test_an_option_this_mpv_does_not_know_is_quoted_back(self):
+        import weave.engine as engine_module
+
+        real = engine_module.mpv_command
+        self.addCleanup(setattr, engine_module, "mpv_command", real)
+        engine_module.mpv_command = lambda *a, **k: [*real(*a, **k), "--weave-not-an-option"]
+        self.assertFalse(self.engine.ensure())
+        self.assertTrue(self.said, "nothing was said about a player that never started")
+        self.assertIn("weave-not-an-option", self.said[0])
+
+    def test_a_player_that_says_nothing_leaves_the_sentence_alone(self):
+        self.engine._log.write_text("")                     # noqa: SLF001
+        self.assertEqual(self.engine.complaint(), "")
 
 
 class Reaping(unittest.TestCase):
