@@ -236,16 +236,6 @@ Item {
                             font.weight: Font.DemiBold
                         }
 
-                        Label {
-                            width: parent.width
-                            text: "Importing reads the subscription list from YouTube and tracks "
-                                  + "every channel in it. It is worth doing once, and again after "
-                                  + "subscribing to something."
-                            color: Theme.colors.textMuted
-                            font.pixelSize: 11
-                            wrapMode: Text.Wrap
-                        }
-
                         Row {
                             spacing: 8
 
@@ -253,12 +243,6 @@ Item {
                                 objectName: "settingsWizard"
                                 text: "Getting started"
                                 onClicked: App.openWizard()
-                            }
-
-                            FlatButton {
-                                objectName: "settingsImport"
-                                text: "Import subscriptions"
-                                onClicked: App.importSubscriptions()
                             }
 
                             FlatButton {
@@ -418,6 +402,40 @@ Item {
                                 text: App.twitchConnected ? "Connect again" : "Connect"
                                 onClicked: App.connectTwitch()
                             }
+                        }
+
+                        Row {
+                            spacing: 8
+
+                            Label {
+                                width: view.wordWidth
+                                height: 28
+                                text: "Subscriptions"
+                                color: Theme.colors.textMuted
+                                font.pixelSize: 12
+                                verticalAlignment: Text.AlignVCenter
+                            }
+
+                            FlatButton {
+                                objectName: "settingsImport"
+                                text: "Import subscriptions"
+                                onClicked: App.importSubscriptions()
+                            }
+                        }
+
+                        Label {
+                            width: parent.width
+                            // Here rather than with the rest of the stored
+                            // data, because which cookies the import is read
+                            // with is the line under it and the two are one
+                            // job.
+                            text: "Importing reads the subscription list from YouTube and tracks "
+                                  + "every channel in it. It is worth doing once, and again after "
+                                  + "subscribing to something. It is read with the cookies below, "
+                                  + "so a browser that is not signed in imports nothing."
+                            color: Theme.colors.textMuted
+                            font.pixelSize: 11
+                            wrapMode: Text.Wrap
                         }
 
                         Row {
