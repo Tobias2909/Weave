@@ -23,7 +23,11 @@ dependencies = [
 # 1.12.2 is the floor rather than the newest at the time: everything before it
 # reads the watch payload's tab endpoint without checking, and a station came
 # back as KeyError: 'endpoint'. See NEEDED in weave/sources/ytmusic.py.
-music = ["ytmusicapi>=1.12.2"]
+# python-mpv is the player itself rather than a nicety. A picture cannot come
+# out of a separate process, and Wayland has no way to embed a foreign window,
+# so the only route to video in the page is libmpv drawing into this one. Pure
+# Python, no build step; libmpv itself comes with mpv, which is already needed.
+music = ["ytmusicapi>=1.12.2", "python-mpv>=1.0.7"]
 
 [project.scripts]
 weave = "weave.__main__:main"
