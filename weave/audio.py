@@ -40,6 +40,7 @@ from .config import Config
 from .cookies import args as cookie_args
 from .sources.ytdlp import explain, prepare
 from .engine_libmpv import CURRENT, NEXT, LibmpvEngine
+from . import trace
 from .imagecache import plain_source
 from .process import Cancelled, Timeout
 from .process import run as run_process
@@ -1161,6 +1162,7 @@ class AudioPlayer(QObject):
         if wanted == self._video_wanted:
             return
         self._video_wanted = wanted
+        trace.mark("page", wanted=wanted)
         if not wanted:
             # Nothing is said to the player. Turning the picture off mid song
             # is a command against something that is playing, and the one rule

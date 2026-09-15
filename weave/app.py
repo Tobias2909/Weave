@@ -22,9 +22,10 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickWindow
 from PySide6.QtQuickControls2 import QQuickStyle
 
-from . import config, desktop, imagecache, mpris, paths
+from . import config, desktop, imagecache, mpris, paths, trace
 from .audio import AudioPlayer
 from .db import Database
+from .engine_libmpv import OPTIONS as PLAYER_OPTIONS
 from .player.mpv import Player
 from .sources import ytmusic
 from .sources.progress import default_dir as default_watch_later
@@ -156,6 +157,14 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
         return 1
 
     window = engine.rootObjects()[0]
+    # Evidence for the page catching, on request only. Armed here because the
+    # watchdog on the window's thread needs the application and the screen's
+    # rate is the number every other one is read against.
+    if trace.start(app) is not None:
+        screen = window.screen()
+        trace.mark("screen", hz=f"{screen.refreshRate():.2f}" if screen else "?",
+                   mpv_options=",".join(f"{k}={v}" for k, v in PLAYER_OPTIONS.items()))
+        print(f"tracing to {trace.LOG}", file=sys.stderr)
     # The backend is known for certain now, so correct the guess. Re-setting a
     # context property re-evaluates the bindings that read it.
     context.setContextProperty("EffectsAvailable", _effects_available())

@@ -22,9 +22,13 @@ one to break that and took it out again. Nothing here tries to be cleverer.
 
 from __future__ import annotations
 
+import threading
+
 from PySide6.QtCore import Property, QObject, QRunnable, Qt, Signal, Slot
 from PySide6.QtGui import QGuiApplication, QOpenGLContext
 from PySide6.QtQuick import QQuickFramebufferObject, QQuickWindow
+
+from .. import trace
 
 # The player whose frames this draws. One music player exists, so it is held
 # here rather than threaded through QML, which cannot carry a Python object
@@ -132,6 +136,7 @@ class VideoSurface(QQuickFramebufferObject):
         if wanted == self._drawing:
             return
         self._drawing = wanted
+        trace.mark("drawing", on=wanted)
         self.drawingChanged.emit()
         if wanted:
             # Nothing has asked it to paint while it was quiet, and it has no
@@ -242,10 +247,11 @@ class _Renderer(QQuickFramebufferObject.Renderer):
         if width <= 0 or height <= 0:
             return
         try:
-            _context.render(flip_y=False, opengl_fbo={
-                "w": width, "h": height,
-                "fbo": int(self.framebufferObject().handle()),
-            })
+            with trace.Timed():
+                _context.render(flip_y=False, opengl_fbo={
+                    "w": width, "h": height,
+                    "fbo": int(self.framebufferObject().handle()),
+                })
         except Exception:
             # A frame that will not draw is not worth taking the window down
             # for. The player says separately when it has nothing to give.
@@ -282,6 +288,7 @@ class _Renderer(QQuickFramebufferObject.Renderer):
         # mpv raises this from its own thread whenever a frame is ready, and
         # all it may do there is ask the window to come and draw.
         _context.update_cb = self._item.frameReady.emit
+        trace.mark("render_context_built", render_thread=threading.get_ident())
         player.render_ready(True)
         return True
 

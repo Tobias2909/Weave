@@ -28,6 +28,8 @@ from __future__ import annotations
 
 from PySide6.QtCore import QObject, Signal
 
+from . import trace
+
 # The same two roles the subprocess engine uses. Every entry handed to mpv is
 # one of them, and an event about an entry that has since been replaced has no
 # role and is dropped.
@@ -106,6 +108,8 @@ class LibmpvEngine(QObject):
         # asking for the video track before then fails outright with "No
         # render context set" and leaves the track switched on and dead.
         self._can_render = False
+        self._clock = trace.Clock()
+        self._paused = True
 
     # ---- the player itself ------------------------------------------------
 
@@ -122,7 +126,11 @@ class LibmpvEngine(QObject):
             self.gone.emit(f"the player library could not be loaded, {exc}")
             return False
         try:
-            self._mpv = mpv.MPV(log_handler=self._on_log, loglevel="error",
+            # Verbose only while tracing. The lines about frames not being
+            # collected and the sound running dry are said at that level and
+            # nowhere else.
+            level = "v" if trace.enabled() else "error"
+            self._mpv = mpv.MPV(log_handler=self._on_log, loglevel=level,
                                 **OPTIONS)
         except Exception as exc:
             self._mpv = None
@@ -170,6 +178,7 @@ class LibmpvEngine(QObject):
         return "; ".join(self._complaints[-lines:])
 
     def _on_log(self, level: str, prefix: str, text: str) -> None:
+        trace.player_said(level, prefix, text)
         if level in ("error", "fatal"):
             said = f"{prefix}: {text.strip()}"
             self._complaints.append(said)
@@ -287,6 +296,7 @@ class LibmpvEngine(QObject):
         if wanted == self._want_video:
             return
         self._want_video = wanted
+        trace.mark("set_video", wanted=wanted, can_render=self._can_render)
         if not self._had_frame or not wanted:
             self._had_frame = False
             self.videoChanged.emit(False)
@@ -304,6 +314,7 @@ class LibmpvEngine(QObject):
         """
         if self._mpv is None or not url:
             return
+        trace.mark("add_video", can_render=self._can_render)
         self._command("video-add", url, "select")
         self._want_video = True
         if self._can_render:
@@ -314,6 +325,7 @@ class LibmpvEngine(QObject):
         if self._mpv is None:
             return
         self._want_video = False
+        trace.mark("drop_video")
         self._set("vid", "no")
         if self._had_frame:
             self._had_frame = False
@@ -334,6 +346,7 @@ class LibmpvEngine(QObject):
         arriving are not a race.
         """
         self._can_render = bool(ready)
+        trace.mark("render_ready", ready=self._can_render, want_video=self._want_video)
         if self._can_render and self._want_video:
             self._set("vid", "auto")
         elif not self._can_render:
@@ -356,12 +369,15 @@ class LibmpvEngine(QObject):
 
     def _on_position(self, _name, value) -> None:
         if value is not None:
+            self._clock.report(float(value), self._paused)
             self.positionChanged.emit(float(value))
 
     def _on_duration(self, _name, value) -> None:
         self.durationChanged.emit(float(value or 0.0))
 
     def _on_paused(self, _name, value) -> None:
+        self._paused = bool(value)
+        self._clock.reset()
         self.pausedChanged.emit(bool(value))
 
     def _on_idle(self, _name, value) -> None:
@@ -374,6 +390,7 @@ class LibmpvEngine(QObject):
         has = value is not None
         if has == self._had_frame:
             return
+        trace.mark("frame_exists", has=has)
         self._had_frame = has
         self.videoChanged.emit(has)
 
