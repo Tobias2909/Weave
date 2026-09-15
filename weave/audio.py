@@ -39,7 +39,7 @@ from PySide6.QtCore import (
 from .config import Config
 from .cookies import args as cookie_args
 from .sources.ytdlp import explain, prepare
-from .engine import CURRENT, NEXT, MusicEngine
+from .engine_libmpv import CURRENT, NEXT, LibmpvEngine
 from .imagecache import plain_source
 from .process import Cancelled, Timeout
 from .process import run as run_process
@@ -229,7 +229,7 @@ class AudioPlayer(QObject):
     failed = Signal(str)
 
     def __init__(self, cfg: Config, db=None, parent: QObject | None = None,
-                 engine: MusicEngine | None = None) -> None:
+                 engine: LibmpvEngine | None = None) -> None:
         super().__init__(parent)
         self._cfg = cfg
         self._db = db
@@ -249,7 +249,10 @@ class AudioPlayer(QObject):
         # Which queue index mpv holds as its next entry, if any.
         self._appended: int | None = None
 
-        self._engine = engine if engine is not None else MusicEngine(self)
+        # The player lives in this process now. A picture cannot come out
+        # of a second one, and there is no fallback on purpose: two
+        # players would mean faults on the path nobody here ever walks.
+        self._engine = engine if engine is not None else LibmpvEngine(self)
         self._engine.positionChanged.connect(self._on_position)
         self._engine.durationChanged.connect(self._on_duration)
         self._engine.pausedChanged.connect(self._on_paused)

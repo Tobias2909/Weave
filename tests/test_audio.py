@@ -51,10 +51,10 @@ class FakeEngine(QObject):
     def _note(self, *call):
         self.calls.append(call)
 
-    def load(self, url, start=None):
+    def load(self, url, start=None, video=None):
         self._note("load", url, start)
 
-    def append(self, url):
+    def append(self, url, video=None):
         self._note("append", url)
 
     def clear_after(self):
