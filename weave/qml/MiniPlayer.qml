@@ -253,7 +253,15 @@ Rectangle {
                 elide: Text.ElideRight
             }
             Label {
+                id: secondLine
                 objectName: "musicSecondLine"
+                // The name leads to whoever made it, but only while it is a
+                // name. This line carries the chapter where a track has one,
+                // and the word "loading" before that, and neither of those is
+                // somebody to go and see.
+                readonly property string leadsTo:
+                    (!Audio.loading && Audio.currentChapter === ""
+                     && Audio.track.artistId) ? Audio.track.artistId : ""
                 Layout.fillWidth: true
                 // Which song of it is playing, when the track is really
                 // several. That is the more useful of the two by a distance
@@ -267,10 +275,27 @@ Rectangle {
                         return Audio.currentChapter
                     return Audio.track.artist ? Audio.track.artist : ""
                 }
-                color: Audio.currentChapter !== "" && !Audio.loading
+                color: (Audio.currentChapter !== "" && !Audio.loading)
+                       || (secondLine.leadsTo !== "" && secondLineHover.hovered)
                        ? Theme.colors.text : Theme.colors.textMuted
                 font.pixelSize: 11
+                font.underline: secondLine.leadsTo !== "" && secondLineHover.hovered
                 elide: Text.ElideRight
+
+                HoverHandler {
+                    id: secondLineHover
+                    enabled: secondLine.leadsTo !== ""
+                    cursorShape: Qt.PointingHandCursor
+                }
+
+                // Only as wide as the words, so the rest of the bar is not a
+                // target for something that cannot be seen.
+                MouseArea {
+                    enabled: secondLine.leadsTo !== ""
+                    width: Math.min(secondLine.implicitWidth, parent.width)
+                    height: parent.height
+                    onClicked: App.openArtistMusic(secondLine.leadsTo)
+                }
             }
         }
 

@@ -1120,6 +1120,20 @@ class Database:
                 "music_checked_at=? WHERE key=?",
                 (artist_id, name, int(now if now is not None else time.time()), key))
 
+    def channel_for_artist(self, artist_id: str) -> str | None:
+        """The channel that releases under this artist, if one is known here.
+
+        Asked before anything is fetched, because a channel already followed is
+        the one worth standing on: it has the videos, the pictures and the rest
+        of itself, where the artist's own page often has nothing but songs.
+        """
+        if not artist_id:
+            return None
+        row = self.conn.execute(
+            "SELECT key FROM channels WHERE music_artist_id=? "
+            "ORDER BY tracked DESC LIMIT 1", (artist_id,)).fetchone()
+        return row["key"] if row else None
+
     def channel_video_ids(self, key: str, limit: int = 3) -> list[str]:
         """A few of this channel's videos, newest first, to ask the music
         service who made them. Shorts are left out: one is rarely the music

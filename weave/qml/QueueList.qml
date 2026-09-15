@@ -148,6 +148,13 @@ ListView {
                     elide: Text.ElideRight
                 }
                 Label {
+                    id: queuedArtist
+                    // Only where the song carries an address for whoever made
+                    // it, and never on the row that is playing, whose line is
+                    // mostly the words "Playing now" rather than a name.
+                    readonly property string leadsTo:
+                        !queuedRow.playing && queuedRow.modelData.artistId
+                        ? queuedRow.modelData.artistId : ""
                     width: parent.width
                     visible: (queuedRow.modelData.artist || "") !== ""
                              || queuedRow.playing
@@ -159,10 +166,28 @@ ListView {
                                 ? "  ·  " + queuedRow.modelData.artist : ""))
                           : queuedRow.modelData.artist
                     color: queuedRow.playing ? Theme.colors.accent
-                                             : Theme.colors.textMuted
+                           : (leadsTo !== "" && queuedArtistHover.hovered
+                              ? Theme.colors.text : Theme.colors.textMuted)
                     font.pixelSize: 10
                     font.weight: queuedRow.playing ? Font.DemiBold : Font.Normal
+                    font.underline: leadsTo !== "" && queuedArtistHover.hovered
                     elide: Text.ElideRight
+
+                    HoverHandler {
+                        id: queuedArtistHover
+                        enabled: queuedArtist.leadsTo !== ""
+                        cursorShape: Qt.PointingHandCursor
+                    }
+
+                    // A MouseArea, because the row's own press sits underneath
+                    // and a handler would not consume this one, so a press on
+                    // the name would jump the queue as well as leave the page.
+                    MouseArea {
+                        enabled: queuedArtist.leadsTo !== ""
+                        width: Math.min(queuedArtist.implicitWidth, parent.width)
+                        height: parent.height
+                        onClicked: App.openArtistMusic(queuedArtist.leadsTo)
+                    }
                 }
             }
         }

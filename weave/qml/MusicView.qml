@@ -265,6 +265,11 @@ Item {
                                     subtitle: modelData.subtitle
                                     picture: modelData.thumbnail
                                     removable: shelf.saved
+                                    // The name under a tile goes to whoever
+                                    // made it, where the entry carries an
+                                    // address for them.
+                                    subtitleLeads: (modelData.artistId || "") !== ""
+                                    onSubtitleChosen: App.openArtistMusic(modelData.artistId)
                                     onChosen: shelf.saved ? App.playSource(modelData.sourceId)
                                                           : App.playShelfItem(shelf.shelfIndex, index)
                                     onAskedFor: if (!shelf.saved)
@@ -374,6 +379,8 @@ Item {
                         subtitle: modelData.subtitle
                         picture: modelData.thumbnail
                         removable: view.openShelf.kind === "saved"
+                        subtitleLeads: (modelData.artistId || "") !== ""
+                        onSubtitleChosen: App.openArtistMusic(modelData.artistId)
                         // Played through the section it belongs to, so a tile
                         // does the same thing here as it does in the two rows.
                         onChosen: view.openShelf.kind === "saved"

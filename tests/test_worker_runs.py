@@ -963,7 +963,7 @@ class WorkerRuns(unittest.TestCase):
                    "_history", "_search", "_tracks", "_station", "_detail", "_cache_job",
                    "_twitch", "_checkup", "_playlists", "_playlist_items", "_lengths",
                    "_channel_members", "_now_side", "_now_detail",
-                   "_artist_music")
+                   "_artist_music", "_artist_open")
 
         def make(held: str):
             bridge = Bridge.__new__(Bridge)
@@ -1046,6 +1046,12 @@ class WorkerRuns(unittest.TestCase):
         bridge, worker = make("_artist_music")
         Bridge._on_worker_crashed(bridge, worker, "x")
         self.assertFalse(bridge._channel_music_busy)
+
+        # Holds no flag of its own. What it must not do is leave the line
+        # saying it is still looking for the channel.
+        bridge, worker = make("_artist_open")
+        Bridge._on_worker_crashed(bridge, worker, "x")
+        self.assertIn("x", bridge._status, "a dead lookup said nothing")
 
         bridge, worker = make("_cache_job")
         Bridge._on_worker_crashed(bridge, worker, "x")

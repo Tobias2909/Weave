@@ -400,6 +400,8 @@ class Bridge(QObject):
         # than stored, because only the identity is worth keeping and the songs
         # themselves go stale.
         self._artist_music: ArtistMusic | None = None
+        # Finding which channel an artist really is, before going there.
+        self._artist_open: ArtistMusic | None = None
         self._channel_music: list = []
         self._channel_music_name = ""
         self._channel_music_busy = False
@@ -3281,22 +3283,58 @@ class Bridge(QObject):
         self._queue_track(found[0] if found else None, play_next)
 
     @Slot(str)
-    def openArtistMusic(self, channel_id: str) -> None:
-        """Open a channel on its music, which is what pressing an artist means.
+    def openArtistMusic(self, artist_id: str) -> None:
+        """Open whoever made this, on their music.
 
-        The id comes off a song, so it is the artist's own channel and already
-        the answer this page would otherwise go looking for. It is written down
-        before the page opens, so the tab has nothing to resolve.
+        The id on a song is the artist as the music service files them, and that
+        is frequently a generated channel carrying the songs and nothing else,
+        with no videos, no pictures and no streams. Standing there is worse than
+        standing on the channel itself, so the real one is found first.
+
+        Free where it is already known, and otherwise found by the same call
+        that fetches the songs, so asking costs nothing extra.
         """
-        if not channel_id or not ids.CHANNEL_ID.match(channel_id):
+        if not artist_id or not ids.CHANNEL_ID.match(artist_id):
             return
-        key = ids.channel_key(channel_id)
+        known = self._db.channel_for_artist(artist_id)
+        if known:
+            self.openChannel(known)
+            self.showChannelTab("music")
+            return
+        if self._artist_open is not None and self._artist_open.isRunning():
+            return
+        self._set_status("Looking for the channel")
+        self._artist_open = ArtistMusic(self._cfg, "", artist_id, [], artist_id,
+                                        parent=self)
+        self._artist_open.ready.connect(self._on_artist_opened)
+        self._artist_open.failed.connect(self._on_artist_open_failed)
+        self._launch(self._artist_open)
+
+    def _on_artist_opened(self, _key: str, found: dict) -> None:
+        """Go to the channel the artist page points at, not the one asked for.
+
+        The songs came back with it, so they are put in front of the tab rather
+        than fetched a second time on arrival.
+        """
+        artist_id = str(found.get("artistId") or "")
+        real = str(found.get("channelId") or "")
+        target = real if ids.CHANNEL_ID.match(real) else artist_id
+        if not target:
+            return
+        key = ids.channel_key(target)
         self.openChannel(key)
         row = self._db.channel(key) or {}
-        if not row.get("music_checked_at"):
-            self._db.set_channel_music(key, channel_id,
-                                       str(row.get("title") or ""))
+        self._db.set_channel_music(key, artist_id,
+                                   found.get("artistName") or str(row.get("title") or ""))
+        self._channel_music_key = key
+        self._channel_music = found.get("songs") or []
+        self._channel_music_name = found.get("artistName") or ""
+        self._set_status("")
         self.showChannelTab("music")
+        self.channelTabChanged.emit()
+
+    def _on_artist_open_failed(self, message: str) -> None:
+        self._set_status(message)
 
     @Slot(int)
     def playChannelMusic(self, index: int) -> None:
@@ -4254,6 +4292,13 @@ class Bridge(QObject):
         elif worker is self._artist_music:
             self._channel_music_busy = False
             self.channelTabChanged.emit()
+        elif worker is self._artist_open:
+            # Holds no flag. It puts a line up while it looks for the channel,
+            # and the line below replaces that with what went wrong, which is
+            # the more useful of the two. Named here all the same, because the
+            # inventory test insists every worker with a handle on the bridge
+            # is.
+            pass
         elif worker is self._cache_job:
             self._cache_working = False
             self.cacheChanged.emit()

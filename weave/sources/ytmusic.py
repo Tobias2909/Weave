@@ -478,6 +478,9 @@ def home(profile_path: str | None, limit: int = 6) -> list[dict]:
                 "videoId": str(video_id or ""),
                 "playlistId": str(playlist_id or ""),
                 "thumbnail": _thumb(item),
+                # So the name under a tile can be pressed here as well. A
+                # shelf entry that names nobody reachable carries nothing.
+                "artistId": next((a["id"] for a in artists_of(item) if a["id"]), ""),
             })
         if items:
             out.append({"title": str(shelf.get("title") or ""), "items": items})
@@ -504,6 +507,16 @@ def artist_of(profile_path: str | None, video_id: str) -> list[dict]:
     return artists_of(tracks[0]) if tracks and isinstance(tracks[0], dict) else []
 
 
+def _no_artist() -> dict:
+    """Not an artist, said freshly every time.
+
+    Built rather than shared, because a copy of a shared one is shallow and the
+    list inside it stays the same list, so a caller adding to what it was given
+    would change what every later call answered.
+    """
+    return {"name": "", "songs": [], "channel_id": ""}
+
+
 def artist(profile_path: str | None, channel_id: str, limit: int = 200) -> dict:
     """An artist's own page, flattened to the songs on it.
 
@@ -516,20 +529,32 @@ def artist(profile_path: str | None, channel_id: str, limit: int = 200) -> dict:
     are not read here.
     """
     if not channel_id:
-        return {"name": "", "songs": []}
+        return _no_artist()
     try:
         page = client(profile_path).get_artist(channel_id)
     except MusicError:
         raise
+    except (KeyError, TypeError):
+        # An artist page is read through a header that an ordinary channel does
+        # not have, and the library reaches for it without looking. So this is
+        # how "not an artist" arrives, and it is an answer rather than a fault.
+        # Raised as one, it reached the window as a KeyError about a renderer.
+        return _no_artist()
     except Exception as exc:
         raise _blame("the artist", exc) from exc
     page = page or {}
+    # The channel you would subscribe to, which is not the one asked about. An
+    # artist is reached through a browse id that is often a generated channel
+    # carrying nothing but the songs, while this is the channel with the
+    # videos, the pictures and everything else on it.
+    real = str(page.get("channelId") or "")
     shelf = page.get("songs")
     shelf = shelf if isinstance(shelf, dict) else {}
     full = str(shelf.get("browseId") or "")
     if full:
         songs, _offered = playlist_tracks(profile_path, full, limit=limit)
         if songs:
-            return {"name": str(page.get("name") or ""), "songs": songs}
+            return {"name": str(page.get("name") or ""), "songs": songs,
+                    "channel_id": real}
     return {"name": str(page.get("name") or ""),
-            "songs": to_tracks(shelf.get("results") or [])}
+            "songs": to_tracks(shelf.get("results") or []), "channel_id": real}

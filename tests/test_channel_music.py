@@ -37,6 +37,12 @@ class FakeMusic:
         return self.artists.get(video_id, [])
 
 
+# Channel ids are UC and twenty two more. Anything shorter is not one, and
+# the guard that says so is why short stand ins never reached the code.
+TOPIC = "UC" + "t" * 22
+REAL = "UC" + "r" * 22
+
+
 def worker(channel_id="UC1", videos=(), known="") -> ArtistMusic:
     return ArtistMusic(Config(raw={}), "yt:UC1", channel_id, list(videos), known)
 
@@ -124,6 +130,119 @@ class WhatIsRemembered(unittest.TestCase):
                 (f"yt:{ext}", ext, ext, short, 100, 100))
         self.db.conn.commit()
         self.assertEqual(sorted(self.db.channel_video_ids("yt:UC1")), ["aaa", "ccc"])
+
+
+class ANonArtistChannel(unittest.TestCase):
+    def test_it_answers_rather_than_raising(self) -> None:
+        # An artist page is read through a header an ordinary channel does not
+        # have, and the library reaches for it without looking. Raised, that
+        # arrived in the window as a KeyError about a renderer.
+        from weave.sources import ytmusic
+
+        class Client:
+            def get_artist(self, _channel_id):
+                raise KeyError("musicImmersiveHeaderRenderer")
+
+        was = ytmusic.client
+        ytmusic.client = lambda _profile: Client()
+        try:
+            found = ytmusic.artist(None, "UC1")
+        finally:
+            ytmusic.client = was
+        self.assertEqual(found["songs"], [])
+        self.assertEqual(found["name"], "")
+
+    def test_the_empty_answer_is_a_copy(self) -> None:
+        # Handed out as the shared one, a caller that put something in it would
+        # change what every later call answered.
+        from weave.sources import ytmusic
+
+        one = ytmusic.artist(None, "")
+        one["songs"].append("something")
+        self.assertEqual(ytmusic.artist(None, "")["songs"], [])
+
+
+class TheRealChannel(unittest.TestCase):
+    """An artist id is often a generated channel carrying the songs and nothing
+    else. Standing there means no videos, no pictures and no streams."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self._tmp.name) / "t.db")
+        self.bridge = Bridge.__new__(Bridge)
+        QObject.__init__(self.bridge)
+        self.bridge._db = self.db
+        self.bridge._cfg = Config(raw={})
+        self.bridge._channel_music = []
+        self.bridge._channel_music_name = ""
+        self.bridge._channel_music_key = ""
+        self.bridge._channel_music_busy = False
+        self.bridge._artist_open = None
+        self.opened: list = []
+        self.tabs: list = []
+        # The real one keeps a row for a channel it has never seen, which is
+        # what the write below then has something to write to.
+        def open_channel(key):
+            self.opened.append(key)
+            if not self.db.channel(key):
+                self.db.conn.execute(
+                    "INSERT INTO channels(key, platform, ext_id, title, added_at) "
+                    "VALUES(?,'youtube',?,'',1)", (key, key.split(":", 1)[-1]))
+                self.db.conn.commit()
+
+        self.bridge.openChannel = open_channel
+        self.bridge.showChannelTab = self.tabs.append
+        self.bridge._set_status = lambda *_a, **_k: None
+        self.bridge.channelTabChanged = type("S", (), {"emit": lambda self: None})()
+        self.started: list = []
+        self.bridge._launch = lambda worker: self.started.append(worker) or True
+
+    def tearDown(self) -> None:
+        self.db.close()
+        self._tmp.cleanup()
+
+    def add_channel(self, key, ext, title, artist_id=None):
+        self.db.conn.execute(
+            "INSERT INTO channels(key, platform, ext_id, title, added_at) "
+            "VALUES(?,'youtube',?,?,1)", (key, ext, title))
+        self.db.conn.commit()
+        if artist_id is not None:
+            self.db.set_channel_music(key, artist_id, title)
+
+    def test_a_channel_already_known_costs_no_request(self) -> None:
+        self.add_channel("yt:" + REAL, REAL, "The Band", artist_id=TOPIC)
+        Bridge.openArtistMusic(self.bridge, TOPIC)
+        self.assertEqual(self.opened, ["yt:" + REAL])
+        self.assertEqual(self.tabs, ["music"])
+        self.assertEqual(self.started, [], "a known answer was looked up again")
+
+    def test_the_lookup_finds_the_channel_the_artist_page_points_at(self) -> None:
+        Bridge._on_artist_opened(self.bridge, "", {
+            "artistId": TOPIC, "artistName": "The Band",
+            "channelId": REAL, "songs": [{"key": "yt:s1"}]})
+        self.assertEqual(self.opened, ["yt:" + REAL],
+                         "landed on the generated channel rather than the real one")
+        # And the mapping is written down, so the next press costs nothing.
+        self.assertEqual(self.db.channel_for_artist(TOPIC), "yt:" + REAL)
+
+    def test_the_songs_come_with_it(self) -> None:
+        Bridge._on_artist_opened(self.bridge, "", {
+            "artistId": TOPIC, "artistName": "The Band",
+            "channelId": REAL, "songs": [{"key": "yt:s1"}, {"key": "yt:s2"}]})
+        self.assertEqual(len(self.bridge._channel_music), 2,
+                         "the songs already in hand were thrown away")
+        self.assertEqual(self.bridge._channel_music_key, "yt:" + REAL)
+
+    def test_without_a_real_channel_the_artist_is_where_it_goes(self) -> None:
+        Bridge._on_artist_opened(self.bridge, "", {
+            "artistId": TOPIC, "artistName": "The Band",
+            "channelId": "", "songs": []})
+        self.assertEqual(self.opened, ["yt:" + TOPIC])
+
+    def test_a_channel_that_is_not_one_is_refused(self) -> None:
+        Bridge.openArtistMusic(self.bridge, "not-a-channel")
+        self.assertEqual(self.opened, [])
+        self.assertEqual(self.started, [])
 
 
 class TheTab(unittest.TestCase):

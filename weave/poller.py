@@ -2355,7 +2355,7 @@ class ArtistMusic(Worker):
             if not artist_id:
                 # Asked, and there is none. Said plainly so it can be kept.
                 self.ready.emit(self._key, {"artistId": "", "artistName": "",
-                                            "songs": []})
+                                            "channelId": "", "songs": []})
                 return
             found = ytmusic.artist(profile, artist_id)
         except ytmusic.MusicError as exc:
@@ -2364,6 +2364,10 @@ class ArtistMusic(Worker):
         self.ready.emit(self._key, {
             "artistId": artist_id,
             "artistName": found["name"] or name,
+            # The channel with everything else on it. An artist is often
+            # reached through a generated channel that carries the songs and
+            # nothing more, and this is the one worth standing on.
+            "channelId": found.get("channel_id", ""),
             "songs": [{
                 "key": t.key, "videoId": t.video_id, "title": t.title,
                 "artist": t.artist, "album": t.album, "duration": t.duration,
@@ -2379,6 +2383,9 @@ class ArtistMusic(Worker):
         # The channel may be the artist already, which is the case every time
         # one is reached from a song rather than from the feed.
         if self._channel_id:
+            # An ordinary channel has no artist page at all, which arrives as
+            # an empty answer rather than as a failure, so this asks and moves
+            # on rather than guarding the call.
             page = ytmusic.artist(profile, self._channel_id)
             if page["songs"] or page["name"]:
                 return self._channel_id, page["name"]
