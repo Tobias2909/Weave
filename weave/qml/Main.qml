@@ -468,10 +468,15 @@ ApplicationWindow {
 
     MiniPlayer {
         id: miniPlayer
+        objectName: "miniPlayer"
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        z: 2
+        // Over the Now playing page, which is what makes that page come out
+        // from behind the bar rather than over it. It shares this with
+        // nothing: the banner is at the other end of the window and the
+        // notices and the menus are higher still.
+        z: 4
     }
 
     // ---- sidebar ---------------------------------------------------------
@@ -932,6 +937,17 @@ ApplicationWindow {
     Item {
         objectName: "nowPlayingSlot"
         clip: true
+        // Over every view and over the detail panel, under the music bar.
+        //
+        // Stated rather than left to the order these are written in, which is
+        // what it used to rest on and got wrong: the grid, a channel's
+        // playlists and a channel's music are all written after this, so they
+        // were drawn over the page. It showed on the way down, where the view
+        // underneath is visible again from the first frame of the movement
+        // while the page is still travelling, so the page slid away behind
+        // the cards and only landed in front of them. The panel would have
+        // done the same on the right, for the same reason.
+        z: 3
         // Out of the scene only until the page has been opened for the first
         // time. Before then the page has no height yet and would be drawn at
         // the top of the window for a frame; after then it stays, because

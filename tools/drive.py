@@ -339,6 +339,24 @@ class Smoke:
             print(f"[{'ok' if ok else 'FAIL'}] {name}" + (f"  {detail}" if detail else ""),
                   flush=True)
 
+    def layers(self, bridge, window) -> None:
+        """What the Now playing page is drawn over, and what it is drawn under.
+
+        Checked as numbers rather than by eye, because the fault it guards
+        against is invisible at rest: the page only meets the view behind it
+        while it is moving, and it landed in the right place every time.
+        """
+        slot = read(find(window, "nowPlayingSlot"), "z")
+        for name in ("grid", "detailPanel", "musicView", "settingsView"):
+            under = find(window, name)
+            if under is None:
+                continue
+            self.check(f"the page is drawn over {name}", slot > read(under, "z"),
+                       f"{slot} against {read(under, 'z')}")
+        bar = read(find(window, "miniPlayer"), "z")
+        self.check("and under the music bar, which is what it comes out from "
+                   "behind", slot < bar, f"{slot} against {bar}")
+
     def space_bar(self, bridge, window) -> None:
         """The space bar stops and starts the music from anywhere, and is a
         space where something is being typed into.
@@ -1614,6 +1632,7 @@ class Smoke:
 
         self.music(bridge, window)
         self.space_bar(bridge, window)
+        self.layers(bridge, window)
 
         # A box, then the video menu, whose box entries sit between the
         # separator and the last entry however many entries come above.
