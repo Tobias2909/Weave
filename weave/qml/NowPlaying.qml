@@ -29,6 +29,13 @@ Item {
         // Nothing is fetched and nothing decoded until this is true, so the
         // page being open is the whole cost of being able to show a picture.
         Audio.setVideoWanted(wanted)
+        // And ask the surface to draw once. It builds its render context on a
+        // paint, and it has no reason of its own to paint again: the only one
+        // it gets is at startup, before there is a player, where it correctly
+        // gives up. Without this nudge it never draws again, the context is
+        // never built, and mpv says only "No render context set" for ever.
+        if (wanted)
+            videoSurface.update()
     }
     visible: wanted || (everShown && shift.y < page.height)
 
@@ -142,6 +149,7 @@ Item {
                     // would ever paint, nothing would build, and no frame would
                     // ever come.
                     VideoSurface {
+                        id: videoSurface
                         objectName: "nowPlayingVideo"
                         anchors.fill: parent
                     }

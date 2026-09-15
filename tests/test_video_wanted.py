@@ -148,3 +148,60 @@ class WhetherAFrameExists(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheCommandItself(unittest.TestCase):
+    """Run for real, with only the subprocess stubbed.
+
+    Every other test here replaces the whole resolver, which is what let a
+    wrong call sit in it unexecuted: the command line was never built once in
+    the entire suite, and the first thing to run it was a person opening the
+    page.
+    """
+
+    def run_it(self):
+        from unittest import mock
+
+        from weave import audio
+
+        class Result:
+            stdout = "https://example.invalid/video\n"
+            stderr = ""
+            returncode = 0
+
+        with mock.patch.object(audio, "run_process", return_value=Result()) as ran:
+            found = audio.resolve_video(Config(raw={}),
+                                        "https://www.youtube.com/watch?v=x")
+        return found, list(ran.call_args[0][0])
+
+    def test_it_asks_yt_dlp_for_a_capped_picture(self) -> None:
+        found, command = self.run_it()
+        self.assertEqual(found, "https://example.invalid/video")
+        self.assertEqual(command[0], "yt-dlp")
+        self.assertIn("--get-url", command)
+        self.assertIn("-f", command)
+        # Capped rather than best. The largest a music video comes in is
+        # several times the bytes for a pane a few hundred pixels wide.
+        self.assertIn("1080", command[command.index("-f") + 1])
+
+    def test_it_goes_through_the_shared_preparation(self) -> None:
+        # Which is what puts the JavaScript runtime on the line. Without it the
+        # signed address cannot be worked out and nothing plays at all.
+        _found, command = self.run_it()
+        self.assertTrue(any("cookies" in part for part in command),
+                        "the picture was asked for as a stranger")
+
+    def test_no_address_is_an_empty_answer(self) -> None:
+        from unittest import mock
+
+        from weave import audio
+
+        class Nothing:
+            stdout = ""
+            stderr = "ERROR: Requested format is not available"
+            returncode = 1
+
+        with mock.patch.object(audio, "run_process", return_value=Nothing()):
+            self.assertEqual(
+                audio.resolve_video(Config(raw={}), "https://example.invalid/x"),
+                "")

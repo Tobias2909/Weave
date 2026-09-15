@@ -136,8 +136,8 @@ def resolve_video(cfg: Config, url: str,
     both at once costs about twice as long, measured, and that wait would be
     paid by every press whether or not anybody was looking.
     """
-    command = prepare(cfg, ["--no-playlist", "-f", VIDEO_FORMAT,
-                            "--get-url", url])
+    command = prepare(["yt-dlp", *cookie_args(cfg),
+                       "-f", VIDEO_FORMAT, "--get-url", url])
     result = run_process(command, cancel=cancel, timeout=180)
     for line in result.stdout.splitlines():
         if line.startswith("http"):

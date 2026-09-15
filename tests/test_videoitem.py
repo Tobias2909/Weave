@@ -61,3 +61,33 @@ class OneContextOnly(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ThePageMustAskItToDraw(unittest.TestCase):
+    """The surface builds its render context on a paint, and it has no reason
+    of its own to paint again. The only paint it gets for free is at startup,
+    before there is a player, where it correctly gives up. Without something
+    asking it to draw when the page opens, the context is never built and mpv
+    says only "No render context set" for ever, with the artwork sitting there
+    looking like a video that will not start."""
+
+    def test_the_page_nudges_it_open(self) -> None:
+        from pathlib import Path as P
+
+        page = (P(__file__).resolve().parent.parent
+                / "weave" / "qml" / "NowPlaying.qml").read_text()
+        self.assertIn("VideoSurface", page)
+        self.assertIn(".update()", page,
+                      "nothing asks the surface to draw, so it never will")
+
+
+class TakenDownBeforeThePlayer(unittest.TestCase):
+    def test_there_is_a_way_to_take_it_down(self) -> None:
+        # mpv closing while a render context still points at it takes the
+        # process with it, at the exit rather than at the fault.
+        self.assertTrue(callable(videoitem.shutdown))
+
+    def test_taking_it_down_twice_is_harmless(self) -> None:
+        videoitem.shutdown()
+        videoitem.shutdown()
+        self.assertIsNone(videoitem._context)

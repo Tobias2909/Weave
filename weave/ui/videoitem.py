@@ -265,6 +265,29 @@ class _Renderer(QQuickFramebufferObject.Renderer):
         and is released by the item, in an order the player survives."""
 
 
+def shutdown() -> None:
+    """Take the picture down before the player it draws is closed.
+
+    Order rather than politeness. mpv closing while a render context still
+    points at it takes the process with it, and it does so at the exit rather
+    than at the fault, so it reads as a crash in whatever ran last.
+
+    Rendering is stopped first so the render thread cannot enter the context
+    again, and only then is it freed.
+    """
+    global _context, _proc, _finished
+    _finished = True
+    if _engine is not None:
+        _engine.render_ready(False)
+    context, _context = _context, None
+    if context is not None:
+        try:
+            context.free()
+        except Exception:
+            pass
+    _proc = None
+
+
 def register() -> None:
     """Make the surface reachable from QML."""
     from PySide6.QtQml import qmlRegisterType

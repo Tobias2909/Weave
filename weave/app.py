@@ -197,8 +197,12 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
         feed_timer.stop()
         live_timer.stop()
         _save_geometry(window, db)
-        # Order matters. Background threads first, then the watcher, then the
-        # engine, so nothing is destroyed while it is still running.
+        # Order matters. The picture first, because mpv closing while a
+        # render context still points at it takes the process with it, and it
+        # does so at the exit rather than at the fault. Then the background
+        # threads, the watcher and the engine, so nothing is destroyed while it
+        # is still running.
+        videoitem.shutdown()
         bridge.shutdown()
         player.stop()
 
