@@ -291,7 +291,12 @@ Item {
                             Audio.track.artistId ? Audio.track.artistId : ""
                         width: parent.width
                         visible: text !== ""
-                        text: Audio.track.artist ? Audio.track.artist : ""
+                        // What the music service filed it under, or failing
+                        // that what the extraction named, which is how an
+                        // ordinary video played as music gets a line here.
+                        text: Audio.track.artist ? Audio.track.artist
+                                                 : (App.nowDetail.artistText
+                                                    ? App.nowDetail.artistText : "")
                         color: leadsTo !== "" && artistHover.hovered
                                ? Theme.colors.text : Theme.colors.textMuted
                         font.pixelSize: 13
@@ -316,10 +321,12 @@ Item {
 
                     Item { width: 1; height: 4 }
 
-                    // Views and the date are known only for a song that is also
-                    // a video here. A song that exists only in the music service
-                    // has no row among the videos and so says nothing, which is
-                    // the ordinary case rather than a failure.
+                    // Who made it and how it has been received. A song that
+                    // is also a video Weave follows answers from what is
+                    // stored; for every other one the resolve that found the
+                    // address answers, since it is a full extraction whatever
+                    // is printed and so costs nothing to ask. Empty only until
+                    // that resolve comes back, a few seconds after the press.
                     Label {
                         objectName: "nowPlayingFacts"
                         width: parent.width
@@ -331,9 +338,6 @@ Item {
                                 bits.push(d.channelTitle)
                             if (d.viewsText)
                                 bits.push(d.viewsText + " views")
-                            // Likes arrive with the comments call, so the line
-                            // grows once that tab has been opened and never
-                            // asks for them on its own.
                             if (d.likesText)
                                 bits.push(d.likesText + " likes")
                             if (d.ageText)
@@ -342,6 +346,32 @@ Item {
                         }
                         color: Theme.colors.textMuted
                         font.pixelSize: 12
+                        elide: Text.ElideRight
+                    }
+
+                    // The rest of what the same call carried. Its own line and
+                    // a size smaller, because an album and a category are what
+                    // you read second, and one line of eight things separated
+                    // by dots is a line nobody reads at all.
+                    Label {
+                        objectName: "nowPlayingMoreFacts"
+                        width: parent.width
+                        visible: text !== ""
+                        text: {
+                            var bits = []
+                            var d = App.nowDetail
+                            if (d.albumText)
+                                bits.push(d.albumText)
+                            if (d.commentsText)
+                                bits.push(d.commentsText + " comments")
+                            if (d.followersText)
+                                bits.push(d.followersText + " subscribers")
+                            if (d.categoryText)
+                                bits.push(d.categoryText)
+                            return bits.join("  ·  ")
+                        }
+                        color: Theme.colors.textMuted
+                        font.pixelSize: 11
                         elide: Text.ElideRight
                     }
 
@@ -357,15 +387,31 @@ Item {
 
                     Item { width: 1; height: 6 }
 
-                    // A track that is really several songs says so, and the
-                    // whole list of them is one press away.
-                    FlatButton {
-                        objectName: "nowPlayingChaptersButton"
-                        visible: Audio.chapters.length > 0
-                        text: (chapterList.visible ? "Hide the songs in it  ·  "
-                                                   : "Songs in it  ·  ")
-                              + Audio.chapters.length
-                        onClicked: chapterList.visible = !chapterList.visible
+                    Row {
+                        width: parent.width
+                        spacing: 8
+
+                        // Sound alone, and remembered. On, no picture is ever
+                        // resolved and none is decoded, which measured at 0 KiB
+                        // and a fifth of a percent of a core against 2411
+                        // kbit/s and nine percent with one.
+                        FlatButton {
+                            objectName: "nowPlayingAudioOnly"
+                            text: "Audio only"
+                            accent: Audio.audioOnly
+                            onClicked: Audio.setAudioOnly(!Audio.audioOnly)
+                        }
+
+                        // A track that is really several songs says so, and the
+                        // whole list of them is one press away.
+                        FlatButton {
+                            objectName: "nowPlayingChaptersButton"
+                            visible: Audio.chapters.length > 0
+                            text: (chapterList.visible ? "Hide the songs in it  ·  "
+                                                       : "Songs in it  ·  ")
+                                  + Audio.chapters.length
+                            onClicked: chapterList.visible = !chapterList.visible
+                        }
                     }
 
                     ListView {

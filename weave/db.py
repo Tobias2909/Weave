@@ -675,6 +675,25 @@ class Database:
     def set_image_max_mb(self, megabytes: int) -> None:
         self.set_state("image_max_mb", str(max(16, int(megabytes))))
 
+    def video_height(self, default: int) -> int:
+        """The ceiling for the music player's picture, in pixels of height.
+
+        Here rather than in config.toml for the same reason as the cache
+        ceiling: the file stays something a person wrote and can still read,
+        and a choice made by clicking is state. Only sanity is checked, not
+        which heights the window offers, since a number put here by hand is
+        still a number this has to honour.
+        """
+        raw = self.get_state("video_height")
+        try:
+            chosen = int(raw)
+        except (TypeError, ValueError):
+            return int(default)
+        return max(144, chosen)
+
+    def set_video_height(self, height: int) -> None:
+        self.set_state("video_height", str(max(144, int(height))))
+
     def browser_profile(self) -> str:
         """The cookie profile picked in the window, or empty when none was.
 

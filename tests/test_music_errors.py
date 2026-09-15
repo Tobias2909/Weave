@@ -141,6 +141,10 @@ class WhatTheWindowShows(unittest.TestCase):
         class Player(QObject):
             failed = Signal(str)
             trackChanged = Signal()
+            # What the resolve learned. The bridge connects to it, so a stand
+            # in without it says the wiring is broken when it is not.
+            factsChanged = Signal()
+            trackFacts = {}
 
             def pause_for_video(self):
                 pass

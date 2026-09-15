@@ -26,6 +26,7 @@ from .. import __version__
 from .. import format as fmt
 from .. import imagecache
 from .. import palette, themes
+from .. import audio
 from .. import browsers, cookies, ids
 from .. import paths, tokens
 from ..config import Config
@@ -215,6 +216,7 @@ class Bridge(QObject):
     searchRestored = Signal(str)
     checksChanged = Signal()
     cacheChanged = Signal()
+    videoQualityChanged = Signal()
     cookiesChanged = Signal()
     startingChanged = Signal()
     updateChanged = Signal()
@@ -776,6 +778,14 @@ class Bridge(QObject):
     importMessage = Property(str, lambda self: self._import_message, notify=importChanged)
     recommendedText = Property(str, lambda self: self._recommended_line(),
                                notify=recommendedChanged)
+    videoCeiling = Property(int, lambda self: self._video_ceiling(),
+                           notify=videoQualityChanged)
+    videoCeilingText = Property(str, lambda self: audio.height_label(self._video_ceiling()),
+                                notify=videoQualityChanged)
+    videoChoices = Property("QVariantList", lambda _self: [
+        {"height": step, "label": audio.height_label(step)}
+        for step in audio.VIDEO_HEIGHT_STEPS], notify=videoQualityChanged)
+
     cacheCeiling = Property(int, lambda self: self._ceiling_mb(), notify=cacheChanged)
     cacheCeilingText = Property(str, lambda self: imagecache.ceiling_label(self._ceiling_mb()),
                                 notify=cacheChanged)
@@ -978,10 +988,52 @@ class Bridge(QObject):
         """What is known about the song playing, in the panel's shape.
 
         A song that came from YouTube Music alone has no row among the videos,
-        so this is empty for it and the page falls back to what the player
-        itself carries. That is the normal case, not a failure.
+        so the stored half of this is empty for it. That is the normal case
+        rather than a failure, and the resolve that found the address answers
+        for the rest: it is a full extraction whatever is printed, so the
+        views, the likes, the date and the album cost nothing.
         """
-        return self._detail_for(self._now_key())
+        detail = dict(self._detail_for(self._now_key()))
+        return self._with_player_facts(detail)
+
+    # What a fact from the player is called once it is drawn, and how it is
+    # turned into words. A stored row is the more exact of the two sources and
+    # is never overwritten here, the same rule `_extra` follows.
+    _FACT_TEXT = (
+        ("channel", "channelTitle", None),
+        ("views", "viewsText", fmt.count_text),
+        ("likes", "likesText", fmt.count_text),
+        ("published_at", "ageText", fmt.age_text),
+        ("comments", "commentsText", fmt.count_text),
+        ("followers", "followersText", fmt.count_text),
+        ("album", "albumText", None),
+        ("artist", "artistText", None),
+        ("category", "categoryText", None),
+    )
+
+    def _with_player_facts(self, detail: dict) -> dict:
+        """Fill what the videos know nothing about from what the resolve said.
+
+        Only where the stored row said nothing, so a song that is also a
+        followed channel's video keeps the exact figures Weave already has
+        and does not flicker between two accounts of the same number.
+        """
+        if self._audio is None:
+            return detail
+        facts = self._audio.trackFacts
+        if not facts:
+            return detail
+        for name, into, shape in self._FACT_TEXT:
+            if detail.get(into):
+                continue
+            value = facts.get(name)
+            if value in (None, "", 0):
+                continue
+            detail[into] = shape(value) if shape else str(value)
+        year = facts.get("year")
+        if year and not detail.get("ageText"):
+            detail["ageText"] = str(year)
+        return detail
 
     def _get_now_words(self) -> dict:
         return dict(self._now_words)
@@ -1987,6 +2039,27 @@ class Bridge(QObject):
         self.cacheChanged.emit()
         self._run_cache_job(ImageCacheJob.PRUNE if held > megabytes * 1024 * 1024
                             else ImageCacheJob.MEASURE)
+
+    def _video_ceiling(self) -> int:
+        """The ceiling in force for the music player's picture. The config
+        carries the default and the choice made here overrides it."""
+        return self._db.video_height(self._cfg.music_video_height)
+
+    @Slot(int)
+    def setVideoCeiling(self, height: int) -> None:
+        """Choose how large a picture the music player may fetch.
+
+        It takes hold on the next song rather than this one. Changing it
+        mid song would mean dropping a picture that is already decoding and
+        resolving a second address for the same track, which is a few seconds
+        of waiting and a second request to pay for a difference nobody asked
+        to see right now.
+        """
+        height = int(height)
+        if height not in audio.VIDEO_HEIGHT_STEPS or height == self._video_ceiling():
+            return
+        self._db.set_video_height(height)
+        self.videoQualityChanged.emit()
 
     @Slot()
     def refreshCookieProfiles(self) -> None:
@@ -3123,6 +3196,11 @@ class Bridge(QObject):
         # there describing a track that had stopped, with no way back to it.
         audio.trackChanged.connect(self._close_now_playing_if_silent)
         audio.trackChanged.connect(self._forget_now)
+        # The facts arrive a few seconds after the press, with the address, so
+        # the page has to be told that what it drew under the picture has
+        # grown. Its own signal and not trackChanged, which would read as a
+        # different song and ask for the words and the comments all over again.
+        audio.factsChanged.connect(self.nowChanged.emit)
 
     def _close_now_playing_if_silent(self) -> None:
         if self._view_kind != NOWPLAYING:

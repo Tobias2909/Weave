@@ -348,6 +348,63 @@ Item {
                                 onClicked: App.clearImageCache()
                             }
                         }
+
+                        Label {
+                            width: parent.width
+                            text: "The music player fetches a picture only while the Now "
+                                  + "playing page is open, and never for anything over a "
+                                  + "quarter of an hour. This is the tallest it will ask "
+                                  + "for. A song offered only smaller is shown at what it "
+                                  + "has, and a new ceiling takes hold at the next song."
+                            color: Theme.colors.textMuted
+                            font.pixelSize: 11
+                            wrapMode: Text.Wrap
+                        }
+
+                        Row {
+                            spacing: 8
+
+                            Label {
+                                width: view.wordWidth
+                                height: 28
+                                text: "Music video"
+                                color: Theme.colors.textMuted
+                                font.pixelSize: 12
+                                verticalAlignment: Text.AlignVCenter
+                            }
+
+                            FlatButton {
+                                id: videoCeilingButton
+                                objectName: "videoCeiling"
+                                text: App.videoCeilingText + "  \u25be"
+                                onClicked: videoCeilingMenu.popup(videoCeilingButton, 0,
+                                                                  videoCeilingButton.height + 2)
+
+                                ThemedMenu {
+                                    id: videoCeilingMenu
+                                    objectName: "videoCeilingMenu"
+                                    implicitWidth: 160
+
+                                    Repeater {
+                                        model: App.videoChoices
+
+                                        ThemedMenuItem {
+                                            required property var modelData
+
+                                            // The tick marks the one in force, the same as
+                                            // the picture cache's own menu does it.
+                                            text: modelData.height === App.videoCeiling
+                                                  ? modelData.label + "   \u2713"
+                                                  : modelData.label
+                                            onTriggered: {
+                                                App.setVideoCeiling(modelData.height)
+                                                videoCeilingMenu.dismiss()
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 

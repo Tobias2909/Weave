@@ -115,6 +115,12 @@ image_days = 7
 # Ceiling for the image cache. A thumbnail averages about 17 KB.
 image_max_mb = 300
 
+[music]
+# The tallest picture the music player will fetch for a song. A ceiling rather
+# than a demand, so a video offered only smaller is shown at what it has. The
+# settings page writes its own choice over this.
+video_height = 1080
+
 [ui]
 # How far one wheel notch moves the grid, counted in card rows. A Flickable on
 # its own moves about sixty pixels, which is a fifth of a row here.

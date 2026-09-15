@@ -256,6 +256,9 @@ class TheHeartFollowsTheSong(unittest.TestCase):
                 # The window listens to this now. A player that cannot fail
                 # is not one the bridge will take.
                 self.failed = Wire()
+                # Nor one that cannot say what its resolve learned.
+                self.factsChanged = Wire()
+                self.trackFacts = {}
 
             def pause_for_video(self):
                 pass

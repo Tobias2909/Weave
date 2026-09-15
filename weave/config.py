@@ -130,6 +130,15 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         # thousand videos plus avatars and banners fit in this.
         "image_max_mb": 300,
     },
+    "music": {
+        # The tallest picture the music player will fetch for a song, and the
+        # default for the picker on the settings page, which writes its own
+        # choice to the database and overrides this. A ceiling and not a
+        # demand: the best shape at or under it is taken. Measured, the same
+        # three and a half minute video is 29 MiB in vp9 at 1080 and 77 in
+        # avc1, which is why vp9 is asked for first.
+        "video_height": 1080,
+    },
     "ui": {
         # How far one wheel notch moves the grid, counted in card rows. A
         # Flickable on its own moves about sixty pixels, which is a fifth of a
@@ -194,6 +203,10 @@ class Config:
     @property
     def image_max_mb(self) -> int:
         return max(16, int(self.get("cache", "image_max_mb")))
+
+    @property
+    def music_video_height(self) -> int:
+        return max(144, int(self.get("music", "video_height")))
 
     @property
     def scroll_rows_per_notch(self) -> float:

@@ -18,6 +18,7 @@ playing, and moves on with no gap.
 
 from __future__ import annotations
 
+import calendar
 import json
 import random
 import threading
@@ -53,10 +54,28 @@ MUSIC_FORMAT = "bestaudio"
 # The picture, when one is asked for. Capped rather than best: a music video at
 # its largest is several times the bytes for a pane a few hundred pixels wide,
 # and vp9 at this height measured 29 MiB against 77 for the same thing in avc1.
-# The fallbacks are there because not every video is offered in every shape.
 VIDEO_HEIGHT = 1080
-VIDEO_FORMAT = (f"bestvideo[height<={VIDEO_HEIGHT}][vcodec^=vp9]/"
-                f"bestvideo[height<={VIDEO_HEIGHT}]/bestvideo")
+
+# What the settings page offers as that cap. A ceiling and not a demand: the
+# best shape at or under it is taken, so a video offered only smaller is shown
+# at whatever it has rather than refused.
+VIDEO_HEIGHT_STEPS: tuple[int, ...] = (360, 480, 720, 1080, 1440, 2160)
+
+
+def video_format(height: int = VIDEO_HEIGHT) -> str:
+    """What to ask yt-dlp for, capped at a height.
+
+    The fallbacks are there because not every video is offered in every shape:
+    vp9 at the ceiling, then anything at the ceiling, then whatever there is.
+    """
+    height = int(height)
+    return (f"bestvideo[height<={height}][vcodec^=vp9]/"
+            f"bestvideo[height<={height}]/bestvideo")
+
+
+def height_label(height: int) -> str:
+    """A ceiling as it is offered on the settings page and reported back."""
+    return f"{int(height)}p"
 
 # Past this a video is not worth fetching. A long mix or a talk played as music
 # is an hour of pictures nobody looks at, and the artwork says as much.
@@ -90,10 +109,96 @@ REPEAT_OFF, REPEAT_ALL, REPEAT_ONE = 0, 1, 2
 @dataclass(frozen=True)
 class Resolved:
     """What one resolve came back with. The address is the point of it; the
-    chapters ride along in the same call and cost nothing."""
+    chapters and the facts ride along in the same call and cost nothing."""
 
     address: str
     chapters: tuple[dict, ...] = ()
+    facts: dict | None = None
+
+
+# What is known about a song by the time it can be played, asked for in the
+# same call as the address. Measured against the live endpoint: the resolve is
+# a full extraction whatever is printed, so every one of these is free, and a
+# listing cannot answer for any of them. A flat listing carries no like count
+# at all and no date without an extractor argument.
+FACT_FIELDS = ("view_count", "like_count", "comment_count", "channel",
+               "channel_follower_count", "timestamp", "upload_date",
+               "track", "artists", "album", "release_year", "categories")
+FACT_SPEC = "%(.{" + ",".join(FACT_FIELDS) + "})j"
+
+
+def parse_facts(text: str) -> dict:
+    """What yt-dlp said about the song, in the shape the page draws.
+
+    Printed as one JSON object among the other lines of the same output, so
+    the whole of it is looked at rather than a line counted off. Anything the
+    extractor did not answer for is left out entirely rather than carried as a
+    None the window would have to test for.
+    """
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            found = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(found, dict):
+            continue
+        return _facts_from(found)
+    return {}
+
+
+def _facts_from(found: dict) -> dict:
+    """One extraction turned into plain numbers and words."""
+    out: dict = {}
+
+    def number(name: str, into: str) -> None:
+        value = found.get(name)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            out[into] = int(value)
+
+    def words(name: str, into: str) -> None:
+        value = found.get(name)
+        if isinstance(value, str) and value.strip():
+            out[into] = value.strip()
+
+    number("view_count", "views")
+    number("like_count", "likes")
+    number("comment_count", "comments")
+    number("channel_follower_count", "followers")
+    number("release_year", "year")
+    words("channel", "channel")
+    words("track", "track")
+    words("album", "album")
+
+    # The moment it went up. An extraction carries the exact time; the date on
+    # its own is the fallback, read as UTC because a date with no hour in it is
+    # not a moment anywhere in particular.
+    stamp = found.get("timestamp")
+    if isinstance(stamp, (int, float)) and not isinstance(stamp, bool):
+        out["published_at"] = int(stamp)
+    else:
+        day = found.get("upload_date")
+        if isinstance(day, str) and len(day) == 8 and day.isdigit():
+            try:
+                out["published_at"] = calendar.timegm(
+                    time.strptime(day, "%Y%m%d"))
+            except ValueError:
+                pass
+
+    # Several names for one song, and the first is the one it is filed under.
+    artists = found.get("artists")
+    if isinstance(artists, list):
+        named = [str(one).strip() for one in artists if str(one).strip()]
+        if named:
+            out["artist"] = ", ".join(named)
+    categories = found.get("categories")
+    if isinstance(categories, list) and categories:
+        first = str(categories[0]).strip()
+        if first:
+            out["category"] = first
+    return out
 
 
 def parse_chapters(text: str) -> tuple[dict, ...]:
@@ -130,7 +235,8 @@ def parse_chapters(text: str) -> tuple[dict, ...]:
 
 
 def resolve_video(cfg: Config, url: str,
-                  cancel: threading.Event | None = None) -> str:
+                  cancel: threading.Event | None = None,
+                  height: int = VIDEO_HEIGHT) -> str:
     """The picture for one song, as its own stream.
 
     Asked for separately and only when a page is open to show it. Asking for
@@ -138,7 +244,7 @@ def resolve_video(cfg: Config, url: str,
     paid by every press whether or not anybody was looking.
     """
     command = prepare(["yt-dlp", *cookie_args(cfg),
-                       "-f", VIDEO_FORMAT, "--get-url", url])
+                       "-f", video_format(height), "--get-url", url])
     result = run_process(command, cancel=cancel, timeout=180)
     for line in result.stdout.splitlines():
         if line.startswith("http"):
@@ -150,9 +256,12 @@ def resolve_address(cfg: Config, url: str, live: bool,
                     cancel: threading.Event | None = None) -> Resolved:
     """One entry to one playable address, blocking. Takes a few seconds.
 
-    The chapters come back in the same call, which is the whole reason they
-    are worth having: a video that is really an album has its tracks marked in
-    them, and asking separately would be another few seconds per song.
+    The chapters and the facts come back in the same call, which is the whole
+    reason they are worth having: a video that is really an album has its
+    tracks marked in the chapters, the views and the likes and the date are
+    what the page says under the picture, and asking for any of it separately
+    would be another few seconds per song. Measured: printing them costs
+    nothing, because a resolve is a full extraction either way.
     """
     # Warnings are NOT suppressed here, deliberately. When YouTube's
     # challenge goes unsolved, yt-dlp says why in warnings and then fails
@@ -161,11 +270,13 @@ def resolve_address(cfg: Config, url: str, live: bool,
     # the cause there is. A test fails if the flag comes back.
     command = prepare(["yt-dlp", *cookie_args(cfg),
                        "-f", LIVE_FORMAT if live else MUSIC_FORMAT,
-                       "--get-url", "--print", "%(chapters)j", url])
+                       "--get-url", "--print", "%(chapters)j",
+                       "--print", FACT_SPEC, url])
     result = run_process(command, cancel=cancel, timeout=180)
     for line in result.stdout.splitlines():
         if line.startswith("http"):
-            return Resolved(line, parse_chapters(result.stdout))
+            return Resolved(line, parse_chapters(result.stdout),
+                            parse_facts(result.stdout))
     raise _NoAddress(_why(result.stderr or ""))
 
 
@@ -220,7 +331,7 @@ class AddressCache:
 class _Resolver(QThread):
     """Turns one entry into a playable address."""
 
-    resolved = Signal(str, str, list)
+    resolved = Signal(str, str, list, "QVariantMap")
     failed = Signal(str, str)
 
     def __init__(self, cfg: Config, key: str, url: str, live: bool,
@@ -243,7 +354,8 @@ class _Resolver(QThread):
         except (FileNotFoundError, Timeout, _NoAddress) as exc:
             self.failed.emit(self.key, str(exc) or "could not resolve the track")
             return
-        self.resolved.emit(self.key, found.address, list(found.chapters))
+        self.resolved.emit(self.key, found.address, list(found.chapters),
+                           dict(found.facts or {}))
 
 
 class _VideoResolver(QThread):
@@ -253,11 +365,13 @@ class _VideoResolver(QThread):
     failed = Signal(str, str)
 
     def __init__(self, cfg: Config, key: str, url: str,
-                 parent: QObject | None = None) -> None:
+                 parent: QObject | None = None,
+                 height: int = VIDEO_HEIGHT) -> None:
         super().__init__(parent)
         self._cfg = cfg
         self.key = key
         self._url = url
+        self._height = height
         self._cancel = threading.Event()
 
     def cancel(self) -> None:
@@ -265,7 +379,8 @@ class _VideoResolver(QThread):
 
     def run(self) -> None:
         try:
-            found = resolve_video(self._cfg, self._url, self._cancel)
+            found = resolve_video(self._cfg, self._url, self._cancel,
+                                  self._height)
         except Cancelled:
             return
         except (FileNotFoundError, Timeout) as exc:
@@ -286,6 +401,10 @@ class AudioPlayer(QObject):
     queueChanged = Signal()
     queueReplaced = Signal()
     videoChanged = Signal()
+    # What the resolve learned about the song. Its own signal on purpose: the
+    # page asks for words and comments again on trackChanged, and those cost
+    # requests, so facts arriving must not read as a different song.
+    factsChanged = Signal()
     stateChanged = Signal()
     progressChanged = Signal()
     failed = Signal(str)
@@ -308,6 +427,11 @@ class AudioPlayer(QObject):
         # than expiring with the address, since where a song starts is not
         # something that goes stale.
         self._chapters: dict[str, tuple[dict, ...]] = {}
+        # What is known about each track, by track key, from the same resolve
+        # that found its address. Kept for the same reason the chapters are:
+        # it cost nothing, and how many people have watched a song is not
+        # something that goes stale over an evening.
+        self._facts: dict[str, dict] = {}
         # Which queue index mpv holds as its next entry, if any.
         self._appended: int | None = None
 
@@ -343,6 +467,9 @@ class AudioPlayer(QObject):
         # is open to show it, measured at 0 KiB and 0.2 % of a core, so a
         # listener who never opens the page pays nothing for the ability to.
         self._video_wanted = False
+        # Sound alone, whatever is open. Remembered, because it is a way of
+        # listening rather than something done to one song.
+        self._audio_only = (db.get_state("music_audio_only", "0") == "1") if db else False
         self._video_resolver: _VideoResolver | None = None
         self._video_addresses: dict[str, str] = {}
         self._video_note = ""
@@ -644,12 +771,16 @@ class AudioPlayer(QObject):
         self._resolver.failed.connect(self._on_resolve_failed)
         self._resolver.start()
 
-    def _on_resolved(self, key: str, address: str, chapters: list | None = None) -> None:
+    def _on_resolved(self, key: str, address: str, chapters: list | None = None,
+                     facts: dict | None = None) -> None:
         # Kept whoever it was for. A resolve that arrives after the choice has
         # moved on still learned where that track's songs are, and it will be
         # wanted the moment anybody goes back to it.
         if chapters:
             self._chapters[key] = tuple(chapters)
+        if facts:
+            self._facts[key] = dict(facts)
+            self.factsChanged.emit()
         entry = self._current()
         if entry.get("key") != key:
             return                       # a later choice overtook this one
@@ -1180,7 +1311,7 @@ class AudioPlayer(QObject):
         """Find the picture for what is playing, if it deserves one."""
         entry = self._current()
         self._video_note = ""
-        if not entry or not self._video_wanted:
+        if not entry or not self._video_wanted or self._audio_only:
             return
         note = self._refuse_video(entry)
         if note:
@@ -1215,7 +1346,8 @@ class AudioPlayer(QObject):
 
     def _on_video_resolved(self, key: str, url: str) -> None:
         self._video_addresses[key] = url
-        if self._current().get("key") != key or not self._video_wanted:
+        if (self._current().get("key") != key or not self._video_wanted
+                or self._audio_only):
             return
         self._engine.add_video(url)
         self.videoChanged.emit()
@@ -1229,7 +1361,45 @@ class AudioPlayer(QObject):
     def _make_video_resolver(self, entry: dict):
         """Its own method so a test can put something there that never reaches
         for a subprocess, the same way the address resolver is replaced."""
-        return _VideoResolver(self._cfg, entry["key"], entry["url"], self)
+        return _VideoResolver(self._cfg, entry["key"], entry["url"], self,
+                              self.video_height())
+
+    def video_height(self) -> int:
+        """The ceiling in force for the picture.
+
+        The config carries the default and a choice made on the settings page
+        overrides it, exactly as the image cache ceiling works. Read at the
+        moment a picture is asked for, so a change takes hold on the next song
+        without anything having to be told about it.
+        """
+        wanted = getattr(self._cfg, "music_video_height", VIDEO_HEIGHT)
+        if self._db is None:
+            return int(wanted)
+        return self._db.video_height(int(wanted))
+
+    @Slot(bool)
+    def setAudioOnly(self, value: bool) -> None:
+        """Sound alone, whatever page is open.
+
+        Turning it on says so to the player at once rather than at the next
+        song: the picture is already being decoded, and waiting would be
+        ignoring what was asked for. Turning it off starts one if there is
+        something open to show it.
+        """
+        value = bool(value)
+        if value == self._audio_only:
+            return
+        self._audio_only = value
+        if self._db is not None:
+            self._db.set_state("music_audio_only", "1" if value else "0")
+        if value:
+            self._stop_video_resolver()
+            self._video_note = ""
+            self._engine.drop_video()
+        else:
+            self._start_video()
+        self.stateChanged.emit()
+        self.videoChanged.emit()
 
     def _stop_video_resolver(self) -> None:
         if self._video_resolver is not None and self._video_resolver.isRunning():
@@ -1240,6 +1410,17 @@ class AudioPlayer(QObject):
         self._video_showing = bool(showing)
         self.videoChanged.emit()
 
+    def _get_track_facts(self) -> dict:
+        """What the resolve learned about the song playing, or nothing yet.
+
+        Empty until its address has been found, which is a few seconds after
+        the press, and empty for good for a track that would not resolve.
+        """
+        return dict(self._facts.get(self._current().get("key", ""), {}))
+
+    def _get_audio_only(self) -> bool:
+        return self._audio_only
+
     def _get_video_wanted(self) -> bool:
         return self._video_wanted
 
@@ -1249,6 +1430,9 @@ class AudioPlayer(QObject):
     def _get_video_showing(self) -> bool:
         return self._video_showing
 
+    # Views, likes and the date, from the resolve that found the address.
+    trackFacts = Property("QVariantMap", _get_track_facts, notify=factsChanged)
+    audioOnly = Property(bool, _get_audio_only, notify=stateChanged)
     videoWanted = Property(bool, _get_video_wanted, notify=videoChanged)
     # Why there is no picture, when there is a reason worth saying.
     videoNote = Property(str, _get_video_note, notify=videoChanged)
