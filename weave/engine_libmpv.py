@@ -295,6 +295,13 @@ class LibmpvEngine(QObject):
         if self._can_render or not wanted:
             self._set("vid", "auto" if wanted else "no")
 
+    def render_failed(self, why: str) -> None:
+        """The surface could not be built. Kept with the player's own
+        complaints, so the page can say why there is no picture rather than
+        simply never showing one."""
+        self._complaints.append(f"the picture could not be set up, {why}")
+        del self._complaints[:-8]
+
     def render_ready(self, ready: bool) -> None:
         """Something has attached itself to draw the frames, or let go again.
 
@@ -310,6 +317,12 @@ class LibmpvEngine(QObject):
             if self._had_frame:
                 self._had_frame = False
                 self.videoChanged.emit(False)
+
+    @property
+    def raw(self):
+        """The player itself, for the one thing that needs it: building a
+        render context, which has to be made against this exact handle."""
+        return self._mpv
 
     @property
     def wants_video(self) -> bool:
