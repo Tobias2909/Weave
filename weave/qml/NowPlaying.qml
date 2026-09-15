@@ -81,10 +81,11 @@ Item {
     // looking at, so it keeps only its tabs. Raising the window's own minimum
     // instead would be taking the size of the window away from the person
     // using it.
-    // Travelling. The video and the window share one framebuffer, so drawing
-    // frames while the page moves ties the whole interface to the video's rate:
-    // the movement drags, the clock stalls, and the music is heard to catch.
-    // Nothing of the picture is drawn until it has arrived.
+    // Travelling. The picture is drawn throughout, and rides along with the
+    // page. Drawing it costs one draw a frame now that the player's render
+    // call no longer waits for the frame's display time; what used to be felt
+    // as the whole window catching was that wait, and then the player's own
+    // thread waiting on frames nobody collected while the surface was quiet.
     readonly property bool sliding: slideStep.running
     onSlidingChanged: {
         // Back to drawing once it has settled. The surface has no reason of
@@ -188,9 +189,10 @@ Item {
                         // Never hidden. Hiding a framebuffer item makes Qt
                         // destroy its renderer and hand the graphics resources
                         // back, and building them again is a cost paid exactly
-                        // when the page is moving. It stays and stops working
-                        // instead.
-                        drawing: page.wanted && !page.sliding
+                        // when the page is moving. It stays, and draws for as
+                        // long as any of it can be seen, which includes the
+                        // slide out. Frames keep being collected either way.
+                        drawing: page.wanted || page.sliding
                     }
 
                     // Square cover art over it, at its own shape, until there
@@ -201,12 +203,12 @@ Item {
                     Rectangle {
                         anchors.fill: parent
                         color: Theme.colors.background
-                        // Out of the way once there is a picture underneath,
-                        // and back over it whenever the page is moving. Faded
-                        // rather than switched, since the picture arrives a
-                        // couple of seconds in and a hard cut draws the eye to
-                        // exactly the wrong moment.
-                        opacity: (Audio.videoShowing && !page.sliding) ? 0 : 1
+                        // Out of the way once there is a picture underneath.
+                        // Faded rather than switched, since the picture arrives
+                        // a couple of seconds in and a hard cut draws the eye
+                        // to exactly the wrong moment. It stays out of the way
+                        // while the page moves, so the picture travels with it.
+                        opacity: Audio.videoShowing ? 0 : 1
                         visible: opacity > 0
                         Behavior on opacity {
                             NumberAnimation { duration: 320

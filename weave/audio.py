@@ -58,6 +58,10 @@ VIDEO_HEIGHT = 1080
 VIDEO_FORMAT = (f"bestvideo[height<={VIDEO_HEIGHT}][vcodec^=vp9]/"
                 f"bestvideo[height<={VIDEO_HEIGHT}]/bestvideo")
 
+# How long after the page closes the picture is switched off. Longer than the
+# slide, so the picture leaves with the page rather than going black inside it.
+VIDEO_DROP_MS = 250
+
 # Past this a video is not worth fetching. A long mix or a talk played as music
 # is an hour of pictures nobody looks at, and the artwork says as much.
 VIDEO_MAX_S = 15 * 60
@@ -347,6 +351,12 @@ class AudioPlayer(QObject):
         self._video_addresses: dict[str, str] = {}
         self._video_note = ""
         self._video_showing = False
+        # Closing the page puts the picture away once the page is out of
+        # sight, not while it is still travelling with the picture in it.
+        self._video_drop = QTimer(self)
+        self._video_drop.setSingleShot(True)
+        self._video_drop.setInterval(VIDEO_DROP_MS)
+        self._video_drop.timeout.connect(self._put_picture_away)
         self._recover_at = 0.0
         self._recover_count = 0
         self._stall_timer = QTimer(self)
@@ -1164,23 +1174,31 @@ class AudioPlayer(QObject):
         self._video_wanted = wanted
         trace.mark("page", wanted=wanted)
         if not wanted:
-            # Nothing is said to the player. Turning the picture off mid song
-            # is a command against something that is playing, and the one rule
-            # here that outranks every saving is that opening and closing this
-            # page must not disturb the music by so much as a moment.
-            #
-            # So the picture is simply not renewed. The surface stops drawing
-            # because the page is not there to draw on, and the next song gets
-            # no picture attached, which is where the fetching and the decoding
-            # actually stop. That costs the rest of one song and no more.
+            # Switched off once the page is out of sight, not now. The rule
+            # that outranks every saving is that opening and closing this page
+            # must not disturb the music by so much as a moment, and switching
+            # the picture off is measured gapless for the sound. What was heard
+            # before was the surface going quiet with frames still coming,
+            # which held the player's output thread and the core behind it.
+            # The surface collects frames throughout now, and the picture
+            # leaves after the page has, so the box never goes black mid slide.
             self._stop_video_resolver()
+            self._video_drop.start()
             self._video_note = ""
             self.videoChanged.emit()
             return
         self._start_video()
 
+    def _put_picture_away(self) -> None:
+        """The page has gone. Stop decoding a picture nobody can see."""
+        if self._video_wanted:
+            return
+        self._engine.drop_video()
+
     def _start_video(self) -> None:
         """Find the picture for what is playing, if it deserves one."""
+        # Opened again before the picture was put away: it stays.
+        self._video_drop.stop()
         entry = self._current()
         self._video_note = ""
         if not entry or not self._video_wanted:

@@ -14,10 +14,19 @@ the only place mpv may be asked to draw. Everything here is therefore split
 between two threads on purpose: the item lives with the window, the renderer
 with the scene graph, and mpv talks to neither directly.
 
-The known cost, and it is theirs as much as ours: one framebuffer shared between
-the interface and the video ties Qt's paint rate to the video's, so a film at 24
-frames a second paints the menus at 24 as well. They built a second, offscreen
-one to break that and took it out again. Nothing here tries to be cleverer.
+The cost that shape is known for, the interface painting no faster than the
+video, comes from one thing: mpv's render call waits for the frame's display
+time, up to fifty milliseconds by default, and it is being called on the thread
+that paints everything. So it is asked not to wait, and the player is told to
+hand frames over at their display time (video-timing-offset). Each render is
+then one draw, a millisecond or two, and Qt paints at its own rate.
+
+The other half of the same trap is never to stop collecting frames while the
+player is producing them. mpv's output thread waits two hundred milliseconds
+for each frame to be collected before giving up on it, and the player's core
+waits on that thread for a track change, so a surface that goes quiet with
+video running stalls the player rather than sparing it. While the page does
+not want frames drawn, they are still collected, only not painted.
 """
 
 from __future__ import annotations
@@ -112,11 +121,12 @@ class VideoSurface(QQuickFramebufferObject):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._renderer: _Renderer | None = None
-        # Whether frames are wanted right now. Not the same as being visible:
+        # Whether frames are to be painted. Not the same as being visible:
         # hiding a framebuffer item makes Qt destroy its renderer and give the
         # graphics resources back, which is a synchronous cost paid at exactly
-        # the moment the page is moving. So the item stays, and this says
-        # whether to do any work.
+        # the moment the page is moving. So the item stays. Frames are always
+        # collected from the player either way; this only says whether they
+        # are drawn.
         self._drawing = True
         self.frameReady.connect(self._redraw)
         # The window closing is what takes the picture down in a running
@@ -143,15 +153,15 @@ class VideoSurface(QQuickFramebufferObject):
             # reason of its own, so it is asked once here.
             self.update()
 
-    # Set by the page. False while it is travelling, and while it is away.
+    # Set by the page. True while it is open and while it is travelling.
     drawing = Property(bool, _get_drawing, _set_drawing, notify=drawingChanged)
 
     @Slot()
     def _redraw(self) -> None:
-        # A frame arrived. Ignored while the page is moving, so mpv's own rate
-        # cannot drive repaints of a window that is busy animating.
-        if self._drawing:
-            self.update()
+        # A frame arrived. Always collected, whether or not it is painted,
+        # because a frame left waiting holds the player's output thread for
+        # two hundred milliseconds and the player's core behind it.
+        self.update()
 
     def _on_window(self) -> None:
         window = self.window()
@@ -237,18 +247,23 @@ class _Renderer(QQuickFramebufferObject.Renderer):
         player = _engine
         if player is None or not player.running() or _finished:
             return
-        # Painted, but not redrawn from the player. Whatever was last in the
-        # framebuffer stays there, which costs nothing and is covered anyway.
-        if not self._item.drawing:
-            return
         if _context is None and not self._make_context(player):
             return
-        width, height = self._size
-        if width <= 0 or height <= 0:
-            return
         try:
+            # Collected but not drawn. The player counts the frame as shown
+            # and moves on, and whatever was last in the framebuffer stays.
+            if not self._item.drawing:
+                _context.render(skip_rendering=True, block_for_target_time=False)
+                return
+            width, height = self._size
+            if width <= 0 or height <= 0:
+                return
+            # Never waits. The player is told to hand frames over at their
+            # display time, and this returns the moment the draw is issued,
+            # so the thread painting the window is held for one draw only.
             with trace.Timed():
-                _context.render(flip_y=False, opengl_fbo={
+                _context.render(flip_y=False, block_for_target_time=False,
+                                opengl_fbo={
                     "w": width, "h": height,
                     "fbo": int(self.framebufferObject().handle()),
                 })

@@ -78,10 +78,11 @@ def mark(event: str, **fields) -> None:
 
 
 def open_log(path: Path = LOG) -> Path:
-    """Start writing. Truncates, so each run reads from a clean start."""
+    """Start writing. Appends, and every run begins with a start line, so a
+    run before a change and one after it sit in the same file."""
     global _file, _t0
     path.parent.mkdir(parents=True, exist_ok=True)
-    _file = open(path, "w", encoding="utf-8")                  # noqa: SIM115
+    _file = open(path, "a", encoding="utf-8")                  # noqa: SIM115
     _t0 = time.monotonic()
     mark("start", pid=os.getpid(), python=sys.version.split()[0])
     return path

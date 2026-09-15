@@ -56,6 +56,13 @@ OPTIONS = {
     "gapless_audio": True,
     "audio_client_name": "weave",
     "terminal": False,
+    # Hand a frame over at its display time rather than fifty milliseconds
+    # early. By default the render call blocks for the difference, and it is
+    # made on the thread that paints the whole window, so every frame of
+    # video parked the interface for up to that long. mpv's own header says
+    # this is the setting that stops the render call limiting the caller's
+    # frame rate. The surface asks not to wait as well, so the two agree.
+    "video_timing_offset": 0,
 }
 
 
@@ -110,6 +117,10 @@ class LibmpvEngine(QObject):
         self._can_render = False
         self._clock = trace.Clock()
         self._paused = True
+        # The picture attached to the entry that is playing, so that opening
+        # the page twice in one song switches the track back on rather than
+        # attaching the same file again.
+        self._attached = ""
 
     # ---- the player itself ------------------------------------------------
 
@@ -155,6 +166,8 @@ class LibmpvEngine(QObject):
         @player.event_callback("start-file")
         def _started(event):
             entry = _entry_id(event)
+            # An external track belongs to the file it was added to.
+            self._attached = ""
             role = self._roles.get(entry)
             if role:
                 self.started.emit(role)
@@ -207,6 +220,7 @@ class LibmpvEngine(QObject):
         if not self.ensure():
             return
         self._roles.clear()
+        self._attached = ""
         entry = self._play(url, "replace", start, video)
         if entry is not None:
             self._claim(entry, CURRENT)
@@ -314,14 +328,18 @@ class LibmpvEngine(QObject):
         """
         if self._mpv is None or not url:
             return
-        trace.mark("add_video", can_render=self._can_render)
-        self._command("video-add", url, "select")
+        trace.mark("add_video", can_render=self._can_render,
+                   again=url == self._attached)
+        if url != self._attached:
+            self._command("video-add", url, "select")
+            self._attached = url
         self._want_video = True
         if self._can_render:
             self._set("vid", "auto")
 
     def drop_video(self) -> None:
-        """Take the picture away and stop fetching it, leaving the sound."""
+        """Switch the picture off, leaving the sound and leaving the track
+        attached, so it can be switched back on within the same song."""
         if self._mpv is None:
             return
         self._want_video = False

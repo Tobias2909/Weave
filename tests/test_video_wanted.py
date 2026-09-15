@@ -65,19 +65,31 @@ class WhenNobodyIsLooking(unittest.TestCase):
         self.assertFalse(one.videoWanted)
         self.assertIsNone(one._video_resolver, "a picture was fetched for nobody")
 
-    def test_closing_the_page_says_nothing_to_the_player(self) -> None:
-        # The rule that outranks every saving: opening and closing this page
-        # must not disturb the music by so much as a moment. Turning the
-        # picture off is a command against something that is playing, and it
-        # was heard as a stutter, so the picture is simply not renewed.
+    def test_closing_the_page_puts_the_picture_away_once_it_is_out_of_sight(self) -> None:
+        # Not while the page is still sliding with the picture in it, which
+        # would show a black box on the way out, and not never, which would
+        # decode a picture nobody can see for the rest of the song.
         one = player()
         one.play_items([song()])
         one._video_wanted = True
         one._engine.calls.clear()
         one.setVideoWanted(False)
         self.assertFalse(one.videoWanted)
-        self.assertEqual(one._engine.calls, [],
-                         "closing the page reached for the player")
+        self.assertEqual(one._engine.calls, [], "the picture went before the page did")
+        self.assertTrue(one._video_drop.isActive())
+        one._put_picture_away()
+        self.assertEqual(one._engine.calls, [("drop_video",)])
+
+    def test_opening_it_again_in_time_keeps_the_picture(self) -> None:
+        one = player()
+        one.play_items([song(duration_s=200)])
+        one._video_addresses["yt:a"] = "https://example.invalid/v"
+        one.setVideoWanted(True)
+        one.setVideoWanted(False)
+        one.setVideoWanted(True)
+        self.assertFalse(one._video_drop.isActive(), "a picture wanted again was still due to go")
+        one._put_picture_away()
+        self.assertNotIn(("drop_video",), one._engine.calls)
 
     def test_the_next_song_is_where_it_actually_stops(self) -> None:
         # Which is where the fetching and the decoding end, without a command

@@ -10,7 +10,7 @@ import unittest
 
 from PySide6.QtCore import QObject
 
-from weave.engine_libmpv import CURRENT, NEXT, LibmpvEngine, available
+from weave.engine_libmpv import CURRENT, NEXT, OPTIONS, LibmpvEngine, available
 
 
 class Recorder(QObject):
@@ -89,6 +89,57 @@ class NoPictureWithoutSomewhereToPutIt(unittest.TestCase):
         one.set_video(True)
         one.set_video(False)
         self.assertFalse(one.wants_video)
+
+
+class Talker:
+    """Stands in for the player and keeps what it was told."""
+
+    def __init__(self) -> None:
+        self.said: list = []
+
+    def command(self, *args) -> None:
+        self.said.append(tuple(args))
+
+    def __setitem__(self, name, value) -> None:
+        self.said.append((name, value))
+
+
+class NeverWaitingOnAFrame(unittest.TestCase):
+    def test_frames_are_handed_over_at_their_display_time(self) -> None:
+        # The render call is made on the thread that paints the window and
+        # blocks for the difference otherwise, up to fifty milliseconds a
+        # frame, which is the whole window catching at the video's rate.
+        self.assertEqual(OPTIONS["video_timing_offset"], 0)
+
+
+class OnePictureAttachedPerSong(unittest.TestCase):
+    def test_the_same_address_is_switched_back_on_not_added_again(self) -> None:
+        one = engine()
+        one._mpv = Talker()
+        one.render_ready(True)
+        one._mpv.said.clear()
+        one.add_video("https://example.invalid/v")
+        one.add_video("https://example.invalid/v")
+        added = [s for s in one._mpv.said if s[0] == "video-add"]
+        self.assertEqual(len(added), 1, "the same picture was attached twice")
+        self.assertIn(("vid", "auto"), one._mpv.said)
+
+    def test_a_new_song_forgets_what_was_attached(self) -> None:
+        one = engine()
+        one._mpv = Talker()
+        one.add_video("https://example.invalid/v")
+        one._attached = ""                                   # what start-file does
+        one.add_video("https://example.invalid/v")
+        added = [s for s in one._mpv.said if s[0] == "video-add"]
+        self.assertEqual(len(added), 2)
+
+    def test_dropping_leaves_the_track_attached(self) -> None:
+        one = engine()
+        one._mpv = Talker()
+        one.add_video("https://example.invalid/v")
+        one.drop_video()
+        self.assertIn(("vid", "no"), one._mpv.said)
+        self.assertEqual(one._attached, "https://example.invalid/v")
 
 
 class WhetherItIsThere(unittest.TestCase):
