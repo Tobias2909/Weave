@@ -42,6 +42,7 @@ class FakeEngine(QObject):
     started = Signal(str)
     ended = Signal(str)
     gone = Signal(str)
+    videoChanged = Signal(bool)
 
     def __init__(self):
         super().__init__()
@@ -50,6 +51,12 @@ class FakeEngine(QObject):
 
     def _note(self, *call):
         self.calls.append(call)
+
+    def add_video(self, url):
+        self._note('add_video', url)
+
+    def drop_video(self):
+        self._note('drop_video')
 
     def load(self, url, start=None, video=None):
         self._note("load", url, start)

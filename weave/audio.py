@@ -49,6 +49,18 @@ from .process import run as run_process
 LIVE_FORMAT = "93"
 MUSIC_FORMAT = "bestaudio"
 
+# The picture, when one is asked for. Capped rather than best: a music video at
+# its largest is several times the bytes for a pane a few hundred pixels wide,
+# and vp9 at this height measured 29 MiB against 77 for the same thing in avc1.
+# The fallbacks are there because not every video is offered in every shape.
+VIDEO_HEIGHT = 1080
+VIDEO_FORMAT = (f"bestvideo[height<={VIDEO_HEIGHT}][vcodec^=vp9]/"
+                f"bestvideo[height<={VIDEO_HEIGHT}]/bestvideo")
+
+# Past this a video is not worth fetching. A long mix or a talk played as music
+# is an hour of pictures nobody looks at, and the artwork says as much.
+VIDEO_MAX_S = 15 * 60
+
 # Long enough to hear as a fade rather than a cut, short enough not to be a
 # wait before the video starts.
 FADE_MS = 500
@@ -114,6 +126,23 @@ def parse_chapters(text: str) -> tuple[dict, ...]:
                         "end": float(end) if isinstance(end, (int, float)) else 0.0})
         return tuple(out)
     return ()
+
+
+def resolve_video(cfg: Config, url: str,
+                  cancel: threading.Event | None = None) -> str:
+    """The picture for one song, as its own stream.
+
+    Asked for separately and only when a page is open to show it. Asking for
+    both at once costs about twice as long, measured, and that wait would be
+    paid by every press whether or not anybody was looking.
+    """
+    command = prepare(cfg, ["--no-playlist", "-f", VIDEO_FORMAT,
+                            "--get-url", url])
+    result = run_process(command, cancel=cancel, timeout=180)
+    for line in result.stdout.splitlines():
+        if line.startswith("http"):
+            return line
+    return ""
 
 
 def resolve_address(cfg: Config, url: str, live: bool,
@@ -216,6 +245,37 @@ class _Resolver(QThread):
         self.resolved.emit(self.key, found.address, list(found.chapters))
 
 
+class _VideoResolver(QThread):
+    """Turns one entry into a picture, when something is open to show it."""
+
+    resolved = Signal(str, str)
+    failed = Signal(str, str)
+
+    def __init__(self, cfg: Config, key: str, url: str,
+                 parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._cfg = cfg
+        self.key = key
+        self._url = url
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def run(self) -> None:
+        try:
+            found = resolve_video(self._cfg, self._url, self._cancel)
+        except Cancelled:
+            return
+        except (FileNotFoundError, Timeout) as exc:
+            self.failed.emit(self.key, str(exc) or "could not find the picture")
+            return
+        if found:
+            self.resolved.emit(self.key, found)
+        else:
+            self.failed.emit(self.key, "this one has no picture")
+
+
 class AudioPlayer(QObject):
     trackChanged = Signal()
     # The queue as a list changes far less often than the track does. Bound to
@@ -224,6 +284,7 @@ class AudioPlayer(QObject):
     # building. What is playing is a number now, read beside the list.
     queueChanged = Signal()
     queueReplaced = Signal()
+    videoChanged = Signal()
     stateChanged = Signal()
     progressChanged = Signal()
     failed = Signal(str)
@@ -261,6 +322,9 @@ class AudioPlayer(QObject):
         self._engine.started.connect(self._on_started)
         self._engine.ended.connect(self._on_ended)
         self._engine.gone.connect(self._on_gone)
+        # Whether a frame exists yet. The page keeps the artwork up
+        # until it does, so the pane is never a black box waiting.
+        self._engine.videoChanged.connect(self._on_video_frame)
         self._pos = 0.0
         self._dur = 0.0
         self._paused = True
@@ -274,6 +338,14 @@ class AudioPlayer(QObject):
 
         self._recovering = False
         self._resume_at = 0.0
+        # The picture. Nothing is fetched and nothing decoded until something
+        # is open to show it, measured at 0 KiB and 0.2 % of a core, so a
+        # listener who never opens the page pays nothing for the ability to.
+        self._video_wanted = False
+        self._video_resolver: _VideoResolver | None = None
+        self._video_addresses: dict[str, str] = {}
+        self._video_note = ""
+        self._video_showing = False
         self._recover_at = 0.0
         self._recover_count = 0
         self._stall_timer = QTimer(self)
@@ -1062,6 +1134,104 @@ class AudioPlayer(QObject):
             self._db.set_state("music_autopause", "1" if value else "0")
         self.stateChanged.emit()
 
+    # ---- the picture ------------------------------------------------------
+
+    @Slot(bool)
+    def setVideoWanted(self, wanted: bool) -> None:
+        """Whether anything is open to show a picture."""
+        wanted = bool(wanted)
+        if wanted == self._video_wanted:
+            return
+        self._video_wanted = wanted
+        if not wanted:
+            self._stop_video_resolver()
+            self._engine.drop_video()
+            self._video_note = ""
+            self._video_showing = False
+            self.videoChanged.emit()
+            return
+        self._start_video()
+
+    def _start_video(self) -> None:
+        """Find the picture for what is playing, if it deserves one."""
+        entry = self._current()
+        self._video_note = ""
+        if not entry or not self._video_wanted:
+            return
+        note = self._refuse_video(entry)
+        if note:
+            self._video_note = note
+            self.videoChanged.emit()
+            return
+        known = self._video_addresses.get(entry.get("key", ""))
+        if known:
+            self._engine.add_video(known)
+            self.videoChanged.emit()
+            return
+        self._stop_video_resolver()
+        self._video_resolver = self._make_video_resolver(entry)
+        self._video_resolver.resolved.connect(self._on_video_resolved)
+        self._video_resolver.failed.connect(self._on_video_failed)
+        self._video_resolver.start()
+        self.videoChanged.emit()
+
+    def _refuse_video(self, entry: dict) -> str:
+        """Why this one gets no picture, or nothing at all.
+
+        A broadcast is exempt from the length rule: it reports no length worth
+        comparing, and its picture is already being fetched whatever happens,
+        since a livestream is offered in no sound only shape at all.
+        """
+        if entry.get("live"):
+            return ""
+        length = self._dur or float(entry.get("duration_s") or 0)
+        if length and length > VIDEO_MAX_S:
+            return f"no video over {VIDEO_MAX_S // 60} minutes"
+        return ""
+
+    def _on_video_resolved(self, key: str, url: str) -> None:
+        self._video_addresses[key] = url
+        if self._current().get("key") != key or not self._video_wanted:
+            return
+        self._engine.add_video(url)
+        self.videoChanged.emit()
+
+    def _on_video_failed(self, key: str, why: str) -> None:
+        if self._current().get("key") != key:
+            return
+        self._video_note = why
+        self.videoChanged.emit()
+
+    def _make_video_resolver(self, entry: dict):
+        """Its own method so a test can put something there that never reaches
+        for a subprocess, the same way the address resolver is replaced."""
+        return _VideoResolver(self._cfg, entry["key"], entry["url"], self)
+
+    def _stop_video_resolver(self) -> None:
+        if self._video_resolver is not None and self._video_resolver.isRunning():
+            self._video_resolver.cancel()
+        self._video_resolver = None
+
+    def _on_video_frame(self, showing: bool) -> None:
+        self._video_showing = bool(showing)
+        self.videoChanged.emit()
+
+    def _get_video_wanted(self) -> bool:
+        return self._video_wanted
+
+    def _get_video_note(self) -> str:
+        return self._video_note
+
+    def _get_video_showing(self) -> bool:
+        return self._video_showing
+
+    videoWanted = Property(bool, _get_video_wanted, notify=videoChanged)
+    # Why there is no picture, when there is a reason worth saying.
+    videoNote = Property(str, _get_video_note, notify=videoChanged)
+    # A frame exists. Until it does the artwork stays up, so the pane is never
+    # a black box waiting.
+    videoShowing = Property(bool, _get_video_showing, notify=videoChanged)
+
     @Slot()
     def stop(self) -> None:
         self._engine.stop()
@@ -1080,6 +1250,11 @@ class AudioPlayer(QObject):
             self._fade_to(0.0, pause_after=True)
 
     def shutdown(self) -> None:
+        # The picture resolver goes with the rest. Qt treats destroying
+        # a thread that is still running as fatal, and this one outlives
+        # a short session easily: it spends seconds asking for an
+        # address nobody is waiting for any more.
+        self._stop_video_resolver()
         for resolver in [self._resolver, *self._next_resolvers]:
             if resolver is not None and resolver.isRunning():
                 resolver.cancel()

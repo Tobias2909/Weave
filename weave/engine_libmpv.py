@@ -295,6 +295,30 @@ class LibmpvEngine(QObject):
         if self._can_render or not wanted:
             self._set("vid", "auto" if wanted else "no")
 
+    def add_video(self, url: str) -> None:
+        """Attach a picture to the song already playing.
+
+        Measured gapless: the sound does not break, and a frame exists about
+        four and a half seconds later. The alternative is loading the track
+        again with the picture in it, which restarts the song.
+        """
+        if self._mpv is None or not url:
+            return
+        self._command("video-add", url, "select")
+        self._want_video = True
+        if self._can_render:
+            self._set("vid", "auto")
+
+    def drop_video(self) -> None:
+        """Take the picture away and stop fetching it, leaving the sound."""
+        if self._mpv is None:
+            return
+        self._want_video = False
+        self._set("vid", "no")
+        if self._had_frame:
+            self._had_frame = False
+            self.videoChanged.emit(False)
+
     def render_failed(self, why: str) -> None:
         """The surface could not be built. Kept with the player's own
         complaints, so the page can say why there is no picture rather than
