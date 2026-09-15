@@ -221,7 +221,31 @@ def _thumb(item: dict) -> str:
     if not isinstance(thumbs, list) or not thumbs:
         return ""
     largest = thumbs[-1]
-    return str(largest.get("url") or "") if isinstance(largest, dict) else ""
+    if not isinstance(largest, dict):
+        return ""
+    return bigger(str(largest.get("url") or ""))
+
+
+# Large enough for the picture beside what is playing, which is the biggest
+# any of these is ever drawn. Asking for no size at all is what the channel
+# avatars did once, and an unresized upload came back at 8334 square and was
+# refused by the image reader for being over its decode allowance.
+THUMB_PX = 544
+_SIZED = re.compile(r"=w\d+-h\d+")
+
+
+def bigger(url: str) -> str:
+    """The same picture at a size worth looking at.
+
+    What a listing hands back is sized for the listing it came from, and what
+    comes back beside a related song is small enough to see the pixels in when
+    it is drawn as artwork. The picture service takes the size in the address,
+    so a larger one is asked for rather than the small one being scaled up.
+
+    Addresses that do not carry a size are left exactly as they are, which is
+    every ordinary video thumbnail.
+    """
+    return _SIZED.sub(f"=w{THUMB_PX}-h{THUMB_PX}", url, count=1)
 
 
 def _artist(item: dict) -> str:

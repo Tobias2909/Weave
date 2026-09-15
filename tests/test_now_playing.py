@@ -6,10 +6,13 @@ all, what closing it does to the view you were on, and what a new song does to
 everything drawn beside it.
 """
 
+import sys
 import unittest
 from pathlib import Path
 
 from PySide6.QtCore import QObject
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from weave.poller import SongSide
 from weave.ui.bridge import ALL, MUSIC, NOWPLAYING, Bridge
@@ -58,6 +61,7 @@ def bridge_with(audio=None, view=ALL, has_previous=True) -> Bridge:
     bridge._now_comments = []
     bridge._now_threads = 5
     bridge._now_busy = ""
+    bridge._now_song = ""
     bridge._now_ids = {}
     bridge.nowChanged = Recorder()
     bridge._status = ""
@@ -150,6 +154,29 @@ class WhatSitsBesideTheSong(unittest.TestCase):
         self.assertEqual(bridge._now_threads, 5)
         self.assertEqual(bridge._now_busy, "")
         self.assertTrue(bridge.nowChanged.count)
+
+    def test_adding_to_the_queue_keeps_what_is_beside_the_song(self) -> None:
+        # The player raises the same signal for a song added to the queue as
+        # for a song starting, and reading that as a new song threw away the
+        # very list the song had just been queued from. The Related tab then
+        # said there was nothing there while the thing it had queued sat in
+        # the queue.
+        audio = FakeAudio(track={"key": "yt:a", "url": ""})
+        bridge = bridge_with(audio=audio)
+        bridge._now_song = "yt:a"
+        bridge._now_related = [{"title": "One"}]
+        Bridge._forget_now(bridge)
+        self.assertEqual(bridge._now_related, [{"title": "One"}],
+                         "queueing a song emptied the list it came from")
+
+    def test_the_next_song_still_empties_it(self) -> None:
+        audio = FakeAudio(track={"key": "yt:b", "url": ""})
+        bridge = bridge_with(audio=audio)
+        bridge._now_song = "yt:a"
+        bridge._now_related = [{"title": "One"}]
+        Bridge._forget_now(bridge)
+        self.assertEqual(bridge._now_related, [])
+        self.assertEqual(bridge._now_song, "yt:b")
 
     def test_the_two_addresses_are_kept_so_the_other_tab_costs_nothing(self) -> None:
         # One answer carries the tracks, the address of the words and the
@@ -257,3 +284,44 @@ class OneQueueDrawnOneWay(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ALargerPicture(unittest.TestCase):
+    def test_a_music_address_is_asked_for_at_a_size_worth_drawing(self) -> None:
+        from weave.sources import ytmusic
+
+        small = "https://lh3.googleusercontent.com/abc=w60-h60-l90-rj"
+        self.assertEqual(ytmusic.bigger(small),
+                         "https://lh3.googleusercontent.com/abc=w544-h544-l90-rj")
+
+    def test_an_ordinary_video_thumbnail_is_left_alone(self) -> None:
+        from weave.sources import ytmusic
+
+        # These carry no size in the address, and rewriting one would be
+        # inventing a form the picture service was never asked about.
+        plain = "https://i.ytimg.com/vi/aaaaaaaaaaa/hqdefault.jpg?sqp=x&rs=y"
+        self.assertEqual(ytmusic.bigger(plain), plain)
+        self.assertEqual(ytmusic.bigger(""), "")
+
+
+class AFreshList(unittest.TestCase):
+    def test_putting_a_list_on_says_so_separately(self) -> None:
+        # Adding one song raises the queue signal too, so the page cannot tell
+        # a fresh list from a longer one by that alone.
+        from test_audio import FakeEngine, FakeResolver
+
+        from weave.audio import AudioPlayer
+        from weave.config import Config
+
+        told = []
+        player = AudioPlayer(Config(raw={}), engine=FakeEngine())
+        player._make_resolver = lambda entry: FakeResolver(entry["key"])
+        player.queueReplaced.connect(lambda: told.append(True))
+        player.play_items([{"key": "k", "title": "One", "artist": "",
+                            "thumbnail": "", "live": False,
+                            "url": "https://www.youtube.com/watch?v=aaaaaaaaaaa"}])
+        self.assertEqual(told, [True])
+        player.add_item({"key": "k2", "title": "Two", "artist": "",
+                         "thumbnail": "", "live": False,
+                         "url": "https://www.youtube.com/watch?v=bbbbbbbbbbb"})
+        self.assertEqual(told, [True], "adding a song read as a fresh list")

@@ -223,6 +223,7 @@ class AudioPlayer(QObject):
     # moved, which resets the view and throws away delegates it was still
     # building. What is playing is a number now, read beside the list.
     queueChanged = Signal()
+    queueReplaced = Signal()
     stateChanged = Signal()
     progressChanged = Signal()
     failed = Signal(str)
@@ -479,6 +480,10 @@ class AudioPlayer(QObject):
             self._order = [self._at] + [i for i in self._order if i != self._at]
         self._forget_recovery()
         self.queueChanged.emit()
+        # A list replaced outright is not the same event as a song ending into
+        # the next one, and the window has to be able to tell them apart. The
+        # queue signal cannot say it, since adding one song raises that too.
+        self.queueReplaced.emit()
         self._start_current()
 
     def _rebuild_order(self) -> None:

@@ -250,6 +250,9 @@ class TheHeartFollowsTheSong(unittest.TestCase):
         class Player:
             def __init__(self):
                 self.trackChanged = Wire()
+                # The page beside the song reads which song it is about, to
+                # tell a new one from a song merely added to the queue.
+                self.track = {"key": "yt:a", "url": ""}
                 # The window listens to this now. A player that cannot fail
                 # is not one the bridge will take.
                 self.failed = Wire()
@@ -274,6 +277,7 @@ class TheHeartFollowsTheSong(unittest.TestCase):
         bridge._now_comments = []
         bridge._now_threads = 5
         bridge._now_busy = ""
+        bridge._now_song = ""
         bridge.nowChanged = type("S", (), {"emit": lambda self, *a: None})()
         told = []
         bridge.favoritesChanged = type("S", (), {"emit": lambda self, *a: told.append(True)})()

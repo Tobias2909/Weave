@@ -37,6 +37,14 @@ Item {
         }
     }
 
+    // Its own ground, because the page travels over whatever it was opened
+    // from. Left transparent, the view behind shows through for the length of
+    // the slide, which is half of every close.
+    ThemeBackground {
+        anchors.fill: parent
+        z: -1
+    }
+
     // Under this the column on the right does not fit beside a picture worth
     // looking at, so it keeps only its tabs. Raising the window's own minimum
     // instead would be taking the size of the window away from the person
@@ -74,6 +82,14 @@ Item {
             page.asked = ({})
             if (page.tab !== "next")
                 page.choose(page.tab)
+        }
+
+        // A whole list put on is a fresh start, and what is beside a song from
+        // the list before it is not worth keeping open. The queue is what
+        // somebody wants to see at that moment anyway.
+        function onQueueReplaced() {
+            page.asked = ({})
+            page.tab = "next"
         }
     }
 
@@ -136,6 +152,36 @@ Item {
                         text: "No picture"
                         color: Theme.colors.textMuted
                         font.pixelSize: 12
+                    }
+
+                    // The picture is where the pointer already is, so it takes
+                    // the two things worth doing without moving it. Either
+                    // button, because reaching for the wrong one and having
+                    // nothing happen is worse than both doing the same thing.
+                    MouseArea {
+                        objectName: "nowPlayingSurface"
+                        anchors.fill: parent
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        onClicked: Audio.toggle()
+
+                        // A notch is five, the same as the bar's own slider,
+                        // so the two do not disagree about what a notch means.
+                        WheelHandler {
+                            acceptedDevices: PointerDevice.Mouse
+                                             | PointerDevice.TouchPad
+                            property real carried: 0
+                            onWheel: function (event) {
+                                carried += event.angleDelta.y
+                                while (carried >= 120) {
+                                    carried -= 120
+                                    Audio.nudgeVolume(1)
+                                }
+                                while (carried <= -120) {
+                                    carried += 120
+                                    Audio.nudgeVolume(-1)
+                                }
+                            }
+                        }
                     }
                 }
 

@@ -305,6 +305,8 @@ class Bridge(QObject):
         self._now_comments: list = []
         self._now_threads = 5
         self._now_busy = ""
+        # Which song everything beside it is about.
+        self._now_song = ""
         # The two addresses the station answer carries, kept per song so that
         # opening the second tab spends nothing looking them up again.
         self._now_ids: dict = {}
@@ -3578,7 +3580,17 @@ class Bridge(QObject):
         Cleared rather than left to be overwritten, because a tab that was open
         would otherwise show the last song's answer until the new one landed,
         which reads as the page simply being wrong.
+
+        Only when the song really did change. The player raises the same signal
+        when a song is added to the queue, and reading that as a new song threw
+        away the list the song had just been added from, which left the Related
+        tab saying there was nothing there while the thing it had just queued
+        sat in the queue.
         """
+        song = self._now_key() or self._now_video_id()
+        if song == self._now_song:
+            return
+        self._now_song = song
         self._now_words = {}
         self._now_related = []
         self._now_comments = []
