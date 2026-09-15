@@ -22,7 +22,7 @@ one to break that and took it out again. Nothing here tries to be cleverer.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, QRunnable, Signal, Slot
+from PySide6.QtCore import QObject, QRunnable, Qt, Signal, Slot
 from PySide6.QtGui import QGuiApplication, QOpenGLContext
 from PySide6.QtQuick import QQuickFramebufferObject, QQuickWindow
 
@@ -108,12 +108,39 @@ class VideoSurface(QQuickFramebufferObject):
         super().__init__(parent)
         self._renderer: _Renderer | None = None
         self.frameReady.connect(self._redraw)
+        # The window closing is what takes the picture down in a running
+        # application, and nothing else does. Freed at destruction instead, the
+        # context outlives the scene that made it and the process dies on the
+        # way out, which looks like a fault in whatever ran last.
+        self.windowChanged.connect(self._on_window)
         # Qt's own framebuffer is upside down as far as mpv is concerned.
         self.setMirrorVertically(True)
 
     @Slot()
     def _redraw(self) -> None:
         self.update()
+
+    def _on_window(self) -> None:
+        window = self.window()
+        if window is None:
+            return
+        # Raised on the render thread as the scene is torn down, which is both
+        # the right moment and the only thread that may free the context.
+        window.sceneGraphInvalidated.connect(
+            self._let_go, Qt.ConnectionType.DirectConnection)
+
+    def _let_go(self) -> None:
+        global _context, _proc, _finished
+        _finished = True
+        context, _context = _context, None
+        if _engine is not None:
+            _engine.render_ready(False)
+        if context is not None:
+            try:
+                context.free()
+            except Exception:
+                pass
+        _proc = None
 
     def createRenderer(self) -> QQuickFramebufferObject.Renderer:
         self._renderer = _Renderer(self)

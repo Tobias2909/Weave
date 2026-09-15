@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import Weave 1.0
 
 // The page about the song that is playing. The picture in the middle, what is
 // known about it underneath, and everything that belongs beside it in one
@@ -22,7 +23,13 @@ Item {
     // a full page down, which would show the page sliding past on the way to
     // somewhere nobody asked it to go.
     property bool everShown: false
-    onWantedChanged: if (wanted) everShown = true
+    onWantedChanged: {
+        if (wanted)
+            everShown = true
+        // Nothing is fetched and nothing decoded until this is true, so the
+        // page being open is the whole cost of being able to show a picture.
+        Audio.setVideoWanted(wanted)
+    }
     visible: wanted || (everShown && shift.y < page.height)
 
     // A transform rather than a real move, so nothing is laid out again while
@@ -123,25 +130,49 @@ Item {
                     height: width * 9 / 16
                     clip: true
 
-                    // Square cover art in a wide box, centred, at its own
-                    // shape. Stretching it to the corners would be inventing
-                    // picture that was never there.
-                    RoundedImage {
-                        objectName: "nowPlayingArtwork"
-                        anchors.centerIn: parent
-                        height: parent.height
-                        width: height
-                        radius: 8
-                        visible: (Audio.track.thumbnail || "") !== ""
-                        source: Audio.track.thumbnail ? Audio.track.thumbnail : ""
+                    // The video, underneath, and drawing from the moment the
+                    // page opens rather than from the moment there is
+                    // something to see.
+                    //
+                    // That order is load bearing. The surface builds its
+                    // render context on its first paint, mpv refuses to decode
+                    // video until that context exists, and a frame is what the
+                    // page would otherwise be waiting for before drawing the
+                    // surface at all. Shown only once a frame existed, nothing
+                    // would ever paint, nothing would build, and no frame would
+                    // ever come.
+                    VideoSurface {
+                        objectName: "nowPlayingVideo"
+                        anchors.fill: parent
                     }
 
-                    Label {
-                        anchors.centerIn: parent
-                        visible: (Audio.track.thumbnail || "") === ""
-                        text: "No picture"
-                        color: Theme.colors.textMuted
-                        font.pixelSize: 12
+                    // Square cover art over it, at its own shape, until there
+                    // is a picture underneath worth uncovering. Stretching it
+                    // to the corners would be inventing picture that was never
+                    // there, and swapping sooner shows a black box for the two
+                    // and a half seconds a frame takes to exist.
+                    Rectangle {
+                        anchors.fill: parent
+                        visible: !Audio.videoShowing
+                        color: Theme.colors.background
+
+                        RoundedImage {
+                            objectName: "nowPlayingArtwork"
+                            anchors.centerIn: parent
+                            height: parent.height
+                            width: height
+                            radius: 8
+                            visible: (Audio.track.thumbnail || "") !== ""
+                            source: Audio.track.thumbnail ? Audio.track.thumbnail : ""
+                        }
+
+                        Label {
+                            anchors.centerIn: parent
+                            visible: (Audio.track.thumbnail || "") === ""
+                            text: "No picture"
+                            color: Theme.colors.textMuted
+                            font.pixelSize: 12
+                        }
                     }
 
                     // The picture is where the pointer already is, so it takes
@@ -252,6 +283,16 @@ Item {
                         }
                         color: Theme.colors.textMuted
                         font.pixelSize: 12
+                        elide: Text.ElideRight
+                    }
+
+                    Label {
+                        objectName: "nowPlayingVideoNote"
+                        width: parent.width
+                        visible: text !== "" && !Audio.videoShowing
+                        text: Audio.videoNote
+                        color: Theme.colors.textMuted
+                        font.pixelSize: 11
                         elide: Text.ElideRight
                     }
 

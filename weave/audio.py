@@ -1136,6 +1136,12 @@ class AudioPlayer(QObject):
 
     # ---- the picture ------------------------------------------------------
 
+    @property
+    def engine(self):
+        """The player itself. The surface needs it to build a render context,
+        which can only be made against this exact handle."""
+        return self._engine
+
     @Slot(bool)
     def setVideoWanted(self, wanted: bool) -> None:
         """Whether anything is open to show a picture."""

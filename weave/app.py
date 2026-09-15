@@ -28,7 +28,7 @@ from .db import Database
 from .player.mpv import Player
 from .sources import ytmusic
 from .sources.progress import default_dir as default_watch_later
-from .ui import navigation
+from .ui import navigation, videoitem
 from .ui.bridge import Bridge
 from .ui.feed_model import FeedModel
 from .ui.theme import Theme
@@ -118,6 +118,10 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
     audio = AudioPlayer(cfg, db, parent=app)
     bridge.attach_theme(theme)
     bridge.attach_audio(audio)
+    # Which player the video surface draws. One music player exists, and
+    # the surface is built by QML rather than here, so it is told once
+    # rather than handed down through the window.
+    videoitem.attach(audio.engine)
     # The mouse back and forward buttons are not delivered to any one item,
     # so they are read at the application before anything else sees them.
     navigation.install(app, bridge)
@@ -142,6 +146,9 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
     # run one. Told to QML so it can fall back to square pictures rather than
     # drawing nothing at all.
     context.setContextProperty("EffectsAvailable", _effects_available())
+    # The surface the picture is drawn on, reachable from QML as a type
+    # rather than as a context property, because the page makes one.
+    videoitem.register()
     engine.addImportPath(str(QML_DIR))
     engine.load(QUrl.fromLocalFile(str(QML_DIR / "Main.qml")))
     if not engine.rootObjects():
