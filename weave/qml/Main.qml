@@ -921,16 +921,34 @@ ApplicationWindow {
         step: grid.cellHeight * App.scrollRowsPerNotch
     }
 
-    // The panel is hidden while this is open, so the page takes the width
-    // rather than leaving a band for something that is not drawn.
-    NowPlaying {
-        objectName: "nowPlayingPage"
-        visible: App.viewKind === "nowplaying"
+    // The page slides up out of the music bar and drops back into it. The
+    // sliding is done with a transform rather than by moving the item, so
+    // nothing is laid out again on the way and whatever is drawn inside it,
+    // a video among other things later, is only offset while it travels.
+    //
+    // This wrapper is what clips it. Without one the page is drawn over the
+    // music bar and past the bottom of the window for the length of the
+    // animation, which is the opposite of coming out from behind the bar.
+    Item {
+        objectName: "nowPlayingSlot"
+        clip: true
+        // Left visible always, and empty when the page is away. Binding this
+        // to the page's own visible deadlocks the two of them, because a Qt
+        // Quick child of an invisible parent reports itself invisible as well,
+        // so each one held the other down and the page never appeared.
         anchors.left: sidebar.right
         anchors.right: parent.right
         anchors.top: liveBar.visible ? liveBar.bottom : parent.top
         anchors.topMargin: liveBar.visible ? 0 : banner.height
         anchors.bottom: miniPlayer.top
+
+        // The panel is hidden while this is open, so the page takes the width
+        // rather than leaving a band for something that is not drawn.
+        NowPlaying {
+            id: nowPlayingPage
+            objectName: "nowPlayingPage"
+            anchors.fill: parent
+        }
     }
 
     // Out of the page and back where you were, with the music still playing.

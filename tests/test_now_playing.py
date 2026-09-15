@@ -184,7 +184,30 @@ class WhatSitsBesideTheSong(unittest.TestCase):
         Bridge.readNowSide(bridge, SongSide.WORDS)
         self.assertEqual(started, [], "the words were asked for a second time")
 
-    def test_a_song_with_no_video_id_asks_for_nothing(self) -> None:
+    def test_the_id_is_read_out_of_the_address(self) -> None:
+        # The entries the player is handed are built in several places and most
+        # keep only what the player needs, which is a title, a picture and an
+        # address. No videoId field among them. Reading one was why both tabs
+        # asked for nothing at all and sat empty.
+        real = {"key": "yt:dQw4w9WgXcQ", "title": "One", "artist": "Somebody",
+                "thumbnail": "", "live": False,
+                "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}
+        bridge = bridge_with(audio=FakeAudio(track=real))
+        self.assertEqual(Bridge._now_video_id(bridge), "dQw4w9WgXcQ")
+
+        started = []
+        bridge._launch = lambda worker: started.append(worker) or True
+        bridge._cfg = None
+        Bridge.readNowSide(bridge, SongSide.WORDS)
+        self.assertEqual(len(started), 1, "the words were never asked for")
+        self.assertEqual(bridge._now_busy, SongSide.WORDS)
+
+    def test_a_named_id_wins_over_the_address(self) -> None:
+        bridge = bridge_with(audio=FakeAudio(track={"key": "yt:a", "videoId": "named",
+                                                    "url": "https://youtu.be/other"}))
+        self.assertEqual(Bridge._now_video_id(bridge), "named")
+
+    def test_an_entry_with_no_address_at_all_asks_for_nothing(self) -> None:
         bridge = bridge_with(audio=FakeAudio(track={"key": "yt:a"}))
         started = []
         bridge._launch = lambda worker: started.append(worker) or True

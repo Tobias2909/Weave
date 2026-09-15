@@ -13,6 +13,30 @@ Item {
     id: page
     objectName: "nowPlayingView"
 
+    // Wanted, rather than shown. The page stays drawn for as long as it takes
+    // to drop back into the bar, or leaving it would be a disappearance rather
+    // than a movement.
+    readonly property bool wanted: App.viewKind === "nowplaying"
+    // Only after it has been opened once. The height arrives after the first
+    // layout, and that first change of it animates the offset from nothing to
+    // a full page down, which would show the page sliding past on the way to
+    // somewhere nobody asked it to go.
+    property bool everShown: false
+    onWantedChanged: if (wanted) everShown = true
+    visible: wanted || (everShown && shift.y < page.height)
+
+    // A transform rather than a real move, so nothing is laid out again while
+    // it travels and whatever is drawn inside is only offset. The clipping is
+    // done by the wrapper around this, which is what makes it come out from
+    // behind the music bar rather than over it.
+    transform: Translate {
+        id: shift
+        y: page.wanted ? 0 : page.height
+        Behavior on y {
+            NumberAnimation { duration: 190; easing.type: Easing.OutCubic }
+        }
+    }
+
     // Under this the column on the right does not fit beside a picture worth
     // looking at, so it keeps only its tabs. Raising the window's own minimum
     // instead would be taking the size of the window away from the person

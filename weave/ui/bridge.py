@@ -3589,12 +3589,27 @@ class Bridge(QObject):
                 worker.cancel()
         self.nowChanged.emit()
 
+    def _now_video_id(self) -> str:
+        """The id of the song playing, whichever list it was queued from.
+
+        A queue entry is not obliged to carry one. The items the player is
+        handed are built in several places and most of them keep only what the
+        player itself needs, which is a title, a picture and an address. The
+        address is the one field every one of them must have, because the
+        player refuses an entry without it, so the id is read back out of that
+        rather than from a field that is usually missing.
+        """
+        track = (self._audio.track if self._audio else {}) or {}
+        named = str(track.get("videoId") or track.get("ext_id") or "")
+        if named:
+            return named
+        return ids.youtube_video_id(str(track.get("url") or "")) or ""
+
     @Slot(str)
     def readNowSide(self, what: str) -> None:
         """The words, or what is like this song. Asked for when the tab is
         pressed and never before, since each is a request of its own."""
-        track = (self._audio.track if self._audio else {}) or {}
-        video_id = str(track.get("videoId") or track.get("ext_id") or "")
+        video_id = self._now_video_id()
         if not video_id or self._now_busy:
             return
         if what == SongSide.WORDS and self._now_words:
