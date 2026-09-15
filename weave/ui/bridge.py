@@ -3114,7 +3114,16 @@ class Bridge(QObject):
             shelves = json.loads(stored)
         except ValueError:
             return []
-        return shelves if isinstance(shelves, list) else []
+        if not isinstance(shelves, list):
+            return []
+        # Kept before songs carried the address of whoever made them. Shown as
+        # they are, every name on them would be dead until the next refresh, so
+        # they are treated as nothing and fetched again.
+        for shelf in shelves:
+            for item in (shelf.get("items") or []) if isinstance(shelf, dict) else []:
+                if isinstance(item, dict) and "artistId" not in item:
+                    return []
+        return shelves
 
     @Slot()
     def loadHome(self, force: bool = False) -> None:
@@ -3269,6 +3278,10 @@ class Bridge(QObject):
         self._queue_track({
             "key": f"yt:{video}", "title": item.get("title", ""),
             "artist": item.get("subtitle", ""), "thumbnail": item.get("thumbnail", ""),
+            # Carried here as well. Built without it, a song queued from a tile
+            # reached the bar and the queue with no address behind its name, so
+            # the name sat there looking like every other one and did nothing.
+            "artistId": item.get("artistId", ""),
             "live": False, "url": ids.watch_url("youtube", video),
         }, play_next)
 
@@ -3439,6 +3452,9 @@ class Bridge(QObject):
             "key": row["key"], "title": row["title"],
             "artist": row["channel_title"] or "",
             "thumbnail": qml_source(row["thumbnail_url"]),
+            # A kept song is a stored row and carries no artist address, so the
+            # name on it stays plain words rather than a link that goes nowhere.
+            "artistId": "",
             "live": False,
             "url": ids.watch_url("youtube", row["ext_id"]),
         } for row in rows]
@@ -3490,6 +3506,7 @@ class Bridge(QObject):
             self._audio.play_items([{
                 "key": f"yt:{video}", "title": item.get("title", ""),
                 "artist": item.get("subtitle", ""), "thumbnail": item.get("thumbnail", ""),
+                "artistId": item.get("artistId", ""),
                 "live": False, "url": ids.watch_url("youtube", video),
             }])
 

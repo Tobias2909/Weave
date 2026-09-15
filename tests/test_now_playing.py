@@ -354,3 +354,31 @@ class AFreshList(unittest.TestCase):
                          "thumbnail": "", "live": False,
                          "url": "https://www.youtube.com/watch?v=bbbbbbbbbbb"})
         self.assertEqual(told, [True], "adding a song read as a fresh list")
+
+
+class EveryQueueEntryCarriesItsArtist(unittest.TestCase):
+    """A name is pressable only where the entry behind it carries an address.
+
+    This is a guard rather than one case, because the fault has been the same
+    twice: the entries handed to the player are built in several places, and a
+    builder that forgets the field leaves the name dead in the bar and in the
+    queue while looking exactly like every other name. Nothing in the window
+    can tell the difference, so it is caught here instead.
+    """
+
+    def test_no_builder_forgets_it(self) -> None:
+        source = (Path(__file__).resolve().parent.parent
+                  / "weave" / "ui" / "bridge.py").read_text()
+        # Every entry handed to the player has an address built this way, which
+        # is what makes it findable without parsing the whole file.
+        marker = 'ids.watch_url("youtube"'
+        missing = []
+        for piece in source.split(marker)[1:]:
+            # Back to the start of the dict this address sits in, then forward
+            # over it. A builder is small, so a window either side is enough.
+            before = source[:source.index(marker + piece)]
+            start = before.rfind("{")
+            entry = source[start:source.index(marker + piece) + 200]
+            if '"key"' in entry and '"artistId"' not in entry:
+                missing.append(entry.strip().splitlines()[0].strip())
+        self.assertEqual(missing, [], "a queue entry was built with no artist address")

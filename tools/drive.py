@@ -306,8 +306,13 @@ def seed() -> None:
     art = artwork_file()
     db.set_state("music_shelves", json.dumps([{
         "title": "Listen again",
+        # The address of whoever made it, which every real shelf entry carries
+        # now and which is what makes the name under a tile worth pressing.
+        # Stored shelves without it are treated as stale and fetched again, so
+        # a seed without it would leave the page empty.
         "items": [{"title": f"Track {i}", "subtitle": "Someone",
                    "videoId": f"smoketrack{i:02d}", "playlistId": f"RDsmoke{i:02d}",
+                   "artistId": "UC" + "s" * 22,
                    "thumbnail": art} for i in range(40)],
     }]))
     db.set_state("music_shelves_at", str(int(time.time())))
