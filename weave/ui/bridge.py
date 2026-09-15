@@ -56,6 +56,7 @@ from ..poller import (
     PlaylistsFetcher,
     RecommendationsFetcher,
     SearchFetcher,
+    ArtistMusic,
     SongSide,
     SourceDetails,
     SubsImporter,
@@ -389,6 +390,14 @@ class Bridge(QObject):
         # Which half of a channel page is showing. Not part of the view, since
         # walking back and forth between the two is not walking anywhere.
         self._channel_tab = "videos"
+        # The music belonging to the channel being looked at. Held here rather
+        # than stored, because only the identity is worth keeping and the songs
+        # themselves go stale.
+        self._artist_music: ArtistMusic | None = None
+        self._channel_music: list = []
+        self._channel_music_name = ""
+        self._channel_music_busy = False
+        self._channel_music_key = ""
         # What was last handed to mpv, so the thing that was pressed can say
         # so itself. Cleared when mpv reports back, on a failure, and by a
         # timer, because a chip that never leaves is worse than none.
@@ -2297,16 +2306,91 @@ class Bridge(QObject):
 
     @Slot(str)
     def showChannelTab(self, which: str) -> None:
-        if which not in ("videos", "playlists", "streams", "members") or which == self._channel_tab:
+        if which not in ("videos", "playlists", "streams", "members",
+                         "music") or which == self._channel_tab:
             return
         self._channel_tab = which
         self.channelTabChanged.emit()
         if which == "playlists":
             self._fetch_channel_playlists()
+        elif which == "music":
+            self._fetch_channel_music()
         else:
             # Videos and streams are two readings of what is stored, so
             # walking between them is a reload rather than a request.
             self.reload()
+
+    # ---- the music a channel releases ------------------------------------
+
+    def _fetch_channel_music(self) -> None:
+        """The songs of whoever this channel releases as.
+
+        Only when the tab is opened, and never for the whole feed, since the
+        question costs requests and most channels have no answer to it. The
+        identity found is kept on the channel, an empty one included, so an
+        ordinary channel is asked once and never again.
+        """
+        key = self._view_channel
+        if not key or self._channel_music_busy:
+            return
+        if self._channel_music_key == key and self._channel_music:
+            return
+        row = self._db.channel(key) or {}
+        self._channel_music_key = key
+        self._channel_music = []
+        self._channel_music_name = ""
+        asked = row.get("music_checked_at")
+        known = str(row.get("music_artist_id") or "")
+        if asked and not known:
+            # Asked before, and this channel has no music side. Nothing is
+            # spent finding that out a second time.
+            self.channelTabChanged.emit()
+            return
+        self._channel_music_busy = True
+        self.channelTabChanged.emit()
+        self._artist_music = ArtistMusic(
+            self._cfg, key, str(row.get("ext_id") or ""),
+            self._db.channel_video_ids(key, ArtistMusic.SAMPLE), known, parent=self)
+        self._artist_music.ready.connect(self._on_channel_music)
+        self._artist_music.failed.connect(self._on_channel_music_failed)
+        if not self._launch(self._artist_music):
+            self._channel_music_busy = False
+
+    def _on_channel_music(self, key: str, found: dict) -> None:
+        self._channel_music_busy = False
+        # Kept whatever the answer was. A channel with no music side is a fact
+        # worth remembering, not a question to put again on the next visit.
+        self._db.set_channel_music(key, found["artistId"], found["artistName"])
+        if key == self._view_channel:
+            self._channel_music = found["songs"]
+            self._channel_music_name = found["artistName"]
+        self.channelTabChanged.emit()
+
+    def _on_channel_music_failed(self, message: str) -> None:
+        self._channel_music_busy = False
+        self.channelTabChanged.emit()
+        self._set_status(message)
+
+    def _get_channel_music(self) -> list:
+        return list(self._channel_music)
+
+    def _get_channel_music_by(self) -> str:
+        """Named only when the music comes from somewhere else. Landing on a
+        channel and finding a stranger's songs under it, with nothing saying
+        why, would read as the wrong page rather than as the right one."""
+        if not self._channel_music_name:
+            return ""
+        row = self._db.channel(self._view_channel) or {}
+        if self._channel_music_name.strip().lower() == str(
+                row.get("title") or "").strip().lower():
+            return ""
+        return self._channel_music_name
+
+    channelMusic = Property("QVariantList", _get_channel_music,
+                            notify=channelTabChanged)
+    channelMusicBy = Property(str, _get_channel_music_by, notify=channelTabChanged)
+    channelMusicBusy = Property(bool, lambda self: self._channel_music_busy,
+                                notify=channelTabChanged)
 
     def _fetch_channel_playlists(self, force: bool = False) -> None:
         """Read the tab, once a day unless asked again.
@@ -3183,6 +3267,45 @@ class Bridge(QObject):
             return
         found = self._track_items([row])
         self._queue_track(found[0] if found else None, play_next)
+
+    @Slot(int)
+    def playChannelMusic(self, index: int) -> None:
+        """A song off a channel's music tab, and the rest of the tab after it.
+
+        Pressing one plays it as music, which is what the headphone does
+        everywhere else. These are songs; there is nothing else a press could
+        sensibly mean here.
+        """
+        if not self._audio or not self._channel_music:
+            return
+        items = self._track_items(self._channel_music)
+        self._audio.play_items(items, max(0, min(index, len(items) - 1)))
+
+    @Slot(int, bool)
+    def queueChannelMusic(self, index: int, play_next: bool = False) -> None:
+        try:
+            row = self._channel_music[index]
+        except (IndexError, TypeError):
+            return
+        found = self._track_items([row])
+        self._queue_track(found[0] if found else None, play_next)
+
+    @Slot(int)
+    def favoriteChannelMusic(self, index: int) -> None:
+        try:
+            row = self._channel_music[index]
+        except (IndexError, TypeError):
+            return
+        self._mark_favorite(str(row.get("key") or ""), str(row.get("title") or ""),
+                            row.get("artist"), row.get("thumbnail"))
+
+    @Slot(int, result=bool)
+    def channelMusicIsFavorite(self, index: int) -> bool:
+        try:
+            row = self._channel_music[index]
+        except (IndexError, TypeError):
+            return False
+        return self.isFavorite(str(row.get("key") or ""))
 
     @Slot(int)
     def favoriteResult(self, index: int) -> None:
@@ -4090,6 +4213,9 @@ class Bridge(QObject):
         elif worker in (self._now_side, self._now_detail):
             self._now_busy = ""
             self.nowChanged.emit()
+        elif worker is self._artist_music:
+            self._channel_music_busy = False
+            self.channelTabChanged.emit()
         elif worker is self._cache_job:
             self._cache_working = False
             self.cacheChanged.emit()

@@ -962,7 +962,8 @@ class WorkerRuns(unittest.TestCase):
         holders = ("_poller", "_importer", "_adder", "_details", "_searcher", "_recommended",
                    "_history", "_search", "_tracks", "_station", "_detail", "_cache_job",
                    "_twitch", "_checkup", "_playlists", "_playlist_items", "_lengths",
-                   "_channel_members", "_now_side", "_now_detail")
+                   "_channel_members", "_now_side", "_now_detail",
+                   "_artist_music")
 
         def make(held: str):
             bridge = Bridge.__new__(Bridge)
@@ -986,6 +987,7 @@ class WorkerRuns(unittest.TestCase):
             bridge._searching = True
             bridge._detail_loading = True
             bridge._now_busy = "words"
+            bridge._channel_music_busy = True
             bridge._cache_working = True
             bridge._twitch_status = "asking Twitch for a code"
             # The members button crashing has to put itself back to off, which
@@ -995,7 +997,7 @@ class WorkerRuns(unittest.TestCase):
             for signal in ("problemsChanged", "statusChanged", "noticeChanged", "busyChanged",
                            "importChanged", "addChanged", "musicChanged", "detailChanged",
                            "cacheChanged", "twitchChanged", "viewChanged",
-                           "nowChanged"):
+                           "nowChanged", "channelTabChanged"):
                 setattr(bridge, signal, Recorder())
             return bridge, worker
 
@@ -1040,6 +1042,10 @@ class WorkerRuns(unittest.TestCase):
             bridge, worker = make(held)
             Bridge._on_worker_crashed(bridge, worker, "x")
             self.assertEqual(bridge._now_busy, "", held)
+
+        bridge, worker = make("_artist_music")
+        Bridge._on_worker_crashed(bridge, worker, "x")
+        self.assertFalse(bridge._channel_music_busy)
 
         bridge, worker = make("_cache_job")
         Bridge._on_worker_crashed(bridge, worker, "x")

@@ -1051,6 +1051,16 @@ ApplicationWindow {
                 accent: App.channelTab === "playlists"
                 onClicked: App.showChannelTab("playlists")
             }
+            // Always offered, unlike Streams and Members, because whether a
+            // channel has a music side cannot be known without asking and
+            // asking costs a request. So the question is put when the button
+            // is pressed, and the answer is kept, an empty one included.
+            FlatButton {
+                objectName: "channelMusicTab"
+                text: "Music"
+                accent: App.channelTab === "music"
+                onClicked: App.showChannelTab("music")
+            }
         }
 
         // Somebody else's playlist, which was reached from their page and can
@@ -1309,11 +1319,27 @@ ApplicationWindow {
         step: channelPlaylistsView.rowHeight * App.scrollRowsPerNotch
     }
 
+    ChannelMusic {
+        id: channelMusicView
+        objectName: "channelMusicView"
+        visible: App.viewKind === "channel" && App.channelTab === "music"
+        anchors.left: grid.left
+        anchors.right: grid.right
+        anchors.top: grid.top
+        anchors.bottom: grid.bottom
+    }
+
+    SmoothScroll {
+        flickable: channelMusicView
+        step: channelMusicView.rowHeight * App.scrollRowsPerNotch
+    }
+
     GridView {
         id: grid
         objectName: "grid"
         visible: App.viewKind !== "music" && App.viewKind !== "debug"
                  && App.viewKind !== "nowplaying"
+                 && !(App.viewKind === "channel" && App.channelTab === "music")
                  && App.viewKind !== "settings"
                  && !(App.viewKind === "channel" && App.channelTab === "playlists")
         anchors.left: sidebar.right

@@ -93,6 +93,9 @@ class Track:
     album: str
     duration: str
     thumbnail_url: str
+    # The first named artist's own page, empty when the entry names nobody
+    # reachable, which is the case for a compilation.
+    artist_id: str = ""
 
     @property
     def key(self) -> str:
@@ -249,9 +252,19 @@ def bigger(url: str) -> str:
 
 
 def _artist(item: dict) -> str:
-    artists = item.get("artists") or []
-    names = [str(a.get("name")) for a in artists if isinstance(a, dict) and a.get("name")]
-    return ", ".join(names)
+    return ", ".join(a["name"] for a in artists_of(item))
+
+
+def artists_of(item: dict) -> list[dict]:
+    """Who made this, each with the address of their own page where there is
+    one. The id is what makes a name worth pressing, and it is the only way to
+    reach the music of a channel whose songs are uploaded by another one."""
+    out = []
+    for artist in item.get("artists") or []:
+        if not isinstance(artist, dict) or not artist.get("name"):
+            continue
+        out.append({"name": str(artist["name"]), "id": str(artist.get("id") or "")})
+    return out
 
 
 def to_track(item: dict) -> Track | None:
@@ -267,6 +280,7 @@ def to_track(item: dict) -> Track | None:
         # A station spells the length differently as well.
         duration=str(item.get("duration") or item.get("length") or ""),
         thumbnail_url=_thumb(item),
+        artist_id=next((a["id"] for a in artists_of(item) if a["id"]), ""),
     )
 
 
@@ -468,3 +482,47 @@ def home(profile_path: str | None, limit: int = 6) -> list[dict]:
         if items:
             out.append({"title": str(shelf.get("title") or ""), "items": items})
     return out
+
+
+def artist_of(profile_path: str | None, video_id: str) -> list[dict]:
+    """Who the music service says made this video.
+
+    The way to find the music belonging to an ordinary channel. Much of what an
+    artist releases is uploaded by a separate generated channel, so there is no
+    reliable walk from one channel to the other. There is a reliable walk from a
+    video to its artist, and every channel here already has videos.
+    """
+    if not video_id:
+        return []
+    try:
+        found = client(profile_path).get_watch_playlist(videoId=video_id, limit=1)
+    except MusicError:
+        raise
+    except Exception as exc:
+        raise _blame("who made it", exc) from exc
+    tracks = (found or {}).get("tracks") or []
+    return artists_of(tracks[0]) if tracks and isinstance(tracks[0], dict) else []
+
+
+def artist(profile_path: str | None, channel_id: str) -> dict:
+    """An artist's own page, flattened to the songs on it.
+
+    Albums and singles are shelves of their own with a second paged call behind
+    each, and are not read here. What comes back is what the page itself puts
+    up first, which is the songs.
+    """
+    if not channel_id:
+        return {"name": "", "songs": []}
+    try:
+        page = client(profile_path).get_artist(channel_id)
+    except MusicError:
+        raise
+    except Exception as exc:
+        raise _blame("the artist", exc) from exc
+    page = page or {}
+    items: list = []
+    for section in ("songs", "singles"):
+        shelf = page.get(section)
+        if isinstance(shelf, dict):
+            items.extend(shelf.get("results") or [])
+    return {"name": str(page.get("name") or ""), "songs": to_tracks(items)}

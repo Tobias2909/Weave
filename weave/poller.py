@@ -2309,3 +2309,84 @@ class SongSide(Worker):
             self.failed.emit(str(exc))
             return
         self.answered.emit(answer)
+
+
+class ArtistMusic(Worker):
+    """The music belonging to a channel, and who the music service calls it.
+
+    A channel and the artist it releases under are often not the same channel.
+    Much of what an artist puts out is uploaded by a separate generated one, so
+    there is no reliable walk from a channel to its music. There is a reliable
+    walk from a video to its artist, and every channel here already has videos,
+    so that is the way round this takes.
+
+    The answer is handed back for keeping, a negative one included, or an
+    ordinary channel would be asked this on every visit and answer nothing every
+    time.
+    """
+
+    ready = Signal(str, "QVariantMap")
+    failed = Signal(str)
+
+    # Enough to outvote one track that names a guest rather than the channel's
+    # own artist. More than this is paying for a tie that does not happen.
+    SAMPLE = 3
+
+    def __init__(self, cfg: Config, channel_key: str, channel_id: str,
+                 video_ids: list[str], known_id: str = "",
+                 parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._cfg = cfg
+        self._key = channel_key
+        self._channel_id = channel_id
+        self._video_ids = list(video_ids)[:self.SAMPLE]
+        self._known_id = known_id
+
+    def work(self) -> None:
+        from .sources import ytmusic
+
+        profile = cookie_profile(self._cfg)
+        try:
+            artist_id, name = self._identity(ytmusic, profile)
+            if not artist_id:
+                # Asked, and there is none. Said plainly so it can be kept.
+                self.ready.emit(self._key, {"artistId": "", "artistName": "",
+                                            "songs": []})
+                return
+            found = ytmusic.artist(profile, artist_id)
+        except ytmusic.MusicError as exc:
+            self.failed.emit(str(exc))
+            return
+        self.ready.emit(self._key, {
+            "artistId": artist_id,
+            "artistName": found["name"] or name,
+            "songs": [{
+                "key": t.key, "videoId": t.video_id, "title": t.title,
+                "artist": t.artist, "album": t.album, "duration": t.duration,
+                "thumbnail": qml_source(t.thumbnail_url),
+            } for t in found["songs"]],
+        })
+
+    def _identity(self, ytmusic, profile) -> tuple[str, str]:
+        """Which artist this channel is, by the cheapest question first."""
+        if self._known_id:
+            return self._known_id, ""
+        # The channel may be the artist already, which is the case every time
+        # one is reached from a song rather than from the feed.
+        if self._channel_id:
+            page = ytmusic.artist(profile, self._channel_id)
+            if page["songs"] or page["name"]:
+                return self._channel_id, page["name"]
+        # Otherwise its own videos are asked who made them.
+        votes: dict[str, str] = {}
+        counted: dict[str, int] = {}
+        for video_id in self._video_ids:
+            for named in ytmusic.artist_of(profile, video_id):
+                if not named["id"]:
+                    continue
+                votes[named["id"]] = named["name"]
+                counted[named["id"]] = counted.get(named["id"], 0) + 1
+        if not counted:
+            return "", ""
+        best = max(counted, key=lambda one: counted[one])
+        return best, votes[best]

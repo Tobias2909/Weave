@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 42
+SCHEMA_VERSION = 43
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -480,6 +480,17 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # the feed. Existing rows default to being in All, since everything stored
     # before this was followed by hand.
     ("channels", "in_all", "INTEGER NOT NULL DEFAULT 1"),
+    # Which artist the music service knows this channel as, which is not
+    # always the channel itself. Much of what an artist releases is uploaded
+    # by a separate generated channel, so asking the service who made one of
+    # this channel's videos is what finds the music that belongs to it. Empty
+    # string means asked and there is none, NULL means never asked, which is a
+    # question rather than a no.
+    ("channels", "music_artist_id", "TEXT"),
+    ("channels", "music_artist_name", "TEXT"),
+    # When that question was last put. A negative answer is remembered too, or
+    # every visit to an ordinary channel would ask again and get nothing.
+    ("channels", "music_checked_at", "INTEGER"),
     # A search result and a suggestion can be a stream that is on now or one
     # that is announced, exactly as a feed row can, and the flat listing says
     # which without being asked twice. Kept so the card can badge it and the
@@ -1094,6 +1105,32 @@ class Database:
         with self.conn as conn:
             conn.execute("UPDATE channels SET members=? WHERE key=?",
                          (1 if members else 0, key))
+
+    def set_channel_music(self, key: str, artist_id: str, name: str,
+                          now: int | None = None) -> None:
+        """Which artist the music service knows this channel as.
+
+        An empty id is a real answer and is kept as one. Without keeping it,
+        every visit to an ordinary channel would ask the same question and get
+        the same nothing back.
+        """
+        with self.conn as conn:
+            conn.execute(
+                "UPDATE channels SET music_artist_id=?, music_artist_name=?, "
+                "music_checked_at=? WHERE key=?",
+                (artist_id, name, int(now if now is not None else time.time()), key))
+
+    def channel_video_ids(self, key: str, limit: int = 3) -> list[str]:
+        """A few of this channel's videos, newest first, to ask the music
+        service who made them. Shorts are left out: one is rarely the music
+        the channel is known for."""
+        rows = self.conn.execute(
+            "SELECT v.ext_id FROM videos v "
+            "JOIN channels c ON c.key = v.channel_key "
+            f"WHERE v.channel_key=? AND {NOT_A_SHORT} "
+            "ORDER BY COALESCE(v.published_at, v.first_seen_at) DESC LIMIT ?",
+            (key, limit)).fetchall()
+        return [row["ext_id"] for row in rows]
 
     def set_member_of(self, key: str, member: bool) -> None:
         """Remember whether the membership is one you hold, which is what
