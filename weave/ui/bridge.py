@@ -84,6 +84,9 @@ NOWPLAYING = "nowplaying"
 # and how long a playlist's contents are trusted before reading them again.
 RECOMMENDED_TRUST_S = 6 * 3600
 PLAYLIST_TRUST_S = 6 * 3600
+# What an artist has released changes about as often as a playlist does,
+# and reading it costs two requests, so it is kept for as long.
+CHANNEL_MUSIC_TRUST_S = 6 * 3600
 # Shorter, because a history changes every time something is played.
 HISTORY_TRUST_S = 30 * 60
 # How long a set of search results is worth showing before asking again, and
@@ -1064,6 +1067,7 @@ class Bridge(QObject):
             "subtitle": rows[ext_id]["channel_title"] or "",
             "videoId": ext_id,
             "playlistId": "",
+            "artistId": rows[ext_id]["artist_id"] or "",
             "thumbnail": qml_source(rows[ext_id]["thumbnail_url"]),
         } for ext_id in kept]}
 
@@ -1318,6 +1322,11 @@ class Bridge(QObject):
             if not self._shelves:
                 self.loadHome()
             self._show_music_list(music)
+        # Walking back or forward lands on a channel without going through
+        # the opener, so nothing was reading the music half again and it sat
+        # there showing the songs of the channel before it.
+        if kind == CHANNEL and self._channel_tab == "music":
+            self._fetch_channel_music()
         if kind == DEBUG and not self._checks:
             self.runChecks(True)
         if kind == SETTINGS and not self._cache_line:
@@ -2353,6 +2362,12 @@ class Bridge(QObject):
         self._channel_music_key = key
         self._channel_music = []
         self._channel_music_name = ""
+        kept = self._kept_channel_music(key)
+        if kept is not None:
+            self._channel_music = kept
+            self._channel_music_name = str(row.get("music_artist_name") or "")
+            self.channelTabChanged.emit()
+            return
         asked = row.get("music_checked_at")
         known = str(row.get("music_artist_id") or "")
         if asked and not known:
@@ -2370,11 +2385,35 @@ class Bridge(QObject):
         if not self._launch(self._artist_music):
             self._channel_music_busy = False
 
+    def _kept_channel_music(self, key: str) -> list | None:
+        """The songs read last time, while they are still worth trusting.
+
+        Only the identity was being kept before, so every visit read the whole
+        catalogue again, which is two requests and several seconds for a list
+        that changes about as often as a playlist does.
+        """
+        stamp = self._db.get_int(f"channel_music_at.{key}", 0)
+        if not stamp or time.time() - stamp > CHANNEL_MUSIC_TRUST_S:
+            return None
+        stored = self._db.get_state(f"channel_music.{key}")
+        if not stored:
+            return None
+        try:
+            songs = json.loads(stored)
+        except ValueError:
+            return None
+        return songs if isinstance(songs, list) else None
+
+    def _keep_channel_music(self, key: str, songs: list) -> None:
+        self._db.set_state(f"channel_music.{key}", json.dumps(songs))
+        self._db.set_state(f"channel_music_at.{key}", str(int(time.time())))
+
     def _on_channel_music(self, key: str, found: dict) -> None:
         self._channel_music_busy = False
         # Kept whatever the answer was. A channel with no music side is a fact
         # worth remembering, not a question to put again on the next visit.
         self._db.set_channel_music(key, found["artistId"], found["artistName"])
+        self._keep_channel_music(key, found["songs"])
         if key == self._view_channel:
             self._channel_music = found["songs"]
             self._channel_music_name = found["artistName"]
@@ -3341,6 +3380,7 @@ class Bridge(QObject):
                                    found.get("artistName") or str(row.get("title") or ""))
         self._channel_music_key = key
         self._channel_music = found.get("songs") or []
+        self._keep_channel_music(key, self._channel_music)
         self._channel_music_name = found.get("artistName") or ""
         self._set_status("")
         self.showChannelTab("music")
@@ -3452,9 +3492,7 @@ class Bridge(QObject):
             "key": row["key"], "title": row["title"],
             "artist": row["channel_title"] or "",
             "thumbnail": qml_source(row["thumbnail_url"]),
-            # A kept song is a stored row and carries no artist address, so the
-            # name on it stays plain words rather than a link that goes nowhere.
-            "artistId": "",
+            "artistId": row["artist_id"] or "",
             "live": False,
             "url": ids.watch_url("youtube", row["ext_id"]),
         } for row in rows]

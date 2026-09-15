@@ -304,3 +304,92 @@ class TheTab(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class KeptSongsRememberWhoMadeThem(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self._tmp.name) / "t.db")
+
+    def tearDown(self) -> None:
+        self.db.close()
+        self._tmp.cleanup()
+
+    def test_the_address_survives_into_the_kept_list(self) -> None:
+        # A kept song is read back long after the list it came from is gone, so
+        # the address has to be stored with it or the name is words for ever.
+        artist = "UC" + "a" * 22
+        self.db.remember_played("aaaaaaaaaaa", "One", "Somebody", None, 200, artist)
+        self.db.set_music_favorite("aaaaaaaaaaa", True)
+        rows = self.db.music_favorites()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["artist_id"], artist)
+
+    def test_playing_it_again_from_a_list_without_one_keeps_it(self) -> None:
+        artist = "UC" + "b" * 22
+        self.db.remember_played("bbbbbbbbbbb", "One", "Somebody", None, 200, artist)
+        self.db.remember_played("bbbbbbbbbbb", "One", "Somebody", None, 200, None)
+        row = self.db.conn.execute(
+            "SELECT artist_id FROM music_history WHERE ext_id='bbbbbbbbbbb'").fetchone()
+        self.assertEqual(row["artist_id"], artist)
+
+
+class TheSongsAreKept(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self._tmp.name) / "t.db")
+        self.bridge = Bridge.__new__(Bridge)
+        QObject.__init__(self.bridge)
+        self.bridge._db = self.db
+        self.bridge._cfg = Config(raw={})
+        self.bridge._view_channel = "yt:UC1"
+        self.bridge._channel_music = []
+        self.bridge._channel_music_name = ""
+        self.bridge._channel_music_key = ""
+        self.bridge._channel_music_busy = False
+        self.bridge._artist_music = None
+        self.bridge.channelTabChanged = type("S", (), {"emit": lambda self: None})()
+        self.started: list = []
+        self.bridge._launch = lambda worker: self.started.append(worker) or True
+        self.db.conn.execute(
+            "INSERT INTO channels(key, platform, ext_id, title, added_at) "
+            "VALUES('yt:UC1','youtube','UC1','A Channel',1)")
+        self.db.conn.commit()
+
+    def tearDown(self) -> None:
+        self.db.close()
+        self._tmp.cleanup()
+
+    def test_a_second_visit_costs_nothing(self) -> None:
+        # Reading a catalogue is two requests and several seconds, for a list
+        # that changes about as often as a playlist does.
+        self.bridge._keep_channel_music("yt:UC1", [{"key": "yt:s1", "title": "One"}])
+        Bridge._fetch_channel_music(self.bridge)
+        self.assertEqual(self.started, [], "the catalogue was read again")
+        self.assertEqual(len(self.bridge._channel_music), 1)
+
+    def test_a_stale_one_is_read_again(self) -> None:
+        import time as clock
+
+        self.bridge._keep_channel_music("yt:UC1", [{"key": "yt:s1"}])
+        self.db.set_state("channel_music_at.yt:UC1",
+                          str(int(clock.time()) - 7 * 3600))
+        Bridge._fetch_channel_music(self.bridge)
+        self.assertEqual(len(self.started), 1, "a stale list was trusted")
+
+    def test_walking_to_another_channel_does_not_keep_the_old_songs(self) -> None:
+        # Walking back lands on a channel without going through the opener, so
+        # nothing was reading this half again and it showed the songs of the
+        # channel before it.
+        self.bridge._keep_channel_music("yt:UC1", [{"key": "yt:s1"}])
+        Bridge._fetch_channel_music(self.bridge)
+        self.assertEqual(len(self.bridge._channel_music), 1)
+
+        self.db.conn.execute(
+            "INSERT INTO channels(key, platform, ext_id, title, added_at) "
+            "VALUES('yt:UC2','youtube','UC2','Another',1)")
+        self.db.conn.commit()
+        self.bridge._view_channel = "yt:UC2"
+        Bridge._fetch_channel_music(self.bridge)
+        self.assertEqual(self.bridge._channel_music, [],
+                         "another channel's songs were left on the page")

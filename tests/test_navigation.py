@@ -105,6 +105,8 @@ def make_bridge():
     from weave.ui.bridge import Bridge
 
     bridge = Bridge.__new__(Bridge)
+    # The walk reads which half of a channel page is showing.
+    bridge._channel_tab = "videos"
     bridge._view_kind, bridge._view_id = "all", -1
     bridge._view_channel, bridge._view_playlist = "", ""
     bridge._search_text = ""

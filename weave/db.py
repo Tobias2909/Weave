@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 43
+SCHEMA_VERSION = 44
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -491,6 +491,11 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # When that question was last put. A negative answer is remembered too, or
     # every visit to an ordinary channel would ask again and get nothing.
     ("channels", "music_checked_at", "INTEGER"),
+    # Who made a song that was played or kept. Stored with it, because a
+    # kept song is read back out of here long after the list it came from
+    # is gone, and without this the name on it is words rather than a way
+    # to whoever made it.
+    ("music_history", "artist_id", "TEXT"),
     # A search result and a suggestion can be a stream that is on now or one
     # that is announced, exactly as a feed row can, and the flat listing says
     # which without being asked twice. Kept so the card can badge it and the
@@ -2209,7 +2214,8 @@ class Database:
     # ---- lists that come from YouTube ------------------------------------
 
     def remember_played(self, ext_id: str, title: str, artist: str | None,
-                        thumbnail_url: str | None, duration_s: int | None = None) -> None:
+                        thumbnail_url: str | None, duration_s: int | None = None,
+                        artist_id: str | None = None) -> None:
         """Note that a song was played here, now.
 
         Playing the same song again moves it to the top and counts one more
@@ -2219,18 +2225,23 @@ class Database:
         """
         with self.conn as conn:
             conn.execute(
-                "INSERT INTO music_history(ext_id, title, artist, thumbnail_url, "
+                "INSERT INTO music_history(ext_id, title, artist, artist_id, "
+                "                          thumbnail_url, "
                 "                          duration_s, played_at, plays, source) "
-                "VALUES(?,?,?,?,?,?,1,'weave') "
+                "VALUES(?,?,?,?,?,?,?,1,'weave') "
                 "ON CONFLICT(ext_id) DO UPDATE SET "
                 "  title=excluded.title, "
                 "  artist=COALESCE(excluded.artist, music_history.artist), "
+                # Kept where it is already known, since a song can be played
+                # again from a list that carries no address for its artist.
+                "  artist_id=COALESCE(excluded.artist_id, music_history.artist_id), "
                 "  thumbnail_url=COALESCE(excluded.thumbnail_url, music_history.thumbnail_url), "
                 "  duration_s=COALESCE(excluded.duration_s, music_history.duration_s), "
                 "  played_at=excluded.played_at, "
                 "  plays=music_history.plays + 1, "
                 "  source='weave'",
-                (ext_id, title, artist, thumbnail_url, duration_s, int(time.time())),
+                (ext_id, title, artist, artist_id or None, thumbnail_url,
+                 duration_s, int(time.time())),
             )
 
     def replace_service_music_history(self, rows: list[dict]) -> int:
@@ -2337,6 +2348,7 @@ class Database:
                    h.favorite_at         AS published_at,
                    h.thumbnail_url       AS thumbnail_url,
                    h.duration_s          AS duration_s,
+                   h.artist_id           AS artist_id,
                    NULL                  AS views,
                    NULL                  AS likes,
                    NULL                  AS live_status,

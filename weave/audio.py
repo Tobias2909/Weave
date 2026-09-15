@@ -529,7 +529,7 @@ class AudioPlayer(QObject):
             key.split(":", 1)[1], str(entry.get("title") or ""),
             entry.get("artist") or None,
             plain_source(entry.get("thumbnail")) or None,
-            entry.get("duration_s"))
+            entry.get("duration_s"), entry.get("artistId") or None)
 
     def _start_current(self) -> None:
         """Play the current track from the top, or from where a recovery left
