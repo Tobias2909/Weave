@@ -41,7 +41,8 @@ if str(ROOT) not in sys.path:
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QT_QUICK_BACKEND", "software")
 
-from PySide6.QtCore import QCoreApplication, QEventLoop, QMetaObject, QObject, QTimer  # noqa: E402
+from PySide6.QtCore import (QCoreApplication, QEventLoop, QMetaObject, QObject,  # noqa: E402
+                            Qt, QTimer)
 from PySide6.QtGui import QColor, QImage  # noqa: E402
 from PySide6.QtQml import QQmlProperty  # noqa: E402
 
@@ -337,6 +338,59 @@ class Smoke:
         if self.loud:
             print(f"[{'ok' if ok else 'FAIL'}] {name}" + (f"  {detail}" if detail else ""),
                   flush=True)
+
+    def space_bar(self, bridge, window) -> None:
+        """The space bar stops and starts the music from anywhere, and is a
+        space where something is being typed into.
+
+        Driven with a real key rather than by calling the slot, because the
+        thing that can be wrong here is which item the key reaches, and a call
+        proves nothing about that.
+        """
+        from PySide6.QtTest import QTest
+
+        audio = bridge._audio
+        audio._queue = [{"key": "yt:spacebaraaa", "title": "One", "url": "",
+                         "artist": "Somebody", "thumbnail": "", "live": False}]
+        audio._order = [0]
+        audio._at = 0
+        audio._idle = False
+        audio._paused = True
+        audio.trackChanged.emit()
+        audio.stateChanged.emit()
+        settle(0.3)
+
+        call(window.contentItem(), "forceActiveFocus")
+        settle(0.2)
+        QTest.keyClick(window, Qt.Key_Space)
+        settle(0.4)
+        self.check("the space bar starts the music from anywhere",
+                   bool(read(audio, "playing")))
+
+        # Stopping is a fade rather than a cut, so it is not paused for the
+        # half second the fade takes.
+        QTest.keyClick(window, Qt.Key_Space)
+        settle(1.2)
+        self.check("and stops it again", not read(audio, "playing"))
+
+        field = find(window, "searchField")
+        call(field, "forceActiveFocus")
+        settle(0.2)
+        QTest.keyClick(window, Qt.Key_Space)
+        settle(0.4)
+        self.check("but in the search box it is a space",
+                   not read(audio, "playing") and " " in str(read(field, "text")),
+                   f"box {read(field, 'text')!r}, playing {read(audio, 'playing')}")
+        write(field, "text", "")
+        call(window.contentItem(), "forceActiveFocus")
+
+        audio._queue = []
+        audio._order = []
+        audio._at = -1
+        audio._idle = True
+        audio.trackChanged.emit()
+        audio.stateChanged.emit()
+        settle(0.3)
 
     def music(self, bridge, window) -> None:
         """The music page: two rows a section, the page behind them, and a
@@ -1559,6 +1613,7 @@ class Smoke:
         settle(0.3)
 
         self.music(bridge, window)
+        self.space_bar(bridge, window)
 
         # A box, then the video menu, whose box entries sit between the
         # separator and the last entry however many entries come above.

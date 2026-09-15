@@ -966,6 +966,32 @@ ApplicationWindow {
         onActivated: App.closeNowPlaying()
     }
 
+    // Whether the focus is in something being typed into. Asked of the item
+    // that holds the focus rather than by naming every box in the window:
+    // there are boxes on the settings page, in the music view, over a group
+    // and in the theme maker, and a list of them is a list that goes stale.
+    // A text field is anything carrying a caret and a selection, which is
+    // true of every one of them and of nothing else here.
+    readonly property bool typingSomewhere: {
+        var item = root.activeFocusItem
+        return item !== null && item !== undefined
+               && item.hasOwnProperty("cursorPosition")
+               && item.hasOwnProperty("selectedText")
+    }
+
+    // Space stops and starts the music wherever you are. Reaching for the bar
+    // is the one thing done often enough to be worth a key of its own, and it
+    // is the key every player uses for it.
+    //
+    // Not while something is being typed into, where the space bar is a space,
+    // and not while there is no music, where it would swallow the key from
+    // whatever else might want it and do nothing visible in return.
+    Shortcut {
+        sequence: "Space"
+        enabled: Audio.hasQueue && !root.typingSomewhere
+        onActivated: Audio.toggle()
+    }
+
     // The row above the cards, for the two views that have one. Outside the
     // grid rather than its header: a view builds and drops its header as it
     // scrolls, and a header whose height is decided by a binding comes back
