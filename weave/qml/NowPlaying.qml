@@ -37,7 +37,16 @@ Item {
         if (wanted)
             videoSurface.update()
     }
-    visible: wanted || (everShown && shift.y < page.height)
+    // Never hidden, only moved out of sight and clipped away by the wrapper
+    // around it.
+    //
+    // Hiding it takes the whole page out of the scene, and the video surface
+    // with it, whose renderer Qt then destroys and whose graphics resources it
+    // hands back. Building those again is a cost paid at exactly the moment
+    // the page is moving, in both directions, which is what was felt as the
+    // whole window catching. Left in the scene it is laid out once and drawn
+    // only when something changes, which while it is away is never.
+    visible: true
 
     // A transform rather than a real move, so nothing is laid out again while
     // it travels and whatever is drawn inside is only offset. The clipping is
@@ -47,6 +56,11 @@ Item {
         id: shift
         y: page.wanted ? 0 : page.height
         Behavior on y {
+            // Not before it has been opened once. The height arrives after the
+            // first layout, and animating that first change would slide the
+            // page up from nowhere on the way to somewhere nobody asked it to
+            // go, which is what the flag below was always guarding against.
+            enabled: page.everShown
             NumberAnimation {
                 id: slideStep
                 duration: 190
@@ -171,7 +185,12 @@ Item {
                         id: videoSurface
                         objectName: "nowPlayingVideo"
                         anchors.fill: parent
-                        visible: !page.sliding
+                        // Never hidden. Hiding a framebuffer item makes Qt
+                        // destroy its renderer and hand the graphics resources
+                        // back, and building them again is a cost paid exactly
+                        // when the page is moving. It stays and stops working
+                        // instead.
+                        drawing: page.wanted && !page.sliding
                     }
 
                     // Square cover art over it, at its own shape, until there

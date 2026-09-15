@@ -932,6 +932,12 @@ ApplicationWindow {
     Item {
         objectName: "nowPlayingSlot"
         clip: true
+        // Out of the scene only until the page has been opened for the first
+        // time. Before then the page has no height yet and would be drawn at
+        // the top of the window for a frame; after then it stays, because
+        // taking it out again destroys the video surface's renderer and
+        // rebuilding that is what the movement was catching on.
+        visible: nowPlayingPage.everShown
         // Left visible always, and empty when the page is away. Binding this
         // to the page's own visible deadlocks the two of them, because a Qt
         // Quick child of an invisible parent reports itself invisible as well,

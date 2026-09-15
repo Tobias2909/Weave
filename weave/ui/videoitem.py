@@ -22,7 +22,7 @@ one to break that and took it out again. Nothing here tries to be cleverer.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, QRunnable, Qt, Signal, Slot
+from PySide6.QtCore import Property, QObject, QRunnable, Qt, Signal, Slot
 from PySide6.QtGui import QGuiApplication, QOpenGLContext
 from PySide6.QtQuick import QQuickFramebufferObject, QQuickWindow
 
@@ -103,10 +103,17 @@ class VideoSurface(QQuickFramebufferObject):
     # told to redraw from there, so it is bounced through here, which lands it
     # on the window's thread.
     frameReady = Signal()
+    drawingChanged = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._renderer: _Renderer | None = None
+        # Whether frames are wanted right now. Not the same as being visible:
+        # hiding a framebuffer item makes Qt destroy its renderer and give the
+        # graphics resources back, which is a synchronous cost paid at exactly
+        # the moment the page is moving. So the item stays, and this says
+        # whether to do any work.
+        self._drawing = True
         self.frameReady.connect(self._redraw)
         # The window closing is what takes the picture down in a running
         # application, and nothing else does. Freed at destruction instead, the
@@ -117,9 +124,29 @@ class VideoSurface(QQuickFramebufferObject):
         # for Qt already, so mirroring it as well turns the picture over.
         self.setMirrorVertically(False)
 
+    def _get_drawing(self) -> bool:
+        return self._drawing
+
+    def _set_drawing(self, wanted: bool) -> None:
+        wanted = bool(wanted)
+        if wanted == self._drawing:
+            return
+        self._drawing = wanted
+        self.drawingChanged.emit()
+        if wanted:
+            # Nothing has asked it to paint while it was quiet, and it has no
+            # reason of its own, so it is asked once here.
+            self.update()
+
+    # Set by the page. False while it is travelling, and while it is away.
+    drawing = Property(bool, _get_drawing, _set_drawing, notify=drawingChanged)
+
     @Slot()
     def _redraw(self) -> None:
-        self.update()
+        # A frame arrived. Ignored while the page is moving, so mpv's own rate
+        # cannot drive repaints of a window that is busy animating.
+        if self._drawing:
+            self.update()
 
     def _on_window(self) -> None:
         window = self.window()
@@ -204,6 +231,10 @@ class _Renderer(QQuickFramebufferObject.Renderer):
     def render(self) -> None:
         player = _engine
         if player is None or not player.running() or _finished:
+            return
+        # Painted, but not redrawn from the player. Whatever was last in the
+        # framebuffer stays there, which costs nothing and is covered anyway.
+        if not self._item.drawing:
             return
         if _context is None and not self._make_context(player):
             return
