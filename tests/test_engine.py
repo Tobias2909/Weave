@@ -141,6 +141,11 @@ class WhenItWillNotStart(unittest.TestCase):
         self.said = []
         self.engine.gone.connect(self.said.append)
 
+    # What it is about is which of its own words a player that started and
+    # then refused hands back, so there has to be one to start. With none
+    # installed the sentence is about the absence instead, which the test
+    # beside this one and the doctor both cover.
+    @unittest.skipUnless(shutil.which("mpv"), "mpv is not installed")
     def test_an_option_this_mpv_does_not_know_is_quoted_back(self):
         import weave.engine as engine_module
 
