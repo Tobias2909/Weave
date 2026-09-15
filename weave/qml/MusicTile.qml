@@ -12,6 +12,11 @@ Item {
 
     signal chosen()
     signal removeRequested()
+    // Pressing the name under a song goes to whoever made it. Only offered
+    // where the caller has somewhere to go, since most lists carry a name with
+    // no address behind it.
+    property bool subtitleLeads: false
+    signal subtitleChosen()
     // Right pressing a song offers to keep it. What that means is the caller's
     // business, since a tile does not know a favourite from a playlist.
     signal askedFor(int x, int y)
@@ -68,13 +73,33 @@ Item {
                 maximumLineCount: 1
             }
             Label {
+                id: subtitleLabel
                 width: parent.width
                 visible: tile.subtitle !== ""
                 text: tile.subtitle
-                color: "#cfcfcf"
+                color: tile.subtitleLeads && subtitleHover.hovered
+                       ? "#ffffff" : "#cfcfcf"
                 font.pixelSize: 10
+                font.underline: tile.subtitleLeads && subtitleHover.hovered
                 elide: Text.ElideRight
                 maximumLineCount: 1
+
+                HoverHandler {
+                    id: subtitleHover
+                    enabled: tile.subtitleLeads
+                    cursorShape: Qt.PointingHandCursor
+                }
+
+                // Only as wide as the words. Filling the row would swallow
+                // presses meant for the tile on either side of a short name.
+                // A MouseArea, because the tile's own press sits underneath
+                // and a handler would not consume this one.
+                MouseArea {
+                    enabled: tile.subtitleLeads
+                    width: Math.min(subtitleLabel.implicitWidth, parent.width)
+                    height: parent.height
+                    onClicked: tile.subtitleChosen()
+                }
             }
         }
     }

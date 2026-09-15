@@ -61,6 +61,9 @@ def bridge_with(audio=None, view=ALL, has_previous=True) -> Bridge:
     bridge._now_comments = []
     bridge._now_threads = 5
     bridge._now_busy = ""
+    bridge._now_read = set()
+    # Held by the worker and never read here, so None is enough.
+    bridge._cfg = None
     bridge._now_song = ""
     bridge._now_ids = {}
     bridge.nowChanged = Recorder()
@@ -205,11 +208,38 @@ class WhatSitsBesideTheSong(unittest.TestCase):
 
     def test_nothing_is_asked_for_twice(self) -> None:
         bridge = bridge_with(audio=FakeAudio())
-        bridge._now_words = {"text": "held", "read": True}
+        bridge._now_read = {SongSide.WORDS}
         started = []
         bridge._launch = lambda worker: started.append(worker) or True
         Bridge.readNowSide(bridge, SongSide.WORDS)
         self.assertEqual(started, [], "the words were asked for a second time")
+
+    def test_a_press_turned_away_is_not_remembered_as_asked(self) -> None:
+        # Pressing one tab while another is still loading used to be recorded
+        # as asked by the window and refused by this side, which left that tab
+        # empty until the song changed.
+        bridge = bridge_with(audio=FakeAudio())
+        bridge._now_busy = SongSide.WORDS
+        started = []
+        bridge._launch = lambda worker: started.append(worker) or True
+        Bridge.readNowSide(bridge, SongSide.LIKE_IT)
+        self.assertEqual(started, [], "two were fetched at once")
+        self.assertNotIn(SongSide.LIKE_IT, bridge._now_read,
+                         "a press that fetched nothing counted as answered")
+
+        # And it works on the next press, once the other has landed.
+        bridge._now_busy = ""
+        Bridge.readNowSide(bridge, SongSide.LIKE_IT)
+        self.assertEqual(len(started), 1, "the second press was refused too")
+
+    def test_an_empty_answer_still_counts_as_answered(self) -> None:
+        bridge = bridge_with(audio=FakeAudio())
+        Bridge._on_now_side(bridge, {
+            "what": SongSide.LIKE_IT, "videoId": "a", "wordsId": "", "likeId": "L",
+            "text": "", "source": "", "tracks": [],
+        })
+        self.assertIn(SongSide.LIKE_IT, bridge._now_read)
+        self.assertEqual(bridge._now_related, [])
 
     def test_the_id_is_read_out_of_the_address(self) -> None:
         # The entries the player is handed are built in several places and most
@@ -224,7 +254,6 @@ class WhatSitsBesideTheSong(unittest.TestCase):
 
         started = []
         bridge._launch = lambda worker: started.append(worker) or True
-        bridge._cfg = None
         Bridge.readNowSide(bridge, SongSide.WORDS)
         self.assertEqual(len(started), 1, "the words were never asked for")
         self.assertEqual(bridge._now_busy, SongSide.WORDS)

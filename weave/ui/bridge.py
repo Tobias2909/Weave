@@ -306,6 +306,12 @@ class Bridge(QObject):
         self._now_comments: list = []
         self._now_threads = 5
         self._now_busy = ""
+        # Which tabs have been answered for the song playing. Kept here rather
+        # than in the window, because only this side knows whether a press
+        # actually started anything. The window used to mark a tab as asked and
+        # then call, and a call made while another tab was still loading was
+        # refused, leaving that tab marked as asked and permanently empty.
+        self._now_read: set = set()
         # Which song everything beside it is about.
         self._now_song = ""
         # The two addresses the station answer carries, kept per song so that
@@ -981,12 +987,18 @@ class Bridge(QObject):
     def _get_now_busy(self) -> str:
         return self._now_busy
 
+    def _get_now_read(self) -> list:
+        return sorted(self._now_read)
+
     nowDetail = Property("QVariantMap", _get_now_detail, notify=nowChanged)
     nowWords = Property("QVariantMap", _get_now_words, notify=nowChanged)
     nowRelated = Property("QVariantList", _get_now_related, notify=nowChanged)
     nowComments = Property("QVariantList", _get_now_comments, notify=nowChanged)
     # Which tab is waiting on something, so only that one says so.
     nowBusy = Property(str, _get_now_busy, notify=nowChanged)
+    # Which tabs have an answer, so an empty one can say so rather than looking
+    # like a tab that was never asked.
+    nowRead = Property("QVariantList", _get_now_read, notify=nowChanged)
 
     def _get_results(self) -> list:
         return list(self._results)
@@ -3268,6 +3280,24 @@ class Bridge(QObject):
         found = self._track_items([row])
         self._queue_track(found[0] if found else None, play_next)
 
+    @Slot(str)
+    def openArtistMusic(self, channel_id: str) -> None:
+        """Open a channel on its music, which is what pressing an artist means.
+
+        The id comes off a song, so it is the artist's own channel and already
+        the answer this page would otherwise go looking for. It is written down
+        before the page opens, so the tab has nothing to resolve.
+        """
+        if not channel_id or not ids.CHANNEL_ID.match(channel_id):
+            return
+        key = ids.channel_key(channel_id)
+        self.openChannel(key)
+        row = self._db.channel(key) or {}
+        if not row.get("music_checked_at"):
+            self._db.set_channel_music(key, channel_id,
+                                       str(row.get("title") or ""))
+        self.showChannelTab("music")
+
     @Slot(int)
     def playChannelMusic(self, index: int) -> None:
         """A song off a channel's music tab, and the rest of the tab after it.
@@ -3572,6 +3602,10 @@ class Bridge(QObject):
         row arrived with reaches the queue whichever list it came from."""
         return [{"key": row["key"], "title": row["title"], "artist": row["artist"],
                  "thumbnail": row["thumbnail"], "live": False,
+                 # Carried so the name beside what is playing can be pressed.
+                 # Absent from the lists that never had one, which is why it is
+                 # read rather than indexed.
+                 "artistId": row.get("artistId", ""),
                  "url": ids.watch_url("youtube", row["videoId"])}
                 for row in rows]
 
@@ -3719,6 +3753,7 @@ class Bridge(QObject):
         self._now_comments = []
         self._now_threads = 5
         self._now_busy = ""
+        self._now_read = set()
         for worker in (self._now_side, self._now_detail):
             if worker is not None and worker.isRunning():
                 worker.cancel()
@@ -3745,11 +3780,11 @@ class Bridge(QObject):
         """The words, or what is like this song. Asked for when the tab is
         pressed and never before, since each is a request of its own."""
         video_id = self._now_video_id()
-        if not video_id or self._now_busy:
+        if not video_id or what in self._now_read:
             return
-        if what == SongSide.WORDS and self._now_words:
-            return
-        if what == SongSide.LIKE_IT and self._now_related:
+        if self._now_busy:
+            # One at a time, and nothing is remembered about a press that was
+            # turned away, so pressing again once the other has landed works.
             return
         words_id, like_id = self._now_ids.get(video_id, ("", ""))
         self._now_busy = what
@@ -3763,6 +3798,9 @@ class Bridge(QObject):
 
     def _on_now_side(self, answer: dict) -> None:
         self._now_busy = ""
+        # Answered, whatever the answer was. An empty one is a fact about the
+        # song rather than a reason to ask again.
+        self._now_read.add(answer["what"])
         self._now_ids[answer["videoId"]] = (answer["wordsId"], answer["likeId"])
         if answer["what"] == SongSide.WORDS:
             self._now_words = {"text": answer["text"], "source": answer["source"],

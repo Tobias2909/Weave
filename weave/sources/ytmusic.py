@@ -504,12 +504,16 @@ def artist_of(profile_path: str | None, video_id: str) -> list[dict]:
     return artists_of(tracks[0]) if tracks and isinstance(tracks[0], dict) else []
 
 
-def artist(profile_path: str | None, channel_id: str) -> dict:
+def artist(profile_path: str | None, channel_id: str, limit: int = 200) -> dict:
     """An artist's own page, flattened to the songs on it.
 
-    Albums and singles are shelves of their own with a second paged call behind
-    each, and are not read here. What comes back is what the page itself puts
-    up first, which is the songs.
+    The page itself shows only a handful of songs, five of them, with the rest
+    behind an address for the full list. Reading the shelf alone is what made
+    this look like an artist with five songs to their name, so the address is
+    followed where there is one and the shelf is only the fallback.
+
+    Albums are shelves of their own with a second paged call behind each and
+    are not read here.
     """
     if not channel_id:
         return {"name": "", "songs": []}
@@ -520,9 +524,12 @@ def artist(profile_path: str | None, channel_id: str) -> dict:
     except Exception as exc:
         raise _blame("the artist", exc) from exc
     page = page or {}
-    items: list = []
-    for section in ("songs", "singles"):
-        shelf = page.get(section)
-        if isinstance(shelf, dict):
-            items.extend(shelf.get("results") or [])
-    return {"name": str(page.get("name") or ""), "songs": to_tracks(items)}
+    shelf = page.get("songs")
+    shelf = shelf if isinstance(shelf, dict) else {}
+    full = str(shelf.get("browseId") or "")
+    if full:
+        songs, _offered = playlist_tracks(profile_path, full, limit=limit)
+        if songs:
+            return {"name": str(page.get("name") or ""), "songs": songs}
+    return {"name": str(page.get("name") or ""),
+            "songs": to_tracks(shelf.get("results") or [])}

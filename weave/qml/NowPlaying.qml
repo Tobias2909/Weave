@@ -51,21 +51,13 @@ Item {
     // using it.
     readonly property bool roomForColumn: width >= 1100
     property string tab: "next"
-    // Tabs are asked for once each, when they are first opened, rather than on
-    // the way into the page. Comments alone are seven to twelve seconds.
-    property var asked: ({})
 
+    // Asked every time the tab is opened. Whether that costs a request is not
+    // decided here: this side cannot tell a press that started something from
+    // one that was turned away because another tab was still loading, and
+    // remembering the second kind as asked left that tab empty for good.
     function choose(name) {
         page.tab = name
-        if (page.asked[name])
-            return
-        // A fresh object every time. Putting the same one back changes nothing,
-        // because QML compares the reference and emits no change.
-        var seen = {}
-        for (var key in page.asked)
-            seen[key] = page.asked[key]
-        seen[name] = true
-        page.asked = seen
         if (name === "words")
             App.readNowSide("words")
         else if (name === "related")
@@ -79,7 +71,6 @@ Item {
     Connections {
         target: Audio
         function onTrackChanged() {
-            page.asked = ({})
             if (page.tab !== "next")
                 page.choose(page.tab)
         }
@@ -88,7 +79,6 @@ Item {
         // the list before it is not worth keeping open. The queue is what
         // somebody wants to see at that moment anyway.
         function onQueueReplaced() {
-            page.asked = ({})
             page.tab = "next"
         }
     }
@@ -202,13 +192,36 @@ Item {
                     }
 
                     Label {
+                        id: artistLine
                         objectName: "nowPlayingArtist"
+                        // Pressed, it goes to whoever made this, on their
+                        // music. Only where the song carries an address for
+                        // them, which a song from an ordinary video does not.
+                        readonly property string leadsTo:
+                            Audio.track.artistId ? Audio.track.artistId : ""
                         width: parent.width
                         visible: text !== ""
                         text: Audio.track.artist ? Audio.track.artist : ""
-                        color: Theme.colors.textMuted
+                        color: leadsTo !== "" && artistHover.hovered
+                               ? Theme.colors.text : Theme.colors.textMuted
                         font.pixelSize: 13
+                        font.underline: leadsTo !== "" && artistHover.hovered
                         elide: Text.ElideRight
+
+                        HoverHandler {
+                            id: artistHover
+                            enabled: artistLine.leadsTo !== ""
+                            cursorShape: Qt.PointingHandCursor
+                        }
+
+                        // Only as wide as the words, so the empty half of the
+                        // line is not a target for something invisible.
+                        MouseArea {
+                            enabled: artistLine.leadsTo !== ""
+                            width: Math.min(artistLine.implicitWidth, parent.width)
+                            height: parent.height
+                            onClicked: App.openArtistMusic(artistLine.leadsTo)
+                        }
                     }
 
                     Item { width: 1; height: 4 }
@@ -367,7 +380,8 @@ Item {
                         width: parent.width
                         // A song with none is a normal answer. The page says so
                         // plainly rather than sitting empty as if it had failed.
-                        visible: App.nowBusy === "" && App.nowWords.read === true
+                        visible: App.nowBusy === ""
+                                 && App.nowRead.indexOf("words") >= 0
                                  && !App.nowWords.text
                         text: "No words for this one"
                         color: Theme.colors.textMuted
@@ -469,12 +483,36 @@ Item {
                                 elide: Text.ElideRight
                             }
                             Label {
+                                id: relatedArtist
+                                readonly property string leadsTo:
+                                    relatedRow.modelData.artistId
+                                    ? relatedRow.modelData.artistId : ""
                                 width: parent.width
                                 visible: (relatedRow.modelData.artist || "") !== ""
                                 text: relatedRow.modelData.artist
-                                color: Theme.colors.textMuted
+                                color: leadsTo !== "" && relatedArtistHover.hovered
+                                       ? Theme.colors.text : Theme.colors.textMuted
                                 font.pixelSize: 10
+                                font.underline: leadsTo !== ""
+                                                && relatedArtistHover.hovered
                                 elide: Text.ElideRight
+
+                                HoverHandler {
+                                    id: relatedArtistHover
+                                    enabled: relatedArtist.leadsTo !== ""
+                                    cursorShape: Qt.PointingHandCursor
+                                }
+
+                                // A MouseArea, because the row's own press is
+                                // underneath and a handler would not consume
+                                // this one, so both would fire.
+                                MouseArea {
+                                    enabled: relatedArtist.leadsTo !== ""
+                                    width: Math.min(relatedArtist.implicitWidth,
+                                                    parent.width)
+                                    height: parent.height
+                                    onClicked: App.openArtistMusic(relatedArtist.leadsTo)
+                                }
                             }
                         }
                     }
@@ -483,7 +521,11 @@ Item {
                 Label {
                     anchors.centerIn: parent
                     visible: relatedList.count === 0 && App.nowBusy === ""
-                    text: "Nothing here"
+                    // Not asked yet reads differently from asked and empty,
+                    // and saying the wrong one of those is how a tab that was
+                    // never fetched looked like an answer.
+                    text: App.nowRead.indexOf("related") >= 0
+                          ? "Nothing like this one" : "Reading"
                     color: Theme.colors.textMuted
                     font.pixelSize: 12
                 }

@@ -1985,6 +1985,7 @@ class MusicSearch(Worker):
             "key": track.key, "videoId": track.video_id, "title": track.title,
             "artist": track.artist, "album": track.album, "duration": track.duration,
             "thumbnail": qml_source(track.thumbnail_url),
+            "artistId": track.artist_id,
         } for track in tracks])
 
 
@@ -2138,6 +2139,7 @@ class TrackList(Worker):
         self.tracks.emit([{
             "key": t.key, "videoId": t.video_id, "title": t.title, "artist": t.artist,
             "album": t.album, "duration": t.duration, "thumbnail": qml_source(t.thumbnail_url),
+            "artistId": t.artist_id,
         } for t in found], self._label)
 
     def _playlist(self) -> None:
@@ -2157,6 +2159,7 @@ class TrackList(Worker):
         self.tracks.emit([{
             "key": t.key, "videoId": t.video_id, "title": t.title, "artist": t.artist,
             "album": t.album, "duration": t.duration, "thumbnail": qml_source(t.thumbnail_url),
+            "artistId": t.artist_id,
         } for t in found], label)
 
     def _liked(self) -> None:
@@ -2304,6 +2307,7 @@ class SongSide(Worker):
                     "key": t.key, "videoId": t.video_id, "title": t.title,
                     "artist": t.artist, "album": t.album, "duration": t.duration,
                     "thumbnail": qml_source(t.thumbnail_url),
+                    "artistId": t.artist_id,
                 } for t in found]
         except ytmusic.MusicError as exc:
             self.failed.emit(str(exc))
@@ -2364,6 +2368,7 @@ class ArtistMusic(Worker):
                 "key": t.key, "videoId": t.video_id, "title": t.title,
                 "artist": t.artist, "album": t.album, "duration": t.duration,
                 "thumbnail": qml_source(t.thumbnail_url),
+                "artistId": t.artist_id,
             } for t in found["songs"]],
         })
 
