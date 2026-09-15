@@ -536,7 +536,10 @@ class PressingATile(unittest.TestCase):
 
         Bridge.showMusic(bridge)
         bridge.stations = []
-        bridge._play_station = lambda video, label: bridge.stations.append((video, label))
+        # The song pressed is now handed over as well, so it can start
+        # before the station it seeds has been fetched.
+        bridge._play_station = (
+            lambda video, label, pressed=None: bridge.stations.append((video, label)))
         before = [e.view for e in bridge._nav.entries]
         Bridge.playShelfItem(bridge, 0, item_index)
         return before

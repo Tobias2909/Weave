@@ -403,6 +403,9 @@ class Bridge(QObject):
         # than stored, because only the identity is worth keeping and the songs
         # themselves go stale.
         self._artist_music: ArtistMusic | None = None
+        # The song a station was started from, already playing while the
+        # rest of that station is still being fetched.
+        self._station_seed = ""
         # Finding which channel an artist really is, before going there.
         self._artist_open: ArtistMusic | None = None
         self._channel_music: list = []
@@ -3533,7 +3536,7 @@ class Bridge(QObject):
         # it, not asking to read what follows, and the player already lists
         # what follows, so nothing is opened and nothing is walked onto.
         if video and playlist:
-            self._play_station(video, item.get("title", ""))
+            self._play_station(video, item.get("title", ""), item)
             return
         # A playlist is opened to look at. Nothing starts until something in it
         # is chosen.
@@ -3606,15 +3609,32 @@ class Bridge(QObject):
         self._tracks.failed.connect(self._on_search_failed)
         self._launch(self._tracks)
 
-    def _play_station(self, video_id: str, label: str) -> None:
+    def _play_station(self, video_id: str, label: str,
+                      pressed: dict | None = None) -> None:
         """The station built from one song, into the player and nowhere else.
 
         The rows are handed to the queue as they arrive and are not kept, since
         what is not showing does not have to be walked back to. The view stays
         exactly where the press found it.
+
+        The song pressed starts immediately, before the station is asked for.
+        Measured, that call takes two to three seconds, and waiting for it meant
+        two to three seconds of a press having done nothing visible at all: no
+        bar, no song, no sign it had been heard. The rest of the station joins
+        the queue behind it when it lands.
         """
         if self._station is not None and self._station.isRunning():
             return
+        if pressed and self._audio:
+            self._station_seed = f"yt:{video_id}"
+            self._audio.play_items([{
+                "key": self._station_seed,
+                "title": pressed.get("title", ""),
+                "artist": pressed.get("subtitle", ""),
+                "thumbnail": pressed.get("thumbnail", ""),
+                "artistId": pressed.get("artistId", ""),
+                "live": False, "url": ids.watch_url("youtube", video_id),
+            }])
         self._searching = True
         self.musicChanged.emit()
         self._set_status(f"starting {label}" if label else "starting a station")
@@ -3628,7 +3648,20 @@ class Bridge(QObject):
         self.musicChanged.emit()
         if not rows or not self._audio:
             return
-        self._audio.play_items(self._track_items(rows))
+        items = self._track_items(rows)
+        # The song that was pressed is already playing, and the station opens
+        # with that same song, so the rest goes behind it rather than the whole
+        # list replacing a queue that is under way. Replacing it would restart
+        # the song a second or two after it began.
+        seed = getattr(self, "_station_seed", "")
+        if seed and (self._audio.track or {}).get("key") == seed:
+            self._station_seed = ""
+            rest = [item for item in items if item["key"] != seed]
+            if rest:
+                self._audio.extend(rest)
+            return
+        self._station_seed = ""
+        self._audio.play_items(items)
 
     def _start_music_search(self, target: MusicList) -> None:
         if self._search is not None and self._search.isRunning():

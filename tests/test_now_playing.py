@@ -427,3 +427,84 @@ class WhatTheWindowActuallyReceives(unittest.TestCase):
             "key": "yt:a", "title": "One", "artist": "Somebody", "thumbnail": "",
             "live": False, "url": "https://www.youtube.com/watch?v=aaaaaaaaaaa"}])
         self.assertEqual(player.queue[0].get("artistId"), "")
+
+
+class APressIsHeardAtOnce(unittest.TestCase):
+    """Fetching a station takes two to three seconds, measured. Waiting for it
+    before anything appeared meant a press did nothing visible for that whole
+    time: no bar, no song, no sign it had been heard."""
+
+    def player(self):
+        from test_audio import FakeEngine, FakeResolver
+
+        from weave.audio import AudioPlayer
+        from weave.config import Config
+
+        one = AudioPlayer(Config(raw={}), engine=FakeEngine())
+        one._make_resolver = lambda entry: FakeResolver(entry["key"])
+        return one
+
+    def song(self, i):
+        return {"key": f"yt:k{i}", "videoId": f"vid{i:08d}", "title": f"Song {i}",
+                "artist": "Somebody", "album": "", "duration": "3:00",
+                "thumbnail": "", "artistId": ""}
+
+    def bridge_for(self, audio):
+        bridge = Bridge.__new__(Bridge)
+        QObject.__init__(bridge)
+        bridge._audio = audio
+        bridge._searching = True
+        bridge._station_seed = ""
+        bridge.musicChanged = Recorder()
+        return bridge
+
+    def test_the_song_starts_before_the_station_is_asked_for(self) -> None:
+        audio = self.player()
+        bridge = self.bridge_for(audio)
+        bridge._station = None
+        bridge._set_status = lambda *_a, **_k: None
+        bridge._launch = lambda worker: True
+        bridge._cfg = None
+        Bridge._play_station(bridge, "vid00000001", "Song 1",
+                             {"title": "Song 1", "subtitle": "Somebody",
+                              "thumbnail": "", "artistId": ""})
+        self.assertTrue(audio.hasQueue, "the press was silent until the station came")
+        self.assertEqual(audio.track["key"], "yt:vid00000001")
+
+    def test_the_rest_joins_behind_it_rather_than_replacing_it(self) -> None:
+        audio = self.player()
+        bridge = self.bridge_for(audio)
+        seed = {"key": "yt:vid00000001", "title": "Song 1", "artist": "",
+                "thumbnail": "", "live": False,
+                "url": "https://www.youtube.com/watch?v=vid00000001"}
+        audio.play_items([seed])
+        bridge._station_seed = "yt:vid00000001"
+        rows = [{"key": "yt:vid00000001", "videoId": "vid00000001", "title": "Song 1",
+                 "artist": "", "album": "", "duration": "", "thumbnail": "",
+                 "artistId": ""},
+                self.song(2), self.song(3)]
+        Bridge._on_station(bridge, rows)
+        self.assertEqual(len(audio.queue), 3, "the station did not join the queue")
+        self.assertEqual(audio.track["key"], "yt:vid00000001",
+                         "the song restarted when the rest arrived")
+
+    def test_a_station_nobody_is_waiting_on_replaces_the_queue(self) -> None:
+        # The press may have been overtaken, and then the station is just a
+        # list to play rather than something to append to.
+        audio = self.player()
+        bridge = self.bridge_for(audio)
+        bridge._station_seed = "yt:somethingelse"
+        Bridge._on_station(bridge, [self.song(2), self.song(3)])
+        self.assertEqual(len(audio.queue), 2)
+
+    def test_extending_does_not_restart_what_is_playing(self) -> None:
+        audio = self.player()
+        audio.play_items([{"key": "yt:a", "title": "One", "artist": "",
+                           "thumbnail": "", "live": False,
+                           "url": "https://www.youtube.com/watch?v=aaaaaaaaaaa"}])
+        was = audio.track["key"]
+        audio.extend([{"key": "yt:b", "title": "Two", "artist": "", "thumbnail": "",
+                       "live": False,
+                       "url": "https://www.youtube.com/watch?v=bbbbbbbbbbb"}])
+        self.assertEqual(audio.track["key"], was)
+        self.assertEqual(len(audio.queue), 2)

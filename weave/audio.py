@@ -823,6 +823,28 @@ class AudioPlayer(QObject):
         self.trackChanged.emit()
         return True
 
+    def extend(self, items: list[dict]) -> bool:
+        """Put several songs on the end at once.
+
+        One signal rather than one per song, and nothing restarts. A station
+        arrives as fifty tracks after the first of them is already playing, and
+        handing them over one at a time rebuilt the window fifty times.
+        """
+        fresh = [dict(item) for item in items if item.get("url")]
+        if not fresh:
+            return False
+        if not self._queue:
+            self.play_items(fresh)
+            return True
+        first = len(self._queue)
+        self._queue.extend(fresh)
+        self._order.extend(range(first, len(self._queue)))
+        if not self._idle:
+            self._prepare_next()
+        self.queueChanged.emit()
+        self.trackChanged.emit()
+        return True
+
     @Slot(int, int)
     def moveInQueue(self, from_place: int, to_place: int) -> None:
         """Move a song to another place in the play order.
