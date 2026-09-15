@@ -330,6 +330,11 @@ class LibmpvEngine(QObject):
             return
         trace.mark("add_video", can_render=self._can_render,
                    again=url == self._attached)
+        if url == self._attached and self._want_video:
+            # Already attached and already on. Setting the track again, even
+            # to the same value, makes mpv reselect it and lose the frame,
+            # which showed as the artwork flashing over a running picture.
+            return
         if url != self._attached:
             self._command("video-add", url, "select")
             self._attached = url

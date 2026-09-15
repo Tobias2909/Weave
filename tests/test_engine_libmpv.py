@@ -119,10 +119,24 @@ class OnePictureAttachedPerSong(unittest.TestCase):
         one.render_ready(True)
         one._mpv.said.clear()
         one.add_video("https://example.invalid/v")
+        first = list(one._mpv.said)
         one.add_video("https://example.invalid/v")
         added = [s for s in one._mpv.said if s[0] == "video-add"]
         self.assertEqual(len(added), 1, "the same picture was attached twice")
-        self.assertIn(("vid", "auto"), one._mpv.said)
+        self.assertIn(("vid", "auto"), first)
+        # And a picture already running is left alone. Setting the track
+        # again makes mpv reselect it and lose the frame.
+        self.assertEqual(one._mpv.said, first, "a running picture was touched")
+
+    def test_one_switched_off_is_switched_back_on(self) -> None:
+        one = engine()
+        one._mpv = Talker()
+        one.render_ready(True)
+        one.add_video("https://example.invalid/v")
+        one.drop_video()
+        one._mpv.said.clear()
+        one.add_video("https://example.invalid/v")
+        self.assertEqual(one._mpv.said, [("vid", "auto")])
 
     def test_a_new_song_forgets_what_was_attached(self) -> None:
         one = engine()
