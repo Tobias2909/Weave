@@ -122,8 +122,9 @@ class Resolved:
 # listing cannot answer for any of them. A flat listing carries no like count
 # at all and no date without an extractor argument.
 FACT_FIELDS = ("view_count", "like_count", "comment_count", "channel",
-               "channel_follower_count", "timestamp", "upload_date",
-               "track", "artists", "album", "release_year", "categories")
+               "channel_id", "channel_follower_count", "timestamp",
+               "upload_date", "track", "artists", "album", "release_year",
+               "categories", "description")
 FACT_SPEC = "%(.{" + ",".join(FACT_FIELDS) + "})j"
 
 
@@ -169,8 +170,13 @@ def _facts_from(found: dict) -> dict:
     number("channel_follower_count", "followers")
     number("release_year", "year")
     words("channel", "channel")
+    # Not to show. It is how the picture of whoever made this is found among
+    # the channels already known, which is where a song that is only a song
+    # gets a face at all.
+    words("channel_id", "channel_id")
     words("track", "track")
     words("album", "album")
+    words("description", "description")
 
     # The moment it went up. An extraction carries the exact time; the date on
     # its own is the fallback, read as UTC because a date with no hour in it is

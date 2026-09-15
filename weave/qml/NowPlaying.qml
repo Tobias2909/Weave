@@ -271,108 +271,184 @@ Item {
                     width: parent.width
                     spacing: 2
 
-                    Label {
-                        objectName: "nowPlayingTitle"
+                    // The face of whoever made it stands beside what it is
+                    // rather than over or under it. Three short rows read as
+                    // one block when something holds them together on the
+                    // left, and the switch that belongs to the picture sits
+                    // at the far end of the first of them.
+                    Row {
                         width: parent.width
-                        text: Audio.track.title ? Audio.track.title : ""
-                        color: Theme.colors.text
-                        font.pixelSize: 19
-                        font.weight: Font.DemiBold
-                        elide: Text.ElideRight
-                    }
+                        spacing: 10
 
-                    Label {
-                        id: artistLine
-                        objectName: "nowPlayingArtist"
-                        // Pressed, it goes to whoever made this, on their
-                        // music. Only where the song carries an address for
-                        // them, which a song from an ordinary video does not.
-                        readonly property string leadsTo:
-                            Audio.track.artistId ? Audio.track.artistId : ""
-                        width: parent.width
-                        visible: text !== ""
-                        // What the music service filed it under, or failing
-                        // that what the extraction named, which is how an
-                        // ordinary video played as music gets a line here.
-                        text: Audio.track.artist ? Audio.track.artist
-                                                 : (App.nowDetail.artistText
-                                                    ? App.nowDetail.artistText : "")
-                        color: leadsTo !== "" && artistHover.hovered
-                               ? Theme.colors.text : Theme.colors.textMuted
-                        font.pixelSize: 13
-                        font.underline: leadsTo !== "" && artistHover.hovered
-                        elide: Text.ElideRight
-
-                        HoverHandler {
-                            id: artistHover
-                            enabled: artistLine.leadsTo !== ""
-                            cursorShape: Qt.PointingHandCursor
+                        RoundedImage {
+                            id: avatar
+                            objectName: "nowPlayingAvatar"
+                            // As tall as the three rows it stands beside.
+                            // Measured from them rather than written down, so
+                            // it still matches if any of those sizes change.
+                            // None of their heights depends on how wide this
+                            // is, since every one of them elides rather than
+                            // wraps, so reading them here is not a circle.
+                            width: height
+                            height: Math.max(40, Math.min(96, titleRow.height
+                                             + artistLine.height + factsLine.height
+                                             + 2 * said.spacing))
+                            // Round, the way a channel's face is drawn on
+                            // every card in the window.
+                            circle: true
+                            // A channel Weave already follows has a face
+                            // stored. One it does not has none anywhere short
+                            // of a request, and gets none rather than a hole
+                            // where a picture should be.
+                            //
+                            // Asked of the address as it arrives rather than
+                            // of the picture's own source. That one is a URL
+                            // by the time it is read back, and a URL is never
+                            // equal to an empty string, so an empty one left
+                            // this visible and held a round hole open beside
+                            // every song whose channel is a stranger.
+                            readonly property string face:
+                                App.nowDetail.channelAvatar
+                                ? App.nowDetail.channelAvatar : ""
+                            visible: face !== ""
+                            source: face
                         }
 
-                        // Only as wide as the words, so the empty half of the
-                        // line is not a target for something invisible.
-                        MouseArea {
-                            enabled: artistLine.leadsTo !== ""
-                            width: Math.min(artistLine.implicitWidth, parent.width)
-                            height: parent.height
-                            onClicked: App.openArtistMusic(artistLine.leadsTo)
-                        }
-                    }
+                        Column {
+                            id: said
+                            width: parent.width - (avatar.visible
+                                                   ? avatar.width + parent.spacing : 0)
+                            spacing: 2
 
-                    Item { width: 1; height: 4 }
+                            Row {
+                                id: titleRow
+                                width: parent.width
+                                spacing: 10
 
-                    // Who made it and how it has been received. A song that
-                    // is also a video Weave follows answers from what is
-                    // stored; for every other one the resolve that found the
-                    // address answers, since it is a full extraction whatever
-                    // is printed and so costs nothing to ask. Empty only until
-                    // that resolve comes back, a few seconds after the press.
-                    Label {
-                        objectName: "nowPlayingFacts"
-                        width: parent.width
-                        visible: text !== ""
-                        text: {
-                            var bits = []
-                            var d = App.nowDetail
-                            if (d.channelTitle)
-                                bits.push(d.channelTitle)
-                            if (d.viewsText)
-                                bits.push(d.viewsText + " views")
-                            if (d.likesText)
-                                bits.push(d.likesText + " likes")
-                            if (d.ageText)
-                                bits.push(d.ageText)
-                            return bits.join("  ·  ")
-                        }
-                        color: Theme.colors.textMuted
-                        font.pixelSize: 12
-                        elide: Text.ElideRight
-                    }
+                                Label {
+                                    objectName: "nowPlayingTitle"
+                                    width: parent.width - audioOnly.width - titleRow.spacing
+                                    text: Audio.track.title ? Audio.track.title : ""
+                                    color: Theme.colors.text
+                                    font.pixelSize: 19
+                                    font.weight: Font.DemiBold
+                                    elide: Text.ElideRight
+                                }
 
-                    // The rest of what the same call carried. Its own line and
-                    // a size smaller, because an album and a category are what
-                    // you read second, and one line of eight things separated
-                    // by dots is a line nobody reads at all.
-                    Label {
-                        objectName: "nowPlayingMoreFacts"
-                        width: parent.width
-                        visible: text !== ""
-                        text: {
-                            var bits = []
-                            var d = App.nowDetail
-                            if (d.albumText)
-                                bits.push(d.albumText)
-                            if (d.commentsText)
-                                bits.push(d.commentsText + " comments")
-                            if (d.followersText)
-                                bits.push(d.followersText + " subscribers")
-                            if (d.categoryText)
-                                bits.push(d.categoryText)
-                            return bits.join("  ·  ")
+                                // Sound alone, and remembered. On, no picture
+                                // is ever resolved and none is decoded, which
+                                // measured at 0 KiB and a fifth of a percent
+                                // of a core against 2411 kbit/s and nine
+                                // percent with one. Up here because it is
+                                // about the picture above it rather than
+                                // about the words it used to sit under.
+                                FlatButton {
+                                    id: audioOnly
+                                    objectName: "nowPlayingAudioOnly"
+                                    text: "Audio only"
+                                    accent: Audio.audioOnly
+                                    onClicked: Audio.setAudioOnly(!Audio.audioOnly)
+                                }
+                            }
+
+                            Label {
+                                id: artistLine
+                                objectName: "nowPlayingArtist"
+                                // Pressed, it goes to whoever made this, on
+                                // their music. Only where the song carries an
+                                // address for them, which a song from an
+                                // ordinary video does not.
+                                readonly property string leadsTo:
+                                    Audio.track.artistId ? Audio.track.artistId : ""
+                                width: parent.width
+                                visible: text !== ""
+                                // What the music service filed it under, or
+                                // failing that what the extraction named,
+                                // which is how an ordinary video played as
+                                // music gets a line here.
+                                text: Audio.track.artist ? Audio.track.artist
+                                                         : (App.nowDetail.artistText
+                                                            ? App.nowDetail.artistText : "")
+                                color: leadsTo !== "" && artistHover.hovered
+                                       ? Theme.colors.text : Theme.colors.textMuted
+                                font.pixelSize: 13
+                                font.underline: leadsTo !== "" && artistHover.hovered
+                                elide: Text.ElideRight
+
+                                HoverHandler {
+                                    id: artistHover
+                                    enabled: artistLine.leadsTo !== ""
+                                    cursorShape: Qt.PointingHandCursor
+                                }
+
+                                // Only as wide as the words, so the empty half
+                                // of the line is not a target for something
+                                // invisible.
+                                MouseArea {
+                                    enabled: artistLine.leadsTo !== ""
+                                    width: Math.min(artistLine.implicitWidth, parent.width)
+                                    height: parent.height
+                                    onClicked: App.openArtistMusic(artistLine.leadsTo)
+                                }
+                            }
+
+                            // Who made it and how it has been received. A song
+                            // that is also a video Weave follows answers from
+                            // what is stored; for every other one the resolve
+                            // that found the address answers, since it is a
+                            // full extraction whatever is printed and so costs
+                            // nothing to ask. Empty only until that resolve
+                            // comes back, a few seconds after the press.
+                            Label {
+                                id: factsLine
+                                objectName: "nowPlayingFacts"
+                                width: parent.width
+                                visible: text !== ""
+                                text: {
+                                    var bits = []
+                                    var d = App.nowDetail
+                                    if (d.channelTitle)
+                                        bits.push(d.channelTitle)
+                                    if (d.viewsText)
+                                        bits.push(d.viewsText + " views")
+                                    if (d.likesText)
+                                        bits.push(d.likesText + " likes")
+                                    if (d.ageText)
+                                        bits.push(d.ageText)
+                                    return bits.join("  ·  ")
+                                }
+                                color: Theme.colors.textMuted
+                                font.pixelSize: 12
+                                elide: Text.ElideRight
+                            }
+
+                            // The rest of what the same call carried. Its own
+                            // line and a size smaller, because an album and a
+                            // category are what you read second, and one line
+                            // of eight things separated by dots is a line
+                            // nobody reads at all.
+                            Label {
+                                objectName: "nowPlayingMoreFacts"
+                                width: parent.width
+                                visible: text !== ""
+                                text: {
+                                    var bits = []
+                                    var d = App.nowDetail
+                                    if (d.albumText)
+                                        bits.push(d.albumText)
+                                    if (d.commentsText)
+                                        bits.push(d.commentsText + " comments")
+                                    if (d.followersText)
+                                        bits.push(d.followersText + " subscribers")
+                                    if (d.categoryText)
+                                        bits.push(d.categoryText)
+                                    return bits.join("  ·  ")
+                                }
+                                color: Theme.colors.textMuted
+                                font.pixelSize: 11
+                                elide: Text.ElideRight
+                            }
                         }
-                        color: Theme.colors.textMuted
-                        font.pixelSize: 11
-                        elide: Text.ElideRight
                     }
 
                     Label {
@@ -385,33 +461,59 @@ Item {
                         elide: Text.ElideRight
                     }
 
+                    Item { width: 1; height: 4 }
+
+                    // What was written under the video, in the same call that
+                    // found the address. Two lines at rest and eight when it
+                    // is pressed, because the picture is given whatever room
+                    // the words leave and a long description would shrink it
+                    // to nothing. Anything past eight lines belongs on a page
+                    // of its own rather than under a song.
+                    Label {
+                        id: description
+                        objectName: "nowPlayingDescription"
+                        property bool open: false
+                        width: parent.width
+                        visible: text !== ""
+                        text: App.nowDetail.descriptionText
+                              ? App.nowDetail.descriptionText : ""
+                        color: Theme.colors.textMuted
+                        font.pixelSize: 11
+                        wrapMode: Text.Wrap
+                        maximumLineCount: open ? 8 : 2
+                        elide: Text.ElideRight
+
+                        // A different song is a different description, and one
+                        // left open would open the next one at whatever length
+                        // it happens to be.
+                        Connections {
+                            target: Audio
+                            function onTrackChanged() { description.open = false }
+                        }
+
+                        HoverHandler {
+                            enabled: description.truncated || description.open
+                            cursorShape: Qt.PointingHandCursor
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            enabled: description.truncated || description.open
+                            onClicked: description.open = !description.open
+                        }
+                    }
+
                     Item { width: 1; height: 6 }
 
-                    Row {
-                        width: parent.width
-                        spacing: 8
-
-                        // Sound alone, and remembered. On, no picture is ever
-                        // resolved and none is decoded, which measured at 0 KiB
-                        // and a fifth of a percent of a core against 2411
-                        // kbit/s and nine percent with one.
-                        FlatButton {
-                            objectName: "nowPlayingAudioOnly"
-                            text: "Audio only"
-                            accent: Audio.audioOnly
-                            onClicked: Audio.setAudioOnly(!Audio.audioOnly)
-                        }
-
-                        // A track that is really several songs says so, and the
-                        // whole list of them is one press away.
-                        FlatButton {
-                            objectName: "nowPlayingChaptersButton"
-                            visible: Audio.chapters.length > 0
-                            text: (chapterList.visible ? "Hide the songs in it  ·  "
-                                                       : "Songs in it  ·  ")
-                                  + Audio.chapters.length
-                            onClicked: chapterList.visible = !chapterList.visible
-                        }
+                    // A track that is really several songs says so, and the
+                    // whole list of them is one press away.
+                    FlatButton {
+                        objectName: "nowPlayingChaptersButton"
+                        visible: Audio.chapters.length > 0
+                        text: (chapterList.visible ? "Hide the songs in it  ·  "
+                                                   : "Songs in it  ·  ")
+                              + Audio.chapters.length
+                        onClicked: chapterList.visible = !chapterList.visible
                     }
 
                     ListView {

@@ -339,6 +339,65 @@ class Smoke:
             print(f"[{'ok' if ok else 'FAIL'}] {name}" + (f"  {detail}" if detail else ""),
                   flush=True)
 
+    def now_playing(self, bridge, window) -> None:
+        """The page about the song, and the block of words under the picture.
+
+        What goes wrong here is invisible at rest, so it is asked rather than
+        looked at: a face that is not there must take no room, and a long
+        description must not be allowed to eat the picture.
+        """
+        audio = bridge._audio
+        audio._queue = [{"key": "yt:nowplayingaa", "title": "A Song", "url": "",
+                         "artist": "Somebody", "thumbnail": artwork_file(),
+                         "live": False, "duration_s": 213}]
+        audio._order = [0]
+        audio._at = 0
+        audio._idle = False
+        audio._facts["yt:nowplayingaa"] = {
+            "views": 1500, "likes": 90, "channel": "Somebody",
+            "published_at": 1256453853,
+            "description": "A line about it. " * 40,
+        }
+        audio.trackChanged.emit()
+        audio.factsChanged.emit()
+        settle(0.3)
+        bridge.showNowPlaying()
+        settle(0.8)
+        self.check("the Now playing page opens",
+                   read(bridge, "viewKind") == "nowplaying")
+
+        facts = find(window, "nowPlayingFacts")
+        self.check("the facts under the picture say what the resolve learned",
+                   "1.5K views" in str(read(facts, "text")), str(read(facts, "text")))
+
+        # The channel of this song is a stranger, so there is no face for it.
+        # An empty picture that is still visible holds a round hole open, which
+        # is what reading the wrong property did.
+        face = find(window, "nowPlayingAvatar")
+        self.check("no face is drawn for a channel nobody follows",
+                   not read(face, "visible"),
+                   f"source {read(face, 'source')}")
+
+        said = find(window, "nowPlayingDescription")
+        shut = read(said, "height")
+        write(said, "open", True)
+        settle(0.3)
+        opened = read(said, "height")
+        self.check("the description opens and is still bounded",
+                   shut < opened < 200, f"{shut} then {opened}")
+        write(said, "open", False)
+        settle(0.2)
+
+        bridge.closeNowPlaying()
+        settle(0.5)
+        audio._queue = []
+        audio._order = []
+        audio._at = -1
+        audio._idle = True
+        audio._facts.clear()
+        audio.trackChanged.emit()
+        settle(0.3)
+
     def layers(self, bridge, window) -> None:
         """What the Now playing page is drawn over, and what it is drawn under.
 
@@ -1632,6 +1691,7 @@ class Smoke:
 
         self.music(bridge, window)
         self.space_bar(bridge, window)
+        self.now_playing(bridge, window)
         self.layers(bridge, window)
 
         # A box, then the video menu, whose box entries sit between the

@@ -1009,6 +1009,7 @@ class Bridge(QObject):
         ("album", "albumText", None),
         ("artist", "artistText", None),
         ("category", "categoryText", None),
+        ("description", "descriptionText", None),
     )
 
     def _with_player_facts(self, detail: dict) -> dict:
@@ -1033,7 +1034,23 @@ class Bridge(QObject):
         year = facts.get("year")
         if year and not detail.get("ageText"):
             detail["ageText"] = str(year)
+        if not detail.get("channelAvatar"):
+            detail["channelAvatar"] = self._avatar_for(facts.get("channel_id"))
         return detail
+
+    def _avatar_for(self, channel_id: str | None) -> str:
+        """The face of whoever made the song, if this is a channel Weave
+        already knows.
+
+        A song from the music service carries no row among the videos, so its
+        picture has to be found by the channel the extraction named. One that
+        is followed has an avatar stored already; one that is not has no
+        picture anywhere short of a request, and gets none.
+        """
+        if not channel_id:
+            return ""
+        found = self._db.channel(ids.channel_key(str(channel_id)))
+        return qml_source(found["avatar_url"]) if found else ""
 
     def _get_now_words(self) -> dict:
         return dict(self._now_words)

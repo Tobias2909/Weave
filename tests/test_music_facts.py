@@ -31,7 +31,9 @@ OUTPUT = (
     '"channel": "Somebody", "channel_follower_count": 4540000, '
     '"timestamp": 1256453853, "upload_date": "20091025", "track": null, '
     '"artists": ["Somebody", "A Guest"], "album": "An Album", '
-    '"release_year": 2009, "categories": ["Music"]}\n'
+    '"release_year": 2009, "categories": ["Music"], '
+    '"channel_id": "UCaaaaaaaaaaaaaaaaaaaaaa", '
+    '"description": "What was written under it."}\n'
     'https://example.invalid/audio\n'
 )
 
@@ -48,6 +50,16 @@ class WhatTheResolveSays(unittest.TestCase):
         self.assertEqual(found["year"], 2009)
         self.assertEqual(found["category"], "Music")
         self.assertEqual(found["published_at"], 1256453853)
+
+    def test_what_was_written_under_it_comes_too(self) -> None:
+        self.assertEqual(audio.parse_facts(OUTPUT)["description"],
+                         "What was written under it.")
+
+    def test_the_channel_is_named_so_its_face_can_be_found(self) -> None:
+        # Not to show. It is how the picture of whoever made this is looked
+        # up among the channels already known.
+        self.assertEqual(audio.parse_facts(OUTPUT)["channel_id"],
+                         "UCaaaaaaaaaaaaaaaaaaaaaa")
 
     def test_several_names_become_one_line(self) -> None:
         self.assertEqual(audio.parse_facts(OUTPUT)["artist"], "Somebody, A Guest")
@@ -133,10 +145,25 @@ class WhatTheWindowDrawsFromThem(unittest.TestCase):
         def __init__(self, facts):
             self.trackFacts = facts
 
-    def filled(self, detail, facts):
+    def filled(self, detail, facts, db=None):
         bridge = Bridge.__new__(Bridge)
         bridge._audio = self.Player(facts)
+        bridge._db = db if db is not None else scratch_db(self)
         return Bridge._with_player_facts(bridge, dict(detail))
+
+    def test_the_face_is_found_by_the_channel_the_resolve_named(self) -> None:
+        db = scratch_db(self)
+        db.add_channel("yt:UCaaaaaaaaaaaaaaaaaaaaaa", "youtube",
+                       "UCaaaaaaaaaaaaaaaaaaaaaa", "Somebody",
+                       "https://example.invalid/face.jpg")
+        out = self.filled({}, {"channel_id": "UCaaaaaaaaaaaaaaaaaaaaaa"}, db)
+        self.assertIn("face.jpg", out["channelAvatar"])
+
+    def test_a_channel_nobody_follows_gets_no_face(self) -> None:
+        # Rather than a hole where a picture should be. There is none anywhere
+        # short of a request.
+        out = self.filled({}, {"channel_id": "UCbbbbbbbbbbbbbbbbbbbbbb"})
+        self.assertEqual(out["channelAvatar"], "")
 
     def test_a_song_with_no_row_of_its_own_still_says_something(self) -> None:
         out = self.filled({}, {"views": 1500, "likes": 90, "channel": "Somebody",
