@@ -332,16 +332,83 @@ def history(profile_path: str | None, limit: int = 200) -> list[dict]:
     return out
 
 
-def radio(profile_path: str | None, video_id: str, limit: int = 40) -> list[Track]:
-    """A station built from one track, which is where most listening starts
-    when there is no library to speak of."""
+def watch(profile_path: str | None, video_id: str, limit: int = 40) -> dict:
+    """The station built from one track, and the two addresses that come with
+    it for free.
+
+    The same answer carries the tracks, the address of the words for this song
+    and the address of what is like it. Asking again for either of those would
+    be a second request for something already in hand, so all three are kept
+    and the caller takes what it needs.
+    """
     try:
         found = client(profile_path).get_watch_playlist(videoId=video_id, limit=limit)
     except MusicError:
         raise
     except Exception as exc:
         raise _blame("the station", exc) from exc
-    return to_tracks((found or {}).get("tracks") or [])
+    found = found or {}
+    return {
+        "tracks": to_tracks(found.get("tracks") or []),
+        "lyrics_id": str(found.get("lyrics") or "") or None,
+        "related_id": str(found.get("related") or "") or None,
+    }
+
+
+def radio(profile_path: str | None, video_id: str, limit: int = 40) -> list[Track]:
+    """A station built from one track, which is where most listening starts
+    when there is no library to speak of."""
+    return watch(profile_path, video_id, limit)["tracks"]
+
+
+def lyrics(profile_path: str | None, browse_id: str) -> dict:
+    """The words for a song, at the address the station answer gave.
+
+    Not every song has any, and a song with none is a normal answer rather than
+    a failure, so an empty result is returned as such and nothing is said to
+    the person about it beyond the page being empty.
+    """
+    if not browse_id:
+        return {"text": "", "source": ""}
+    try:
+        found = client(profile_path).get_lyrics(browse_id)
+    except MusicError:
+        raise
+    except Exception as exc:
+        raise _blame("the words", exc) from exc
+    if not found:
+        return {"text": "", "source": ""}
+    # A newer library answers with an object rather than a plain mapping, and
+    # both shapes are in the wild depending on which one a distribution ships.
+    text = getattr(found, "lyrics", None)
+    source = getattr(found, "source", None)
+    if text is None and isinstance(found, dict):
+        text = found.get("lyrics")
+        source = found.get("source")
+    if not isinstance(text, str):
+        # Timed words arrive as a list of lines, which is a shape this page
+        # does not draw yet. Nothing is invented from it here.
+        return {"text": "", "source": str(source or "")}
+    return {"text": text, "source": str(source or "")}
+
+
+def related(profile_path: str | None, browse_id: str) -> list[Track]:
+    """What YouTube Music puts next to this song, at the address the station
+    answer gave. The shelves it returns are flattened, since the page shows one
+    list and the headings say nothing a person here would act on."""
+    if not browse_id:
+        return []
+    try:
+        found = client(profile_path).get_song_related(browse_id)
+    except MusicError:
+        raise
+    except Exception as exc:
+        raise _blame("what is like it", exc) from exc
+    items: list = []
+    for shelf in found or []:
+        if isinstance(shelf, dict):
+            items.extend(shelf.get("contents") or [])
+    return to_tracks(items)
 
 
 def home(profile_path: str | None, limit: int = 6) -> list[dict]:

@@ -2249,3 +2249,63 @@ class ChannelAvatarsFetcher(Worker):
                         found += 1
         budget.spend(BROWSE, spent, refused=refused)
         self.ready.emit(found)
+
+
+class SongSide(Worker):
+    """What sits beside the song on the Now playing page.
+
+    One worker for both tabs rather than two, the way TrackList covers three
+    lists, because each needs the same two step walk and a second worker would
+    mean a second flag, a second crash route and a second inventory entry for
+    no difference a person could see.
+
+    The station answer carries the address of the words and the address of what
+    is like this song, so whichever tab was pressed first hands its addresses
+    back and the other tab spends nothing looking them up again.
+    """
+
+    answered = Signal("QVariantMap")
+    failed = Signal(str)
+
+    WORDS = "words"
+    LIKE_IT = "related"
+
+    def __init__(self, cfg: Config, what: str, video_id: str,
+                 words_id: str = "", like_id: str = "",
+                 parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._cfg = cfg
+        self._what = what
+        self._video_id = video_id
+        self._words_id = words_id
+        self._like_id = like_id
+
+    def work(self) -> None:
+        from .sources import ytmusic
+
+        profile = cookie_profile(self._cfg)
+        answer = {"what": self._what, "videoId": self._video_id,
+                  "wordsId": self._words_id, "likeId": self._like_id,
+                  "text": "", "source": "", "tracks": []}
+        try:
+            if not self._words_id and not self._like_id:
+                found = ytmusic.watch(profile, self._video_id, limit=1)
+                self._words_id = found["lyrics_id"] or ""
+                self._like_id = found["related_id"] or ""
+                answer["wordsId"] = self._words_id
+                answer["likeId"] = self._like_id
+            if self._what == self.WORDS:
+                words = ytmusic.lyrics(profile, self._words_id)
+                answer["text"] = words["text"]
+                answer["source"] = words["source"]
+            else:
+                found = ytmusic.related(profile, self._like_id)
+                answer["tracks"] = [{
+                    "key": t.key, "videoId": t.video_id, "title": t.title,
+                    "artist": t.artist, "album": t.album, "duration": t.duration,
+                    "thumbnail": qml_source(t.thumbnail_url),
+                } for t in found]
+        except ytmusic.MusicError as exc:
+            self.failed.emit(str(exc))
+            return
+        self.answered.emit(answer)

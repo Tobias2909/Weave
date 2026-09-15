@@ -56,6 +56,7 @@ from ..poller import (
     PlaylistsFetcher,
     RecommendationsFetcher,
     SearchFetcher,
+    SongSide,
     SourceDetails,
     SubsImporter,
     TrackList,
@@ -76,6 +77,7 @@ RECOMMENDED = "recommended"
 PLAYLIST = "playlist"
 DEBUG = "debug"
 SETTINGS = "settings"
+NOWPLAYING = "nowplaying"
 
 # How long a set of recommendations is worth showing before asking for another,
 # and how long a playlist's contents are trusted before reading them again.
@@ -227,6 +229,7 @@ class Bridge(QObject):
     liveChanged = Signal()
     twitchChanged = Signal()
     detailChanged = Signal()
+    nowChanged = Signal()
     musicChanged = Signal()
     navChanged = Signal()
     favoritesChanged = Signal()
@@ -291,6 +294,20 @@ class Bridge(QObject):
         self._detail_threads = 5
         self._detail_loading = False
         self._detail_closed = False
+        # The Now playing page. It reads the same facts about the song as the
+        # panel does about a video, through the same builder, but keeps its own
+        # workers so that opening a tab here cannot disturb what the panel is
+        # following.
+        self._now_side: SongSide | None = None
+        self._now_detail: DetailFetcher | None = None
+        self._now_words: dict = {}
+        self._now_related: list = []
+        self._now_comments: list = []
+        self._now_threads = 5
+        self._now_busy = ""
+        # The two addresses the station answer carries, kept per song so that
+        # opening the second tab spends nothing looking them up again.
+        self._now_ids: dict = {}
         self._audio = None
         self._search: MusicSearch | None = None
         self._results: list = []
@@ -821,9 +838,18 @@ class Bridge(QObject):
         return next((row for row in self._web_results if row["key"] == key), None)
 
     def _get_detail(self) -> dict:
-        if self._detail_key.startswith("twitch:"):
-            return self._stream_detail(self._detail_key)
-        row = self._video_for_detail(self._detail_key)
+        return self._detail_for(self._detail_key)
+
+    def _detail_for(self, key: str) -> dict:
+        """What is known about one video, in the shape the window draws.
+
+        Taken out of the panel's own reader because the Now playing page shows
+        the same facts about a different video, and two builders for one shape
+        would drift the moment either grew a field.
+        """
+        if key.startswith("twitch:"):
+            return self._stream_detail(key)
+        row = self._video_for_detail(key)
         if not row:
             return {}
         return {
@@ -918,6 +944,38 @@ class Bridge(QObject):
     detailComments = Property("QVariantList", _get_detail_comments, notify=detailChanged)
     detailLoading = Property(bool, _get_detail_loading, notify=detailChanged)
     panelWidth = Property(int, _get_panel_width, notify=detailChanged)
+
+    def _now_key(self) -> str:
+        track = (self._audio.track if self._audio else {}) or {}
+        return str(track.get("key") or "")
+
+    def _get_now_detail(self) -> dict:
+        """What is known about the song playing, in the panel's shape.
+
+        A song that came from YouTube Music alone has no row among the videos,
+        so this is empty for it and the page falls back to what the player
+        itself carries. That is the normal case, not a failure.
+        """
+        return self._detail_for(self._now_key())
+
+    def _get_now_words(self) -> dict:
+        return dict(self._now_words)
+
+    def _get_now_related(self) -> list:
+        return list(self._now_related)
+
+    def _get_now_comments(self) -> list:
+        return list(self._now_comments)
+
+    def _get_now_busy(self) -> str:
+        return self._now_busy
+
+    nowDetail = Property("QVariantMap", _get_now_detail, notify=nowChanged)
+    nowWords = Property("QVariantMap", _get_now_words, notify=nowChanged)
+    nowRelated = Property("QVariantList", _get_now_related, notify=nowChanged)
+    nowComments = Property("QVariantList", _get_now_comments, notify=nowChanged)
+    # Which tab is waiting on something, so only that one says so.
+    nowBusy = Property(str, _get_now_busy, notify=nowChanged)
 
     def _get_results(self) -> list:
         return list(self._results)
@@ -1080,7 +1138,7 @@ class Bridge(QObject):
         # A channel page and a box both ignore the hide watched toggle. The
         # channel page is meant to show everything that channel has, and a box
         # was hand picked, so hiding half of it would be surprising.
-        if self._view_kind in (MUSIC, DEBUG, SETTINGS):
+        if self._view_kind in (MUSIC, DEBUG, SETTINGS, NOWPLAYING):
             # These draw their own page and the grid is hidden behind them, so
             # the rows in it are nobody's business. Emptying it cost a query
             # that could only answer nothing, and a walk along the sidebar
@@ -1722,6 +1780,39 @@ class Bridge(QObject):
     @Slot()
     def showSettings(self) -> None:
         self._set_view(SETTINGS, -1)
+
+    @Slot()
+    def showNowPlaying(self) -> None:
+        """The page about the track that is playing.
+
+        A view like any other, so walking back from it lands wherever you were,
+        and the back button describes that view rather than this one.
+        """
+        if self._audio is None or not self._audio.hasQueue:
+            return
+        self._set_view(NOWPLAYING, -1)
+
+    @Slot()
+    def closeNowPlaying(self) -> None:
+        """Leave the page, keeping the music playing.
+
+        Walking back is right when this page is what was landed on last.
+        Anything else means it was left by another route already, and stepping
+        back then would throw away a view nobody asked to leave.
+        """
+        if self._view_kind != NOWPLAYING:
+            return
+        if self._nav.previous() is not None:
+            self.goBack()
+        else:
+            self._set_view(ALL, -1)
+
+    @Slot()
+    def toggleNowPlaying(self) -> None:
+        if self._view_kind == NOWPLAYING:
+            self.closeNowPlaying()
+        else:
+            self.showNowPlaying()
 
     @Slot()
     def measureCache(self) -> None:
@@ -2885,6 +2976,18 @@ class Bridge(QObject):
         # which songs are kept, so a new song has to say so too. Without this
         # the heart kept whatever it read for the song before.
         audio.trackChanged.connect(self.favoritesChanged.emit)
+        # Stopping the music takes the bar away, and the page is about what the
+        # bar is playing, so it cannot outlive it. Without this the page sat
+        # there describing a track that had stopped, with no way back to it.
+        audio.trackChanged.connect(self._close_now_playing_if_silent)
+        audio.trackChanged.connect(self._forget_now)
+
+    def _close_now_playing_if_silent(self) -> None:
+        if self._view_kind != NOWPLAYING:
+            return
+        if self._audio is not None and self._audio.hasQueue:
+            return
+        self.closeNowPlaying()
 
     def _on_audio_failed(self, message: str) -> None:
         """A track that would not play. It goes to the banner and not only to
@@ -3467,6 +3570,125 @@ class Bridge(QObject):
             self._detail.cancel()
         self.detailChanged.emit()
 
+    # ---- the Now playing page --------------------------------------------
+
+    def _forget_now(self) -> None:
+        """A different song means everything beside it is about the old one.
+
+        Cleared rather than left to be overwritten, because a tab that was open
+        would otherwise show the last song's answer until the new one landed,
+        which reads as the page simply being wrong.
+        """
+        self._now_words = {}
+        self._now_related = []
+        self._now_comments = []
+        self._now_threads = 5
+        self._now_busy = ""
+        for worker in (self._now_side, self._now_detail):
+            if worker is not None and worker.isRunning():
+                worker.cancel()
+        self.nowChanged.emit()
+
+    @Slot(str)
+    def readNowSide(self, what: str) -> None:
+        """The words, or what is like this song. Asked for when the tab is
+        pressed and never before, since each is a request of its own."""
+        track = (self._audio.track if self._audio else {}) or {}
+        video_id = str(track.get("videoId") or track.get("ext_id") or "")
+        if not video_id or self._now_busy:
+            return
+        if what == SongSide.WORDS and self._now_words:
+            return
+        if what == SongSide.LIKE_IT and self._now_related:
+            return
+        words_id, like_id = self._now_ids.get(video_id, ("", ""))
+        self._now_busy = what
+        self.nowChanged.emit()
+        self._now_side = SongSide(self._cfg, what, video_id, words_id, like_id,
+                                  parent=self)
+        self._now_side.answered.connect(self._on_now_side)
+        self._now_side.failed.connect(self._on_now_side_failed)
+        if not self._launch(self._now_side):
+            self._now_busy = ""
+
+    def _on_now_side(self, answer: dict) -> None:
+        self._now_busy = ""
+        self._now_ids[answer["videoId"]] = (answer["wordsId"], answer["likeId"])
+        if answer["what"] == SongSide.WORDS:
+            self._now_words = {"text": answer["text"], "source": answer["source"],
+                               "read": True}
+        else:
+            self._now_related = answer["tracks"]
+        self.nowChanged.emit()
+
+    def _on_now_side_failed(self, message: str) -> None:
+        self._now_busy = ""
+        self.nowChanged.emit()
+        self._set_status(message)
+
+    @Slot()
+    def readNowComments(self) -> None:
+        """Comments for the song, on the same call the panel uses. Its own
+        worker, so that pressing the tab here never moves what the panel is
+        following."""
+        key = self._now_key()
+        row = self._video_for_detail(key)
+        if not row or self._now_busy == "comments":
+            return
+        if self._now_detail is not None and self._now_detail.isRunning():
+            self._now_detail.cancel()
+            self._now_detail.wait(3000)
+        self._now_busy = "comments"
+        self.nowChanged.emit()
+        self._now_detail = DetailFetcher(
+            self._db, self._cfg, row["key"], row["ext_id"],
+            ids.watch_url(row["platform"], row["ext_id"]),
+            self._now_threads, parent=self)
+        self._now_detail.comments.connect(self._on_now_comments)
+        self._now_detail.votes.connect(lambda *_a: self.nowChanged.emit())
+        self._now_detail.failed.connect(self._on_now_detail_failed)
+        if not self._launch(self._now_detail):
+            self._now_busy = ""
+
+    def _on_now_comments(self, key: str, threads: list, extra: dict) -> None:
+        self._now_busy = ""
+        self._now_comments = threads
+        # Likes, the exact view count and the date ride along with the comments
+        # call, and the panel's own reader already knows how to find them.
+        if extra:
+            self._detail_extra = (key, extra)
+        self.nowChanged.emit()
+
+    def _on_now_detail_failed(self, what: str, message: str) -> None:
+        self._now_busy = ""
+        self.nowChanged.emit()
+        self._set_status(f"{what}, {message}")
+
+    @Slot(int)
+    def playNowRelated(self, index: int) -> None:
+        """Play one of the songs beside this one, and the rest after it, the
+        same way pressing a search result does."""
+        if not self._audio or not self._now_related:
+            return
+        items = self._track_items(self._now_related)
+        self._audio.play_items(items, max(0, min(index, len(items) - 1)))
+
+    @Slot(int, bool)
+    def queueNowRelated(self, index: int, play_next: bool) -> None:
+        """Put one of them in the queue without leaving what is playing."""
+        if not self._audio or not (0 <= index < len(self._now_related)):
+            return
+        item = self._track_items([self._now_related[index]])[0]
+        if self._audio.add_item(item, play_next=play_next):
+            self._set_status("Playing next" if play_next else "Added to the queue")
+
+    @Slot()
+    def loadMoreNowComments(self) -> None:
+        if self._now_busy or not self._now_comments:
+            return
+        self._now_threads += 10
+        self.readNowComments()
+
     @Slot()
     def loadMoreComments(self) -> None:
         if self._detail_loading or not self._detail_key:
@@ -3838,6 +4060,9 @@ class Bridge(QObject):
         elif worker is self._detail:
             self._detail_loading = False
             self.detailChanged.emit()
+        elif worker in (self._now_side, self._now_detail):
+            self._now_busy = ""
+            self.nowChanged.emit()
         elif worker is self._cache_job:
             self._cache_working = False
             self.cacheChanged.emit()

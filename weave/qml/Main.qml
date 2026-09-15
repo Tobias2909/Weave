@@ -867,6 +867,7 @@ ApplicationWindow {
         anchors.bottom: miniPlayer.top
         width: App.panelWidth
         visible: App.detailOpen && App.viewKind !== "music"
+                 && App.viewKind !== "nowplaying"
     }
 
     MusicView {
@@ -918,6 +919,27 @@ ApplicationWindow {
     SmoothScroll {
         flickable: settingsView.scrolls
         step: grid.cellHeight * App.scrollRowsPerNotch
+    }
+
+    // The panel is hidden while this is open, so the page takes the width
+    // rather than leaving a band for something that is not drawn.
+    NowPlaying {
+        objectName: "nowPlayingPage"
+        visible: App.viewKind === "nowplaying"
+        anchors.left: sidebar.right
+        anchors.right: parent.right
+        anchors.top: liveBar.visible ? liveBar.bottom : parent.top
+        anchors.topMargin: liveBar.visible ? 0 : banner.height
+        anchors.bottom: miniPlayer.top
+    }
+
+    // Out of the page and back where you were, with the music still playing.
+    // Bound to the page alone, so that everywhere else Escape still belongs to
+    // whatever popup is open.
+    Shortcut {
+        sequence: "Escape"
+        enabled: App.viewKind === "nowplaying"
+        onActivated: App.closeNowPlaying()
     }
 
     // The row above the cards, for the two views that have one. Outside the
@@ -1273,6 +1295,7 @@ ApplicationWindow {
         id: grid
         objectName: "grid"
         visible: App.viewKind !== "music" && App.viewKind !== "debug"
+                 && App.viewKind !== "nowplaying"
                  && App.viewKind !== "settings"
                  && !(App.viewKind === "channel" && App.channelTab === "playlists")
         anchors.left: sidebar.right
@@ -1409,6 +1432,7 @@ ApplicationWindow {
         Label {
             anchors.centerIn: parent
             visible: grid.count === 0 && App.viewKind !== "music"
+                     && App.viewKind !== "nowplaying"
             horizontalAlignment: Text.AlignHCenter
             color: Theme.colors.textMuted
             font.pixelSize: 14

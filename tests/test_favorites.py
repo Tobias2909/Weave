@@ -263,6 +263,18 @@ class TheHeartFollowsTheSong(unittest.TestCase):
 
         bridge = Bridge.__new__(Bridge)
         bridge._player = Video()
+        # A track change now also empties what sits beside the song on the Now
+        # playing page, and asks whether that page has outlived the music it is
+        # about, so the state both of those read has to be here.
+        bridge._view_kind = "all"
+        bridge._now_side = None
+        bridge._now_detail = None
+        bridge._now_words = {}
+        bridge._now_related = []
+        bridge._now_comments = []
+        bridge._now_threads = 5
+        bridge._now_busy = ""
+        bridge.nowChanged = type("S", (), {"emit": lambda self, *a: None})()
         told = []
         bridge.favoritesChanged = type("S", (), {"emit": lambda self, *a: told.append(True)})()
         audio = Player()
