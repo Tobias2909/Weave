@@ -47,7 +47,11 @@ Item {
         id: shift
         y: page.wanted ? 0 : page.height
         Behavior on y {
-            NumberAnimation { duration: 190; easing.type: Easing.OutCubic }
+            NumberAnimation {
+                id: slideStep
+                duration: 190
+                easing.type: Easing.OutCubic
+            }
         }
     }
 
@@ -63,6 +67,18 @@ Item {
     // looking at, so it keeps only its tabs. Raising the window's own minimum
     // instead would be taking the size of the window away from the person
     // using it.
+    // Travelling. The video and the window share one framebuffer, so drawing
+    // frames while the page moves ties the whole interface to the video's rate:
+    // the movement drags, the clock stalls, and the music is heard to catch.
+    // Nothing of the picture is drawn until it has arrived.
+    readonly property bool sliding: slideStep.running
+    onSlidingChanged: {
+        // Back to drawing once it has settled. The surface has no reason of
+        // its own to paint again, so it is asked, exactly as it is on opening.
+        if (!sliding && wanted)
+            videoSurface.update()
+    }
+
     readonly property bool roomForColumn: width >= 1100
     property string tab: "next"
 
@@ -114,7 +130,10 @@ Item {
             // a field of nothing between them.
             Column {
                 id: middle
-                anchors.centerIn: parent
+                // Level with the row of tabs beside it rather than floating in
+                // the middle of the space under them.
+                anchors.top: parent.top
+                anchors.horizontalCenter: parent.horizontalCenter
                 width: frame.width
                 spacing: 12
 
@@ -152,6 +171,7 @@ Item {
                         id: videoSurface
                         objectName: "nowPlayingVideo"
                         anchors.fill: parent
+                        visible: !page.sliding
                     }
 
                     // Square cover art over it, at its own shape, until there
@@ -161,8 +181,18 @@ Item {
                     // and a half seconds a frame takes to exist.
                     Rectangle {
                         anchors.fill: parent
-                        visible: !Audio.videoShowing
                         color: Theme.colors.background
+                        // Out of the way once there is a picture underneath,
+                        // and back over it whenever the page is moving. Faded
+                        // rather than switched, since the picture arrives a
+                        // couple of seconds in and a hard cut draws the eye to
+                        // exactly the wrong moment.
+                        opacity: (Audio.videoShowing && !page.sliding) ? 0 : 1
+                        visible: opacity > 0
+                        Behavior on opacity {
+                            NumberAnimation { duration: 320
+                                              easing.type: Easing.InOutQuad }
+                        }
 
                         RoundedImage {
                             objectName: "nowPlayingArtwork"
