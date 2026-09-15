@@ -424,6 +424,12 @@ class AudioPlayer(QObject):
             "title": self._queue[i].get("title", ""),
             "artist": self._queue[i].get("artist", ""),
             "thumbnail": self._queue[i].get("thumbnail", ""),
+            # The address of whoever made it, so the name on a row can be
+            # pressed. Built here from a fixed set of fields, and a field left
+            # out of that set can never reach the window however faithfully
+            # everything upstream carries it, which is exactly what kept every
+            # name in the queue dead.
+            "artistId": self._queue[i].get("artistId", ""),
             # Where it sits in the queue, so it can be jumped to directly.
             "at": i,
         } for i in self._order]

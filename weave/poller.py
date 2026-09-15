@@ -36,7 +36,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-from . import backoff, imagecache, tokens
+from . import backoff, ids, imagecache, tokens
 from .budget import BROWSE, DISLIKES, FEEDS, OEMBED, PLAYER, SHORTS, TWITCH, Budget
 from .config import Config
 from .cookies import profile_path as cookie_profile
@@ -2367,7 +2367,8 @@ class ArtistMusic(Worker):
             # The channel with everything else on it. An artist is often
             # reached through a generated channel that carries the songs and
             # nothing more, and this is the one worth standing on.
-            "channelId": found.get("channel_id", ""),
+            "channelId": self._real_channel(
+                artist_id, found.get("channel_id", "")),
             "songs": [{
                 "key": t.key, "videoId": t.video_id, "title": t.title,
                 "artist": t.artist, "album": t.album, "duration": t.duration,
@@ -2375,6 +2376,28 @@ class ArtistMusic(Worker):
                 "artistId": t.artist_id,
             } for t in found["songs"]],
         })
+
+    def _real_channel(self, artist_id: str, named: str) -> str:
+        """The channel worth standing on, rather than the one the songs are
+        filed under.
+
+        Only what the artist page says outright, which is free because that
+        page was being read anyway. Measured, it names a different channel for
+        about one artist in six.
+
+        Finding the rest by name was built and then taken out again, because it
+        does not work and cannot be made to. A generated channel is titled
+        "<name> - Topic", and searching for that name does not return a channel
+        belonging to the artist: for two ensembles measured it returned other
+        people's upload channels and a broadcaster, and nothing named after the
+        artist at all. Matching loosely would send somebody who pressed an
+        ensemble's name to a radio station instead, which is worse than leaving
+        them where they asked to go. Many of these artists simply have no other
+        channel, and a generated one is then the only thing that exists.
+        """
+        if named and ids.CHANNEL_ID.match(named) and named != artist_id:
+            return named
+        return ""
 
     def _identity(self, ytmusic, profile) -> tuple[str, str]:
         """Which artist this channel is, by the cheapest question first."""

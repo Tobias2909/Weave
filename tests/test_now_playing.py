@@ -382,3 +382,48 @@ class EveryQueueEntryCarriesItsArtist(unittest.TestCase):
             if '"key"' in entry and '"artistId"' not in entry:
                 missing.append(entry.strip().splitlines()[0].strip())
         self.assertEqual(missing, [], "a queue entry was built with no artist address")
+
+
+class WhatTheWindowActuallyReceives(unittest.TestCase):
+    """A field can be carried faithfully the whole way down and still never
+    arrive, because the properties the window reads rebuild each row from a
+    fixed set of fields. Anything left out of that set is dropped there, with
+    nothing upstream able to tell. That is what kept every name in the queue
+    dead while the entries behind them carried the address perfectly well.
+    """
+
+    def player(self):
+        from test_audio import FakeEngine, FakeResolver
+
+        from weave.audio import AudioPlayer
+        from weave.config import Config
+
+        one = AudioPlayer(Config(raw={}), engine=FakeEngine())
+        one._make_resolver = lambda entry: FakeResolver(entry["key"])
+        return one
+
+    def test_the_queue_hands_over_the_artist_address(self) -> None:
+        player = self.player()
+        player.play_items([{
+            "key": "yt:a", "title": "One", "artist": "Somebody", "thumbnail": "",
+            "artistId": "UC" + "a" * 22, "live": False,
+            "url": "https://www.youtube.com/watch?v=aaaaaaaaaaa"}])
+        rows = player.queue
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].get("artistId"), "UC" + "a" * 22,
+                         "the queue rebuilt the row without the address")
+
+    def test_the_playing_track_hands_it_over_too(self) -> None:
+        player = self.player()
+        player.play_items([{
+            "key": "yt:a", "title": "One", "artist": "Somebody", "thumbnail": "",
+            "artistId": "UC" + "b" * 22, "live": False,
+            "url": "https://www.youtube.com/watch?v=aaaaaaaaaaa"}])
+        self.assertEqual(player.track.get("artistId"), "UC" + "b" * 22)
+
+    def test_an_entry_without_one_is_not_invented(self) -> None:
+        player = self.player()
+        player.play_items([{
+            "key": "yt:a", "title": "One", "artist": "Somebody", "thumbnail": "",
+            "live": False, "url": "https://www.youtube.com/watch?v=aaaaaaaaaaa"}])
+        self.assertEqual(player.queue[0].get("artistId"), "")
