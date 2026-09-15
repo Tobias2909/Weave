@@ -65,13 +65,31 @@ class WhenNobodyIsLooking(unittest.TestCase):
         self.assertFalse(one.videoWanted)
         self.assertIsNone(one._video_resolver, "a picture was fetched for nobody")
 
-    def test_closing_the_page_puts_it_away(self) -> None:
+    def test_closing_the_page_says_nothing_to_the_player(self) -> None:
+        # The rule that outranks every saving: opening and closing this page
+        # must not disturb the music by so much as a moment. Turning the
+        # picture off is a command against something that is playing, and it
+        # was heard as a stutter, so the picture is simply not renewed.
         one = player()
         one.play_items([song()])
         one._video_wanted = True
+        one._engine.calls.clear()
         one.setVideoWanted(False)
         self.assertFalse(one.videoWanted)
-        self.assertIn(("drop_video",), one._engine.calls)
+        self.assertEqual(one._engine.calls, [],
+                         "closing the page reached for the player")
+
+    def test_the_next_song_is_where_it_actually_stops(self) -> None:
+        # Which is where the fetching and the decoding end, without a command
+        # against a song already playing.
+        one = player()
+        one.play_items([song(duration_s=200)])
+        one._video_wanted = True
+        one.setVideoWanted(False)
+        one._engine.calls.clear()
+        one.play_items([song(key="yt:b", duration_s=200)])
+        self.assertNotIn(("add_video", "https://example.invalid/v"),
+                         one._engine.calls)
 
 
 class WhatDeservesAPicture(unittest.TestCase):

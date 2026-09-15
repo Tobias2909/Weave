@@ -620,6 +620,12 @@ class AudioPlayer(QObject):
         self._pos = 0.0
         self._dur = 0.0
         self._remember(entry)
+        # A different song needs its own picture. Without this the page kept
+        # showing nothing from the changeover onwards, and only closing and
+        # opening it again brought one back.
+        self._video_showing = False
+        if self._video_wanted:
+            self._start_video()
         self.trackChanged.emit()
         self.progressChanged.emit()
         if self._resolver is not None and self._resolver.isRunning():
@@ -779,6 +785,12 @@ class AudioPlayer(QObject):
             self._pos = 0.0
             self._dur = 0.0
             self._engine.remove_before()
+            # mpv moved on by itself, so the song changed without going through
+            # the path that starts one. The picture has to follow here as well
+            # or a gapless changeover leaves the page showing nothing.
+            self._video_showing = False
+            if self._video_wanted:
+                self._start_video()
             self.trackChanged.emit()
             self.progressChanged.emit()
             self._prepare_next()
@@ -1150,10 +1162,17 @@ class AudioPlayer(QObject):
             return
         self._video_wanted = wanted
         if not wanted:
+            # Nothing is said to the player. Turning the picture off mid song
+            # is a command against something that is playing, and the one rule
+            # here that outranks every saving is that opening and closing this
+            # page must not disturb the music by so much as a moment.
+            #
+            # So the picture is simply not renewed. The surface stops drawing
+            # because the page is not there to draw on, and the next song gets
+            # no picture attached, which is where the fetching and the decoding
+            # actually stop. That costs the rest of one song and no more.
             self._stop_video_resolver()
-            self._engine.drop_video()
             self._video_note = ""
-            self._video_showing = False
             self.videoChanged.emit()
             return
         self._start_video()

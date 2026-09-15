@@ -113,8 +113,9 @@ class VideoSurface(QQuickFramebufferObject):
         # context outlives the scene that made it and the process dies on the
         # way out, which looks like a fault in whatever ran last.
         self.windowChanged.connect(self._on_window)
-        # Qt's own framebuffer is upside down as far as mpv is concerned.
-        self.setMirrorVertically(True)
+        # One flip, not two. mpv draws into the framebuffer the right way up
+        # for Qt already, so mirroring it as well turns the picture over.
+        self.setMirrorVertically(False)
 
     @Slot()
     def _redraw(self) -> None:
