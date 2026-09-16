@@ -141,12 +141,12 @@ class WhenItWillNotStart(unittest.TestCase):
         self.said = []
         self.engine.gone.connect(self.said.append)
 
-    # What it is about is which of its own words a player that started and
-    # then refused hands back, so there has to be one to start. With none
+    # What it is about is that a player which will not start says something
+    # rather than nothing, so there has to be one to start. With none
     # installed the sentence is about the absence instead, which the test
-    # beside this one and the doctor both cover.
+    # below and the doctor both cover.
     @unittest.skipUnless(shutil.which("mpv"), "mpv is not installed")
-    def test_an_option_this_mpv_does_not_know_is_quoted_back(self):
+    def test_a_player_that_refuses_to_start_says_so(self):
         import weave.engine as engine_module
 
         real = engine_module.mpv_command
@@ -154,7 +154,23 @@ class WhenItWillNotStart(unittest.TestCase):
         engine_module.mpv_command = lambda *a, **k: [*real(*a, **k), "--weave-not-an-option"]
         self.assertFalse(self.engine.ensure())
         self.assertTrue(self.said, "nothing was said about a player that never started")
-        self.assertIn("weave-not-an-option", self.said[0])
+        # Which of the two sentences it is depends on the build. Whether mpv
+        # writes its own complaint to the log before giving up on an option it
+        # does not know is not the same on every version, measured as written
+        # on 0.41 here and absent on the runner's, and a test that insists on
+        # one of them is a test about a version rather than about Weave. What
+        # the window must never get is silence. Quoting is the test below.
+        said = self.said[0]
+        self.assertTrue("weave-not-an-option" in said or "did not open its socket" in said,
+                        said)
+
+    def test_what_mpv_called_an_error_is_quoted_back(self):
+        # The quoting itself, against a log written here rather than by a
+        # player, so it says the same thing on every build of mpv.
+        self.engine._log.write_text(                        # noqa: SLF001
+            "[  0.000][v][cplayer] the verbose account of a run\n"
+            "[  0.001][e][cplayer] Option --weave-not-an-option not found.\n")
+        self.assertIn("weave-not-an-option", self.engine.complaint())
 
     def test_a_player_that_says_nothing_leaves_the_sentence_alone(self):
         self.engine._log.write_text("")                     # noqa: SLF001

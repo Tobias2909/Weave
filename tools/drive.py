@@ -240,6 +240,22 @@ def artwork_file() -> str:
     return path.as_uri()
 
 
+# Where the walk is, for anything that has to say so afterwards. A warning
+# that only ever appears on the runner cannot be chased without it, and a
+# round of pushing to find out which step raised one is a round wasted.
+WHERE = {"step": "starting"}
+
+
+def step(name: str) -> None:
+    WHERE["step"] = name
+    # To stderr, because that is where Qt prints the warnings this exists to
+    # place. A warning the engine raises arrives through the driver and is
+    # labelled below; one Qt prints past it, DelegateModel::cancel among them,
+    # reaches the harness as a line of stderr and nothing else, so the only
+    # way to say where it happened is to be on the same stream in order.
+    print(f"[walk] {name}", file=sys.stderr, flush=True)
+
+
 class Warnings:
     """Every warning the QML engine raises while the window is driven."""
 
@@ -249,7 +265,7 @@ class Warnings:
 
     def _on_warnings(self, errors) -> None:
         for error in errors:
-            self.lines.append(error.toString())
+            self.lines.append(f"{error.toString()}  [during {WHERE['step']}]")
 
 
 # ---- keeping the network out ------------------------------------------------
@@ -346,19 +362,17 @@ class Smoke:
         looked at: a face that is not there must take no room, and a long
         description must not be allowed to eat the picture.
         """
+        # The queue the keys probe put up, rather than another one. What is
+        # wanted here is the words about a song, and swapping the queue under
+        # the views that draw it is what leaves a row half built.
+        step("the Now playing page")
         audio = bridge._audio
-        audio._queue = [{"key": "yt:nowplayingaa", "title": "A Song", "url": "",
-                         "artist": "Somebody", "thumbnail": artwork_file(),
-                         "live": False, "duration_s": 213}]
-        audio._order = [0]
-        audio._at = 0
-        audio._idle = False
-        audio._facts["yt:nowplayingaa"] = {
+        playing = audio._queue[0]["key"] if audio._queue else ""
+        audio._facts[playing] = {
             "views": 1500, "likes": 90, "channel": "Somebody",
             "published_at": 1256453853,
             "description": "A line about it. " * 40,
         }
-        audio.trackChanged.emit()
         audio.factsChanged.emit()
         settle(0.3)
         bridge.showNowPlaying()
@@ -389,16 +403,24 @@ class Smoke:
         settle(0.2)
 
         bridge.closeNowPlaying()
-        settle(0.5)
+        # The page has to be away before the queue goes, or the rows it is
+        # still drawing are cancelled under it. And the view it lands on has
+        # to be one that does not redraw itself when the queue changes, which
+        # the music page does through the favourites.
+        settle(0.8)
+        bridge.selectGroup(-1)
+        settle(0.6)
         audio._queue = []
         audio._order = []
         audio._at = -1
         audio._idle = True
         audio._facts.clear()
         audio.trackChanged.emit()
-        settle(0.3)
+        audio.stateChanged.emit()
+        settle(0.8)
 
     def layers(self, bridge, window) -> None:
+        step("the layers")
         """What the Now playing page is drawn over, and what it is drawn under.
 
         Checked as numbers rather than by eye, because the fault it guards
@@ -426,16 +448,28 @@ class Smoke:
         """
         from PySide6.QtTest import QTest
 
+        step("the space bar")
+        # Off the music page first. Putting a queue up and taking it down
+        # tells the window the favourites have changed, which rebuilds the
+        # shelves, and rebuilding a model while a row is still being built is
+        # what leaves a delegate cancelled at an index that has gone.
+        bridge.selectGroup(-1)
+        settle(0.6)
         audio = bridge._audio
         audio._queue = [{"key": "yt:spacebaraaa", "title": "One", "url": "",
-                         "artist": "Somebody", "thumbnail": "", "live": False}]
+                         "artist": "Somebody", "thumbnail": artwork_file(),
+                         "live": False, "duration_s": 213}]
         audio._order = [0]
         audio._at = 0
         audio._idle = False
         audio._paused = True
         audio.trackChanged.emit()
         audio.stateChanged.emit()
-        settle(0.3)
+        # Long enough for every view that draws a queue to have finished
+        # building its rows. Replacing a model while one is still being built
+        # is what QML calls DelegateModel::cancel, and the runner is slow
+        # enough to be caught at it where this machine never is.
+        settle(0.8)
 
         call(window.contentItem(), "forceActiveFocus")
         settle(0.2)
@@ -460,18 +494,14 @@ class Smoke:
                    f"box {read(field, 'text')!r}, playing {read(audio, 'playing')}")
         write(field, "text", "")
         call(window.contentItem(), "forceActiveFocus")
-
-        audio._queue = []
-        audio._order = []
-        audio._at = -1
-        audio._idle = True
-        audio.trackChanged.emit()
-        audio.stateChanged.emit()
+        # The queue stays up for the page below, which is about the song it
+        # holds. It is taken down once, there.
         settle(0.3)
 
     def music(self, bridge, window) -> None:
         """The music page: two rows a section, the page behind them, and a
         picture everywhere a track is drawn."""
+        step("the music page")
         bridge.showMusic()
         settle(0.6)
         shelves = read(bridge, "musicShelves")
@@ -1666,6 +1696,7 @@ class Smoke:
 
     def run(self, engine, bridge, window) -> None:
         self.warnings = Warnings(engine)
+        step("the boot")
         settle(1.2)
         # A scratch home has channels seeded and no Twitch, which is exactly
         # what the getting started pages are for, so they are already open and
@@ -1683,9 +1714,11 @@ class Smoke:
         for name, slot in (("music", "showMusic"), ("debug", "showDebug"),
                            ("settings", "showSettings"),
                            ("recommended", "showRecommended"), ("history", "showHistory")):
+            step(f"opening the {name} view")
             getattr(bridge, slot)()
             settle(0.3)
             self.check(f"{name} view opens", read(bridge, "viewKind") == name)
+        step("back to All after the views")
         bridge.selectGroup(-1)
         settle(0.3)
 
@@ -1696,6 +1729,7 @@ class Smoke:
 
         # A box, then the video menu, whose box entries sit between the
         # separator and the last entry however many entries come above.
+        step("the boxes and the video menu")
         box_id = bridge.createBox("Later")
         settle(0.2)
         menu = find(window, "videoMenu")
@@ -1711,6 +1745,7 @@ class Smoke:
         bridge.deleteBox(box_id)
 
         # A group made and found in the sidebar list.
+        step("the groups")
         before = len(read(bridge, "groups"))
         group_id = bridge.createGroup("Smoke group")
         settle(0.2)
