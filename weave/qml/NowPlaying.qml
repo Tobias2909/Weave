@@ -104,9 +104,14 @@ Item {
     // showFullScreen itself.
     signal fullscreenToggled()
 
-    // Nothing beside the picture while the screen is filled. The point of it
-    // is the picture, and the tabs are where the picture would be.
-    readonly property bool roomForColumn: width >= 1100 && !page.cinema
+    // Whether the pointer is in the right fifth of the screen, which is what
+    // brings the column beside the song back while the screen is filled. The
+    // bar at the bottom answers to movement anywhere; this answers to being
+    // near it, so the rest of the time there is nothing over the picture.
+    property bool sideNear: false
+    readonly property bool sideAwake: page.cinema && page.sideNear
+
+    readonly property bool roomForColumn: width >= 1100
     property string tab: "next"
 
     // Asked every time the tab is opened. Whether that costs a request is not
@@ -141,6 +146,10 @@ Item {
     }
 
     RowLayout {
+        // Not "row": a property somewhere else in this file is called that,
+        // and a property that shares the name of an id loses to it. There is
+        // a test that says so.
+        id: pageRow
         anchors.fill: parent
         // Right to the edges when the screen is filled. A margin there is a
         // frame drawn around a picture that was asked to be the whole screen.
@@ -189,8 +198,14 @@ Item {
                         : stage.height
                     readonly property real room: Math.min(stage.width,
                                                           Math.max(90, spare) * 16 / 9)
-                    width: Math.max(160, room)
-                    height: width * 9 / 16
+                    // Sixteen by nine on the page, because the box is reserved
+                    // whether or not there is a video in it and a song and a
+                    // music video must not resize the page between them. With
+                    // the screen filled there is nothing else on the screen to
+                    // keep still for, so the box IS the screen and the picture
+                    // inside it keeps its own shape, which is mpv's to hold.
+                    width: page.cinema ? stage.width : Math.max(160, room)
+                    height: page.cinema ? stage.height : width * 9 / 16
                     clip: true
 
                     // The video, underneath, and drawing from the moment the
@@ -268,22 +283,32 @@ Item {
                         objectName: "nowPlayingSurface"
                         anchors.fill: parent
                         acceptedButtons: Qt.LeftButton | Qt.RightButton
-                        onClicked: Audio.toggle()
                         // Goes away with the bar. A pointer left sitting on a
                         // picture filling the screen is the one thing left
                         // saying this is a window.
                         cursorShape: page.cinema && !page.chromeAwake
                                      ? Qt.BlankCursor : Qt.ArrowCursor
 
-                        // The gesture every player uses for it. The first
-                        // press of the two has already stopped the music by
-                        // the time this arrives, so it is started again here:
-                        // a double press means the screen and nothing else,
-                        // and Qt has no way to know the second press is
-                        // coming until it has been made.
+                        // One press stops and starts the music, two fill the
+                        // screen, and two never do both.
+                        //
+                        // Qt cannot know a second press is coming until it has
+                        // been made, so the first press is held for as long as
+                        // the system gives a double press to arrive in, and
+                        // dropped if one does. Undoing the first press instead
+                        // was tried and is wrong: the release of the second
+                        // press is a press of its own, so the music stopped
+                        // anyway.
+                        onClicked: pressWait.restart()
                         onDoubleClicked: {
-                            Audio.toggle()
+                            pressWait.stop()
                             page.fullscreenToggled()
+                        }
+
+                        Timer {
+                            id: pressWait
+                            interval: Qt.styleHints.mouseDoubleClickInterval
+                            onTriggered: Audio.toggle()
                         }
 
                         // A notch is five, the same as the bar's own slider,
@@ -646,265 +671,356 @@ Item {
         }
 
         // ---- everything that belongs beside the song ---------------------
-        ColumnLayout {
-            id: side
-            objectName: "nowPlayingSide"
-            Layout.preferredWidth: page.roomForColumn ? 360 : 190
-            Layout.maximumWidth: page.roomForColumn ? 360 : 190
+        // The room the column takes beside the picture on the page. Empty, and
+        // no width at all when the screen is filled, which is what lets the
+        // picture have the whole of it.
+        Item {
+            id: sideCell
+            objectName: "nowPlayingSideCell"
+            Layout.preferredWidth: page.cinema ? 0
+                                               : (page.roomForColumn ? 360 : 190)
+            Layout.maximumWidth: Layout.preferredWidth
             Layout.fillHeight: true
-            spacing: 10
+            visible: !page.cinema
+        }
+    }
 
-            // The tabs themselves are always there. In a narrow window they are
-            // most of what is there, which is what keeps the picture worth
-            // looking at on a small screen.
-            Flow {
-                Layout.fillWidth: true
-                spacing: 6
+    ColumnLayout {
+        id: side
+        objectName: "nowPlayingSide"
+        // It sits in the room beside the picture on the page, and over the
+        // picture when the screen is filled. ONE column either way: two would
+        // have drifted apart the first time either of them grew.
+        //
+        // Both homes are plain items, never the row itself. A child of a
+        // layout may not be anchored -- "Cannot anchor to an item that isn't
+        // a parent or sibling" -- and anchoring to its own parent is the only
+        // shape that is legal in both.
+        parent: page.cinema ? sideSlot : sideCell
+        anchors.fill: parent
+        spacing: 10
 
-                Repeater {
-                    model: [{ name: "next", label: "Next" },
-                            { name: "words", label: "Lyrics" },
-                            { name: "comments", label: "Comments" },
-                            { name: "related", label: "Related" }]
-                    FlatButton {
-                        required property var modelData
-                        objectName: "nowPlayingTab_" + modelData.name
-                        text: modelData.label
-                        accent: page.tab === modelData.name
-                        onClicked: page.choose(modelData.name)
+        // The tabs themselves are always there. In a narrow window they are
+        // most of what is there, which is what keeps the picture worth
+        // looking at on a small screen.
+        Flow {
+            Layout.fillWidth: true
+            spacing: 6
+
+            Repeater {
+                model: [{ name: "next", label: "Next" },
+                        { name: "words", label: "Lyrics" },
+                        { name: "comments", label: "Comments" },
+                        { name: "related", label: "Related" }]
+                FlatButton {
+                    required property var modelData
+                    objectName: "nowPlayingTab_" + modelData.name
+                    text: modelData.label
+                    accent: page.tab === modelData.name
+                    onClicked: page.choose(modelData.name)
+                }
+            }
+        }
+
+        Label {
+            objectName: "nowPlayingBusy"
+            Layout.fillWidth: true
+            visible: App.nowBusy !== ""
+            text: App.nowBusy === "comments" ? "Reading the comments"
+                                             : "Reading"
+            color: Theme.colors.textMuted
+            font.pixelSize: 11
+        }
+
+        // ---- Next ----------------------------------------------------
+        QueueList {
+            objectName: "nowPlayingQueue"
+            visible: page.tab === "next"
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            rowHeight: 48
+        }
+
+        // ---- Lyrics --------------------------------------------------
+        Flickable {
+            objectName: "nowPlayingWords"
+            visible: page.tab === "words"
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            clip: true
+            contentWidth: width
+            contentHeight: wordsColumn.height
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+            Column {
+                id: wordsColumn
+                width: parent.width
+                spacing: 8
+
+                Label {
+                    width: parent.width
+                    // Whatever the music service returns for this song, as
+                    // it returns it.
+                    text: App.nowWords.text ? App.nowWords.text : ""
+                    visible: text !== ""
+                    color: Theme.colors.text
+                    font.pixelSize: 12
+                    lineHeight: 1.35
+                    wrapMode: Text.Wrap
+                }
+                Label {
+                    width: parent.width
+                    visible: (App.nowWords.source || "") !== ""
+                    text: App.nowWords.source ? App.nowWords.source : ""
+                    color: Theme.colors.textMuted
+                    font.pixelSize: 10
+                    wrapMode: Text.Wrap
+                }
+                Label {
+                    width: parent.width
+                    // A song with none is a normal answer. The page says so
+                    // plainly rather than sitting empty as if it had failed.
+                    visible: App.nowBusy === ""
+                             && App.nowRead.indexOf("words") >= 0
+                             && !App.nowWords.text
+                    text: "No words for this one"
+                    color: Theme.colors.textMuted
+                    font.pixelSize: 12
+                }
+            }
+        }
+
+        // ---- Comments ------------------------------------------------
+        ListView {
+            id: commentList
+            objectName: "nowPlayingComments"
+            visible: page.tab === "comments"
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            clip: true
+            spacing: 12
+            model: App.nowComments
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+            delegate: CommentThread {
+                required property var modelData
+                width: ListView.view.width
+                comment: modelData
+            }
+
+            Label {
+                anchors.centerIn: parent
+                visible: commentList.count === 0 && App.nowBusy === ""
+                text: "Nothing here"
+                color: Theme.colors.textMuted
+                font.pixelSize: 12
+            }
+        }
+
+        // ---- Related -------------------------------------------------
+        ListView {
+            id: relatedList
+            objectName: "nowPlayingRelated"
+            visible: page.tab === "related"
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            clip: true
+            spacing: 2
+            model: App.nowRelated
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+            // Handed down, because a delegate cannot see an id declared
+            // around it and reaching for one raises a reference error.
+            property var owner: relatedMenu
+
+            delegate: Rectangle {
+                id: relatedRow
+                required property var modelData
+                required property int index
+                width: relatedList.width
+                height: 48
+                radius: 5
+                color: relatedHover.hovered ? Theme.colors.surface : "transparent"
+
+                HoverHandler { id: relatedHover }
+
+                MouseArea {
+                    anchors.fill: parent
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                    onClicked: function (mouse) {
+                        if (mouse.button === Qt.RightButton) {
+                            var menu = relatedRow.ListView.view.owner
+                            menu.row = relatedRow.index
+                            menu.popup()
+                            return
+                        }
+                        App.playNowRelated(relatedRow.index)
+                    }
+                }
+
+                Row {
+                    anchors.fill: parent
+                    anchors.margins: 4
+                    spacing: 8
+
+                    RoundedImage {
+                        width: 38
+                        height: 38
+                        radius: 4
+                        anchors.verticalCenter: parent.verticalCenter
+                        visible: (relatedRow.modelData.thumbnail || "") !== ""
+                        source: relatedRow.modelData.thumbnail
+                                ? relatedRow.modelData.thumbnail : ""
+                    }
+
+                    Column {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: parent.width - 50
+                        spacing: 1
+                        Label {
+                            width: parent.width
+                            text: relatedRow.modelData.title
+                            color: Theme.colors.text
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                        }
+                        Label {
+                            id: relatedArtist
+                            readonly property string leadsTo:
+                                relatedRow.modelData.artistId
+                                ? relatedRow.modelData.artistId : ""
+                            width: parent.width
+                            visible: (relatedRow.modelData.artist || "") !== ""
+                            text: relatedRow.modelData.artist
+                            color: leadsTo !== "" && relatedArtistHover.hovered
+                                   ? Theme.colors.text : Theme.colors.textMuted
+                            font.pixelSize: 10
+                            font.underline: leadsTo !== ""
+                                            && relatedArtistHover.hovered
+                            elide: Text.ElideRight
+
+                            HoverHandler {
+                                id: relatedArtistHover
+                                enabled: relatedArtist.leadsTo !== ""
+                                cursorShape: Qt.PointingHandCursor
+                            }
+
+                            // A MouseArea, because the row's own press is
+                            // underneath and a handler would not consume
+                            // this one, so both would fire.
+                            MouseArea {
+                                enabled: relatedArtist.leadsTo !== ""
+                                width: Math.min(relatedArtist.implicitWidth,
+                                                parent.width)
+                                height: parent.height
+                                onClicked: App.openArtistMusic(relatedArtist.leadsTo)
+                            }
+                        }
                     }
                 }
             }
 
             Label {
-                objectName: "nowPlayingBusy"
-                Layout.fillWidth: true
-                visible: App.nowBusy !== ""
-                text: App.nowBusy === "comments" ? "Reading the comments"
-                                                 : "Reading"
+                anchors.centerIn: parent
+                visible: relatedList.count === 0 && App.nowBusy === ""
+                // Not asked yet reads differently from asked and empty,
+                // and saying the wrong one of those is how a tab that was
+                // never fetched looked like an answer.
+                text: App.nowRead.indexOf("related") >= 0
+                      ? "Nothing like this one" : "Reading"
                 color: Theme.colors.textMuted
-                font.pixelSize: 11
+                font.pixelSize: 12
             }
+        }
 
-            // ---- Next ----------------------------------------------------
-            QueueList {
-                objectName: "nowPlayingQueue"
-                visible: page.tab === "next"
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                rowHeight: 48
-            }
+        ThemedMenu {
+            id: relatedMenu
+            objectName: "nowPlayingRelatedMenu"
+            property int row: -1
 
-            // ---- Lyrics --------------------------------------------------
-            Flickable {
-                objectName: "nowPlayingWords"
-                visible: page.tab === "words"
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                contentWidth: width
-                contentHeight: wordsColumn.height
-                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-
-                Column {
-                    id: wordsColumn
-                    width: parent.width
-                    spacing: 8
-
-                    Label {
-                        width: parent.width
-                        // Whatever the music service returns for this song, as
-                        // it returns it.
-                        text: App.nowWords.text ? App.nowWords.text : ""
-                        visible: text !== ""
-                        color: Theme.colors.text
-                        font.pixelSize: 12
-                        lineHeight: 1.35
-                        wrapMode: Text.Wrap
-                    }
-                    Label {
-                        width: parent.width
-                        visible: (App.nowWords.source || "") !== ""
-                        text: App.nowWords.source ? App.nowWords.source : ""
-                        color: Theme.colors.textMuted
-                        font.pixelSize: 10
-                        wrapMode: Text.Wrap
-                    }
-                    Label {
-                        width: parent.width
-                        // A song with none is a normal answer. The page says so
-                        // plainly rather than sitting empty as if it had failed.
-                        visible: App.nowBusy === ""
-                                 && App.nowRead.indexOf("words") >= 0
-                                 && !App.nowWords.text
-                        text: "No words for this one"
-                        color: Theme.colors.textMuted
-                        font.pixelSize: 12
-                    }
+            ThemedMenuItem {
+                text: "Play next"
+                onTriggered: {
+                    App.queueNowRelated(relatedMenu.row, true)
+                    relatedMenu.dismiss()
                 }
             }
-
-            // ---- Comments ------------------------------------------------
-            ListView {
-                id: commentList
-                objectName: "nowPlayingComments"
-                visible: page.tab === "comments"
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                spacing: 12
-                model: App.nowComments
-                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-                delegate: CommentThread {
-                    required property var modelData
-                    width: ListView.view.width
-                    comment: modelData
-                }
-
-                Label {
-                    anchors.centerIn: parent
-                    visible: commentList.count === 0 && App.nowBusy === ""
-                    text: "Nothing here"
-                    color: Theme.colors.textMuted
-                    font.pixelSize: 12
+            ThemedMenuItem {
+                text: "Add to the queue"
+                onTriggered: {
+                    App.queueNowRelated(relatedMenu.row, false)
+                    relatedMenu.dismiss()
                 }
             }
+        }
+    }
 
-            // ---- Related -------------------------------------------------
-            ListView {
-                id: relatedList
-                objectName: "nowPlayingRelated"
-                visible: page.tab === "related"
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                spacing: 2
-                model: App.nowRelated
-                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-                // Handed down, because a delegate cannot see an id declared
-                // around it and reaching for one raises a reference error.
-                property var owner: relatedMenu
+    // Where the column beside the song is drawn when the screen is filled.
+    // Empty on the page itself: the column is a cell of the row there and
+    // comes here only while there is a screen to draw it over.
+    Item {
+        id: sideSlot
+        objectName: "nowPlayingSideSlot"
+        z: 4
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.right: parent.right
+        anchors.margins: 16
+        // The right fifth of the screen, which is the strip that brings it
+        // back, so what appears is exactly where the hand already is.
+        width: Math.max(300, page.width / 5 - 32)
+        visible: opacity > 0
+        opacity: page.sideAwake ? 1 : 0
+        // Nothing to press while it is not there, so a column nobody can see
+        // cannot take a press meant for the picture behind it.
+        enabled: page.sideAwake
+        Behavior on opacity {
+            NumberAnimation { duration: 180; easing.type: Easing.InOutQuad }
+        }
 
-                delegate: Rectangle {
-                    id: relatedRow
-                    required property var modelData
-                    required property int index
-                    width: relatedList.width
-                    height: 48
-                    radius: 5
-                    color: relatedHover.hovered ? Theme.colors.surface : "transparent"
+        // Something to read the words against. First here, so the column
+        // itself, which arrives as a child later, is drawn over it.
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: -12
+            radius: 12
+            readonly property color panel: Qt.color(Theme.colors.surface)
+            color: Qt.rgba(panel.r, panel.g, panel.b, 0.88)
+            border.width: 1
+            border.color: Theme.colors.border
+        }
+    }
 
-                    HoverHandler { id: relatedHover }
-
-                    MouseArea {
-                        anchors.fill: parent
-                        acceptedButtons: Qt.LeftButton | Qt.RightButton
-                        onClicked: function (mouse) {
-                            if (mouse.button === Qt.RightButton) {
-                                var menu = relatedRow.ListView.view.owner
-                                menu.row = relatedRow.index
-                                menu.popup()
-                                return
-                            }
-                            App.playNowRelated(relatedRow.index)
-                        }
-                    }
-
-                    Row {
-                        anchors.fill: parent
-                        anchors.margins: 4
-                        spacing: 8
-
-                        RoundedImage {
-                            width: 38
-                            height: 38
-                            radius: 4
-                            anchors.verticalCenter: parent.verticalCenter
-                            visible: (relatedRow.modelData.thumbnail || "") !== ""
-                            source: relatedRow.modelData.thumbnail
-                                    ? relatedRow.modelData.thumbnail : ""
-                        }
-
-                        Column {
-                            anchors.verticalCenter: parent.verticalCenter
-                            width: parent.width - 50
-                            spacing: 1
-                            Label {
-                                width: parent.width
-                                text: relatedRow.modelData.title
-                                color: Theme.colors.text
-                                font.pixelSize: 11
-                                elide: Text.ElideRight
-                            }
-                            Label {
-                                id: relatedArtist
-                                readonly property string leadsTo:
-                                    relatedRow.modelData.artistId
-                                    ? relatedRow.modelData.artistId : ""
-                                width: parent.width
-                                visible: (relatedRow.modelData.artist || "") !== ""
-                                text: relatedRow.modelData.artist
-                                color: leadsTo !== "" && relatedArtistHover.hovered
-                                       ? Theme.colors.text : Theme.colors.textMuted
-                                font.pixelSize: 10
-                                font.underline: leadsTo !== ""
-                                                && relatedArtistHover.hovered
-                                elide: Text.ElideRight
-
-                                HoverHandler {
-                                    id: relatedArtistHover
-                                    enabled: relatedArtist.leadsTo !== ""
-                                    cursorShape: Qt.PointingHandCursor
-                                }
-
-                                // A MouseArea, because the row's own press is
-                                // underneath and a handler would not consume
-                                // this one, so both would fire.
-                                MouseArea {
-                                    enabled: relatedArtist.leadsTo !== ""
-                                    width: Math.min(relatedArtist.implicitWidth,
-                                                    parent.width)
-                                    height: parent.height
-                                    onClicked: App.openArtistMusic(relatedArtist.leadsTo)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Label {
-                    anchors.centerIn: parent
-                    visible: relatedList.count === 0 && App.nowBusy === ""
-                    // Not asked yet reads differently from asked and empty,
-                    // and saying the wrong one of those is how a tab that was
-                    // never fetched looked like an answer.
-                    text: App.nowRead.indexOf("related") >= 0
-                          ? "Nothing like this one" : "Reading"
-                    color: Theme.colors.textMuted
-                    font.pixelSize: 12
-                }
+    // Which fifth of the screen the pointer is in. The place on the screen is
+    // read rather than trusted to the signal: onPointChanged is raised by
+    // anything about the point changing, a layout settling included, and the
+    // position is reported relative to this item, so it is recomputed every
+    // time rather than treated as a report that the hand moved.
+    HoverHandler {
+        id: sideWatch
+        objectName: "nowPlayingSideWatch"
+        enabled: page.cinema
+        onPointChanged: {
+            // Only while something is actually over the page. The signal is
+            // raised by anything about the point changing, a layout settling
+            // included, and a point reported while nothing is hovering says
+            // nothing about where a hand is.
+            if (!sideWatch.hovered)
+                return
+            page.sideNear = point.position.x >= page.width * 0.8
+        }
+        property bool everHere: false
+        onHoveredChanged: {
+            if (hovered) {
+                sideWatch.everHere = true
+                return
             }
-
-            ThemedMenu {
-                id: relatedMenu
-                objectName: "nowPlayingRelatedMenu"
-                property int row: -1
-
-                ThemedMenuItem {
-                    text: "Play next"
-                    onTriggered: {
-                        App.queueNowRelated(relatedMenu.row, true)
-                        relatedMenu.dismiss()
-                    }
-                }
-                ThemedMenuItem {
-                    text: "Add to the queue"
-                    onTriggered: {
-                        App.queueNowRelated(relatedMenu.row, false)
-                        relatedMenu.dismiss()
-                    }
-                }
-            }
+            // A hand that was here and has gone takes the column with it.
+            // Hover reported as lost when nothing was ever over the page is
+            // not a hand leaving: it happens whenever the scene recomputes,
+            // which this does the moment the column itself appears.
+            if (!sideWatch.everHere)
+                return
+            sideWatch.everHere = false
+            page.sideNear = false
         }
     }
 
@@ -915,7 +1031,9 @@ Item {
         objectName: "nowPlayingLeaveFullscreen"
         z: 5
         anchors.top: parent.top
-        anchors.right: parent.right
+        // Out of the right fifth, where the column comes back, so the two are
+        // never in each other's way.
+        anchors.right: sideSlot.left
         anchors.margins: 16
         text: "Leave fullscreen"
         visible: opacity > 0

@@ -423,6 +423,9 @@ class Smoke:
         # context aborts under the offscreen platform, so video is verified on
         # a real session and the shape of the page is verified here.
         slot = find(window, "nowPlayingSlot")
+        # "nowPlayingPage", not the "nowPlayingView" written inside the
+        # component: the use site in Main.qml overrides the objectName.
+        window_page = find(window, "nowPlayingPage")
         toolbar_before = read(window, "cinema")
         self.check("the window is not filled to begin with", not toolbar_before,
                    str(toolbar_before))
@@ -472,6 +475,51 @@ class Smoke:
                    read(bar, "opacity") == 1 and read(bar, "enabled") is True,
                    f"opacity {read(bar, 'opacity')} enabled {read(bar, 'enabled')}")
 
+        # The picture takes the whole screen rather than a sixteen by nine box
+        # inside it. What shape the picture itself is drawn at inside that is
+        # mpv's to keep, not the page's.
+        stage = find(window, "nowPlayingStage")
+        shown = find(window, "nowPlayingFrame")
+        self.check("the picture is the screen, not a box on it",
+                   abs(read(shown, "width") - read(stage, "width")) < 1
+                   and abs(read(shown, "height") - read(stage, "height")) < 1,
+                   f"frame {read(shown, 'width')}x{read(shown, 'height')} "
+                   f"stage {read(stage, 'width')}x{read(stage, 'height')}")
+
+        # The column beside the song is over the picture now, and only while
+        # the hand is in the strip it lives in.
+        slot = find(window, "nowPlayingSideSlot")
+        column = find(window, "nowPlayingSide")
+        self.check("the column beside the song is out of the way",
+                   read(slot, "opacity") == 0 and not read(slot, "enabled"),
+                   f"opacity {read(slot, 'opacity')} enabled {read(slot, 'enabled')}")
+        self.check("and is drawn over the picture rather than beside it",
+                   read(column, "parent") is slot,
+                   str(read(column, "parent")))
+        # What the column does once it is wanted, rather than the hand that
+        # wants it. Offscreen there is a pointer and it sits at 0,0, so the
+        # watcher keeps correctly deciding that nothing is near the right
+        # edge and writing sideNear back to false. It is switched off for
+        # these three checks; the screen is left immediately after, and it
+        # only ever runs while the screen is filled.
+        write(find(window, "nowPlayingSideWatch"), "enabled", False)
+        write(window_page, "sideNear", True)
+        settle(0.5)
+        self.check("being near the right edge brings it back",
+                   read(slot, "opacity") == 1 and read(slot, "enabled") is True,
+                   f"near {read(window_page, 'sideNear')} "
+                   f"opacity {read(slot, 'opacity')} enabled {read(slot, 'enabled')}")
+        # The right fifth, or 300 where a fifth is narrower than a column can
+        # usefully be. Offscreen the screen is 800 wide, so the floor wins.
+        self.check("and it takes the right fifth, or a floor under it",
+                   read(slot, "width") <= max(300, read(window, "width") / 5),
+                   f"{read(slot, 'width')} of {read(window, 'width')}")
+        write(window_page, "sideNear", False)
+        settle(0.5)
+        self.check("and moving away takes it off again",
+                   read(slot, "opacity") == 0 and not read(slot, "enabled"),
+                   f"opacity {read(slot, 'opacity')} enabled {read(slot, 'enabled')}")
+
         call(window, "leaveCinema")
         settle(0.6)
         self.check("leaving puts everything back",
@@ -480,6 +528,10 @@ class Smoke:
         self.check("and the words with it",
                    read(find(window, "nowPlayingWords"), "visible") is True,
                    "words still away")
+        self.check("and the column goes back beside the song",
+                   read(find(window, "nowPlayingSide"), "parent")
+                   is find(window, "nowPlayingSideCell"),
+                   str(read(find(window, "nowPlayingSide"), "parent")))
 
         bridge.closeNowPlaying()
         # The page has to be away before the queue goes, or the rows it is
