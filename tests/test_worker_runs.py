@@ -593,6 +593,54 @@ class WorkerRuns(unittest.TestCase):
         self.assertEqual(bridge._source_details, [])
         self.assertTrue(done.deleted)
 
+    def test_and_out_of_anything_holding_several_of_them(self):
+        """The line that clears an attribute cannot see a worker kept in a
+        dictionary, and the entry outlived the object Qt deleted a moment
+        later. Asking a deleted C++ object whether it is still running raises,
+        and that raise came out through whatever had set the song playing --
+        a press in the queue among them -- and took the rest of that press
+        with it, so the song was not kept and the page did not follow.
+        """
+        from weave.ui.bridge import Bridge
+
+        class Done:
+            def isFinished(self):
+                return True
+
+            def deleteLater(self):
+                pass
+
+        done = Done()
+        other = Done()
+        bridge = Bridge.__new__(Bridge)
+        bridge._threads = {done}
+        bridge._keepers = {"sound": done, 1080: other}
+        bridge._source_details = []
+        bridge.sender = lambda: None
+        Bridge._reap(bridge)
+        self.assertEqual(bridge._keepers, {1080: other})
+
+    def test_and_a_dictionary_of_anything_else_is_left_alone(self):
+        """Every dictionary on the window is looked through, so what is in
+        one has to be identified by being the worker and nothing else."""
+        from weave.ui.bridge import Bridge
+
+        class Done:
+            def isFinished(self):
+                return True
+
+            def deleteLater(self):
+                pass
+
+        done = Done()
+        bridge = Bridge.__new__(Bridge)
+        bridge._threads = {done}
+        bridge._source_details = []
+        bridge._settings = {"theme": "dark", "height": 1080}
+        bridge.sender = lambda: None
+        Bridge._reap(bridge)
+        self.assertEqual(bridge._settings, {"theme": "dark", "height": 1080})
+
     def test_nothing_new_starts_once_shutdown_has_begun(self):
         """The other half of the same crash, and the half that actually caused
         it. A timer that was already due fired after shutdown had finished,

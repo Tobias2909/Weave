@@ -4961,6 +4961,16 @@ class Bridge(QObject):
             for name, value in list(vars(self).items()):
                 if value is worker:
                     setattr(self, name, None)
+                # And out of anything holding several of them. A worker kept
+                # in a dictionary was missed by the line above, and the entry
+                # outlived the object Qt deleted a moment later, so the next
+                # look at it asked a deleted C++ object whether it was still
+                # running and raised. That raise came out through whatever had
+                # set the song playing -- a press in the queue, among others --
+                # and took the rest of that press with it.
+                elif isinstance(value, dict):
+                    for held in [k for k, v in value.items() if v is worker]:
+                        del value[held]
             if worker in self._source_details:
                 self._source_details.remove(worker)
             worker.deleteLater()
