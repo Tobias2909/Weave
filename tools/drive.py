@@ -718,6 +718,77 @@ class Smoke:
         bridge.reload()
         settle(0.5)
 
+        self.a_suggested_stream_that_ended(bridge, window)
+
+    def a_suggested_stream_that_ended(self, bridge, window) -> None:
+        """The same answer, on the suggestions page, where he found it wrong.
+
+        A suggestion is usually a channel nobody follows, so the video is not
+        in `videos` at all and correcting it there reached nothing the card
+        reads. It is said on the cached row as well now.
+
+        And the page must survive being told. Reading the rows again is a
+        database read and not a request, and a list of the same keys reaches
+        the grid as a change to the rows that differ rather than as a fresh
+        model, so nothing is fetched, nothing is lost and the page does not
+        move under the hand. That is what the last two checks are about.
+        """
+        from weave import paths
+        from weave.db import Database
+
+        step("a suggested stream that has ended")
+        gone = "yt:smokelive02"
+        db = Database(paths.DB_FILE)
+        db.replace_cached(db.RECOMMENDED, [
+            {"ext_id": "smokelive02", "title": "A suggested broadcast",
+             "channel_name": "Somebody", "channel_ext_id": "UC" + "s" * 22,
+             "live_status": "is_live"},
+            *[{"ext_id": f"smokesugg{i:02d}", "title": f"Suggestion {i}",
+               "channel_name": "Somebody", "channel_ext_id": "UC" + "s" * 22,
+               "duration_s": 300} for i in range(30)],
+        ])
+        db.close()
+        bridge.showRecommended()
+        settle(0.7)
+        grid = find(window, "grid")
+        wait_until(lambda: read(grid, "count") > 30, 4.0)
+        call(grid, "forceLayout")
+        settle(0.3)
+
+        before_count = read(grid, "count")
+        write(grid, "contentY", 200.0)
+        settle(0.4)
+        before_where = read(grid, "contentY")
+        row = bridge._model.row_for_key(gone) or {}
+        self.check("a suggested stream says it is live", bool(row.get("isLive")),
+                   f"live {row.get('isLive')}")
+
+        db = Database(paths.DB_FILE)
+        db.set_live_state(gone, None, False)
+        db.close()
+        bridge._set_notice("")
+        bridge._pending_play = (gone, "https://example/watch", "A suggested broadcast")
+        bridge._on_stream_checked(gone, False, False)
+        settle(0.6)
+
+        row = bridge._model.row_for_key(gone) or {}
+        self.check("and after the answer the suggestion does not",
+                   not row.get("isLive") and row.get("wasLive"),
+                   f"live {row.get('isLive')} was {row.get('wasLive')}")
+        self.check("the rest of the suggestions are all still there",
+                   read(grid, "count") == before_count,
+                   f"{read(grid, 'count')} against {before_count}")
+        self.check("and the page has not moved under the hand",
+                   abs(read(grid, "contentY") - before_where) < 1,
+                   f"{before_where:.0f} to {read(grid, 'contentY'):.0f}")
+
+        bridge._set_notice("")
+        db = Database(paths.DB_FILE)
+        db.replace_cached(db.RECOMMENDED, [])
+        db.close()
+        bridge.selectGroup(-1)
+        settle(0.5)
+
     def announcements(self, bridge, window) -> None:
         """A stream that has not begun says when it will, in the panel as well.
 

@@ -103,3 +103,53 @@ class StreamsInTheseLists(unittest.TestCase):
         row = flatlist.as_row(recommended.parse_lines(self.SOON)[0])
         self.assertEqual((row["live_status"], row["scheduled_at"]),
                          ("is_upcoming", 1800000000))
+
+
+class AStreamInASuggestionThatHasEnded(unittest.TestCase):
+    """A suggestion says live from the moment it was read, and goes on saying
+    it until the whole list is read again.
+
+    A suggestion is usually a channel nobody follows, so the video is not in
+    `videos` at all and there is nothing there to correct. Where both do have a
+    word for it the listing's own wins, since it came from the same reading as
+    the rest of the row. So finding out that a broadcast has ended has to be
+    said on the cached row as well, or the card goes on saying live however
+    many times the answer comes back.
+    """
+
+    def setUp(self):
+        from tests.support import scratch_db
+
+        self.db = scratch_db(self)
+        self.db.replace_cached(self.db.RECOMMENDED, [
+            {"ext_id": "bbbbbbbbbbb", "title": "On air now",
+             "channel_name": "Some channel", "channel_ext_id": "UCabcdefghijklmnopqrstuv",
+             "live_status": "is_live"},
+            {"ext_id": "ccccccccccc", "title": "Starting later",
+             "channel_name": "Some channel", "channel_ext_id": "UCabcdefghijklmnopqrstuv",
+             "live_status": "is_upcoming", "scheduled_at": 1_800_000_000},
+            {"ext_id": "ddddddddddd", "title": "An ordinary video",
+             "channel_name": "Some channel", "channel_ext_id": "UCabcdefghijklmnopqrstuv"},
+        ])
+
+    def states(self):
+        return {row["ext_id"]: row["live_status"]
+                for row in self.db.cached(self.db.RECOMMENDED)}
+
+    def test_the_suggestion_stops_saying_live(self):
+        self.assertEqual(self.states()["bbbbbbbbbbb"], "is_live")
+        self.db.set_live_state("yt:bbbbbbbbbbb", None, False)
+        self.assertEqual(self.states()["bbbbbbbbbbb"], "was_live")
+
+    def test_one_that_has_not_begun_is_left_alone(self):
+        """A different question, and this is not the answer to it."""
+        self.db.set_live_state("yt:ccccccccccc", None, False)
+        self.assertEqual(self.states()["ccccccccccc"], "is_upcoming")
+
+    def test_an_ordinary_video_is_not_given_a_state_it_never_had(self):
+        self.db.set_live_state("yt:ddddddddddd", None, False)
+        self.assertIsNone(self.states()["ddddddddddd"])
+
+    def test_a_stream_that_is_still_on_changes_nothing(self):
+        self.db.set_live_state("yt:bbbbbbbbbbb", 51, True)
+        self.assertEqual(self.states()["bbbbbbbbbbb"], "is_live")

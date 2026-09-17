@@ -1646,12 +1646,30 @@ class Database:
 
     def set_live_state(self, video_key: str, viewers: int | None, still_live: bool) -> None:
         """A stream that has stopped becomes an ordinary video rather than
-        vanishing, so it stays in the feed and only leaves the live bar."""
+        vanishing, so it stays in the feed and only leaves the live bar.
+
+        Said in both places a card can be drawn from. A video is in `videos`
+        when it belongs to a channel that is followed, and in `cached_videos`
+        when it came from the suggestions or the listening history, and a
+        suggestion is usually not in `videos` at all. Where both have a word
+        for it the listing's own wins, because it came from the same reading
+        as the rest of the row, so a suggestion that said live would go on
+        saying it however often the video itself was corrected.
+
+        Only a cached row that still says live is touched. One that says a
+        stream has not begun is answering a different question, and this is
+        not the answer to it.
+        """
+        ext_id = video_key.split(":", 1)[-1]
         with self.conn as conn:
             conn.execute(
                 "UPDATE videos SET live_viewers=?, live_status=? WHERE key=?",
                 (viewers if still_live else None,
                  "is_live" if still_live else "was_live", video_key))
+            if not still_live:
+                conn.execute(
+                    "UPDATE cached_videos SET live_status='was_live' "
+                    "WHERE ext_id=? AND live_status='is_live'", (ext_id,))
 
     def set_scheduled_at(self, video_key: str, starts_at: int | None) -> None:
         """When an announced stream is due, in real time rather than as the
