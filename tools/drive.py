@@ -1466,6 +1466,62 @@ class Smoke:
                    not read(line, "visible") and read(bridge, "updateVersion") == "",
                    str(read(bridge, "updateVersion")))
 
+    def sidebar_order(self, bridge, window, box_id) -> None:
+        """Where the sections sit, and that the wheel agrees with the eye.
+
+        The boxes are drawn above Yours, which is the order he asked for, and
+        the wheel walks positions rather than names, so the list behind it has
+        to be moved with the sidebar or the wheel steps past a section that is
+        plainly there.
+        """
+        boxes = find(window, "boxesHeading")
+        yours = find(window, "yoursHeading")
+        self.check("the sidebar has both headings",
+                   boxes is not None and yours is not None)
+        if boxes is None or yours is None:
+            return
+        self.check("the boxes are drawn above Yours",
+                   read(boxes, "y") < read(yours, "y"),
+                   f"boxes {read(boxes, 'y'):.0f}, yours {read(yours, 'y'):.0f}")
+
+        # One step down from All, which is the first entry either way. The box
+        # made for this walk is the only one there is, so landing anywhere else
+        # means the wheel is walking the old order.
+        bridge.selectGroup(-1)
+        settle(0.3)
+        bridge.stepSelection(1)
+        settle(0.3)
+        self.check("and the wheel reaches a box before Yours",
+                   read(bridge, "viewKind") == "box" and read(bridge, "viewId") == box_id,
+                   f"{read(bridge, 'viewKind')} {read(bridge, 'viewId')}")
+        bridge.selectGroup(-1)
+        settle(0.3)
+
+    def history_button(self, bridge, window) -> None:
+        """Reading the history again, on the page rather than in the bar."""
+        bridge.showHistory()
+        settle(0.4)
+        again = find(window, "historyRefresh")
+        self.check("the history carries its own read it again button",
+                   again is not None and read(again, "visible") is True)
+        if again is not None:
+            self.check("which says which half it would read",
+                       str(read(again, "text")) == "Read it again",
+                       str(read(again, "text")))
+            bridge.showMusicInHistory(True)
+            settle(0.4)
+            self.check("and says the other thing over the listening",
+                       str(read(again, "text")) == "Read the listening again",
+                       str(read(again, "text")))
+            bridge.showMusicInHistory(False)
+            settle(0.3)
+        action = find(window, "viewAction")
+        self.check("and the bar no longer offers it",
+                   action is not None and not read(action, "visible"),
+                   str(read(action, "text")) if action is not None else "no button")
+        bridge.selectGroup(-1)
+        settle(0.3)
+
     def group_bar(self, bridge, window, group_id) -> None:
         """The row of buttons over a group, and where the first row starts.
 
@@ -1742,6 +1798,11 @@ class Smoke:
                    0 < box_at == len(labels) - 2, f"at {box_at} of {len(labels)}")
         menu.close()
         settle(0.2)
+
+        step("the sidebar order and the history's own button")
+        self.sidebar_order(bridge, window, box_id)
+        self.history_button(bridge, window)
+
         bridge.deleteBox(box_id)
 
         # A group made and found in the sidebar list.

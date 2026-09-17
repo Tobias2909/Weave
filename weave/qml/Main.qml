@@ -29,12 +29,9 @@ ApplicationWindow {
     // What the open view can do, if anything, shown as one button beside
     // Refresh.
     readonly property string viewActionText: {
-        if (App.viewKind === "history") return App.historyShowsMusic
-                                              ? "Read the listening again"
-                                              : "Read it again"
-        // Recommended is not here. Its button sits on the page itself, where
-        // what it acts on is, since nobody read a button in the bar as
-        // belonging to the page under it.
+        // Neither recommended nor history is here. Both have a button on the
+        // page itself, where what it acts on is, since nobody read a button in
+        // the bar as belonging to the page under it.
         if (App.viewKind === "playlist") return "Read it again"
         if (App.viewKind === "search") return App.searchScope === "youtube"
                                               ? "Search again" : "Search YouTube"
@@ -42,12 +39,7 @@ ApplicationWindow {
     }
 
     function doViewAction() {
-        if (App.viewKind === "history") {
-            if (App.historyShowsMusic) App.readMusicHistory()
-            else App.importHistory()
-        }
-        else if (App.viewKind === "recommended") App.refreshRecommended()
-        else if (App.viewKind === "playlist") App.refreshPlaylist()
+        if (App.viewKind === "playlist") App.refreshPlaylist()
         else if (App.viewKind === "search") App.searchYouTube()
     }
 
@@ -669,7 +661,43 @@ ApplicationWindow {
 
                 Item { width: 1; height: 10 }
 
-                SidebarHeading { text: "Yours" }
+                SidebarHeading {
+                    objectName: "boxesHeading"
+                    text: "Boxes"
+                    actionText: "+"
+                    onAction: root.askForName("box", -1, "", "")
+                }
+
+                Repeater {
+                    model: App.boxes
+                    SidebarRow {
+                        width: sidebarColumn.width
+                        label: modelData.name
+                        count: modelData.items
+                        selected: App.viewKind === "box" && App.viewId === modelData.id
+                        onActivated: App.selectBox(modelData.id)
+                        onRevealRequested: root.revealRow(this)
+                        onContextRequested: {
+                            boxMenu.boxId = modelData.id
+                            boxMenu.boxName = modelData.name
+                            boxMenu.popup()
+                        }
+                    }
+                }
+
+                Label {
+                    visible: App.boxes.length === 0
+                    width: sidebarColumn.width - 28
+                    x: 14
+                    text: "A box holds videos you pick yourself. Make one with the plus above."
+                    color: Theme.colors.textMuted
+                    font.pixelSize: 11
+                    wrapMode: Text.Wrap
+                }
+
+                Item { width: 1; height: 10 }
+
+                SidebarHeading { objectName: "yoursHeading"; text: "Yours" }
 
                 SidebarRow {
                     width: sidebarColumn.width
@@ -714,43 +742,6 @@ ApplicationWindow {
                     selected: App.viewKind === "settings"
                     onActivated: App.showSettings()
                     onRevealRequested: root.revealRow(this)
-                }
-
-                Item { width: 1; height: 10 }
-
-                Item { width: 1; height: 10 }
-
-                SidebarHeading {
-                    text: "Boxes"
-                    actionText: "+"
-                    onAction: root.askForName("box", -1, "", "")
-                }
-
-                Repeater {
-                    model: App.boxes
-                    SidebarRow {
-                        width: sidebarColumn.width
-                        label: modelData.name
-                        count: modelData.items
-                        selected: App.viewKind === "box" && App.viewId === modelData.id
-                        onActivated: App.selectBox(modelData.id)
-                        onRevealRequested: root.revealRow(this)
-                        onContextRequested: {
-                            boxMenu.boxId = modelData.id
-                            boxMenu.boxName = modelData.name
-                            boxMenu.popup()
-                        }
-                    }
-                }
-
-                Label {
-                    visible: App.boxes.length === 0
-                    width: sidebarColumn.width - 28
-                    x: 14
-                    text: "A box holds videos you pick yourself. Make one with the plus above."
-                    color: Theme.colors.textMuted
-                    font.pixelSize: 11
-                    wrapMode: Text.Wrap
                 }
 
                 Item { width: 1; height: 10 }
@@ -1052,6 +1043,23 @@ ApplicationWindow {
                 text: "Music"
                 accent: App.historyShowsMusic
                 onClicked: App.showMusicInHistory(true)
+            }
+        }
+
+        // Reading the history again acts on the page under it, not on the
+        // feed, so it sits at this end of the page's own row the way the
+        // suggestions button does. It was in the bar at the top, where a
+        // button reads as belonging to the window rather than to the view.
+        FlatButton {
+            objectName: "historyRefresh"
+            visible: viewBar.onHistory
+            anchors.right: parent.right
+            anchors.rightMargin: 6
+            anchors.verticalCenter: parent.verticalCenter
+            text: App.historyShowsMusic ? "Read the listening again" : "Read it again"
+            onClicked: {
+                if (App.historyShowsMusic) App.readMusicHistory()
+                else App.importHistory()
             }
         }
 

@@ -1541,12 +1541,12 @@ class Bridge(QObject):
         """
         entries: list[tuple[str, int]] = [(ALL, -1)]
         entries.extend((GROUP, int(row["id"])) for row in self._db.groups())
+        entries.extend((BOX, int(row["id"])) for row in self._db.boxes())
         entries.append((RECOMMENDED, -1))
         entries.append((HISTORY, -1))
         entries.append((MUSIC, -1))
         entries.append((DEBUG, -1))
         entries.append((SETTINGS, -1))
-        entries.extend((BOX, int(row["id"])) for row in self._db.boxes())
         entries.extend((PLAYLIST, index) for index, _ in enumerate(self._sidebar_playlists()))
         return entries
 
