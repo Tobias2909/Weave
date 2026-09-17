@@ -3,6 +3,7 @@ every rounding decision in one place."""
 
 from __future__ import annotations
 
+import re
 import time
 from datetime import date
 
@@ -127,3 +128,78 @@ def duration_text(seconds: int | None) -> str:
     if hours:
         return f"{hours}:{minutes:02d}:{secs:02d}"
     return f"{minutes}:{secs:02d}"
+
+
+# What counts as an address inside a description. Two shapes, because people
+# write both: one with a scheme, and one that begins at www and leaves the
+# scheme to be assumed. The run stops at whitespace and at the three
+# characters that cannot appear in markup without being escaped first, so a
+# link can never swallow the tag built around it.
+_ADDRESS = re.compile(r"""(?xi)
+    \b
+    (?:
+        https?://[^\s<>"']+
+      | www\.[^\s<>"']+
+    )
+""")
+
+# What a sentence puts after an address rather than inside it. A closing
+# bracket is only trimmed when nothing opened it inside the address, since
+# plenty of real addresses carry a matched pair.
+_TRAILING = ".,;:!?'\""
+_CLOSERS = {")": "(", "]": "["}
+
+
+def _tidy(address: str) -> tuple[str, str]:
+    """Split an address from the punctuation a sentence left on its end."""
+    after = ""
+    while address:
+        last = address[-1]
+        unopened = (last in _CLOSERS
+                    and address.count(_CLOSERS[last]) < address.count(last))
+        if last not in _TRAILING and not unopened:
+            break
+        after = last + after
+        address = address[:-1]
+    return address, after
+
+
+def _escaped(text: str) -> str:
+    return (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def linked(text: str) -> str:
+    """A description as markup, with its addresses made pressable.
+
+    Qt draws this as StyledText, which is the only format that gives a Label
+    an `<a href>` to report when it is pressed. Two consequences follow and
+    both are handled here rather than left to the caller.
+
+    Everything that is not an address is escaped, because an ampersand or an
+    angle bracket in somebody's description would otherwise be read as markup
+    and disappear. And every newline becomes a break, because StyledText
+    collapses runs of whitespace, so a description written in paragraphs would
+    arrive as one long line.
+
+    Always returns markup, even for a description with no address in it, so
+    the Label can be told once what format it is reading instead of switching
+    between two and re-laying itself out on every song.
+    """
+    if not text:
+        return ""
+    out: list[str] = []
+    at = 0
+    for found in _ADDRESS.finditer(text):
+        address, after = _tidy(found.group(0))
+        if not address:
+            continue
+        out.append(_escaped(text[at:found.start()]))
+        # An address written from www alone is still an address. The scheme is
+        # assumed for the browser and left out of what is drawn, which is what
+        # was written.
+        target = address if address.lower().startswith("http") else "https://" + address
+        out.append(f'<a href="{_escaped(target)}">{_escaped(address)}</a>')
+        out.append(_escaped(after))
+        at = found.end()
+    out.append(_escaped(text[at:]))
+    return "".join(out).replace("\n", "<br>")

@@ -1026,7 +1026,7 @@ class Bridge(QObject):
         ("album", "albumText", None),
         ("artist", "artistText", None),
         ("category", "categoryText", None),
-        ("description", "descriptionText", None),
+        ("description", "descriptionText", fmt.linked),
     )
 
     def _with_player_facts(self, detail: dict) -> dict:
@@ -2510,6 +2510,23 @@ class Bridge(QObject):
     @Slot(int)
     def selectBox(self, box_id: int) -> None:
         self._set_view(BOX, box_id)
+
+    @Slot(str)
+    def openLink(self, address: str) -> None:
+        """Hand an address written in a description to the browser.
+
+        Weave opens videos itself and everything else outside, and a
+        description is somebody else's writing, so what arrives here is not
+        trusted to be an address at all. Only http and https are passed on:
+        the markup is built from http and https alone, and a scheme that
+        slipped past that would be handed to the desktop to act on.
+        """
+        url = QUrl(address)
+        if url.scheme().lower() not in ("http", "https") or not url.host():
+            self._set_status("that link cannot be opened")
+            return
+        QDesktopServices.openUrl(url)
+        self._set_status(f"opened {url.host()} in the browser")
 
     @Slot(str)
     def openChannel(self, channel_key: str) -> None:

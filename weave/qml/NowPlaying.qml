@@ -486,6 +486,13 @@ Item {
                         wrapMode: Text.Wrap
                         maximumLineCount: open ? 8 : 2
                         elide: Text.ElideRight
+                        // Already markup when it arrives, addresses and all,
+                        // and always markup even when there is nothing in it
+                        // to press. Told once rather than switched between
+                        // two formats, which would lay the page out again on
+                        // every song.
+                        textFormat: Text.StyledText
+                        linkColor: Theme.colors.accent
 
                         // A different song is a different description, and one
                         // left open would open the next one at whatever length
@@ -495,15 +502,33 @@ Item {
                             function onTrackChanged() { description.open = false }
                         }
 
-                        HoverHandler {
-                            enabled: description.truncated || description.open
-                            cursorShape: Qt.PointingHandCursor
-                        }
-
+                        // One handler for both things the words do, because
+                        // two would fight over the press. An address under the
+                        // pointer wins: opening it is what somebody aiming at
+                        // it meant, and the rest of the words still open and
+                        // close the paragraph.
                         MouseArea {
+                            id: descriptionPress
                             anchors.fill: parent
-                            enabled: description.truncated || description.open
-                            onClicked: description.open = !description.open
+                            hoverEnabled: true
+                            property string link: ""
+                            property bool foldable: description.truncated
+                                                    || description.open
+                            onPositionChanged: function (mouse) {
+                                link = description.linkAt(mouse.x, mouse.y)
+                            }
+                            onExited: link = ""
+                            cursorShape: (link !== "" || foldable)
+                                         ? Qt.PointingHandCursor : Qt.ArrowCursor
+                            onClicked: function (mouse) {
+                                var here = description.linkAt(mouse.x, mouse.y)
+                                if (here !== "") {
+                                    App.openLink(here)
+                                    return
+                                }
+                                if (foldable)
+                                    description.open = !description.open
+                            }
                         }
                     }
 

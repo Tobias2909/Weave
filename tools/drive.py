@@ -371,7 +371,8 @@ class Smoke:
         audio._facts[playing] = {
             "views": 1500, "likes": 90, "channel": "Somebody",
             "published_at": 1256453853,
-            "description": "A line about it. " * 40,
+            "description": ("A line about it, see https://example.test/a?b=1&c=2 "
+                            "and a < b. " * 40),
         }
         audio.factsChanged.emit()
         settle(0.3)
@@ -402,6 +403,17 @@ class Smoke:
         write(said, "open", False)
         settle(0.2)
 
+        # What a description is made of once Qt has it. The words arrive as
+        # markup so that an address inside them can be pressed, which puts the
+        # burden of escaping everything else on the way in. The label's
+        # textFormat is not read here: PySide has no converter for
+        # QQuickText::TextFormat and asking for it raises.
+        markup = str(read(said, "text"))
+        self.check("an address in the description is something to press",
+                   '<a href="https://example.test/a?b=1&amp;c=2">' in markup,
+                   markup[:120])
+        self.check("and the words around it cannot become markup themselves",
+                   "&lt;" in markup and "<b" not in markup, markup[:120])
         bridge.closeNowPlaying()
         # The page has to be away before the queue goes, or the rows it is
         # still drawing are cancelled under it. And the view it lands on has
