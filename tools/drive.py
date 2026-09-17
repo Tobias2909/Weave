@@ -947,6 +947,59 @@ class Smoke:
         bridge.closeDetail()
         settle(0.4)
 
+    def a_song_that_is_gone(self, bridge, window) -> None:
+        """A song pressed and found to be no longer on YouTube.
+
+        A playlist read from YouTube already arrives without its private and
+        deleted entries, and the foot of the page says how many were left out.
+        One that goes after the list was read cannot be caught that way, so it
+        is caught when it is pressed, and the same thing has to happen: out of
+        the list, counted with the rest, and said at the foot.
+
+        The discovery itself is a resolve against YouTube and this walk is
+        offline, so the answer is handed over here. What is checked is what the
+        answer does.
+        """
+        from weave import paths
+        from weave.db import Database
+
+        step("a song that is gone")
+        listed = Database(paths.DB_FILE)
+        listed.replace_playlists([{"ext_id": "PL0000000000000000000009", "title": "Some songs"}])
+        listed.replace_playlist_items("PL0000000000000000000009", [
+            {"ext_id": "smokesong01", "title": "A song", "channel_name": "Smoke"},
+            {"ext_id": "smokesong02", "title": "Another song", "channel_name": "Smoke"},
+        ], skipped=1)
+        listed.close()
+        bridge.selectPlaylist("PL0000000000000000000009")
+        settle(0.7)
+        grid = find(window, "grid")
+        call(grid, "forceLayout")
+        settle(0.3)
+        self.check("the playlist holds both of its songs", read(grid, "count") == 2,
+                   f"count {read(grid, 'count')}")
+        self.check("and says what the reading already left out",
+                   "1 video" in str(read(bridge, "playlistSkippedText")),
+                   str(read(bridge, "playlistSkippedText")))
+
+        bridge._on_song_gone("yt:smokesong01")
+        settle(0.7)
+        call(grid, "forceLayout")
+        settle(0.3)
+        self.check("pressing one that has gone takes it out of the list",
+                   read(grid, "count") == 1
+                   and bridge._model.row_for_key("yt:smokesong01") is None,
+                   f"count {read(grid, 'count')}")
+        self.check("and it is counted with the rest that were left out",
+                   "2 videos" in str(read(bridge, "playlistSkippedText")),
+                   str(read(bridge, "playlistSkippedText")))
+        self.check("and the window says what happened to it",
+                   "deleted" in str(read(bridge, "notice")), str(read(bridge, "notice")))
+
+        bridge._set_notice("")
+        bridge.selectGroup(-1)
+        settle(0.5)
+
     def announcements(self, bridge, window) -> None:
         """A stream that has not begun says when it will, in the panel as well.
 
@@ -2454,6 +2507,7 @@ class Smoke:
         # earlier in the walk leaves it somewhere else.
         self.hiding(bridge, window)
         self.a_stream_that_ended(bridge, window)
+        self.a_song_that_is_gone(bridge, window)
 
         if self.shot:
             self.check("screenshot written", screenshot(window, self.shot), self.shot)

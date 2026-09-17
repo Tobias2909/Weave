@@ -144,6 +144,9 @@ class WhatTheWindowShows(unittest.TestCase):
             # What the resolve learned. The bridge connects to it, so a stand
             # in without it says the wiring is broken when it is not.
             factsChanged = Signal()
+            # A song found to be gone from YouTube, which is a different report
+            # from a failure and reaches the lists rather than the banner.
+            gone = Signal(str)
             trackFacts = {}
 
             def pause_for_video(self):

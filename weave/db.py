@@ -3035,6 +3035,39 @@ class Database:
                          (int(time.time()), skipped, playlist_id))
         return len(rows)
 
+    def forget_playlist_item(self, ext_id: str) -> int:
+        """Take one video out of every playlist that holds it, and count it as
+        left out, which is what a private or a deleted entry already is.
+
+        A playlist read from YouTube already arrives without them: the listing
+        says which of its rows nobody can resolve, those are dropped, and the
+        number travels with the list so the foot of the page can say it. What
+        that cannot catch is a video that went private or was deleted AFTER the
+        list was read, which is not discovered until it is pressed. This is
+        that same act, done then, so the two agree rather than the second one
+        leaving a row nothing can play.
+
+        The count goes up rather than being recomputed, because it is what the
+        fetch itself left out and the row being taken out here is exactly one
+        more of those. A fresh read replaces it with YouTube's own figure,
+        which by then includes this one.
+
+        Answers how many playlists it was taken out of.
+        """
+        if not ext_id:
+            return 0
+        with self.conn as conn:
+            holders = [row[0] for row in conn.execute(
+                "SELECT DISTINCT playlist_id FROM playlist_items WHERE ext_id=?", (ext_id,))]
+            if not holders:
+                return 0
+            conn.execute("DELETE FROM playlist_items WHERE ext_id=?", (ext_id,))
+            marks = ",".join("?" * len(holders))
+            conn.execute(
+                f"UPDATE playlists SET skipped = skipped + 1 WHERE ext_id IN ({marks})",
+                holders)
+        return len(holders)
+
     def playlist_items(self, playlist_id: str, limit: int = 500) -> list[sqlite3.Row]:
         """Shaped like a feed row, so the same grid draws it. A playlist keeps
         its own order rather than being sorted by date, which is the whole

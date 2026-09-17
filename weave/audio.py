@@ -305,6 +305,43 @@ def address_expiry(address: str) -> float | None:
     return float(stamp) if stamp.isdigit() else None
 
 
+# What yt-dlp says when the video itself is gone rather than when something
+# went wrong on the way to it. Measured against two real ones he reported:
+# "Video unavailable. This video is not available". A private entry and one the
+# uploader removed each say so in their own words.
+GONE_MARKS = (
+    "this video is not available",
+    "private video",
+    "removed by the uploader",
+    "video has been removed",
+    "video is no longer available",
+    "account associated with this video has been terminated",
+)
+
+# And the one thing that vetoes all of it. A video Weave cannot play HERE is
+# not a video that has gone: a country lock, a membership, an age gate and a
+# login problem are about this copy of the application and not about the video,
+# and taking one of those out of a playlist would throw away something that is
+# still there. Only the country lock needs saying, because YouTube opens that
+# sentence with the same two words as a deletion. The rest carry none of the
+# marks above and are left out by simply not matching.
+#
+# "sign in" deliberately does NOT veto, and that was nearly the bug: read from
+# yt-dlp's own source, a private video answers with the reason AND the
+# subreason joined, so its sentence carries "Private video" and an invitation
+# to sign in together, and vetoing on the second would have thrown away exactly
+# the case this exists for.
+STILL_THERE_MARKS = ("in your country",)
+
+
+def reads_as_gone(message: str) -> bool:
+    """Whether a failure says the video itself is no longer there."""
+    said = (message or "").lower()
+    if any(mark in said for mark in STILL_THERE_MARKS):
+        return False
+    return any(mark in said for mark in GONE_MARKS)
+
+
 class _NoAddress(RuntimeError):
     pass
 
@@ -419,6 +456,10 @@ class AudioPlayer(QObject):
     stateChanged = Signal()
     progressChanged = Signal()
     failed = Signal(str)
+    # A song that is no longer on YouTube, by key. Its own report rather than
+    # a failure, because nothing went wrong here and there is nothing to try
+    # again: what is wanted is for the lists holding it to stop holding it.
+    gone = Signal(str)
 
     def __init__(self, cfg: Config, db=None, parent: QObject | None = None,
                  engine: LibmpvEngine | None = None) -> None:
@@ -825,6 +866,14 @@ class AudioPlayer(QObject):
             return
         self._loading = False
         self.stateChanged.emit()
+        if reads_as_gone(message):
+            # The video is not there any more, which is a different thing from
+            # a track that would not play. It leaves the queue rather than
+            # being tried again, and what is said about it is said by whoever
+            # holds the lists it was in.
+            self.gone.emit(key)
+            self.removeFromQueue(self._queue.index(self._current()))
+            return
         self.failed.emit(message)
 
     # ---- the track after this one ----------------------------------------

@@ -3401,6 +3401,7 @@ class Bridge(QObject):
         # a dead cookie, a missing solver and a broken sound card, which is
         # nothing at all.
         audio.failed.connect(self._on_audio_failed)
+        audio.gone.connect(self._on_song_gone)
         self._player.nowPlaying.connect(lambda *_a: self._audio.pause_for_video())
         # Whether the heart is lit depends on the song playing as much as on
         # which songs are kept, so a new song has to say so too. Without this
@@ -3423,6 +3424,36 @@ class Bridge(QObject):
         if self._audio is not None and self._audio.hasQueue:
             return
         self.closeNowPlaying()
+
+    def _on_song_gone(self, key: str) -> None:
+        """A song that is no longer on YouTube, found by pressing it.
+
+        A playlist read from YouTube already arrives without its private and
+        deleted entries: the listing says which of its rows nobody can resolve,
+        those are dropped, and the foot of the page says how many. What that
+        cannot catch is a video that went private or was deleted since the list
+        was read, and until now such a row sat there looking playable and gave
+        a failure every time it was pressed. This is the same act, done at the
+        moment it is discovered, so the two agree.
+
+        It leaves the queue in the player, it leaves every playlist that held
+        it, and it is marked gone in the videos table as well, which is where
+        the feed and the boxes read from. Marked rather than deleted there,
+        because a video can sit in a box somebody built by hand and can carry a
+        watched mark, and both of those are worth more than the row.
+        """
+        ext_id = key.split(":", 1)[1] if ":" in key else ""
+        if not ext_id:
+            return
+        lists = self._db.forget_playlist_item(ext_id)
+        self._db.mark_unavailable(ext_id)
+        self._set_notice("That one is private or has been deleted. "
+                         "It is out of the list now.", clear_after_s=8)
+        self._set_status(f"{key} is gone from YouTube, and out of "
+                         f"{lists} {'list' if lists == 1 else 'lists'}")
+        self.playlistSkippedChanged.emit()
+        self.playlistsChanged.emit()
+        self.reload()
 
     def _on_audio_failed(self, message: str) -> None:
         """A track that would not play. It goes to the banner and not only to
