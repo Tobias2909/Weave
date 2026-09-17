@@ -2038,6 +2038,16 @@ class MusicSearch(Worker):
         } for track in tracks])
 
 
+# How many shelves of the music page are read. The limit counts shelves rather
+# than items, and YouTube pages them, so this is how far down its front page
+# Weave looks. Six stopped well short of the end: measured on a real account,
+# the page carries twenty to twenty three shelves and Forgotten favourites, the
+# one he asked for, is ALWAYS THE LAST OF THEM. Thirty is comfortably past the
+# end with room for YouTube adding more. The whole set took under five seconds
+# and is kept for six hours, so the cost is per morning rather than per visit.
+HOME_SHELVES = 30
+
+
 class MusicHome(Worker):
     """The shelves YouTube Music opens on, which is what fills the music view
     before anything has been searched for."""
@@ -2053,7 +2063,7 @@ class MusicHome(Worker):
         from .sources import ytmusic
 
         try:
-            found = ytmusic.home(cookie_profile(self._cfg))
+            found = ytmusic.home(cookie_profile(self._cfg), limit=HOME_SHELVES)
         except ytmusic.MusicError as exc:
             self.failed.emit(str(exc))
             return
@@ -2065,7 +2075,20 @@ class MusicHome(Worker):
             if "listen again" in shelf["title"].lower():
                 found.insert(0, found.pop(index))
                 break
-        found.insert(1 if found else 0, self._own_playlists())
+        # And the one he asked for, which YouTube always puts last, where
+        # nobody scrolls. Moved up beside the other thing worth opening on,
+        # since he says he reaches for it often. Matched by name the same way
+        # the line above matches, so a shelf YouTube renames simply stays where
+        # it was put rather than going missing.
+        pinned = 0
+        for index, shelf in enumerate(found):
+            if "forgotten" in shelf["title"].lower():
+                found.insert(1 if found else 0, found.pop(index))
+                pinned = 1
+                break
+        # After both of those, or after whichever of them was there. Where it
+        # went before was simply second, and second is now taken.
+        found.insert(min(1 + pinned, len(found)), self._own_playlists())
         # Kept, but after the music ones, since those are the real thing now.
         found.append(self._from_youtube())
         self.shelves.emit([shelf for shelf in found if shelf["items"]])

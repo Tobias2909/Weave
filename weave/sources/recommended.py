@@ -51,6 +51,14 @@ def fetch(cfg: Config, limit: int = 48, throttle: Throttle | None = None,
     ]
     result = ytdlp.run(command, RecommendedError, "the recommendations", throttle, cancel, timeout)
     found = parse(result.stdout)
-    if found:
+    # A slice with nothing in it is an answer, not a failure, so only a run
+    # that also complained is treated as one. The same guard a search and the
+    # history already carry, and this was the one listing without it: reaching
+    # the foot of the suggestions put "the recommendations came back empty" in
+    # the status line, which reads as a fault and is not one. Measured against
+    # the endpoint: the list is made afresh for every request, an empty slice
+    # can be followed by a full one, and yt-dlp says nothing on stderr for any
+    # of it.
+    if found or not ytdlp.complained(result):
         return found
     raise ytdlp.blame(result, RecommendedError, "the recommendations")

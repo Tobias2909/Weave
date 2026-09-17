@@ -182,6 +182,55 @@ def normalise(url: str | None) -> str:
     return _SIGNED_CROP.sub(r"\1.jpg", url)
 
 
+# The sizes YouTube makes for every video, and the ones it makes only when the
+# upload was big enough. Measured: default, mqdefault and hqdefault always
+# answer; hq720, sddefault and maxresdefault are made from the source and can
+# be missing, and a 404 on one of those says nothing whatever about the video.
+_ALWAYS_MADE = ("default", "mqdefault", "hqdefault")
+_SIZE_IN_NAME = re.compile(r"/vi/[A-Za-z0-9_-]{11}/([a-z0-9]+)\.jpg")
+
+# The letterboxed size, and the same frame without the bands.
+_LETTERBOXED = re.compile(r"(/vi/[A-Za-z0-9_-]{11}/)hqdefault\.jpg$")
+# And the way back, for a video too small to have the bigger one.
+_LETTERBOXED_BACK = re.compile(r"(/vi/[A-Za-z0-9_-]{11}/)[a-z0-9]+\.jpg$")
+
+
+def always_made(url: str | None) -> bool:
+    """Whether this address names a size YouTube makes for every video.
+
+    What it is for: a 404 is how a video that has been taken down is found,
+    since the picture is asked for anyway. That only holds for an address that
+    would exist if the video did. A missing hq720 is a small upload, not a
+    dead one, and believing otherwise would mark living videos gone.
+    """
+    found = _SIZE_IN_NAME.search((url or "").strip())
+    return found is None or found.group(1) in _ALWAYS_MADE
+
+
+def unletterboxed(url: str | None) -> str:
+    """The same frame without the bands hqdefault bakes into it.
+
+    `hqdefault.jpg` is 480x360 and a widescreen upload is fitted inside that
+    with a black band above and below, measured at 44 rows each. A card is
+    drawn 16 by 9 and crops exactly those off, which is why the bare address is
+    the right one there. A music tile is SQUARE: it crops the sides instead and
+    keeps both bands, and the picture reads as a 4 by 3 postcard beside the
+    square covers YouTube Music hands over for a song it knows.
+
+    `hq720.jpg` is the same frame at 1280x720 with no bands at all, and it is
+    what YouTube Music itself gives for a video it knows, so this is the music
+    half agreeing with the rest rather than a taste of its own. A video too
+    small to have one falls back while it is fetched.
+    """
+    url = normalise(url)
+    return _LETTERBOXED.sub(r"\1hq720.jpg", url) if url else ""
+
+
+def square_source(url: str | None) -> str:
+    """A picture for a square box, wrapped for the cache."""
+    return qml_source(unletterboxed(plain_source(url)))
+
+
 def video_id(url: str | None) -> str:
     """The video a thumbnail belongs to, or an empty string when the picture is
     not a thumbnail at all. An avatar and a banner have no video behind them."""
@@ -314,7 +363,8 @@ class _Response(QQuickImageResponse, QRunnable):
             self._fail_path.write_text(f"{reason}\t{strikes}\n")
         except OSError:
             pass
-        if reason == "HTTP 404" and strikes >= MISSING_STRIKES and self._reporter is not None:
+        if (reason == "HTTP 404" and strikes >= MISSING_STRIKES
+                and self._reporter is not None and always_made(self._url)):
             gone = video_id(self._url)
             if gone:
                 self._reporter.missing.emit(gone)
@@ -344,6 +394,12 @@ class _Response(QQuickImageResponse, QRunnable):
                 continue
             if response.status_code != 200:
                 reason = f"HTTP {response.status_code}"
+                # A size YouTube did not make for this upload. The one it makes
+                # for every video is asked for instead, so a small upload shows
+                # its picture rather than a hole. Once, and only downwards.
+                if response.status_code == 404 and not always_made(self._url):
+                    self._url = _LETTERBOXED_BACK.sub(r"\1hqdefault.jpg", self._url)
+                    continue
                 # Only a server that is struggling is worth asking twice.
                 if response.status_code not in (429, 500, 502, 503, 504):
                     break

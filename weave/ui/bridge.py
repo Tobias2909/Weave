@@ -31,7 +31,7 @@ from .. import browsers, cookies, ids
 from .. import paths, tokens
 from ..config import Config
 from ..db import GROUP_SHOWS, GROUP_SHOWS_ALL, GROUP_SHOWS_STREAMS, Database
-from ..imagecache import SECONDS_PER_DAY, plain_source, qml_source
+from ..imagecache import SECONDS_PER_DAY, plain_source, qml_source, square_source
 from ..sources import release as release_source
 from ..sources import progress as mpv_progress
 from ..player.mpv import Player
@@ -458,6 +458,11 @@ class Bridge(QObject):
         self._cache_working = False
         self._loading_more = False
         self._exhausted = False
+        # Where the next helping of suggestions starts, and how many slices in
+        # a row have come back with nothing. One empty slice is not the end of
+        # the list, so it takes two.
+        self._recommended_next = 1
+        self._empty_slices = 0
         # Where a search started, so emptying the box goes back there.
         self._before_search: tuple[str, int, str, str] = (ALL, -1, "", "")
         # The history view shows what YouTube says was watched, or what has
@@ -1669,8 +1674,7 @@ class Bridge(QObject):
         if self._view_kind == SEARCH and self._search_scope == "youtube":
             self._fetch_results(start=len(self._web_results) + 1)
         elif self._view_kind == RECOMMENDED:
-            self._fetch_recommended(force=True, start=self._db.recommended_count() + 1,
-                                    append=True)
+            self._fetch_recommended(force=True, start=self._recommended_next, append=True)
         elif self._view_kind == HISTORY:
             self._fetch_history(force=True,
                                 start=self._db.cached_count(self._db.HISTORY) + 1,
@@ -2272,12 +2276,25 @@ class Bridge(QObject):
                          else "asking YouTube what it suggests")
         self._set_notice("Loading more" if append else "Asking YouTube what it suggests",
                          clear_after_s=90)
+        # Where the next helping starts, counted in the positions asked for
+        # rather than in the rows that survived. A slice is filtered on the way
+        # in, radio rows and rows with no title among them, so deriving the
+        # next start from how many rows are STORED stands still whenever a
+        # slice yields none and asks for the same positions for ever.
+        self._recommended_next = start + PAGE * 2
         self._recommended = RecommendationsFetcher(self._db, self._cfg, PAGE * 2, start,
                                                    append, parent=self)
         self._recommended.ready.connect(self._on_recommended)
-        self._recommended.failed.connect(
-            lambda message: self._set_status(f"recommendations, {message}"))
+        self._recommended.failed.connect(self._on_recommended_failed)
         self._launch(self._recommended)
+
+    def _on_recommended_failed(self, message: str) -> None:
+        """Something really went wrong, as opposed to a slice with nothing in
+        it, which is an answer. The flag has to come down either way, or the
+        foot of the page never asks for anything again."""
+        self._loading_more = False
+        self._set_notice("")
+        self._set_status(f"recommendations, {message}")
 
     def _on_recommended(self, count: int) -> None:
         # The row above the cards says how old they are, so it has to hear
@@ -2286,9 +2303,30 @@ class Bridge(QObject):
         self.recommendedChanged.emit()
         self._loading_more = False
         self._set_notice("")
-        # Nothing new means the feed has been walked to its end for now.
-        self._exhausted = count == 0 and self._db.recommended_count() > 0
-        self._set_status(f"{self._db.recommended_count()} suggestions")
+        held = self._db.recommended_count()
+        if count:
+            self._empty_slices = 0
+            self._set_status(f"{held} suggestions")
+        else:
+            # One empty slice is not the end. YouTube builds this list afresh
+            # for every request and a slice with nothing in it can be followed
+            # by a full one, measured against the endpoint. So the next slice
+            # is asked for at once, since nothing was added and the foot of the
+            # page cannot ask again by itself, and only the second empty one in
+            # a row is taken as the end.
+            self._empty_slices += 1
+            if self._empty_slices < 2 and held:
+                self._set_status("asking YouTube for more")
+                # Asked for on the way back rather than from here. This is the
+                # worker's own answer, and the thread that sent it has not
+                # finished yet, so starting the next one now is refused as one
+                # already running and the page is left waiting for ever.
+                QTimer.singleShot(0, lambda: self._fetch_recommended(
+                    force=True, start=self._recommended_next, append=True))
+                return
+            self._exhausted = bool(held)
+            self._set_status(f"{held} suggestions, which is every one YouTube has for now"
+                             if held else "YouTube suggested nothing")
         if self._view_kind == RECOMMENDED:
             self.reload()
         # The batch that just landed may name channels the earlier check, run
@@ -4034,11 +4072,21 @@ class Bridge(QObject):
 
     @staticmethod
     def _as_track(row) -> dict | None:
+        """A card, as the music player wants it.
+
+        The picture is asked for again in a shape that suits a square box.
+        Every picture the music draws is square, from the tile on a shelf to
+        the cover on the Now playing page, while this row came from a playlist
+        of ordinary videos, where the picture is the widescreen frame inside a
+        four by three plate. Cropped square that plate keeps its black bands,
+        which is what made a song of this kind read as a postcard beside the
+        square covers YouTube Music hands over.
+        """
         if not row:
             return None
         return {
             "key": row["key"], "title": row["title"], "artist": row["channelTitle"],
-            "thumbnail": row["thumbnail"], "live": bool(row["isLive"]),
+            "thumbnail": square_source(row["thumbnail"]), "live": bool(row["isLive"]),
             "url": row["url"],
         }
 
@@ -4465,9 +4513,15 @@ class Bridge(QObject):
         self._history = HistoryImporter(self._db, self._cfg, PAGE * 2, start, append,
                                         parent=self)
         self._history.imported.connect(self._on_history)
-        self._history.failed.connect(
-            lambda message: self._set_status(f"history, {message}"))
+        self._history.failed.connect(self._on_history_failed)
         self._launch(self._history)
+
+    def _on_history_failed(self, message: str) -> None:
+        """The same flag, for the same reason as the suggestions. Left up, the
+        foot of the page never asks for anything again."""
+        self._loading_more = False
+        self._set_notice("")
+        self._set_status(f"history, {message}")
 
     def _on_history(self, added: int, marked: int) -> None:
         self._loading_more = False

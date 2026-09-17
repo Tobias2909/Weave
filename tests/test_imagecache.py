@@ -515,3 +515,73 @@ class FailureRecord(unittest.TestCase):
     def test_recording_into_a_missing_directory_is_harmless(self):
         imagecache._record(self.dir / "gone", "https://x/a.jpg", "HTTP 404")
         self.assertEqual(len(imagecache.failures(self.dir / "gone")), 1)
+
+
+class TheShapeAPictureIsAskedForIn(unittest.TestCase):
+    """A music tile is square, and hqdefault is not.
+
+    `hqdefault.jpg` is 480x360, and a widescreen upload is fitted inside that
+    with a black band above and below, measured at 44 rows each. Drawn 16 by 9
+    those are cropped off exactly, which is why the bare address is right on a
+    card. Drawn square the sides are cropped instead and both bands stay, which
+    is what made a song of that kind read as a four by three postcard beside
+    the square covers YouTube Music hands over.
+    """
+
+    VIDEO = "aaaaaaaaaaa"
+
+    def address(self, name):
+        return f"https://i.ytimg.com/vi/{self.VIDEO}/{name}"
+
+    def test_the_letterboxed_size_is_swapped_for_the_same_frame_without_bands(self):
+        self.assertEqual(imagecache.unletterboxed(self.address("hqdefault.jpg")),
+                         self.address("hq720.jpg"))
+
+    def test_a_signed_one_is_unsigned_first(self):
+        signed = self.address("hqdefault.jpg") + "?sqp=-oaymwEc&rs=AOn4"
+        self.assertEqual(imagecache.unletterboxed(signed), self.address("hq720.jpg"))
+
+    def test_one_that_already_has_no_bands_is_left_alone(self):
+        for name in ("hq720.jpg", "mqdefault.jpg", "maxresdefault.jpg"):
+            self.assertEqual(imagecache.unletterboxed(self.address(name)),
+                             self.address(name))
+
+    def test_a_picture_that_is_not_a_thumbnail_is_left_alone(self):
+        avatar = "https://yt3.googleusercontent.com/somebody=s512"
+        self.assertEqual(imagecache.unletterboxed(avatar), avatar)
+
+    def test_nothing_stays_nothing(self):
+        self.assertEqual(imagecache.unletterboxed(""), "")
+        self.assertEqual(imagecache.unletterboxed(None), "")
+        self.assertEqual(imagecache.unletterboxed(imagecache.NO_THUMBNAIL), "")
+
+    def test_the_wrapper_goes_on_and_off_around_it(self):
+        wrapped = imagecache.qml_source(self.address("hqdefault.jpg"))
+        self.assertEqual(imagecache.square_source(wrapped),
+                         imagecache.qml_source(self.address("hq720.jpg")))
+
+
+class WhichSizesAlwaysExist(unittest.TestCase):
+    """A 404 is how a video that has been taken down is found, since the
+    picture is asked for anyway. That only holds for an address that would
+    exist if the video did. A missing hq720 is a small upload, not a dead one,
+    and believing otherwise would mark living videos gone."""
+
+    VIDEO = "bbbbbbbbbbb"
+
+    def address(self, name):
+        return f"https://i.ytimg.com/vi/{self.VIDEO}/{name}"
+
+    def test_the_sizes_made_for_every_video(self):
+        for name in ("default.jpg", "mqdefault.jpg", "hqdefault.jpg"):
+            self.assertTrue(imagecache.always_made(self.address(name)), name)
+
+    def test_the_sizes_made_only_from_a_big_enough_upload(self):
+        for name in ("hq720.jpg", "sddefault.jpg", "maxresdefault.jpg"):
+            self.assertFalse(imagecache.always_made(self.address(name)), name)
+
+    def test_anything_that_is_not_a_thumbnail_answers_yes(self):
+        # An avatar or a banner names no size, and nothing about this rule is
+        # meant to stop those being believed.
+        self.assertTrue(imagecache.always_made("https://yt3.googleusercontent.com/x=s512"))
+        self.assertTrue(imagecache.always_made(""))
