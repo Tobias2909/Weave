@@ -982,11 +982,31 @@ class Smoke:
                    "1 video" in str(read(bridge, "playlistSkippedText")),
                    str(read(bridge, "playlistSkippedText")))
 
-        bridge._on_song_gone("yt:smokesong01")
+        # Through the player, and through the half of it that finds nearly all
+        # of them: looking ahead at what the queue will play next. Pressing a
+        # song is the rare way to meet one that has gone; ordinarily it comes
+        # round in the queue, and the answer arrives minutes early while the
+        # song before it is still playing.
+        audio = bridge._audio
+        audio._queue = [
+            {"key": "yt:smokesong02", "title": "Another song", "url": ""},
+            {"key": "yt:smokesong01", "title": "A song", "url": ""},
+        ]
+        audio._order = [0, 1]
+        audio._at = 0
+        audio._idle = False
+        audio.trackChanged.emit()
+        audio._on_next_gone("yt:smokesong01")
         settle(0.7)
+        self.check("one found gone while looking ahead leaves the queue",
+                   [entry["key"] for entry in audio._queue] == ["yt:smokesong02"],
+                   str([entry["key"] for entry in audio._queue]))
+        self.check("and what was playing keeps playing",
+                   audio.track.get("key") == "yt:smokesong02",
+                   str(audio.track.get("key")))
         call(grid, "forceLayout")
         settle(0.3)
-        self.check("pressing one that has gone takes it out of the list",
+        self.check("and the list it was in",
                    read(grid, "count") == 1
                    and bridge._model.row_for_key("yt:smokesong01") is None,
                    f"count {read(grid, 'count')}")
@@ -996,6 +1016,12 @@ class Smoke:
         self.check("and the window says what happened to it",
                    "deleted" in str(read(bridge, "notice")), str(read(bridge, "notice")))
 
+        audio._queue = []
+        audio._order = []
+        audio._at = -1
+        audio._idle = True
+        audio.trackChanged.emit()
+        audio.stateChanged.emit()
         bridge._set_notice("")
         bridge.selectGroup(-1)
         settle(0.5)

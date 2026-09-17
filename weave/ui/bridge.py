@@ -3577,7 +3577,8 @@ class Bridge(QObject):
         self.closeNowPlaying()
 
     def _on_song_gone(self, key: str) -> None:
-        """A song that is no longer on YouTube, found by pressing it.
+        """A song that is no longer on YouTube, found by pressing it or,
+        far more often, by looking ahead at what the queue will play next.
 
         A playlist read from YouTube already arrives without its private and
         deleted entries: the listing says which of its rows nobody can resolve,

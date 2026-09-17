@@ -150,6 +150,96 @@ class ItLeavesTheQueue(unittest.TestCase):
         self.assertEqual(len(self.player._queue), 3)
 
 
+class ItIsCaughtBeforeItIsReached(unittest.TestCase):
+    """The case that matters in practice.
+
+    A song is seldom pressed. It comes round in the queue, and until this the
+    answer arrived with nobody listening: nothing was handed to mpv for it, so
+    the listening ended on the song before, saying nothing, and the dead one
+    stayed in the queue and in the playlist it came from.
+    """
+
+    def setUp(self):
+        from tests.test_audio import FakeEngine, FakeResolver, track
+        from weave.audio import AudioPlayer
+        from weave.config import Config
+
+        self.engine = FakeEngine()
+        self.player = AudioPlayer(Config(raw={}), engine=self.engine)
+        self.player.setShuffle(False)
+        self.player.setRepeat(0)
+        self.made = []
+
+        def resolver(entry):
+            made = FakeResolver(entry["key"])
+            self.made.append(made)
+            return made
+
+        self.player._make_resolver = resolver
+        self.player._queue = [track(n) for n in ("aaa", "bbb", "ccc")]
+        self.player._rebuild_order()
+        self.player._at = 0
+        self.player._idle = False
+        self.said = []
+        self.player.gone.connect(self.said.append)
+        self.failures = []
+        self.player.failed.connect(self.failures.append)
+
+    def look_ahead(self):
+        """Resolve the song after this one, the way playing one does."""
+        self.player._arrange_next()
+        return self.made[-1]
+
+    def test_the_look_ahead_listens_to_the_answer_at_all(self):
+        ahead = self.look_ahead()
+        self.assertEqual(ahead.key, "yt:bbb")
+        ahead.gone.emit("yt:bbb")
+        self.assertEqual(self.said, ["yt:bbb"])
+
+    def test_and_it_leaves_the_queue_without_the_listening_stopping(self):
+        ahead = self.look_ahead()
+        ahead.gone.emit("yt:bbb")
+        self.assertEqual([entry["key"] for entry in self.player._queue],
+                         ["yt:aaa", "yt:ccc"])
+        # The one playing is untouched, and what follows it is the live one.
+        self.assertEqual(self.player.track["title"], "aaa")
+        self.assertEqual(self.player._next_index(), 1)
+
+    def test_it_is_not_reported_as_a_track_that_would_not_play(self):
+        self.look_ahead().gone.emit("yt:bbb")
+        self.assertEqual(self.failures, [])
+
+    def test_every_copy_of_it_goes(self):
+        """A song that is gone is gone wherever it sits in the queue, and
+        leaving the later ones would stop the listening again further on."""
+        from tests.test_audio import track
+
+        self.player._queue.append(track("bbb"))
+        self.player._rebuild_order()
+        self.look_ahead().gone.emit("yt:bbb")
+        self.assertEqual([entry["key"] for entry in self.player._queue],
+                         ["yt:aaa", "yt:ccc"])
+
+    def test_one_that_arrives_after_the_queue_moved_past_it_still_goes(self):
+        """The answer takes seconds and the queue can move in them. It is
+        looked up by key rather than by where it was."""
+        ahead = self.look_ahead()
+        self.player._at = 2
+        ahead.gone.emit("yt:bbb")
+        self.assertEqual([entry["key"] for entry in self.player._queue],
+                         ["yt:aaa", "yt:ccc"])
+        self.assertEqual(self.player.track["title"], "ccc")
+
+    def test_one_about_a_song_that_is_no_longer_in_the_queue_is_harmless(self):
+        ahead = self.look_ahead()
+        self.player._queue = [track_key for track_key in self.player._queue
+                              if track_key["key"] != "yt:bbb"]
+        self.player._rebuild_order()
+        ahead.gone.emit("yt:bbb")
+        self.assertEqual(self.said, ["yt:bbb"])
+        self.assertEqual(len(self.player._queue), 2)
+
+
 class AskingWhetherThereIsAnythingToPlay(unittest.TestCase):
     """The sentence a failed resolve comes back with is not enough to decide
     on, so a second question is asked.

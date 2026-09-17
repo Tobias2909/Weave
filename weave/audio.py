@@ -1022,6 +1022,7 @@ class AudioPlayer(QObject):
             return
         resolver = self._make_resolver(entry)
         resolver.resolved.connect(self._on_next_resolved)
+        resolver.gone.connect(self._on_next_gone)
         resolver.finished.connect(self._sweep_resolvers)
         self._next_resolvers.append(resolver)
         resolver.start()
@@ -1093,6 +1094,28 @@ class AudioPlayer(QObject):
         if entry.get("key") == key and self._appended is None and not self._idle:
             self._engine.append(address)
             self._appended = wanted
+
+    def _on_next_gone(self, key: str) -> None:
+        """A song with nothing to play, met while looking ahead.
+
+        This is how nearly all of them are met. A song is seldom pressed; it
+        comes round in the queue, and by then the question has already been
+        asked and answered, because looking ahead resolves it minutes early.
+        Nobody was listening to the answer, so nothing was handed to mpv for
+        it and the listening ended on the song before it with no word about
+        why, leaving the dead one in the queue and in the list it came from.
+
+        It leaves both exactly as a pressed one does. Every copy of it goes,
+        since a song that is gone is gone wherever it sits in the queue, and
+        removing one re-arranges what follows on its own.
+        """
+        self.gone.emit(key)
+        while True:
+            here = next((i for i, entry in enumerate(self._queue)
+                         if entry.get("key") == key), None)
+            if here is None:
+                return
+            self.removeFromQueue(here)
 
     def _sweep_resolvers(self) -> None:
         self._next_resolvers = [r for r in self._next_resolvers if r.isRunning()]
