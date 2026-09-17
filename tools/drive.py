@@ -414,6 +414,73 @@ class Smoke:
                    markup[:120])
         self.check("and the words around it cannot become markup themselves",
                    "&lt;" in markup and "<b" not in markup, markup[:120])
+
+        # ---- the picture filling the screen ------------------------------
+        #
+        # The same window made bigger, so what is asked here is that the page
+        # takes the whole of it and that everything which is not the picture
+        # gets out of the way. The surface itself is not asked about: a render
+        # context aborts under the offscreen platform, so video is verified on
+        # a real session and the shape of the page is verified here.
+        slot = find(window, "nowPlayingSlot")
+        toolbar_before = read(window, "cinema")
+        self.check("the window is not filled to begin with", not toolbar_before,
+                   str(toolbar_before))
+        narrow = read(slot, "width")
+        call(window, "enterCinema")
+        settle(0.6)
+        self.check("the page can fill the window", read(window, "cinema") is True,
+                   str(read(window, "cinema")))
+        # The width is the window's, whatever that is. Offscreen the screen is
+        # smaller than the window Weave opens at, so filling it makes the
+        # window NARROWER, and comparing against the width before says nothing.
+        self.check("and takes the whole width, over the sidebar",
+                   read(slot, "x") == 0
+                   and abs(read(slot, "width") - read(window, "width")) < 1,
+                   f"x {read(slot, 'x')} width {read(slot, 'width')} "
+                   f"window {read(window, 'width')} was {narrow}")
+        self.check("the toolbar gives its room back",
+                   not read(find(window, "toolBar"), "visible"),
+                   "toolbar still visible")
+        self.check("the words under the picture are away",
+                   not read(find(window, "nowPlayingWords"), "visible"),
+                   "words still drawn")
+        self.check("and the way back is offered",
+                   read(find(window, "nowPlayingLeaveFullscreen"), "visible") is True,
+                   str(read(find(window, "nowPlayingLeaveFullscreen"), "visible")))
+        bar = find(window, "miniPlayer")
+        self.check("the music bar stays over it",
+                   read(bar, "visible") is True and read(bar, "opacity") == 1,
+                   f"visible {read(bar, 'visible')} opacity {read(bar, 'opacity')}")
+
+        # Stillness takes the bar away and movement brings it back, which is
+        # the whole of what makes it a picture rather than a picture with a
+        # bar across it. Faded and switched off rather than hidden, so it keeps
+        # its height and cannot take a press meant for the picture behind it.
+        write(window, "chromeAwake", False)
+        settle(0.5)
+        self.check("and goes when nothing moves",
+                   read(bar, "opacity") == 0 and not read(bar, "enabled"),
+                   f"awake {read(window, 'chromeAwake')} "
+                   f"dimmed {read(bar, 'dimmed')} "
+                   f"opacity {read(bar, 'opacity')} enabled {read(bar, 'enabled')}")
+        self.check("without taking its room with it, so it does not jump back",
+                   read(bar, "height") > 0, f"height {read(bar, 'height')}")
+        call(window, "wakeChrome")
+        settle(0.5)
+        self.check("and comes back when something does",
+                   read(bar, "opacity") == 1 and read(bar, "enabled") is True,
+                   f"opacity {read(bar, 'opacity')} enabled {read(bar, 'enabled')}")
+
+        call(window, "leaveCinema")
+        settle(0.6)
+        self.check("leaving puts everything back",
+                   not read(window, "cinema") and read(slot, "x") > 0,
+                   f"cinema {read(window, 'cinema')} x {read(slot, 'x')}")
+        self.check("and the words with it",
+                   read(find(window, "nowPlayingWords"), "visible") is True,
+                   "words still away")
+
         bridge.closeNowPlaying()
         # The page has to be away before the queue goes, or the rows it is
         # still drawing are cancelled under it. And the view it lands on has

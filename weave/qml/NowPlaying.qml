@@ -94,7 +94,19 @@ Item {
             videoSurface.update()
     }
 
-    readonly property bool roomForColumn: width >= 1100
+    // Whether the window is filled by this page, and whether the bar and the
+    // corner button are up. Both are decided by the window and handed down: a
+    // component in its own file cannot see an id declared in the one that
+    // uses it.
+    property bool cinema: false
+    property bool chromeAwake: true
+    // Asked of the window, which owns the shape. The page never calls
+    // showFullScreen itself.
+    signal fullscreenToggled()
+
+    // Nothing beside the picture while the screen is filled. The point of it
+    // is the picture, and the tabs are where the picture would be.
+    readonly property bool roomForColumn: width >= 1100 && !page.cinema
     property string tab: "next"
 
     // Asked every time the tab is opened. Whether that costs a request is not
@@ -130,7 +142,9 @@ Item {
 
     RowLayout {
         anchors.fill: parent
-        anchors.margins: 16
+        // Right to the edges when the screen is filled. A margin there is a
+        // frame drawn around a picture that was asked to be the whole screen.
+        anchors.margins: page.cinema ? 0 : 16
         spacing: 16
 
         // ---- the picture and what is known about it ----------------------
@@ -146,8 +160,13 @@ Item {
             Column {
                 id: middle
                 // Level with the row of tabs beside it rather than floating in
-                // the middle of the space under them.
-                anchors.top: parent.top
+                // the middle of the space under them. With the screen filled
+                // there are no tabs to be level with and nothing under the
+                // picture, so it sits in the middle of the screen instead of
+                // at the top of it with a black band below.
+                anchors.top: page.cinema ? undefined : parent.top
+                anchors.verticalCenter: page.cinema ? parent.verticalCenter
+                                                    : undefined
                 anchors.horizontalCenter: parent.horizontalCenter
                 width: frame.width
                 spacing: 12
@@ -163,8 +182,11 @@ Item {
                 Item {
                     id: frame
                     objectName: "nowPlayingFrame"
-                    readonly property real spare: stage.height - words.height
-                                                  - middle.spacing
+                    // What is left once the words have taken their room, and
+                    // the whole of it when there are no words.
+                    readonly property real spare: words.visible
+                        ? stage.height - words.height - middle.spacing
+                        : stage.height
                     readonly property real room: Math.min(stage.width,
                                                           Math.max(90, spare) * 16 / 9)
                     width: Math.max(160, room)
@@ -247,6 +269,22 @@ Item {
                         anchors.fill: parent
                         acceptedButtons: Qt.LeftButton | Qt.RightButton
                         onClicked: Audio.toggle()
+                        // Goes away with the bar. A pointer left sitting on a
+                        // picture filling the screen is the one thing left
+                        // saying this is a window.
+                        cursorShape: page.cinema && !page.chromeAwake
+                                     ? Qt.BlankCursor : Qt.ArrowCursor
+
+                        // The gesture every player uses for it. The first
+                        // press of the two has already stopped the music by
+                        // the time this arrives, so it is started again here:
+                        // a double press means the screen and nothing else,
+                        // and Qt has no way to know the second press is
+                        // coming until it has been made.
+                        onDoubleClicked: {
+                            Audio.toggle()
+                            page.fullscreenToggled()
+                        }
 
                         // A notch is five, the same as the bar's own slider,
                         // so the two do not disagree about what a notch means.
@@ -272,6 +310,9 @@ Item {
                 // ---- the words under the picture -------------------------
                 Column {
                     id: words
+                    objectName: "nowPlayingWords"
+                    // Nothing under the picture while the screen is filled.
+                    visible: !page.cinema
                     width: parent.width
                     spacing: 2
 
@@ -331,7 +372,8 @@ Item {
 
                                 Label {
                                     objectName: "nowPlayingTitle"
-                                    width: parent.width - audioOnly.width - titleRow.spacing
+                                    width: parent.width - audioOnly.width
+                                           - fillScreen.width - titleRow.spacing * 2
                                     text: Audio.track.title ? Audio.track.title : ""
                                     color: Theme.colors.text
                                     font.pixelSize: 19
@@ -352,6 +394,17 @@ Item {
                                     text: "Audio only"
                                     accent: Audio.audioOnly
                                     onClicked: Audio.setAudioOnly(!Audio.audioOnly)
+                                }
+
+                                // The way in that can be found by looking. The
+                                // ways out are the corner button, Escape, F
+                                // and another double press, and this row is
+                                // not drawn while the screen is filled.
+                                FlatButton {
+                                    id: fillScreen
+                                    objectName: "nowPlayingFullscreen"
+                                    text: "Fullscreen"
+                                    onClicked: page.fullscreenToggled()
                                 }
                             }
 
@@ -852,6 +905,24 @@ Item {
                     }
                 }
             }
+        }
+    }
+
+    // The way back, in the corner, up and away with the bar at the other end
+    // of the screen. Last in the file and with a z of its own, so it is over
+    // the picture whatever else is drawn: the picture is the whole page here.
+    FlatButton {
+        objectName: "nowPlayingLeaveFullscreen"
+        z: 5
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.margins: 16
+        text: "Leave fullscreen"
+        visible: opacity > 0
+        opacity: page.cinema && page.chromeAwake ? 1 : 0
+        onClicked: page.fullscreenToggled()
+        Behavior on opacity {
+            NumberAnimation { duration: 180; easing.type: Easing.InOutQuad }
         }
     }
 }

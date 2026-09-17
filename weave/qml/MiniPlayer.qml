@@ -8,6 +8,18 @@ Rectangle {
     id: bar
     visible: Audio.hasQueue
     height: visible ? 64 : 0
+
+    // Out of sight while the picture fills the screen and nothing has moved
+    // for a while. Faded and switched off rather than hidden: hiding takes
+    // its height with it, and the bar coming back would jump into place
+    // instead of arriving. Switched off so that a bar nobody can see cannot
+    // take a press meant for the picture behind it.
+    property bool dimmed: false
+    opacity: dimmed ? 0 : 1
+    enabled: !dimmed
+    Behavior on opacity {
+        NumberAnimation { duration: 180; easing.type: Easing.InOutQuad }
+    }
     // Read through Qt.color, since a theme colour is a string and asking a
     // string for r, g or b gives undefined, which Qt.rgba renders as black.
     readonly property color panel: Qt.color(Theme.colors.surface)

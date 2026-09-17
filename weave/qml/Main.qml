@@ -110,6 +110,91 @@ ApplicationWindow {
                                      && visibility !== Window.FullScreen
                                      && visibility !== Window.Minimized
 
+    // ---- the picture, filling the screen ---------------------------------
+    //
+    // The SAME window, made bigger. Not a second one: a fullscreen Window of
+    // its own is a new scene with a new graphics context, which destroys the
+    // video surface's renderer and asks mpv for a second render context, and
+    // mpv refuses a second one. Here the surface never moves and never hides,
+    // and the whole cost at the toggle is one framebuffer built at the new
+    // size, which is what an ordinary window resize already does.
+    //
+    // Nothing is hidden to make room either. The page is over every view
+    // already, so filling the window covers the sidebar, the live bar and the
+    // banner without touching any of them. Only the toolbar is outside the
+    // window's content and has to be told, and only the bar stays over the
+    // page, which is what it is for.
+    readonly property bool cinema: App.viewKind === "nowplaying"
+                                   && visibility === Window.FullScreen
+
+    // What to go back to. A window that was maximised before must not come
+    // back merely normal, and the compositor does not remember it for us.
+    property int shapeBefore: Window.Windowed
+
+    function enterCinema() {
+        if (App.viewKind !== "nowplaying" || root.visibility === Window.FullScreen)
+            return
+        root.shapeBefore = root.visibility
+        root.showFullScreen()
+    }
+
+    function leaveCinema() {
+        if (root.visibility !== Window.FullScreen)
+            return
+        if (root.shapeBefore === Window.Maximized)
+            root.showMaximized()
+        else
+            root.showNormal()
+    }
+
+    function toggleCinema() {
+        if (root.visibility === Window.FullScreen)
+            root.leaveCinema()
+        else
+            root.enterCinema()
+    }
+
+    // Leaving the page leaves the screen. Otherwise Escape would close the
+    // page behind a window still filling the screen with the feed in it.
+    onCinemaChanged: root.wakeChrome()
+    Connections {
+        target: App
+        // viewKind is reported by viewChanged, which every view change raises.
+        function onViewChanged() {
+            if (App.viewKind !== "nowplaying")
+                root.leaveCinema()
+        }
+    }
+
+    // Whether the bar and the corner button are up. Movement brings them
+    // back and stillness takes them away again, which is what every player
+    // does, and what makes a picture filling the screen a picture rather than
+    // a picture with a bar across it.
+    property bool chromeAwake: true
+
+    function wakeChrome() {
+        root.chromeAwake = true
+        if (root.cinema)
+            chromeNap.restart()
+        else
+            chromeNap.stop()
+    }
+
+    Timer {
+        id: chromeNap
+        objectName: "chromeNap"
+        interval: 2600
+        // Never while the pointer is resting on the bar itself. Taking it
+        // away from under the hand is the one time it is certainly wanted.
+        running: false
+        onTriggered: {
+            if (barHover.hovered)
+                chromeNap.restart()
+            else
+                root.chromeAwake = false
+        }
+    }
+
     // The shape to come back to. The geometry is stored on the way out by
     // reading the window, so a window closed while maximised would be
     // remembered as the size of the screen and could never be got back to its
@@ -196,9 +281,18 @@ ApplicationWindow {
         target: root
         parent: Overlay.overlay
         anchors.fill: parent
+        // A screen has no edges to take hold of, and these sit over
+        // everything, so they would take the presses meant for the picture.
+        visible: !root.cinema
     }
 
     header: ToolBar {
+        id: toolBar
+        objectName: "toolBar"
+        // The one piece of chrome the page cannot simply cover, because a
+        // window's header is not inside its content. Hidden gives the room
+        // back rather than leaving a band of nothing.
+        visible: !root.cinema
         background: Rectangle {
             color: root.panelColour(Theme.colors.surface)
             Rectangle {
@@ -469,6 +563,22 @@ ApplicationWindow {
         // nothing: the banner is at the other end of the window and the
         // notices and the menus are higher still.
         z: 4
+        // The same bar, over the picture, when the picture fills the screen.
+        // Not a second one built for the occasion: everything wanted there is
+        // already here, the timeline, the volume and the queue among it, and
+        // two of them would have drifted apart the first time either grew.
+        //
+        // Asked for by name rather than by writing this item's visible from
+        // out here. Whether the bar is there at all is the bar's own rule --
+        // it is there once something is queued -- and setting visible here
+        // replaced that rule outright, which put a bar across the bottom of
+        // every view with nothing playing.
+        dimmed: root.cinema && !root.chromeAwake
+
+        // Keeps itself up while the pointer is on it. Asked by the timer
+        // rather than acted on here, so resting on the bar and moving over it
+        // come to the same thing.
+        HoverHandler { id: barHover }
     }
 
     // ---- sidebar ---------------------------------------------------------
@@ -949,11 +1059,37 @@ ApplicationWindow {
         // to the page's own visible deadlocks the two of them, because a Qt
         // Quick child of an invisible parent reports itself invisible as well,
         // so each one held the other down and the page never appeared.
-        anchors.left: sidebar.right
+        // The whole window when the screen is filled, which is what covers
+        // the sidebar, the live bar and the banner without any of them being
+        // told anything. The bar is the one thing left over it, on purpose.
+        anchors.left: root.cinema ? parent.left : sidebar.right
         anchors.right: parent.right
-        anchors.top: liveBar.visible ? liveBar.bottom : parent.top
-        anchors.topMargin: liveBar.visible ? 0 : banner.height
-        anchors.bottom: miniPlayer.top
+        anchors.top: root.cinema || !liveBar.visible ? parent.top : liveBar.bottom
+        anchors.topMargin: root.cinema || liveBar.visible ? 0 : banner.height
+        anchors.bottom: root.cinema ? parent.bottom : miniPlayer.top
+
+        // Movement anywhere over the picture brings the bar back. A handler
+        // rather than a covering area, because an area over the whole page
+        // would take the presses that belong to the picture under it.
+        //
+        // Movement means the POINTER moved, which is not what the signal
+        // means. It is raised whenever anything about the point changes, and
+        // the point is reported relative to this item as well, so a layout
+        // settling under a pointer that has not stirred raises it too and the
+        // bar would never go away. The place on the screen is the only part
+        // of it that says the hand moved.
+        HoverHandler {
+            id: pointerWatch
+            enabled: root.cinema
+            property point wasAt: Qt.point(-1, -1)
+            onPointChanged: {
+                if (point.scenePosition.x === pointerWatch.wasAt.x
+                        && point.scenePosition.y === pointerWatch.wasAt.y)
+                    return
+                pointerWatch.wasAt = point.scenePosition
+                root.wakeChrome()
+            }
+        }
 
         // The panel is hidden while this is open, so the page takes the width
         // rather than leaving a band for something that is not drawn.
@@ -961,6 +1097,11 @@ ApplicationWindow {
             id: nowPlayingPage
             objectName: "nowPlayingPage"
             anchors.fill: parent
+            // Handed down. A component in its own file cannot see an id
+            // declared in this one.
+            cinema: root.cinema
+            chromeAwake: root.chromeAwake
+            onFullscreenToggled: root.toggleCinema()
         }
     }
 
@@ -970,7 +1111,23 @@ ApplicationWindow {
     Shortcut {
         sequence: "Escape"
         enabled: App.viewKind === "nowplaying"
-        onActivated: App.closeNowPlaying()
+        // One step at a time. Escape out of a filled screen straight out of
+        // the page would leave a window still filling the screen with the
+        // feed in it.
+        onActivated: {
+            if (root.cinema)
+                root.leaveCinema()
+            else
+                App.closeNowPlaying()
+        }
+    }
+
+    // The key every player uses for it, and the one somebody tries first.
+    // Not while something is being typed into, where an f is an f.
+    Shortcut {
+        sequence: "F"
+        enabled: App.viewKind === "nowplaying" && !root.typingSomewhere
+        onActivated: root.toggleCinema()
     }
 
     // Whether the focus is in something being typed into. Asked of the item
