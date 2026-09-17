@@ -877,6 +877,76 @@ class Smoke:
         settle(0.3)
         bridge._set_notice("")
 
+    def panel_scale(self, bridge, window) -> None:
+        """The panel is dragged wider to read it, so what is in it grows.
+
+        A wider panel that kept eleven pixel text only fitted more of the same
+        squint. The narrowest it goes is the size it has always been, on
+        purpose: that size was right for that width, and only the widening
+        needed an answer.
+        """
+        step("the panel grows with the panel")
+        was = read(bridge, "panelWidth")
+        bridge.selectGroup(-1)
+        settle(0.4)
+        key = bridge._model.key_at(0)
+        bridge.openDetail(key)
+        # Settled first. Opening one asks for its comments, that ask fails
+        # offline, and the failure empties the list, so comments put in before
+        # it answered would be thrown away again.
+        settle(0.8)
+        # Comments of this shape rather than real ones, since what is measured
+        # is how big they are drawn and the walk is offline.
+        bridge._detail_comments = [{
+            "author": "Somebody", "text": "A comment long enough to wrap over a line.",
+            "when": "2 days ago", "likes": 12, "avatar": "", "pinned": False,
+            "byUploader": False, "replies": [],
+        }]
+        bridge._detail_loading = False
+        bridge.detailChanged.emit()
+        settle(0.7)
+
+        panel = find(window, "detailPanel")
+        bridge.setPanelWidth(300)
+        settle(0.5)
+        title = find(window, "detailTitle")
+        # A Repeater's delegates are not QObject children of anything, so the
+        # comment has to be looked for in the visual tree.
+        words = item_named(window.contentItem(), "commentText")
+        self.check("the panel draws a title and a comment",
+                   title is not None and words is not None,
+                   f"title {'yes' if title else 'no'}, comment {'yes' if words else 'no'}, "
+                   f"open {read(bridge, 'detailOpen')}, "
+                   f"comments {len(read(bridge, 'detailComments'))}")
+        if title is None or words is None:
+            bridge.setPanelWidth(was)
+            bridge.closeDetail()
+            return
+        narrow_title = float(read(title, "font.pixelSize"))
+        narrow_words = float(read(words, "font.pixelSize"))
+        self.check("at its narrowest it is the size it always was",
+                   narrow_title == 15 and narrow_words == 12,
+                   f"title {narrow_title:.0f} comment {narrow_words:.0f}")
+
+        bridge.setPanelWidth(560)
+        settle(0.6)
+        wide_title = float(read(title, "font.pixelSize"))
+        wide_words = float(read(words, "font.pixelSize"))
+        self.check("and pulled wide everything in it is bigger",
+                   wide_title > narrow_title and wide_words > narrow_words,
+                   f"title {narrow_title:.0f} to {wide_title:.0f}, "
+                   f"comment {narrow_words:.0f} to {wide_words:.0f}")
+        self.check("but not a different application, a third bigger at most",
+                   wide_words <= narrow_words * 1.36 and wide_title <= narrow_title * 1.36,
+                   f"title x{wide_title / narrow_title:.2f} "
+                   f"comment x{wide_words / narrow_words:.2f}")
+        self.check("and the panel itself is as wide as it was asked to be",
+                   float(read(panel, "width")) == 560, f"{read(panel, 'width'):.0f}")
+
+        bridge.setPanelWidth(was)
+        bridge.closeDetail()
+        settle(0.4)
+
     def announcements(self, bridge, window) -> None:
         """A stream that has not begun says when it will, in the panel as well.
 
@@ -2363,6 +2433,7 @@ class Smoke:
                        str(read(find(window, name), "text")))
 
         self.starting(bridge, window)
+        self.panel_scale(bridge, window)
         self.updates(bridge, window)
         self.announcements(bridge, window)
         self.members(bridge, window)

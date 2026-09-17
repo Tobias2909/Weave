@@ -15,6 +15,30 @@ Rectangle {
     // looked plausible. On a light one the whole bar was black with dark text
     // on it.
     readonly property color ground: Qt.color(Theme.colors.surface)
+
+    // How much bigger everything in here is drawn than it is at the narrowest
+    // the panel goes. The panel is dragged wider to read the comments, and a
+    // wider panel that keeps eleven pixel text only fits more of the same
+    // squint, so the words grow with the room. Narrow is the size it has
+    // always been, deliberately: what is there now is right for that width and
+    // only the widening needed an answer.
+    //
+    // The ceiling is a third bigger rather than the full width ratio. The
+    // panel can be dragged to nearly twice its narrowest, and text at twice
+    // the size reads as a different application rather than as the same one
+    // with more room.
+    readonly property int narrowest: 300
+    readonly property int widest: 560
+    readonly property real biggest: 1.35
+    readonly property real textScale: {
+        var along = (Math.max(narrowest, Math.min(widest, width)) - narrowest)
+                    / (widest - narrowest)
+        return 1 + along * (biggest - 1)
+    }
+
+    // Rounded once here rather than at every use, so two labels asked for the
+    // same size can never land a pixel apart.
+    function sized(pixels) { return Math.round(pixels * panel.textScale) }
     color: Qt.rgba(ground.r, ground.g, ground.b,
                    // A pale bar keeps more of itself, or the gradient behind
                    // it shows through and the dark text on it stops being
@@ -58,7 +82,7 @@ Rectangle {
         Label {
             text: "Now playing"
             color: Theme.colors.textMuted
-            font.pixelSize: 11
+            font.pixelSize: panel.sized(11)
             font.letterSpacing: 1.1
             font.weight: Font.DemiBold
         }
@@ -98,10 +122,11 @@ Rectangle {
             }
 
             Label {
+                objectName: "detailTitle"
                 width: parent.width
                 text: App.detail.title ? App.detail.title : ""
                 color: Theme.colors.text
-                font.pixelSize: 15
+                font.pixelSize: panel.sized(15)
                 font.weight: Font.DemiBold
                 wrapMode: Text.Wrap
             }
@@ -114,8 +139,8 @@ Rectangle {
                 TapHandler { onTapped: App.openChannel(App.detail.channelKey) }
 
                 RoundedImage {
-                    width: 28
-                    height: 28
+                    width: panel.sized(28)
+                    height: panel.sized(28)
                     circle: true
                     visible: App.detail.channelAvatar !== ""
                     source: App.detail.channelAvatar ? App.detail.channelAvatar : ""
@@ -125,10 +150,10 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     text: App.detail.channelTitle ? App.detail.channelTitle : ""
                     color: channelHover.hovered ? Theme.colors.text : Theme.colors.textMuted
-                    font.pixelSize: 13
+                    font.pixelSize: panel.sized(13)
                     font.underline: channelHover.hovered
                     elide: Text.ElideRight
-                    width: Math.max(0, parent.width - 36)
+                    width: Math.max(0, parent.width - panel.sized(28) - 8)
                 }
             }
 
@@ -158,7 +183,7 @@ Rectangle {
                         visible: value !== ""
                         text: modelData.label === "" ? value : value + " " + modelData.label
                         color: Theme.colors.textMuted
-                        font.pixelSize: 11
+                        font.pixelSize: panel.sized(11)
                     }
                 }
             }
@@ -168,7 +193,7 @@ Rectangle {
             Label {
                 text: App.detailLoading ? "Loading comments" : "Comments"
                 color: Theme.colors.textMuted
-                font.pixelSize: 11
+                font.pixelSize: panel.sized(11)
                 font.letterSpacing: 1.1
                 font.weight: Font.DemiBold
             }
@@ -178,7 +203,7 @@ Rectangle {
                 visible: !App.detailLoading && App.detailComments.length === 0
                 text: "No comments to show."
                 color: Theme.colors.textMuted
-                font.pixelSize: 12
+                font.pixelSize: panel.sized(12)
             }
 
             Repeater {
@@ -187,6 +212,9 @@ Rectangle {
                     required property var modelData
                     width: body.width
                     comment: modelData
+                    // Handed down rather than reached for. A component in
+                    // another file cannot see an id declared in this one.
+                    textScale: panel.textScale
                 }
             }
 
