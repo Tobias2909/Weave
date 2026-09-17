@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 44
+SCHEMA_VERSION = 45
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -65,6 +65,12 @@ NOT_A_SHORT = ("(v.is_short = 0 OR (v.is_short IS NULL "
 # watched, and deleting the row would quietly take it out of the one and lose
 # the other.
 STILL_THERE = "v.unavailable_at IS NULL"
+
+# A video somebody took out of sight by hand. Kept out of everything that is a
+# list of what there is to watch, and left alone in a box, because a box was
+# picked video by video and quietly dropping one out of a hand built list is a
+# different thing from tidying a feed.
+NOT_HIDDEN = "v.key NOT IN (SELECT video_key FROM hidden_videos)"
 
 # The channel a video points at when nothing knows which channel it came from.
 # A history row carries no channel whatsoever, measured, and a video row has to
@@ -275,6 +281,23 @@ CREATE TABLE IF NOT EXISTS watched (
     watched_at INTEGER NOT NULL,
     progress   REAL,                           -- fraction of the duration seen
     source     TEXT NOT NULL                   -- mpv, manual or seed
+);
+
+-- A video taken out of sight by hand. A card can spoil something or simply be
+-- unpleasant to keep meeting, and the answer to that is to stop drawing it
+-- rather than to pretend it was never published.
+--
+-- Its own table, addressed by key and pointing at nothing, because what is
+-- hidden is not always a video this database holds: a suggestion or a search
+-- result belongs to a channel nobody follows and is never in `videos` at all.
+-- The title and the picture are kept alongside for exactly the same reason,
+-- so the settings page can show what it is offering to bring back even when
+-- there is no row for it anywhere else.
+CREATE TABLE IF NOT EXISTS hidden_videos (
+    video_key     TEXT PRIMARY KEY,
+    title         TEXT NOT NULL DEFAULT '',
+    thumbnail_url TEXT,
+    hidden_at     INTEGER NOT NULL
 );
 """
 
@@ -1259,7 +1282,8 @@ class Database:
         found["video_count"] = int(self.conn.execute(
             "SELECT COUNT(*) FROM videos v "
             "JOIN channels c ON c.key = v.channel_key "
-            f"WHERE v.channel_key=? AND {NOT_A_SHORT}", (key,)).fetchone()[0])
+            f"WHERE v.channel_key=? AND {NOT_A_SHORT} AND {NOT_HIDDEN}",
+            (key,)).fetchone()[0])
         return found
 
     def channel_details_are_stale(self, key: str, interval_s: int = 604800) -> bool:
@@ -2061,7 +2085,8 @@ class Database:
                       JOIN channels c ON c.key = v.channel_key
                       LEFT JOIN watched w ON w.video_key = v.key
                      WHERE m.group_id = g.id AND w.video_key IS NULL
-                       AND {NOT_A_SHORT} AND {STILL_THERE}) AS unwatched
+                       AND {NOT_A_SHORT} AND {STILL_THERE}
+                       AND {NOT_HIDDEN}) AS unwatched
             FROM groups g
             ORDER BY g.position, g.id
             """
@@ -2596,6 +2621,11 @@ class Database:
                                     AND named.platform = 'youtube'
             LEFT JOIN watched w ON w.video_key = 'yt:' || r.ext_id
             WHERE r.kind = ?
+              -- Taken out of sight by hand, the same as in the feed. A
+              -- suggestion is where he found one worth hiding, and these rows
+              -- are addressed by their id rather than through videos, since
+              -- most of them belong to channels nobody follows.
+              AND 'yt:' || r.ext_id NOT IN (SELECT video_key FROM hidden_videos)
             ORDER BY r.position
             LIMIT ?
             """,
@@ -2706,11 +2736,18 @@ class Database:
         marks = ",".join("?" * len(keys))
         watched = {row[0] for row in self.conn.execute(
             f"SELECT video_key FROM watched WHERE video_key IN ({marks})", keys)}
+        # Taken out of sight by hand. A search answers from the source rather
+        # than from any table here, so this is the only place such a row can be
+        # left out, and one worth hiding is worth hiding wherever it turns up.
+        hidden = {row[0] for row in self.conn.execute(
+            f"SELECT video_key FROM hidden_videos WHERE video_key IN ({marks})", keys)}
 
         out = []
         for row in rows:
-            channel = known.get(row.get("channel_ext_id") or "")
             key = f"yt:{row['ext_id']}"
+            if key in hidden:
+                continue
+            channel = known.get(row.get("channel_ext_id") or "")
             channel_ext_id = row.get("channel_ext_id") or ""
             out.append({
                 "key": key, "platform": "youtube", "ext_id": row["ext_id"],
@@ -3132,7 +3169,7 @@ class Database:
             "SELECT COUNT(*) FROM videos v "
             "JOIN channels c ON c.key = v.channel_key AND c.tracked = 1 AND c.in_all = 1 "
             "LEFT JOIN watched w ON w.video_key = v.key "
-            f"WHERE w.video_key IS NULL AND {NOT_A_SHORT}"
+            f"WHERE w.video_key IS NULL AND {NOT_A_SHORT} AND {NOT_HIDDEN}"
         ).fetchone()[0])
 
     # What tells a stream from a video here. A stream that has ended keeps its
@@ -3173,6 +3210,11 @@ class Database:
         # that carries Shorts, in which case it waits for the kind test. See
         # NOT_A_SHORT.
         where = [NOT_A_SHORT, STILL_THERE]
+        # Out of sight by hand, which is a different thing from a box. A box
+        # was picked video by video, so what is in one stays in it and can be
+        # found there again.
+        if box_id is None:
+            where.append(NOT_HIDDEN)
         # What is behind a membership has a half of its own on the channel
         # page, and is left out everywhere else by default, because for almost
         # every channel it cannot be opened and rows nobody can act on are
@@ -3243,6 +3285,70 @@ class Database:
             """,
             args,
         ))
+
+    # ---- hidden --------------------------------------------------------
+
+    def hide_video(self, video_key: str, title: str = "",
+                   thumbnail_url: str | None = None) -> None:
+        """Take one video out of sight.
+
+        The title and the picture are kept here rather than looked up later,
+        because what is hidden is not always a video this database holds. A
+        suggestion or a search result belongs to a channel nobody follows, and
+        the next read of that list drops the row entirely, so without a copy
+        there would be nothing to put on the page that offers to bring it back.
+        """
+        with self.conn as conn:
+            conn.execute(
+                "INSERT INTO hidden_videos(video_key, title, thumbnail_url, hidden_at) "
+                "VALUES(?,?,?,?) ON CONFLICT(video_key) DO UPDATE SET "
+                "  title=excluded.title, thumbnail_url=excluded.thumbnail_url, "
+                "  hidden_at=excluded.hidden_at",
+                (video_key, title or "", thumbnail_url, int(time.time())))
+
+    def unhide_video(self, video_key: str) -> bool:
+        """Put one back. Answers whether it was hidden at all."""
+        with self.conn as conn:
+            before = conn.total_changes
+            conn.execute("DELETE FROM hidden_videos WHERE video_key=?", (video_key,))
+            return conn.total_changes > before
+
+    def unhide_all(self) -> int:
+        """Put every one of them back, and say how many that was."""
+        with self.conn as conn:
+            before = conn.total_changes
+            conn.execute("DELETE FROM hidden_videos")
+            return conn.total_changes - before
+
+    def is_hidden(self, video_key: str) -> bool:
+        return self.conn.execute(
+            "SELECT 1 FROM hidden_videos WHERE video_key=?", (video_key,)).fetchone() is not None
+
+    def hidden_videos(self, limit: int = 500) -> list[dict]:
+        """What is out of sight, newest first.
+
+        The stored title and picture are what is shown, with anything the rest
+        of the database happens to know preferred over them, since a row in
+        `videos` is kept up to date and this copy is a moment.
+        """
+        return [dict(row) for row in self.conn.execute(
+            """
+            SELECT h.video_key                                  AS key,
+                   COALESCE(v.title, h.title)                   AS title,
+                   COALESCE(v.thumbnail_url, h.thumbnail_url)   AS thumbnail_url,
+                   COALESCE(c.title, '')                        AS channel_title,
+                   h.hidden_at                                  AS hidden_at
+            FROM hidden_videos h
+            LEFT JOIN videos v ON v.key = h.video_key
+            LEFT JOIN channels c ON c.key = v.channel_key
+            -- Newest first, and the one hidden last wins a second they share,
+            -- which two in a row always do.
+            ORDER BY h.hidden_at DESC, h.rowid DESC
+            LIMIT ?
+            """, (limit,))]
+
+    def hidden_count(self) -> int:
+        return int(self.conn.execute("SELECT COUNT(*) FROM hidden_videos").fetchone()[0])
 
     # ---- watched ---------------------------------------------------------
 

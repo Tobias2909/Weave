@@ -217,6 +217,7 @@ class Bridge(QObject):
     searchRestored = Signal(str)
     checksChanged = Signal()
     cacheChanged = Signal()
+    hiddenChanged = Signal()
     videoQualityChanged = Signal()
     cookiesChanged = Signal()
     startingChanged = Signal()
@@ -1792,6 +1793,66 @@ class Bridge(QObject):
         if hidden and self._view_kind == PLAYLIST and self._view_playlist == playlist_id:
             self._set_view(ALL, -1)
         self.playlistsChanged.emit()
+
+    @Slot(str)
+    def hideVideo(self, key: str) -> None:
+        """Take a card out of sight, wherever it was pressed.
+
+        A card can spoil something, or simply be unpleasant to keep meeting,
+        and the answer to that is to stop drawing it. It is not a deletion:
+        the video keeps its place in any box it was put in by hand, keeps its
+        watched mark, and the settings page offers every one of them back.
+
+        The title and the picture go with it, because a suggestion or a search
+        result is not a video this database holds and the next read of that
+        list drops the row, which would leave nothing to offer back.
+        """
+        if not key:
+            return
+        row = self._model.row_for_key(key) or {}
+        # The address without the wrapper the window reads it through. What is
+        # stored is stored plain, or wrapping it again on the way back out
+        # would throw it away.
+        picture = plain_source(str(row.get("thumbnail") or ""))
+        self._db.hide_video(key, str(row.get("title") or ""), picture or None)
+        self._set_notice("Hidden. Settings has them all, to bring back.",
+                         clear_after_s=6)
+        self._set_status(f"hid {row.get('title', key)}")
+        self.hiddenChanged.emit()
+        self.reload()
+        self.groupsChanged.emit()
+
+    @Slot(str)
+    def unhideVideo(self, key: str) -> None:
+        """Put one back, from the settings page."""
+        if not self._db.unhide_video(key):
+            return
+        self._set_status("brought a video back")
+        self.hiddenChanged.emit()
+        self.reload()
+        self.groupsChanged.emit()
+
+    @Slot()
+    def unhideEverything(self) -> None:
+        brought = self._db.unhide_all()
+        if not brought:
+            return
+        self._set_notice(f"Brought back {brought} "
+                         f"{'video' if brought == 1 else 'videos'}.", clear_after_s=5)
+        self.hiddenChanged.emit()
+        self.reload()
+        self.groupsChanged.emit()
+
+    def _get_hidden(self) -> list:
+        return [{
+            "key": row["key"],
+            "title": row["title"] or row["key"],
+            "channelTitle": row["channel_title"] or "",
+            "thumbnail": qml_source(row["thumbnail_url"] or ""),
+        } for row in self._db.hidden_videos()]
+
+    hiddenVideos = Property("QVariantList", _get_hidden, notify=hiddenChanged)
+    hiddenCount = Property(int, lambda self: self._db.hidden_count(), notify=hiddenChanged)
 
     @Slot()
     def refreshPlaylists(self) -> None:

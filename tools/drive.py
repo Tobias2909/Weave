@@ -789,6 +789,94 @@ class Smoke:
         bridge.selectGroup(-1)
         settle(0.5)
 
+    def hiding(self, bridge, window) -> None:
+        """Taking a card out of sight, and getting it back.
+
+        Hidden is not deleted. What is checked is that the card leaves the
+        feed, that the settings page offers it back by name, and that bringing
+        it back puts it where it was. The press itself is made through the
+        bridge rather than through the menu, since the offscreen platform
+        delivers no clicks, but the entry is read off the real menu so that an
+        entry nobody can reach would still be caught.
+        """
+        from weave import paths
+        from weave.db import Database
+
+        step("hiding a video")
+        bridge.selectGroup(-1)
+        settle(0.5)
+        grid = find(window, "grid")
+        call(grid, "forceLayout")
+        settle(0.2)
+        before = read(grid, "count")
+
+        menu = find(window, "videoMenu")
+        menu.open()
+        settle(0.3)
+        labels = [text.strip() for text, _ in menu_entries(menu)]
+        self.check("the video menu offers to hide it",
+                   "Hide this video" in labels, ", ".join(labels))
+        menu.close()
+        settle(0.2)
+
+        key = bridge._model.key_at(0)
+        # A seeded video has no picture, and what is kept about a hidden one
+        # is worth checking. An address that never answers is how pictures are
+        # seeded everywhere in this walk: geometry is what is being measured.
+        db = Database(paths.DB_FILE)
+        with db.conn as conn:
+            conn.execute("UPDATE videos SET thumbnail_url=? WHERE key=?",
+                         ("https://pictures.invalid/hidden.jpg", key))
+        db.close()
+        bridge.reload()
+        settle(0.4)
+        bridge.hideVideo(key)
+        settle(0.6)
+        call(grid, "forceLayout")
+        settle(0.2)
+        self.check("hiding one takes it out of the feed",
+                   read(grid, "count") == before - 1 and bridge._model.row_for_key(key) is None,
+                   f"{read(grid, 'count')} against {before}")
+        self.check("and the window says where it went",
+                   "Settings" in str(read(bridge, "notice")), str(read(bridge, "notice")))
+
+        bridge.showSettings()
+        settle(0.7)
+        said = find(window, "hiddenCount")
+        listed = find(window, "hiddenVideos")
+        self.check("the settings page counts what is hidden",
+                   said is not None and "1 video is hidden" in str(read(said, "text")),
+                   str(read(said, "text")) if said is not None else "no line")
+        self.check("and lists it",
+                   listed is not None and read(listed, "visible") is True
+                   and read(listed, "count") == 1,
+                   f"count {read(listed, 'count')}" if listed is not None else "no list")
+        self.check("with the picture it had, stored plain",
+                   str(read(bridge, "hiddenVideos")[0]["thumbnail"]).endswith(
+                       "https://pictures.invalid/hidden.jpg"),
+                   str(read(bridge, "hiddenVideos")[0]["thumbnail"]))
+
+        bridge.unhideVideo(key)
+        settle(0.5)
+        self.check("bringing it back empties the list",
+                   read(bridge, "hiddenCount") == 0,
+                   f"{read(bridge, 'hiddenCount')} left")
+        bridge.selectGroup(-1)
+        settle(0.6)
+        call(grid, "forceLayout")
+        settle(0.2)
+        self.check("and puts the card back where it was",
+                   read(grid, "count") == before
+                   and bridge._model.row_for_key(key) is not None,
+                   f"{read(grid, 'count')} against {before}")
+        db = Database(paths.DB_FILE)
+        with db.conn as conn:
+            conn.execute("UPDATE videos SET thumbnail_url=NULL WHERE key=?", (key,))
+        db.close()
+        bridge.reload()
+        settle(0.3)
+        bridge._set_notice("")
+
     def announcements(self, bridge, window) -> None:
         """A stream that has not begun says when it will, in the panel as well.
 
@@ -2288,8 +2376,12 @@ class Smoke:
         self.boxes(bridge, window)
         self.wizard(bridge, window)
         self.scrolling(bridge, window)
-        # Last, because it puts a video into the feed and takes it out again,
-        # and every step above that counts the feed would count it.
+        # Last, these three, because each puts a row into the feed or takes one
+        # out and every step above that counts the feed would count it. The
+        # scrolling step is the strict one: it measures where the grid sits
+        # after a view change, and a model that was rebuilt rather than reset
+        # earlier in the walk leaves it somewhere else.
+        self.hiding(bridge, window)
         self.a_stream_that_ended(bridge, window)
 
         if self.shot:

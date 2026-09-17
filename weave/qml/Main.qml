@@ -1634,6 +1634,14 @@ ApplicationWindow {
             onTriggered: { App.copyLink(root.menuKey); videoMenu.dismiss() }
         }
         ThemedMenuItem {
+            objectName: "hideVideoEntry"
+            // Out of sight rather than gone. A card can spoil something or
+            // simply be unpleasant to keep meeting, and what it stays in is a
+            // box, which was picked video by video.
+            text: "Hide this video"
+            onTriggered: { App.hideVideo(root.menuKey); videoMenu.dismiss() }
+        }
+        ThemedMenuItem {
             text: "Groups for this channel"
             onTriggered: {
                 var key = root.menuChannelKey

@@ -405,6 +405,118 @@ Item {
                                 }
                             }
                         }
+
+                        // Videos taken out of sight from a card's own menu.
+                        // Hidden is not deleted, so this is where they come
+                        // back from, and each one says what it is rather than
+                        // showing an address nobody can read.
+                        Label {
+                            width: parent.width
+                            text: "Hiding a video takes its card out of the feed, out of a "
+                                  + "group and out of the suggestions. It stays in any box "
+                                  + "you put it in and it keeps whatever it was marked. "
+                                  + "Bring one back and it is drawn again wherever it "
+                                  + "belongs."
+                            color: Theme.colors.textMuted
+                            font.pixelSize: 11
+                            wrapMode: Text.Wrap
+                        }
+
+                        Row {
+                            spacing: 8
+
+                            Label {
+                                objectName: "hiddenCount"
+                                height: 28
+                                text: App.hiddenCount === 0
+                                      ? "Nothing is hidden"
+                                      : App.hiddenCount + (App.hiddenCount === 1
+                                                           ? " video is hidden"
+                                                           : " videos are hidden")
+                                color: Theme.colors.textMuted
+                                font.pixelSize: 12
+                                verticalAlignment: Text.AlignVCenter
+                            }
+
+                            FlatButton {
+                                objectName: "unhideEverything"
+                                visible: App.hiddenCount > 0
+                                text: "Bring them all back"
+                                onClicked: App.unhideEverything()
+                            }
+                        }
+
+                        ListView {
+                            id: hiddenList
+                            objectName: "hiddenVideos"
+                            visible: App.hiddenCount > 0
+                            width: parent.width
+                            height: visible ? Math.min(240, contentHeight) : 0
+                            clip: true
+                            spacing: 6
+                            model: App.hiddenVideos
+                            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                            delegate: Item {
+                                id: hiddenRow
+                                required property var modelData
+                                width: hiddenList.width
+                                height: 44
+
+                                // Asked for while it is still a string. Read
+                                // back off the picture it is a QUrl, and a
+                                // QUrl is never equal to a string, so a test
+                                // against one is always true and a row with no
+                                // picture holds the hole open anyway.
+                                readonly property string picture: modelData.thumbnail || ""
+
+                                RoundedImage {
+                                    id: shot
+                                    objectName: "hiddenThumbnail"
+                                    visible: hiddenRow.picture !== ""
+                                    width: visible ? 68 : 0
+                                    height: 38
+                                    radius: 4
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    source: hiddenRow.picture
+                                }
+
+                                Column {
+                                    anchors.left: shot.visible ? shot.right : parent.left
+                                    anchors.leftMargin: shot.visible ? 10 : 0
+                                    anchors.right: bringBack.left
+                                    anchors.rightMargin: 10
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    spacing: 2
+
+                                    Label {
+                                        width: parent.width
+                                        text: hiddenRow.modelData.title
+                                        color: Theme.colors.text
+                                        font.pixelSize: 12
+                                        elide: Text.ElideRight
+                                    }
+
+                                    Label {
+                                        width: parent.width
+                                        visible: hiddenRow.modelData.channelTitle !== ""
+                                        text: hiddenRow.modelData.channelTitle
+                                        color: Theme.colors.textMuted
+                                        font.pixelSize: 11
+                                        elide: Text.ElideRight
+                                    }
+                                }
+
+                                FlatButton {
+                                    id: bringBack
+                                    objectName: "bringItBack"
+                                    anchors.right: parent.right
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: "Bring it back"
+                                    onClicked: App.unhideVideo(hiddenRow.modelData.key)
+                                }
+                            }
+                        }
                     }
                 }
 
