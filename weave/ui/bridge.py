@@ -60,6 +60,7 @@ from ..poller import (
     ArtistMusic,
     SongSide,
     SourceDetails,
+    StreamCheck,
     SubsImporter,
     TrackList,
     TwitchLogin,
@@ -386,6 +387,12 @@ class Bridge(QObject):
         self._channel_feed: ChannelFeedFetcher | None = None
         self._channel_lists: ChannelPlaylistsFetcher | None = None
         self._channel_members: ChannelMembersFetcher | None = None
+        self._stream_check: StreamCheck | None = None
+        # The press waiting on that question, as the key, the address and the
+        # title. Held rather than asked for again, because the view can have
+        # moved on by the time the answer arrives and the press was about the
+        # thing that was pressed.
+        self._pending_play: tuple[str, str, str] | None = None
         # What the last press of the members button found, and which channel
         # it was about. Said on the channel page rather than only in the bar,
         # because the bar clears itself and the answer is about the page you
@@ -2966,9 +2973,101 @@ class Bridge(QObject):
             # starting on the video that was clicked. Otherwise the window
             # closes after one and the list is not a list.
             url = ids.playlist_watch_url(row["key"].split(":", 1)[1], self._view_playlist)
+        if live and login is None and self._ask_whether_it_is_still_live(
+                row["key"], url, str(row.get("title") or "")):
+            return
+        self._hand_over(row["key"], url, str(row.get("title") or ""), login, live)
+
+    def _hand_over(self, key: str, url: str, title: str,
+                   login: str | None, live: bool) -> None:
+        """Give mpv the address, and say on the card that it is on its way."""
         if self._player.play(url, twitch_login=login, live=live):
-            self._set_status(f"playing {row['title']}")
-            self._set_starting(row["key"])
+            self._set_status(f"playing {title}")
+            self._set_starting(key)
+            self._step_aside_for_video()
+
+    def _step_aside_for_video(self) -> None:
+        """The music gives way to something that was just handed to mpv.
+
+        Said here rather than waited for. The watcher also says it, when it
+        sees mpv open a file, and that is what covers a video started from the
+        browser, but it cannot say it until mpv has something to report. A
+        broadcast is the slow case: the address is resolved before mpv opens
+        anything, which for Twitch is a separate program being asked first,
+        and a stream that has already finished never reports anything at all.
+        Weave knows what it handed over, so it does not have to be told.
+        """
+        if self._audio is not None:
+            self._audio.pause_for_video()
+
+    def _ask_whether_it_is_still_live(self, key: str, url: str, title: str) -> bool:
+        """Make sure a stream is still on air before mpv is given it.
+
+        A card says live because something said so when it was last asked, and
+        a broadcast that ended hours ago goes on saying it until the next round
+        reaches that video. mpv handed the address of a finished stream has
+        nothing to play, so the press looks like nothing happened at all.
+
+        Answers whether the press has been taken over. One at a time, since
+        pressing twice while the first is in flight would ask the same
+        question twice and play it twice when both come back.
+        """
+        if self._stream_check is not None and self._stream_check.isRunning():
+            return True
+        ext_id = key.split(":", 1)[1] if ":" in key else ""
+        if not ext_id:
+            return False
+        self._pending_play = (key, url, title)
+        self._stream_check = StreamCheck(self._db, self._cfg, key, ext_id, self)
+        self._stream_check.answered.connect(self._on_stream_checked)
+        self._stream_check.failed.connect(self._on_stream_check_failed)
+        if not self._launch(self._stream_check):
+            self._pending_play = None
+            return False
+        # The card says the press landed while the question is out, which is
+        # the same thing it says while mpv is starting.
+        self._set_starting(key)
+        self._set_status(f"checking whether {title} is still live")
+        return True
+
+    def _on_stream_checked(self, key: str, still_live: bool, upcoming: bool) -> None:
+        pending = self._pending_play
+        self._pending_play = None
+        if pending is None or pending[0] != key:
+            return
+        _, url, title = pending
+        if still_live:
+            self._hand_over(key, url, title, None, True)
+            return
+        self._set_starting("")
+        if upcoming:
+            # Nothing to play yet rather than nothing to play any more, and the
+            # row is left saying what it says, since it is still true.
+            self._set_notice("That stream has not started yet.", clear_after_s=6)
+            self._set_status(f"{title} has not started yet")
+            return
+        # The worker has already written what it found, so the card only has to
+        # be read again to stop saying live.
+        self._set_notice("That stream has ended. Press it again to watch the "
+                         "recording, if there is one.", clear_after_s=8)
+        self._set_status(f"{title} has ended")
+        self.reload()
+        self.liveChanged.emit()
+
+    def _on_stream_check_failed(self, key: str, why: str) -> None:
+        """The question could not be asked. Play it anyway.
+
+        The check is a safety net rather than a gate, and refusing to play
+        something because a check about it did not answer would make a network
+        hiccup look like a broken press.
+        """
+        pending = self._pending_play
+        self._pending_play = None
+        if pending is None or pending[0] != key:
+            return
+        _, url, title = pending
+        self._set_status(f"could not tell whether {title} is still live, {why}")
+        self._hand_over(key, url, title, None, True)
 
     def _get_press_is_music(self) -> bool:
         """Whether a plain press in the open view already means listening.
@@ -4273,6 +4372,7 @@ class Bridge(QObject):
             # A live tile carries its channel rather than a video, so that is
             # what the chip is matched against there.
             self._set_starting(channel_key)
+            self._step_aside_for_video()
 
     @Slot()
     def importSubscriptions(self) -> None:
@@ -4496,6 +4596,11 @@ class Bridge(QObject):
             self._db.set_members_wanted(self._view_channel, False)
             self._set_notice("")
             self.viewChanged.emit()
+        elif worker is self._stream_check:
+            # The press it was asked about is dropped rather than played on a
+            # guess, and the card stops saying it is on its way.
+            self._pending_play = None
+            self._set_starting("")
         elif worker is self._lengths:
             # Holds no flag: it is background work nothing is waiting on, and
             # the channel it stopped on is left unstamped so it comes round

@@ -156,6 +156,10 @@ class TheHistoryView(unittest.TestCase):
         # The chip a pressed card shows while mpv starts. Stubbed like the
         # notice, since the timer behind it belongs to a real bridge.
         bridge._set_starting = lambda *a, **k: None
+        # The music, which steps aside for anything handed to mpv. None here
+        # says there is no player rather than that it is silent, which is what
+        # a bridge built for one press has.
+        bridge._audio = None
         bridge.listened = []
         bridge.playAudio = bridge.listened.append
         return bridge

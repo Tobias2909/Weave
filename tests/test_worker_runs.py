@@ -657,7 +657,7 @@ class WorkerRuns(unittest.TestCase):
                     "ChannelFeedFetcher", "ChannelPlaylistsFetcher",
                     "ChannelMembersFetcher",
                     "DetailFetcher", "ChannelAvatarsFetcher", "OwnerFetcher",
-                    "LengthFiller"}
+                    "LengthFiller", "StreamCheck"}
         # The checkup runs the doctor, which counts its own requests.
         run_here.add("Checkup")
         source = Path("weave/poller.py").read_text()
@@ -939,6 +939,54 @@ class WorkerRuns(unittest.TestCase):
         self.run_worker(poller.ChannelMembersFetcher(self.db, self.cfg, "yt:UC6", "UC6"))
         self.assertEqual(self.db.channel("yt:UC6")["member_of"], 1)
 
+    def test_the_stream_check(self):
+        """The question asked of one stream the moment it is pressed."""
+        self.db.add_channel("yt:UC7", "youtube", "UC7", "One")
+        self.db.upsert_videos([
+            VideoRow("youtube", "ccccccccccc", "yt:UC7", "A broadcast",
+                     published_at=1_700_000_000, live_status="is_live")])
+        self.db.set_live_state("yt:ccccccccccc", 40, True)
+
+        self.patch(poller.livecheck, "check",
+                   lambda *a, **k: poller.livecheck.LiveState("ccccccccccc", 51, True))
+        answers = []
+        worker = poller.StreamCheck(self.db, self.cfg, "yt:ccccccccccc", "ccccccccccc")
+        worker.answered.connect(lambda *args: answers.append(args))
+        said = self.run_worker(worker)
+        self.assertFalse([word for word in MISTAKES if word in said])
+        self.assertEqual(answers, [("yt:ccccccccccc", True, False)])
+        # Still live, so nothing about the row is touched.
+        self.assertEqual(self.db.video("yt:ccccccccccc")["live_status"], "is_live")
+
+        # And one that has finished, which is the case it exists for.
+        self.patch(poller.livecheck, "check",
+                   lambda *a, **k: poller.livecheck.LiveState("ccccccccccc", None, False))
+        answers.clear()
+        worker = poller.StreamCheck(self.db, self.cfg, "yt:ccccccccccc", "ccccccccccc")
+        worker.answered.connect(lambda *args: answers.append(args))
+        self.run_worker(worker)
+        self.assertEqual(answers, [("yt:ccccccccccc", False, False)])
+        row = self.db.video("yt:ccccccccccc")
+        self.assertEqual(row["live_status"], "was_live")
+        self.assertIsNone(row["live_viewers"])
+
+    def test_a_stream_check_that_cannot_ask_says_so_rather_than_crashing(self):
+        def refuse(*_a, **_k):
+            raise poller.livecheck.LiveCheckError("yt-dlp said: no")
+
+        self.patch(poller.livecheck, "check", refuse)
+        worker = poller.StreamCheck(self.db, self.cfg, "yt:ddddddddddd", "ddddddddddd")
+        answers = []
+        worker.answered.connect(lambda *args: answers.append(args))
+        failures = []
+        worker.failed.connect(lambda *args: failures.append(args))
+        crashes = []
+        worker.crashed.connect(crashes.append)
+        worker.run()
+        self.assertEqual(crashes, [])
+        self.assertEqual(answers, [])
+        self.assertEqual(len(failures), 1)
+
     def test_the_bridge_puts_down_the_flag_a_crashed_worker_left_up(self):
         """Every worker raises some flag in the bridge while it runs, and each
         one used to be lowered only by that worker's own success or failure
@@ -963,7 +1011,7 @@ class WorkerRuns(unittest.TestCase):
                    "_history", "_search", "_tracks", "_station", "_detail", "_cache_job",
                    "_twitch", "_checkup", "_playlists", "_playlist_items", "_lengths",
                    "_channel_members", "_now_side", "_now_detail",
-                   "_artist_music", "_artist_open")
+                   "_artist_music", "_artist_open", "_stream_check")
 
         def make(held: str):
             bridge = Bridge.__new__(Bridge)

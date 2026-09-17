@@ -640,6 +640,84 @@ class Smoke:
         self.check("a failure takes the chip away", read(bridge, "startingKey") == "",
                    str(read(bridge, "startingKey")))
 
+    def a_stream_that_ended(self, bridge, window) -> None:
+        """A card that says live about a broadcast which has finished.
+
+        A card says live because something said so when it was last asked, and
+        nothing asks again until the next round reaches that video. Pressing
+        one is what finds out, so the answer has to reach the card as well as
+        the person: the badge goes and the bottom of the window says why
+        nothing is playing.
+
+        The question itself is a request and the walk is offline, so the
+        answer is handed over here rather than asked for. What is checked is
+        what the answer does.
+        """
+        from weave import paths
+        from weave.db import Database, VideoRow
+
+        step("a stream that has ended")
+        grid = find(window, "grid")
+        gone = "yt:smokelive01"
+        db = Database(paths.DB_FILE)
+        db.upsert_videos([VideoRow("youtube", "smokelive01", "yt:UCsmokesmokesmokesmokes1",
+                                   "A broadcast", published_at=1_700_000_600,
+                                   live_status="is_live")])
+        db.set_live_state(gone, 40, True)
+        db.close()
+        # Read again rather than selected again. The walk is already on All by
+        # now, and selecting the view it is on is a no op, so nothing would be
+        # read back and the new row would not be in the grid at all.
+        bridge.reload()
+        settle(0.5)
+        call(grid, "forceLayout")
+        settle(0.3)
+
+        def badges():
+            return [found for found in
+                    (item_named(card, "streamBadge")
+                     for card in visible_children(read(grid, "contentItem")))
+                    if found is not None and read(found, "visible")]
+
+        was_live = len(badges())
+        row = bridge._model.row_for_key(gone) or {}
+        self.check("the card says it is live", bool(row.get("isLive")),
+                   f"live {row.get('isLive')}")
+
+        bridge._set_notice("")
+        # What the worker writes before it answers, done here because the
+        # question it asks is a request and this walk is offline.
+        db = Database(paths.DB_FILE)
+        db.set_live_state(gone, None, False)
+        db.close()
+        bridge._pending_play = (gone, "https://example/watch", "A broadcast")
+        bridge._on_stream_checked(gone, False, False)
+        settle(0.6)
+        call(grid, "forceLayout")
+        settle(0.3)
+
+        row = bridge._model.row_for_key(gone) or {}
+        self.check("and after the answer it does not",
+                   not row.get("isLive") and row.get("wasLive"),
+                   f"live {row.get('isLive')} was {row.get('wasLive')}")
+        self.check("the card wears the mark of a stream that has been",
+                   len(badges()) == was_live + 1,
+                   f"{len(badges())} against {was_live} before")
+        self.check("and the bottom of the window says why nothing is playing",
+                   "ended" in str(read(bridge, "notice")), str(read(bridge, "notice")))
+        self.check("with nothing left saying it is on its way",
+                   read(bridge, "startingKey") == "", str(read(bridge, "startingKey")))
+        bridge._set_notice("")
+
+        # Taken out again. Everything below counts the feed, and a step that
+        # leaves a video behind quietly breaks whatever counts next.
+        db = Database(paths.DB_FILE)
+        with db.conn as conn:
+            conn.execute("DELETE FROM videos WHERE key=?", (gone,))
+        db.close()
+        bridge.reload()
+        settle(0.5)
+
     def announcements(self, bridge, window) -> None:
         """A stream that has not begun says when it will, in the panel as well.
 
@@ -2139,6 +2217,9 @@ class Smoke:
         self.boxes(bridge, window)
         self.wizard(bridge, window)
         self.scrolling(bridge, window)
+        # Last, because it puts a video into the feed and takes it out again,
+        # and every step above that counts the feed would count it.
+        self.a_stream_that_ended(bridge, window)
 
         if self.shot:
             self.check("screenshot written", screenshot(window, self.shot), self.shot)

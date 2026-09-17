@@ -1688,6 +1688,55 @@ class TwitchLogin(Worker):
         return added
 
 
+class StreamCheck(Worker):
+    """Whether one stream is still on air, asked the moment it is pressed.
+
+    A card says live because something said so when it was last asked, and a
+    broadcast that ended hours ago goes on saying it until the next round
+    reaches that video. Handing mpv the address of a stream that has finished
+    does not open a window with a message in it, it gives mpv nothing to play,
+    so the press looks like the application ignoring it.
+
+    One call, about two and a half seconds, and only for YouTube. Twitch says
+    who is live through its own interface every ninety seconds, which is never
+    stale enough to be worth a second question.
+    """
+
+    answered = Signal(str, bool, bool)    # key, still live, not started yet
+    failed = Signal(str, str)
+
+    def __init__(self, db: Database, cfg: Config, key: str, ext_id: str,
+                 parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._db = db
+        self._cfg = cfg
+        self._key = key
+        self._ext_id = ext_id
+        self._throttle = self._throttle_for(cfg)
+
+    def work(self) -> None:
+        # Spent rather than weighed. A press is one deliberate act that cannot
+        # burst, and the background share of the ceiling exists so that there
+        # is always room for one.
+        _spend(self._db, self._cfg, PLAYER)
+        try:
+            state = livecheck.check(self._cfg, self._ext_id, self._throttle, self._cancel)
+        except ProcessCancelled:
+            return
+        except livecheck.LiveCheckError as exc:
+            _spend(self._db, self._cfg, PLAYER, count=0, refused=1)
+            self.failed.emit(self._key, str(exc))
+            return
+        if self._cancel.is_set():
+            return
+        if not state.still_live and not state.upcoming:
+            # What it is now, so the card stops saying live whatever else
+            # happens next. A stream that has ended is an ordinary video and
+            # stays in the feed.
+            self._db.set_live_state(self._key, None, False)
+        self.answered.emit(self._key, state.still_live, state.upcoming)
+
+
 class LiveWatcher(Worker):
     """Who is live right now. Runs on its own timer, far more often than the
     feed, because a live bar that is fifteen minutes stale is wrong."""
