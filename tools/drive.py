@@ -2481,7 +2481,8 @@ class Smoke:
 
         # What the page says about the cache and the connections, which is
         # read rather than acted on, so an empty one is a binding that failed.
-        for name in ("cacheSize", "cookieSource", "musicIdentity", "twitchState"):
+        for name in ("cacheSize", "cookieSource", "musicIdentity", "twitchState",
+                     "videosKept"):
             self.check(f"the page states the {name}", str(read(find(window, name), "text")) != "",
                        str(read(find(window, name), "text")))
 

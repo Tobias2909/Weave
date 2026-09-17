@@ -41,6 +41,8 @@ class FakeVideoResolver:
 
     resolved = _Wire()
     failed = _Wire()
+    # The look ahead sweeps the ones that have ended, so it listens for this.
+    finished = _Wire()
 
 
 def player() -> AudioPlayer:
@@ -221,3 +223,90 @@ class TheCommandItself(unittest.TestCase):
             self.assertEqual(
                 audio.resolve_video(Config(raw={}), "https://example.invalid/x"),
                 "")
+
+
+class TheSongAfterThisOne(unittest.TestCase):
+    """The picture for the next song is found while this one is playing.
+
+    The sound has always been done this way, because resolving is the only
+    wait in the chain. The picture was not, so every song change showed the
+    artwork for the seconds an address takes to find and a frame to arrive,
+    however long there had been to do it in.
+    """
+
+    def setUp(self):
+        self.player = player()
+        self.player._queue = [song("yt:a"), song("yt:b"), song("yt:c")]
+        self.player._rebuild_order()
+        self.player._at = 0
+        self.player._idle = False
+
+    def looking_for(self):
+        return [r.key for r in self.player._next_video_resolvers if r.isRunning()]
+
+    def test_nothing_is_looked_for_while_no_page_is_open(self):
+        self.player._prepare_next()
+        self.assertEqual(self.looking_for(), [])
+
+    def test_with_the_page_open_the_next_one_is_looked_for(self):
+        self.player.setVideoWanted(True)
+        self.player._prepare_next()
+        self.assertEqual(self.looking_for(), ["yt:b"])
+
+    def test_opening_the_page_is_itself_the_moment_to_look(self):
+        # Rather than waiting for whatever would have called on next.
+        self.player.setVideoWanted(True)
+        self.assertEqual(self.looking_for(), ["yt:b"])
+
+    def test_one_already_known_is_not_looked_for_again(self):
+        self.player._video_addresses["yt:b"] = "https://example/picture"
+        self.player.setVideoWanted(True)
+        self.assertEqual(self.looking_for(), [])
+
+    def test_nor_is_one_asked_for_twice(self):
+        self.player.setVideoWanted(True)
+        self.player._prepare_next()
+        self.player._prepare_next()
+        self.assertEqual(self.looking_for(), ["yt:b"])
+
+    def test_sound_alone_looks_for_nothing(self):
+        self.player.setVideoWanted(True)
+        self.player.setAudioOnly(True)
+        self.player._next_video_resolvers = []
+        self.player._prepare_next()
+        self.assertEqual(self.looking_for(), [])
+
+    def test_one_that_would_be_refused_a_picture_is_not_looked_for(self):
+        """The length rule is the same one the current song is held to."""
+        self.player._queue[1] = song("yt:b", duration_s=VIDEO_MAX_S + 60)
+        self.player.setVideoWanted(True)
+        self.assertEqual(self.looking_for(), [])
+
+    def test_the_end_of_the_queue_has_nothing_after_it(self):
+        self.player._at = 2
+        self.player.setVideoWanted(True)
+        self.assertEqual(self.looking_for(), [])
+
+    def test_what_comes_back_is_kept_for_when_that_song_starts(self):
+        """The handler is the one the current song's picture uses. It writes
+        the address down and hands it to the player only when it belongs to
+        the song playing, which the next one does not yet."""
+        self.player.setVideoWanted(True)
+        self.player._on_video_resolved("yt:b", "https://example/picture")
+        self.assertEqual(self.player._video_addresses["yt:b"], "https://example/picture")
+        self.assertEqual(self.player._engine.only("add_video"), [])
+
+    def test_and_is_handed_over_the_moment_that_song_is_the_one_playing(self):
+        self.player.setVideoWanted(True)
+        self.player._on_video_resolved("yt:b", "https://example/picture")
+        self.player._engine.calls.clear()
+        self.player._at = 1
+        self.player._start_video()
+        self.assertEqual(self.player._engine.only("add_video"),
+                         [("add_video", "https://example/picture")])
+
+    def test_closing_the_page_stops_looking(self):
+        self.player.setVideoWanted(True)
+        self.assertEqual(self.looking_for(), ["yt:b"])
+        self.player.setVideoWanted(False)
+        self.assertEqual(self.player._next_video_resolvers, [])

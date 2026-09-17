@@ -28,7 +28,7 @@ from .. import imagecache
 from .. import palette, themes
 from .. import audio
 from .. import browsers, cookies, ids
-from .. import paths, tokens
+from .. import paths, tokens, videocache
 from ..config import Config
 from ..db import GROUP_SHOWS, GROUP_SHOWS_ALL, GROUP_SHOWS_STREAMS, Database
 from ..imagecache import SECONDS_PER_DAY, plain_source, qml_source, square_source
@@ -61,6 +61,7 @@ from ..poller import (
     SongSide,
     SourceDetails,
     StreamCheck,
+    VideoKeeper,
     SubsImporter,
     TrackList,
     TwitchLogin,
@@ -218,6 +219,7 @@ class Bridge(QObject):
     checksChanged = Signal()
     cacheChanged = Signal()
     hiddenChanged = Signal()
+    videosKeptChanged = Signal()
     videoQualityChanged = Signal()
     cookiesChanged = Signal()
     startingChanged = Signal()
@@ -389,6 +391,7 @@ class Bridge(QObject):
         self._channel_lists: ChannelPlaylistsFetcher | None = None
         self._channel_members: ChannelMembersFetcher | None = None
         self._stream_check: StreamCheck | None = None
+        self._keeper: VideoKeeper | None = None
         # The press waiting on that question, as the key, the address and the
         # title. Held rather than asked for again, because the view can have
         # moved on by the time the answer arrives and the press was about the
@@ -1240,6 +1243,110 @@ class Bridge(QObject):
         """
         if self._db.mark_unavailable(ext_id):
             self._loss_timer.start()
+
+    # ---- the videos he keeps ---------------------------------------------
+
+    def _kept_video(self, key: str) -> str:
+        """The file kept for this song, or nothing.
+
+        Asked by the player every time it is about to find a picture, so it is
+        a directory lookup and nothing more. Touching the file is what makes
+        the oldest unplayed one go first when room is needed.
+        """
+        if not key:
+            return ""
+        found = videocache.held(paths.MOVING_CACHE, key, self._audio.video_height()
+                                if self._audio else audio.VIDEO_HEIGHT)
+        if found is None:
+            return ""
+        videocache.touch(found)
+        return str(found)
+
+    def _keep_this_video(self) -> None:
+        """Write the picture of the song playing to disk, if it is one he keeps.
+
+        Only a favourite, because that is a short list somebody curated and
+        this is the only thing that makes the cost bounded. Only while a page
+        is open to show a picture, because otherwise there is no picture being
+        watched to be worth having again. And only once, since the file is
+        what the next play reads.
+        """
+        if self._audio is None or not self._audio.videoWanted:
+            return
+        track = self._audio.track or {}
+        key = str(track.get("key") or "")
+        url = str(track.get("url") or "")
+        if not key or not url or not key.startswith("yt:"):
+            return
+        if not self._db.is_music_favorite(key.split(":", 1)[1]):
+            return
+        height = self._audio.video_height()
+        if videocache.held(paths.MOVING_CACHE, key, height) is not None:
+            return
+        if self._keeper is not None and self._keeper.isRunning():
+            return
+        self._keeper = VideoKeeper(self._cfg, key, url, paths.MOVING_CACHE, height, self)
+        self._keeper.kept.connect(self._on_video_kept)
+        self._keeper.failed.connect(self._on_video_not_kept)
+        self._launch(self._keeper)
+
+    def _on_video_kept(self, key: str, path: str) -> None:
+        self._set_status(f"kept the picture for {key}")
+        self._prune_videos()
+        self.videosKeptChanged.emit()
+
+    def _on_video_not_kept(self, key: str, why: str) -> None:
+        # Nothing is on screen about this. It is work nobody asked for and
+        # nobody is waiting on, and the song played perfectly well without it.
+        self._set_status(f"could not keep the picture for {key}, {why}")
+
+    def _prune_videos(self) -> None:
+        """Bring what is kept under its ceiling, and drop what is no longer a
+        favourite, which is the only reason any of it was written down."""
+        height = self._audio.video_height() if self._audio else audio.VIDEO_HEIGHT
+        wanted = set()
+        for row in self._db.music_favorites():
+            found = videocache.held(paths.MOVING_CACHE, f"yt:{row['ext_id']}", height)
+            if found is not None:
+                wanted.add(found)
+        videocache.prune(paths.MOVING_CACHE, self._video_ceiling_mb() * 1024 * 1024, wanted)
+
+    def _video_ceiling_mb(self) -> int:
+        return self._db.get_int("kept_video_ceiling_mb", videocache.DEFAULT_CEILING_MB)
+
+    def _get_videos_kept_text(self) -> str:
+        held = videocache.held_bytes(paths.MOVING_CACHE)
+        files = len(videocache.contents(paths.MOVING_CACHE))
+        ceiling = self._video_ceiling_mb()
+        if not files:
+            return f"nothing kept yet, of a {ceiling / 1024:.0f} GB ceiling"
+        return (f"{files} kept, {held / (1024 * 1024):.0f} MB "
+                f"of a {ceiling / 1024:.0f} GB ceiling")
+
+    videosKeptText = Property(str, _get_videos_kept_text, notify=videosKeptChanged)
+    videoKeepCeiling = Property(int, _video_ceiling_mb, notify=videosKeptChanged)
+    def _get_video_keep_choices(self) -> list:
+        return [{"mb": step,
+                 "label": f"{step // 1024} GB" if step >= 1024 else f"{step} MB"}
+                for step in videocache.CEILING_STEPS_MB]
+
+    videoKeepChoices = Property("QVariantList", _get_video_keep_choices,
+                                notify=videosKeptChanged)
+
+    @Slot(int)
+    def setVideoKeepCeiling(self, megabytes: int) -> None:
+        self._db.set_state("kept_video_ceiling_mb", str(int(megabytes)))
+        self._prune_videos()
+        self.videosKeptChanged.emit()
+
+    @Slot()
+    def forgetKeptVideos(self) -> None:
+        gone, freed = videocache.forget_all(paths.MOVING_CACHE)
+        if gone:
+            self._set_notice(f"Dropped {gone} kept "
+                             f"{'video' if gone == 1 else 'videos'}, "
+                             f"{freed / (1024 * 1024):.0f} MB.", clear_after_s=6)
+        self.videosKeptChanged.emit()
 
     # ---- the current view ------------------------------------------------
 
@@ -3402,6 +3509,10 @@ class Bridge(QObject):
         # nothing at all.
         audio.failed.connect(self._on_audio_failed)
         audio.gone.connect(self._on_song_gone)
+        # Where a song's picture is kept, and which songs are worth keeping
+        # one for. The player asks the first and the window answers both.
+        audio.local_video = self._kept_video
+        audio.trackChanged.connect(self._keep_this_video)
         self._player.nowPlaying.connect(lambda *_a: self._audio.pause_for_video())
         # Whether the heart is lit depends on the song playing as much as on
         # which songs are kept, so a new song has to say so too. Without this
@@ -3484,10 +3595,19 @@ class Bridge(QObject):
             return []
         # Kept before songs carried the address of whoever made them. Shown as
         # they are, every name on them would be dead until the next refresh, so
-        # they are treated as nothing and fetched again.
+        # such a set is treated as nothing and fetched again.
+        #
+        # Only a SONG is asked, which is an item with a video behind it. A
+        # shelf of playlists never had an artist to name, and neither has the
+        # one built from the ordinary suggestions, so asking those meant every
+        # set Weave wrote was thrown away on the next launch and the view he
+        # opened was blank for as long as a fetch takes. Measured on a real
+        # database: 23 shelves, 79 KB, and two of them with no such key, which
+        # is every set there will ever be.
         for shelf in shelves:
             for item in (shelf.get("items") or []) if isinstance(shelf, dict) else []:
-                if isinstance(item, dict) and "artistId" not in item:
+                if (isinstance(item, dict) and item.get("videoId")
+                        and "artistId" not in item):
                     return []
         return shelves
 

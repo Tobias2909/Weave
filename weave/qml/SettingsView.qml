@@ -406,6 +406,84 @@ Item {
                             }
                         }
 
+                        Label {
+                            width: parent.width
+                            text: "A song you keep has its video written to disk the first "
+                                  + "time you watch it, so every play after that starts at "
+                                  + "once and pulls nothing. Only the ones you keep, and "
+                                  + "only while a page is open to show a picture. The one "
+                                  + "played longest ago goes first when the room runs out."
+                            color: Theme.colors.textMuted
+                            font.pixelSize: 11
+                            wrapMode: Text.Wrap
+                        }
+
+                        Row {
+                            spacing: 8
+
+                            Label {
+                                width: view.wordWidth
+                                height: 28
+                                text: "Kept videos"
+                                color: Theme.colors.textMuted
+                                font.pixelSize: 12
+                                verticalAlignment: Text.AlignVCenter
+                            }
+
+                            Label {
+                                objectName: "videosKept"
+                                height: 28
+                                text: App.videosKeptText
+                                color: Theme.colors.text
+                                font.pixelSize: 12
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                        }
+
+                        Row {
+                            spacing: 8
+
+                            FlatButton {
+                                id: keepCeilingButton
+                                objectName: "videoKeepCeiling"
+                                text: {
+                                    var mb = App.videoKeepCeiling
+                                    return (mb >= 1024 ? (mb / 1024) + " GB" : mb + " MB")
+                                           + "  \u25be"
+                                }
+                                onClicked: keepCeilingMenu.popup(keepCeilingButton, 0,
+                                                                 keepCeilingButton.height + 2)
+
+                                ThemedMenu {
+                                    id: keepCeilingMenu
+                                    objectName: "videoKeepCeilingMenu"
+                                    implicitWidth: 160
+
+                                    Repeater {
+                                        model: App.videoKeepChoices
+
+                                        ThemedMenuItem {
+                                            required property var modelData
+
+                                            text: modelData.mb === App.videoKeepCeiling
+                                                  ? modelData.label + "   \u2713"
+                                                  : modelData.label
+                                            onTriggered: {
+                                                App.setVideoKeepCeiling(modelData.mb)
+                                                keepCeilingMenu.dismiss()
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            FlatButton {
+                                objectName: "forgetKeptVideos"
+                                text: "Drop the kept videos"
+                                onClicked: App.forgetKeptVideos()
+                            }
+                        }
+
                         // Videos taken out of sight from a card's own menu.
                         // Hidden is not deleted, so this is where they come
                         // back from, and each one says what it is rather than

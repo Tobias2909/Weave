@@ -261,6 +261,9 @@ class TheHeartFollowsTheSong(unittest.TestCase):
                 self.gone = Wire()
                 # Nor one that cannot say what its resolve learned.
                 self.factsChanged = Wire()
+                # Whether anything is open to show a picture, which is what
+                # decides whether a song's video is worth keeping on disk.
+                self.videoWanted = False
                 self.trackFacts = {}
 
             def pause_for_video(self):

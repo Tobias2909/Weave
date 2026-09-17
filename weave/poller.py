@@ -36,13 +36,13 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-from . import backoff, ids, imagecache, tokens
+from . import backoff, ids, imagecache, tokens, videocache
 from .budget import BROWSE, DISLIKES, FEEDS, OEMBED, PLAYER, SHORTS, TWITCH, Budget
 from .config import Config
 from .cookies import profile_path as cookie_profile
 from .db import Database
 from .ids import channel_key
-from .imagecache import qml_source
+from .imagecache import qml_source, square_source
 from .net import Cancelled as FetchCancelled
 from .net import Fetcher, HttpError, Throttle
 from .process import Cancelled as ProcessCancelled
@@ -2104,7 +2104,12 @@ class MusicHome(Worker):
             "title": entry["title"], "subtitle": (f"{entry['count']} tracks"
                                                   if entry.get("count") else ""),
             "videoId": "", "playlistId": entry["id"],
-            "thumbnail": qml_source(entry["thumbnail"]),
+            # Empty, and present. Every item Weave builds carries the same
+            # keys as one that came from the music service, because what was
+            # kept from last time is checked for them before it is trusted and
+            # a shelf of this kind has no artist to name.
+            "artistId": "",
+            "thumbnail": square_source(entry["thumbnail"]),
         } for entry in found]}
 
     def _from_youtube(self) -> dict:
@@ -2134,9 +2139,74 @@ class MusicHome(Worker):
             items.append({
                 "title": parts[1], "subtitle": parts[2] if len(parts) > 2 else "",
                 "videoId": parts[0], "playlistId": "",
-                "thumbnail": qml_source(f"https://i.ytimg.com/vi/{parts[0]}/hqdefault.jpg"),
+                # These come from the ordinary suggestions, which carry no
+                # address for whoever made them, so the key is here and empty.
+                "artistId": "",
+                # Asked for in a shape that suits a square tile. The plain
+                # thumbnail is a widescreen frame inside a four by three plate,
+                # and a square box keeps the black bands rather than cropping
+                # them off the way a card does.
+                "thumbnail": square_source(f"https://i.ytimg.com/vi/{parts[0]}/hqdefault.jpg"),
             })
         return {"title": "From your YouTube", "items": items}
+
+
+class VideoKeeper(Worker):
+    """Write one song's picture to disk, so the next play of it costs nothing.
+
+    Only ever asked for a song he has kept. The address alone would not do:
+    a signed one expires within hours, and the point of this is the play
+    tomorrow rather than the play in ten minutes.
+
+    It is a second fetch of something mpv is already streaming, which is the
+    honest cost of the first play of a favourite. Every play after it is a
+    local file, with no address to find and no bytes to pull.
+    """
+
+    kept = Signal(str, str)               # key, the file that was written
+    failed = Signal(str, str)
+
+    def __init__(self, cfg: Config, key: str, url: str, into: Path, height: int,
+                 parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._cfg = cfg
+        self.key = key
+        self._url = url
+        self._into = into
+        self._height = height
+
+    def work(self) -> None:
+        from .audio import video_format
+        from .cookies import args as cookie_args
+        from .process import Timeout
+        from .sources import ytdlp
+
+        target = videocache.target(self._into, self.key, self._height)
+        command = prepare([
+            "yt-dlp", "--no-warnings", *cookie_args(self._cfg),
+            "-f", video_format(self._height),
+            # One file, named here rather than after the title, and no part
+            # left behind to be mistaken for a whole one if this is stopped.
+            "-o", str(target) + ".%(ext)s",
+            "--no-playlist", "--no-progress",
+            self._url,
+        ])
+        try:
+            result = run_process(command, cancel=self._cancel, timeout=900)
+        except ProcessCancelled:
+            return
+        except (OSError, Timeout) as exc:
+            self.failed.emit(self.key, str(exc))
+            return
+        if self._cancel.is_set():
+            return
+        written = videocache.held(self._into, self.key, self._height)
+        if written is None:
+            said = (result.stderr or "").strip().splitlines()
+            self.failed.emit(self.key, ytdlp.explain(
+                said[-1] if said else "nothing was written", result.stderr or ""))
+            return
+        self.kept.emit(self.key, str(written))
 
 
 class MusicHistoryReader(Worker):

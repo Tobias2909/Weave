@@ -523,6 +523,15 @@ class AudioPlayer(QObject):
         # listening rather than something done to one song.
         self._audio_only = (db.get_state("music_audio_only", "0") == "1") if db else False
         self._video_resolver: _VideoResolver | None = None
+        # The picture for the song AFTER this one, found while there is time,
+        # so a song change shows it at once instead of two and a half seconds
+        # later. A list rather than one, the way the sound's own look ahead is
+        # kept, since a queue can be walked faster than a resolve finishes.
+        self._next_video_resolvers: list = []
+        # Asked whether a song's picture is already on disk, and answering
+        # with the file when it is. Installed from outside, since which songs
+        # are worth keeping is not something the player knows.
+        self.local_video = None
         self._video_addresses: dict[str, str] = {}
         self._video_note = ""
         self._video_showing = False
@@ -879,11 +888,20 @@ class AudioPlayer(QObject):
     # ---- the track after this one ----------------------------------------
 
     def _prepare_next(self) -> None:
-        """Make sure mpv holds the right next entry, and nothing else.
+        """Get everything the song after this one needs, while there is time.
 
         Resolving is the only wait in the whole chain, so it is done now,
         while there are minutes to spare, rather than when the track ends.
+        Both halves of it: the sound, which mpv is handed in advance so it can
+        open it and move on with no gap, and the picture, which is found in
+        advance for the same reason and only while the page that draws it is
+        open.
         """
+        self._arrange_next()
+        self._prepare_next_picture()
+
+    def _arrange_next(self) -> None:
+        """Make sure mpv holds the right next entry, and nothing else."""
         self._engine.set_loop(self._repeat_mode == REPEAT_ONE)
         wanted = self._next_index()
         if wanted is None:
@@ -909,6 +927,55 @@ class AudioPlayer(QObject):
         resolver.finished.connect(self._sweep_resolvers)
         self._next_resolvers.append(resolver)
         resolver.start()
+
+    def _prepare_next_picture(self) -> None:
+        """Find the next song's picture while this one is still playing.
+
+        The sound is already done this way, because resolving is the only wait
+        in the chain. The picture was not, so every song change showed the
+        artwork for the two and a half seconds an address takes to find and
+        a frame to arrive, however long there had been to do it in.
+
+        Only while the page is open, which is the rule the whole picture side
+        follows: somebody who never opens it pays nothing for the ability to.
+        One extraction per song, and only for a song that would be given a
+        picture at all.
+        """
+        if not self._video_wanted or self._audio_only:
+            return
+        wanted = self._next_index()
+        if wanted is None:
+            return
+        entry = self._queue[wanted]
+        key = entry.get("key", "")
+        if not key or key in self._video_addresses or self._refuse_video(entry):
+            return
+        if self.local_video and self.local_video(key):
+            # Already on disk, so there is nothing to look ahead for.
+            return
+        if any(r.key == key and r.isRunning() for r in self._next_video_resolvers):
+            return
+        resolver = self._make_video_resolver(entry)
+        # The same handler the current song's picture uses. It writes the
+        # address down and only hands it to the player when it belongs to the
+        # song playing, which this one does not yet.
+        resolver.resolved.connect(self._on_video_resolved)
+        resolver.finished.connect(self._sweep_video_resolvers)
+        self._next_video_resolvers.append(resolver)
+        resolver.start()
+
+    def _sweep_video_resolvers(self) -> None:
+        self._next_video_resolvers = [r for r in self._next_video_resolvers
+                                      if r.isRunning()]
+
+    def _stop_next_video_resolvers(self) -> None:
+        """Closing the page stops looking ahead. What was already found is
+        kept, since it costs nothing to keep and saves the whole wait if the
+        page is opened again before that song comes round."""
+        for resolver in self._next_video_resolvers:
+            if resolver.isRunning():
+                resolver.cancel()
+        self._next_video_resolvers = []
 
     def _on_next_resolved(self, key: str, address: str,
                           chapters: list | None = None) -> None:
@@ -1395,10 +1462,14 @@ class AudioPlayer(QObject):
             # gets no picture unless the page is open, and that bounds the
             # cost to the remainder of one song.
             self._stop_video_resolver()
+            self._stop_next_video_resolvers()
             self._video_note = ""
             self.videoChanged.emit()
             return
         self._start_video()
+        # And the one after it, since opening the page is exactly the moment
+        # the next song becomes worth finding a picture for.
+        self._prepare_next_picture()
 
     def _start_video(self) -> None:
         """Find the picture for what is playing, if it deserves one."""
@@ -1411,7 +1482,17 @@ class AudioPlayer(QObject):
             self._video_note = note
             self.videoChanged.emit()
             return
-        known = self._video_addresses.get(entry.get("key", ""))
+        key = entry.get("key", "")
+        # A song he has kept may have its picture on disk already, in which
+        # case there is no address to find and nothing to pull. Asked through
+        # a hook rather than reached for, because what counts as kept is the
+        # window's business and not the player's.
+        kept = self.local_video(key) if self.local_video else ""
+        if kept:
+            self._engine.add_video(kept)
+            self.videoChanged.emit()
+            return
+        known = self._video_addresses.get(key)
         if known:
             self._engine.add_video(known)
             self.videoChanged.emit()
@@ -1556,10 +1637,11 @@ class AudioPlayer(QObject):
         # a short session easily: it spends seconds asking for an
         # address nobody is waiting for any more.
         self._stop_video_resolver()
-        for resolver in [self._resolver, *self._next_resolvers]:
+        held = [self._resolver, *self._next_resolvers, *self._next_video_resolvers]
+        for resolver in held:
             if resolver is not None and resolver.isRunning():
                 resolver.cancel()
-        for resolver in [self._resolver, *self._next_resolvers]:
+        for resolver in held:
             if resolver is not None and resolver.isRunning():
                 resolver.wait(5000)
         self._engine.quit()
