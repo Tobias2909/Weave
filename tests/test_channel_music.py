@@ -344,6 +344,8 @@ class TheSongsAreKept(unittest.TestCase):
         self.bridge._cfg = Config(raw={})
         self.bridge._view_channel = "yt:UC1"
         self.bridge._channel_music = []
+        self.bridge._channel_music_groups = []
+        self.bridge._channel_music_from_cache = False
         self.bridge._channel_music_name = ""
         self.bridge._channel_music_key = ""
         self.bridge._channel_music_busy = False
@@ -363,7 +365,10 @@ class TheSongsAreKept(unittest.TestCase):
     def test_a_second_visit_costs_nothing(self) -> None:
         # Reading a catalogue is two requests and several seconds, for a list
         # that changes about as often as a playlist does.
-        self.bridge._keep_channel_music("yt:UC1", [{"key": "yt:s1", "title": "One"}])
+        self.bridge._keep_channel_music(
+            "yt:UC1", [{"key": "yt:s1", "title": "One"}],
+            [{"title": "A Record", "kind": "album", "shuffled": False,
+              "songs": [{"key": "yt:s1", "title": "One"}]}])
         Bridge._fetch_channel_music(self.bridge)
         self.assertEqual(self.started, [], "the catalogue was read again")
         self.assertEqual(len(self.bridge._channel_music), 1)
@@ -371,17 +376,61 @@ class TheSongsAreKept(unittest.TestCase):
     def test_a_stale_one_is_read_again(self) -> None:
         import time as clock
 
-        self.bridge._keep_channel_music("yt:UC1", [{"key": "yt:s1"}])
+        self.bridge._keep_channel_music("yt:UC1", [{"key": "yt:s1"}], [])
         self.db.set_state("channel_music_at.yt:UC1",
                           str(int(clock.time()) - 7 * 3600))
         Bridge._fetch_channel_music(self.bridge)
         self.assertEqual(len(self.started), 1, "a stale list was trusted")
 
+    def test_but_it_is_drawn_at_once_while_that_happens(self) -> None:
+        """Reading a catalogue is a call per record and eight seconds measured.
+        A week old answer to press now beats an empty page for eight seconds."""
+        import time as clock
+
+        self.bridge._keep_channel_music(
+            "yt:UC1", [{"key": "yt:s1"}],
+            [{"title": "A Record", "kind": "album", "shuffled": False,
+              "songs": [{"key": "yt:s1"}]}])
+        self.db.set_state("channel_music_at.yt:UC1",
+                          str(int(clock.time()) - 8 * 24 * 3600))
+        Bridge._fetch_channel_music(self.bridge)
+        self.assertEqual(len(self.bridge._channel_music_groups), 1,
+                         "an old catalogue was thrown away rather than shown")
+        self.assertTrue(self.bridge._channel_music_from_cache)
+        self.assertEqual(len(self.started), 1, "and it was not read again behind it")
+
+    def test_a_reading_still_arriving_is_not_drawn_over_what_is_shown(self) -> None:
+        """It arrives a record at a time, and records already on the page would
+        go away and come back one by one."""
+        self.bridge._keep_channel_music(
+            "yt:UC1", [{"key": "yt:s1"}],
+            [{"title": "A Record", "kind": "album", "songs": [{"key": "yt:s1"}]},
+             {"title": "Another", "kind": "album", "songs": [{"key": "yt:s2"}]}])
+        Bridge._fetch_channel_music(self.bridge)
+        Bridge._on_channel_music_growing(
+            self.bridge, "yt:UC1",
+            [{"title": "A Record", "kind": "album", "songs": [{"key": "yt:s1"}]}])
+        self.assertEqual(len(self.bridge._channel_music_groups), 2,
+                         "a partial reading took a record off the page")
+
+    def test_but_an_empty_page_fills_as_the_records_land(self) -> None:
+        Bridge._on_channel_music_growing(
+            self.bridge, "yt:UC1",
+            [{"title": "A Record", "kind": "album", "songs": [{"key": "yt:s1"}]}])
+        self.assertEqual(len(self.bridge._channel_music_groups), 1)
+
+    def test_records_for_another_channel_are_dropped(self) -> None:
+        """They arrive seconds late, by which time the page may have moved."""
+        Bridge._on_channel_music_growing(
+            self.bridge, "yt:UC2",
+            [{"title": "A Record", "kind": "album", "songs": [{"key": "yt:s1"}]}])
+        self.assertEqual(self.bridge._channel_music_groups, [])
+
     def test_walking_to_another_channel_does_not_keep_the_old_songs(self) -> None:
         # Walking back lands on a channel without going through the opener, so
         # nothing was reading this half again and it showed the songs of the
         # channel before it.
-        self.bridge._keep_channel_music("yt:UC1", [{"key": "yt:s1"}])
+        self.bridge._keep_channel_music("yt:UC1", [{"key": "yt:s1"}], [])
         Bridge._fetch_channel_music(self.bridge)
         self.assertEqual(len(self.bridge._channel_music), 1)
 

@@ -818,17 +818,30 @@ class AudioPlayer(QObject):
 
     # ---- the queue -------------------------------------------------------
 
-    def play_items(self, items: list[dict], start: int = 0) -> None:
+    def play_items(self, items: list[dict], start: int = 0,
+                   shuffle_rest: bool = False) -> None:
         """Queue a list and begin. Each entry needs a key, a title and a url,
-        and may say that it is live."""
+        and may say that it is live.
+
+        `shuffle_rest` is for a list that is a bag rather than a running order,
+        a shelf of singles being the one that asked for it. It shuffles this
+        list only and leaves the player's own shuffle setting alone, so a
+        person who plays their singles does not find every later list shuffled
+        too.
+        """
         self._queue = [dict(item) for item in items if item.get("url")]
         if not self._queue:
             return
         self._rebuild_order()
         self._at = max(0, min(start, len(self._queue) - 1))
-        if self._shuffle:
+        if self._shuffle or shuffle_rest:
             # Whatever was picked stays first, the rest are shuffled behind it.
-            self._order = [self._at] + [i for i in self._order if i != self._at]
+            behind = [i for i in self._order if i != self._at]
+            if shuffle_rest and not self._shuffle:
+                # _rebuild_order only shuffles for the setting, so a list that
+                # asked for it on its own is shuffled here.
+                random.shuffle(behind)
+            self._order = [self._at, *behind]
         self._forget_recovery()
         self.queueChanged.emit()
         # A list replaced outright is not the same event as a song ending into

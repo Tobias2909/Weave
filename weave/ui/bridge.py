@@ -87,8 +87,12 @@ NOWPLAYING = "nowplaying"
 # and how long a playlist's contents are trusted before reading them again.
 RECOMMENDED_TRUST_S = 6 * 3600
 PLAYLIST_TRUST_S = 6 * 3600
-# What an artist has released changes about as often as a playlist does,
-# and reading it costs two requests, so it is kept for as long.
+# What an artist has released changes about as often as a playlist does, and
+# reading it costs a call per record, measured at eight seconds for a channel
+# with fifteen of them. So what was read last time is drawn at once whatever
+# its age, and only asked for again behind it once it is older than this.
+# There is no ceiling on the showing: a catalogue from a week ago is a better
+# answer than an empty page while sixteen calls are made.
 CHANNEL_MUSIC_TRUST_S = 6 * 3600
 # Shorter, because a history changes every time something is played.
 HISTORY_TRUST_S = 30 * 60
@@ -423,6 +427,11 @@ class Bridge(QObject):
         # Finding which channel an artist really is, before going there.
         self._artist_open: ArtistMusic | None = None
         self._channel_music: list = []
+        self._channel_music_groups: list = []
+        # Whether what is on the page came off the disk. While it did, a
+        # reading that is still arriving is not drawn over it: records that
+        # are already there would go away and come back one by one.
+        self._channel_music_from_cache = False
         self._channel_music_name = ""
         self._channel_music_busy = False
         self._channel_music_key = ""
@@ -2723,13 +2732,21 @@ class Bridge(QObject):
         row = self._db.channel(key) or {}
         self._channel_music_key = key
         self._channel_music = []
+        self._channel_music_groups = []
+        self._channel_music_from_cache = False
         self._channel_music_name = ""
         kept = self._kept_channel_music(key)
         if kept is not None:
-            self._channel_music = kept
+            # Whatever its age. Something to press now beats the right answer
+            # in eight seconds, and the right answer arrives behind it anyway.
+            self._channel_music = kept.get("songs") or []
+            self._channel_music_groups = kept.get("groups") or []
+            self._channel_music_from_cache = True
             self._channel_music_name = str(row.get("music_artist_name") or "")
             self.channelTabChanged.emit()
-            return
+            if time.time() - self._db.get_int(f"channel_music_at.{key}", 0) \
+                    <= CHANNEL_MUSIC_TRUST_S:
+                return
         asked = row.get("music_checked_at")
         known = str(row.get("music_artist_id") or "")
         if asked and not known:
@@ -2743,41 +2760,71 @@ class Bridge(QObject):
             self._cfg, key, str(row.get("ext_id") or ""),
             self._db.channel_video_ids(key, ArtistMusic.SAMPLE), known, parent=self)
         self._artist_music.ready.connect(self._on_channel_music)
+        self._artist_music.growing.connect(self._on_channel_music_growing)
         self._artist_music.failed.connect(self._on_channel_music_failed)
         if not self._launch(self._artist_music):
             self._channel_music_busy = False
 
-    def _kept_channel_music(self, key: str) -> list | None:
-        """The songs read last time, while they are still worth trusting.
+    def _kept_channel_music(self, key: str) -> dict | None:
+        """What was read last time, while it is still worth trusting.
 
         Only the identity was being kept before, so every visit read the whole
         catalogue again, which is two requests and several seconds for a list
-        that changes about as often as a playlist does.
+        that changes about as often as a playlist does. With the records read
+        as well it is a good deal more than two.
+
+        Age is not asked here on purpose. What was read last time is drawn at
+        once however old it is, and the caller decides whether to read it
+        again behind what is already on the page.
+
+        A stored plain list is what this kept before the records existed. It is
+        answered as nothing rather than as songs without their records, so the
+        first visit after an update reads them once and keeps them.
         """
-        stamp = self._db.get_int(f"channel_music_at.{key}", 0)
-        if not stamp or time.time() - stamp > CHANNEL_MUSIC_TRUST_S:
+        if not self._db.get_int(f"channel_music_at.{key}", 0):
             return None
         stored = self._db.get_state(f"channel_music.{key}")
         if not stored:
             return None
         try:
-            songs = json.loads(stored)
+            kept = json.loads(stored)
         except ValueError:
             return None
-        return songs if isinstance(songs, list) else None
+        return kept if isinstance(kept, dict) else None
 
-    def _keep_channel_music(self, key: str, songs: list) -> None:
-        self._db.set_state(f"channel_music.{key}", json.dumps(songs))
+    def _keep_channel_music(self, key: str, songs: list, groups: list) -> None:
+        self._db.set_state(f"channel_music.{key}",
+                           json.dumps({"songs": songs, "groups": groups}))
         self._db.set_state(f"channel_music_at.{key}", str(int(time.time())))
+
+    def _on_channel_music_growing(self, key: str, groups: list) -> None:
+        """The records read so far, while the rest are still being asked for.
+
+        A channel with fifteen records is sixteen calls and eight seconds, and
+        a page that sits empty for eight seconds and then fills all at once is
+        the same wait spent worse.
+
+        Only into a page that has nothing on it. Where something was drawn from
+        what was kept, a partial reading would take records off the page and
+        put them back one at a time, which is worse than a page that simply
+        changes once when the reading lands.
+        """
+        if key != self._view_channel or self._channel_music_from_cache:
+            return
+        self._channel_music_groups = list(groups)
+        self.channelTabChanged.emit()
 
     def _on_channel_music(self, key: str, found: dict) -> None:
         self._channel_music_busy = False
         # Kept whatever the answer was. A channel with no music side is a fact
         # worth remembering, not a question to put again on the next visit.
         self._db.set_channel_music(key, found["artistId"], found["artistName"])
-        self._keep_channel_music(key, found["songs"])
+        groups = found.get("groups") or []
+        self._keep_channel_music(key, found["songs"], groups)
         if key == self._view_channel:
             self._channel_music = found["songs"]
+            self._channel_music_groups = groups
+            self._channel_music_from_cache = False
             self._channel_music_name = found["artistName"]
         self.channelTabChanged.emit()
 
@@ -2788,6 +2835,9 @@ class Bridge(QObject):
 
     def _get_channel_music(self) -> list:
         return list(self._channel_music)
+
+    def _get_channel_music_groups(self) -> list:
+        return list(self._channel_music_groups)
 
     def _get_channel_music_by(self) -> str:
         """Named only when the music comes from somewhere else. Landing on a
@@ -2803,6 +2853,11 @@ class Bridge(QObject):
 
     channelMusic = Property("QVariantList", _get_channel_music,
                             notify=channelTabChanged)
+    # The same songs, arranged as the records they came out on. The flat list
+    # above is what the queue and the favourites are built from; this is what
+    # the page draws.
+    channelMusicGroups = Property("QVariantList", _get_channel_music_groups,
+                                  notify=channelTabChanged)
     channelMusicBy = Property(str, _get_channel_music_by, notify=channelTabChanged)
     channelMusicBusy = Property(bool, lambda self: self._channel_music_busy,
                                 notify=channelTabChanged)
@@ -3239,6 +3294,53 @@ class Bridge(QObject):
                 row["key"], url, str(row.get("title") or "")):
             return
         self._hand_over(row["key"], url, str(row.get("title") or ""), login, live)
+
+    @Slot(str)
+    def playFromStart(self, key: str) -> None:
+        """A running broadcast, begun at the oldest point YouTube still holds.
+
+        Not the beginning of the broadcast, and the words everywhere say so.
+        What can be reached is the playlist YouTube hands out, which was
+        measured at fifteen minutes on one stream and an hour on four others.
+        A stream that has ended in the meantime simply plays as the recording
+        it has become, which begins at its own beginning, so nothing is asked
+        about it first.
+        """
+        row = self._model.row_for_key(key)
+        if not row:
+            return
+        if key.startswith("twitch:"):
+            # Resolved through streamlink, which is handed the live edge and
+            # nothing behind it. The entry is drawn refused rather than left
+            # out; this is the other half of that.
+            self._set_notice("Twitch keeps no window to rewind into", 5)
+            return
+        if not row["isLive"]:
+            self._set_notice("That is not a running broadcast", 5)
+            return
+        self._hand_over_from_start(row["key"], row["url"], str(row.get("title") or ""))
+
+    @Slot(str)
+    def playLiveFromStart(self, channel_key: str) -> None:
+        """The same, from the live bar, where a card carries a channel."""
+        row = next((entry for entry in self._get_live()
+                    if entry["channelKey"] == channel_key), None)
+        if not row:
+            return
+        if row["platform"] == "twitch":
+            self._set_notice("Twitch keeps no window to rewind into", 5)
+            return
+        self._hand_over_from_start(channel_key,
+                                   ids.watch_url("youtube", row["login"]),
+                                   str(row.get("name") or ""))
+
+    def _hand_over_from_start(self, key: str, url: str, title: str) -> None:
+        if not self._player.play_from_start(url):
+            return
+        self._set_status(f"playing {title} from the start of its window")
+        self._set_notice("Starting as far back as YouTube still holds it", 6)
+        self._set_starting(key)
+        self._step_aside_for_video()
 
     def _hand_over(self, key: str, url: str, title: str,
                    login: str | None, live: bool) -> None:
@@ -3894,7 +3996,8 @@ class Bridge(QObject):
                                    found.get("artistName") or str(row.get("title") or ""))
         self._channel_music_key = key
         self._channel_music = found.get("songs") or []
-        self._keep_channel_music(key, self._channel_music)
+        self._channel_music_groups = found.get("groups") or []
+        self._keep_channel_music(key, self._channel_music, self._channel_music_groups)
         self._channel_music_name = found.get("artistName") or ""
         self._set_status("")
         self.showChannelTab("music")
@@ -3915,6 +4018,56 @@ class Bridge(QObject):
             return
         items = self._track_items(self._channel_music)
         self._audio.play_items(items, max(0, min(index, len(items) - 1)))
+
+    def _group_song(self, group_index: int, index: int) -> tuple[dict, dict] | None:
+        """One song of one record, and the record it is on."""
+        try:
+            group = self._channel_music_groups[group_index]
+            return group, group["songs"][index]
+        except (IndexError, KeyError, TypeError):
+            return None
+
+    @Slot(int, int)
+    def playChannelGroupSong(self, group_index: int, index: int) -> None:
+        """A song off a record, and the rest of that record behind it.
+
+        The record decides the order rather than the press: an album is heard
+        the way it was put together, and a shelf of singles is a bag, so it is
+        heard in no order at all. That rule travels with the group rather than
+        living here, so the window and the player cannot disagree about it.
+        """
+        found = self._group_song(group_index, index)
+        if not self._audio or found is None:
+            return
+        group, _song = found
+        items = self._track_items(group["songs"])
+        if not items:
+            return
+        self._audio.play_items(items, max(0, min(index, len(items) - 1)),
+                               shuffle_rest=bool(group.get("shuffled")))
+
+    @Slot(int, int, bool)
+    def queueChannelGroupSong(self, group_index: int, index: int,
+                              play_next: bool = False) -> None:
+        found = self._group_song(group_index, index)
+        if found is None:
+            return
+        items = self._track_items([found[1]])
+        self._queue_track(items[0] if items else None, play_next)
+
+    @Slot(int, int)
+    def favoriteChannelGroupSong(self, group_index: int, index: int) -> None:
+        found = self._group_song(group_index, index)
+        if found is None:
+            return
+        song = found[1]
+        self._mark_favorite(str(song.get("key") or ""), str(song.get("title") or ""),
+                            song.get("artist"), song.get("thumbnail"))
+
+    @Slot(int, int, result=bool)
+    def channelGroupSongIsFavorite(self, group_index: int, index: int) -> bool:
+        found = self._group_song(group_index, index)
+        return False if found is None else self.isFavorite(str(found[1].get("key") or ""))
 
     @Slot(int, bool)
     def queueChannelMusic(self, index: int, play_next: bool = False) -> None:

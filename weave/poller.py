@@ -2482,11 +2482,22 @@ class ArtistMusic(Worker):
     """
 
     ready = Signal(str, "QVariantMap")
+    # The records read so far, said as each one lands. Sixteen calls and eight
+    # seconds for a channel with fifteen records is a long time to look at an
+    # empty page, and every one of them is worth looking at on its own.
+    growing = Signal(str, "QVariantList")
     failed = Signal(str)
 
     # Enough to outvote one track that names a guest rather than the channel's
     # own artist. More than this is paying for a tie that does not happen.
     SAMPLE = 3
+
+    # How many albums and singles a channel is allowed to have read. Each one
+    # is a single call to the music browse endpoint, measured at 0.11 to 0.24 s
+    # with no refusal for fifteen in a row, and the answer is kept for hours.
+    # The cap is what stops a discography of two hundred records from becoming
+    # two hundred calls the moment a tab is opened.
+    RELEASE_CAP = 30
 
     def __init__(self, cfg: Config, channel_key: str, channel_id: str,
                  video_ids: list[str], known_id: str = "",
@@ -2507,12 +2518,14 @@ class ArtistMusic(Worker):
             if not artist_id:
                 # Asked, and there is none. Said plainly so it can be kept.
                 self.ready.emit(self._key, {"artistId": "", "artistName": "",
-                                            "channelId": "", "songs": []})
+                                            "channelId": "", "songs": [],
+                                            "groups": []})
                 return
             found = ytmusic.artist(profile, artist_id)
         except ytmusic.MusicError as exc:
             self.failed.emit(str(exc))
             return
+        songs = [self._song(track) for track in found["songs"]]
         self.ready.emit(self._key, {
             "artistId": artist_id,
             "artistName": found["name"] or name,
@@ -2521,13 +2534,100 @@ class ArtistMusic(Worker):
             # nothing more, and this is the one worth standing on.
             "channelId": self._real_channel(
                 artist_id, found.get("channel_id", "")),
-            "songs": [{
-                "key": t.key, "videoId": t.video_id, "title": t.title,
-                "artist": t.artist, "album": t.album, "duration": t.duration,
-                "thumbnail": qml_source(t.thumbnail_url),
-                "artistId": t.artist_id,
-            } for t in found["songs"]],
+            "songs": songs,
+            "groups": self._grouped(ytmusic, profile, found, songs),
         })
+
+    @staticmethod
+    def _song(track, picture: str = "") -> dict:
+        """One song as the window wants it.
+
+        The picture falls back to the record's own, because a track read off an
+        album often carries none of its own and a square of nothing beside a
+        title reads as a song that failed to load.
+        """
+        return {
+            "key": track.key, "videoId": track.video_id, "title": track.title,
+            "artist": track.artist, "album": track.album,
+            "duration": track.duration,
+            "thumbnail": qml_source(track.thumbnail_url or picture),
+            "artistId": track.artist_id,
+        }
+
+    def _grouped(self, ytmusic, profile, found: dict, songs: list[dict]) -> list[dict]:
+        """The songs arranged as the records they came out on.
+
+        The records themselves are already in the artist page, so naming them
+        costs nothing. What is on each is one call, capped by RELEASE_CAP, and
+        the whole answer is kept by the window for hours, so a second visit
+        costs nothing either.
+
+        Singles go into one group rather than one group each, or a page of
+        them reads as a shelf of albums with one song on them. That group is
+        marked to be played in a random order, which is what was asked for:
+        pressing a single is picking the singles, not picking a running order.
+
+        Whatever is left over keeps the songs that belong to no record here,
+        so nothing an artist has is lost by grouping.
+        """
+        records: list[dict] = []
+        singles: list[dict] = []
+        placed: set[str] = set()
+        for release in (found.get("releases") or [])[:self.RELEASE_CAP]:
+            try:
+                tracks = ytmusic.release_tracks(profile, release["playlist_id"],
+                                                release["browse_id"])
+            except ytmusic.MusicError:
+                # One record that will not answer is not the whole tab. The
+                # rest of them, and the songs, are still worth showing.
+                continue
+            on_it = [self._song(track, release["thumbnail"]) for track in tracks]
+            if not on_it:
+                continue
+            placed.update(song["key"] for song in on_it)
+            if release["kind"] == "single":
+                singles.extend(on_it)
+            else:
+                records.append({
+                    "title": release["title"], "year": release["year"],
+                    "picture": qml_source(release["thumbnail"]),
+                    "kind": "album", "shuffled": False, "songs": on_it,
+                })
+            # As it lands, so the page fills rather than sitting empty for the
+            # length of the whole reading. The leftovers are deliberately not
+            # in this: they are whatever no record has claimed yet, so they
+            # would start as everything and shrink as the records arrive,
+            # which reads as songs jumping about.
+            self.growing.emit(self._key, self._records(records, singles))
+        groups = self._records(records, singles)
+        rest = [song for song in songs if song["key"] not in placed]
+        if rest:
+            groups.append({
+                # Named for what it is. A leftover group standing alone is
+                # simply the songs, and calling those "other" invites the
+                # question of what they are other than.
+                "title": "Other songs" if groups else "Songs", "year": "",
+                "picture": rest[0].get("thumbnail", ""),
+                "kind": "other", "shuffled": False, "songs": rest,
+            })
+        return groups
+
+    @staticmethod
+    def _records(records: list[dict], singles: list[dict]) -> list[dict]:
+        """The records, with every single gathered into one group.
+
+        A group per single reads as a shelf of albums with one song on each,
+        and that group is marked to be heard in no order: picking a single is
+        picking the singles, not picking a running order.
+        """
+        out = list(records)
+        if singles:
+            out.append({
+                "title": "Singles", "year": "",
+                "picture": singles[0].get("thumbnail", ""),
+                "kind": "singles", "shuffled": True, "songs": list(singles),
+            })
+        return out
 
     def _real_channel(self, artist_id: str, named: str) -> str:
         """The channel worth standing on, rather than the one the songs are

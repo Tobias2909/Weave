@@ -356,6 +356,20 @@ class AFreshList(unittest.TestCase):
         self.assertEqual(told, [True], "adding a song read as a fresh list")
 
 
+def _opening_brace(source: str, at: int) -> int:
+    """Where the dict enclosing this position opens, or -1 outside one."""
+    depth = 0
+    for index in range(at - 1, -1, -1):
+        letter = source[index]
+        if letter == "}":
+            depth += 1
+        elif letter == "{":
+            if depth == 0:
+                return index
+            depth -= 1
+    return -1
+
+
 class EveryQueueEntryCarriesItsArtist(unittest.TestCase):
     """A name is pressable only where the entry behind it carries an address.
 
@@ -373,14 +387,21 @@ class EveryQueueEntryCarriesItsArtist(unittest.TestCase):
         # is what makes it findable without parsing the whole file.
         marker = 'ids.watch_url("youtube"'
         missing = []
-        for piece in source.split(marker)[1:]:
-            # Back to the start of the dict this address sits in, then forward
-            # over it. A builder is small, so a window either side is enough.
-            before = source[:source.index(marker + piece)]
-            start = before.rfind("{")
-            entry = source[start:source.index(marker + piece) + 200]
-            if '"key"' in entry and '"artistId"' not in entry:
-                missing.append(entry.strip().splitlines()[0].strip())
+        at = source.find(marker)
+        while at >= 0:
+            # The dict this address is written inside, found by walking back
+            # over balanced braces. The nearest brace of any kind is not the
+            # same thing: an address passed as an argument rather than built
+            # into a dict has no dict around it at all, and reading back to
+            # the last brace reached into whatever method happened to sit
+            # above it and read a builder there instead. A handoff written
+            # exactly that way is what showed it.
+            start = _opening_brace(source, at)
+            if start >= 0:
+                entry = source[start:at + 200]
+                if '"key"' in entry and '"artistId"' not in entry:
+                    missing.append(entry.strip().splitlines()[0].strip())
+            at = source.find(marker, at + 1)
         self.assertEqual(missing, [], "a queue entry was built with no artist address")
 
 

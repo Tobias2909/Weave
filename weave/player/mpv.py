@@ -35,6 +35,16 @@ from ..config import Config
 WRAPPER_NAME = "mpv-ff2mpv-single.sh"
 DEFAULT_SOCKET = "mpv-ff2mpv.sock"
 
+# What makes mpv begin a running broadcast at the oldest point it is offered
+# instead of at the live edge. ffmpeg's HLS demuxer otherwise starts three
+# segments from the end of the playlist, and nothing else moves it: measured
+# against real broadcasts, a backward seek answers success and moves nothing,
+# --start=0 and --force-seekable change nothing, and yt-dlp's own
+# --live-from-start hands mpv something it cannot open at all. This is the one
+# lever there is, and what it reaches is what the playlist holds, which was
+# fifteen minutes on one stream and an hour on four others.
+REWIND_OPTION = "live_start_index=0"
+
 # Property ids used with observe_property. Any stable integers would do.
 _OBS_PATH = 1
 _OBS_DURATION = 2
@@ -417,7 +427,11 @@ class Player(QObject):
         # waits on it, but a child nobody ever polls stays a zombie in the
         # process table once it does exit. Polled on the next handoff.
         self._children: list[subprocess.Popen] = []
-        self._watcher = _IpcWatcher(resolve_socket(cfg), cfg.watched_threshold, self)
+        # Held here as well as inside the watcher, because starting a stream
+        # at the beginning of its window is said to the player that is already
+        # running rather than through the wrapper, which forwards no arguments.
+        self._socket_path = resolve_socket(cfg)
+        self._watcher = _IpcWatcher(self._socket_path, cfg.watched_threshold, self)
         self._watcher.nowPlaying.connect(self.nowPlaying)
         self._watcher.watched.connect(self.watched)
         self._watcher.connectionChanged.connect(self.connectionChanged)
@@ -442,6 +456,73 @@ class Player(QObject):
     def _sweep_children(self) -> None:
         """Collect the players that have exited since the last look."""
         self._children = [child for child in self._children if child.poll() is None]
+
+    def _tell(self, payload: dict) -> bool:
+        """Say one thing to the mpv that is already running.
+
+        A connection of its own rather than the watcher's, which is a reading
+        thread parked in recv. mpv takes as many clients as ask, and this is
+        exactly what the wrapper does to the same socket.
+        """
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.settimeout(1.0)
+                sock.connect(str(self._socket_path))
+                sock.sendall(json.dumps(payload).encode() + b"\n")
+        except OSError:
+            return False
+        return True
+
+    def play_from_start(self, url: str) -> bool:
+        """A running broadcast, begun at the oldest point YouTube still holds.
+
+        The option has to ride with the file, so this does not go through the
+        wrapper: the wrapper takes a URL and forwards nothing else. A player
+        that is already up is told to load it, which keeps the one window; when
+        there is none, mpv is started here with the same socket the wrapper
+        uses, so the window after this one is shared again.
+        """
+        from ..engine import loadfile_takes_an_index
+
+        self._watcher.set_twitch_hint(None)
+        self._watcher.set_live_hint(True)
+        options = {"demuxer-lavf-o": REWIND_OPTION}
+        # Where the options go moved in mpv 0.38. Getting it wrong does not
+        # lose the option quietly, it fails the whole load.
+        command = (["loadfile", url, "replace", -1, options]
+                   if loadfile_takes_an_index()
+                   else ["loadfile", url, "replace", options])
+        if self._tell({"command": command}):
+            # Both of these follow every load the wrapper sends, for the same
+            # reasons: pause is a global property, so a file handed to a paused
+            # player stays paused, and a minimised window would leave the
+            # stream playing out of sight.
+            self._tell({"command": ["set_property", "pause", False]})
+            self._tell({"command": ["set_property", "window-minimized", False]})
+            return True
+        return self._start_own_mpv(url)
+
+    def _start_own_mpv(self, url: str) -> bool:
+        """Start mpv here, with the rewind option and the shared socket."""
+        mpv = shutil.which("mpv")
+        if mpv is None:
+            self.failed.emit("mpv is not on PATH, so a stream cannot be started "
+                             "at the beginning of its window")
+            return False
+        self._sweep_children()
+        try:
+            self._children.append(subprocess.Popen(
+                [mpv, f"--input-ipc-server={self._socket_path}",
+                 f"--demuxer-lavf-o={REWIND_OPTION}", "--", url],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            ))
+            return True
+        except OSError as exc:
+            self.failed.emit(f"could not start the player: {exc}")
+            return False
 
     def play(self, url: str, twitch_login: str | None = None, live: bool = False) -> bool:
         if not self._command:

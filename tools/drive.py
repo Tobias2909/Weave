@@ -1637,6 +1637,135 @@ class Smoke:
         bridge.selectGroup(-1)
         settle(0.3)
 
+    def channel_albums(self, bridge, window) -> None:
+        """A channel's music, arranged as the records it came out on.
+
+        The records are handed over here rather than read, since reading them
+        is a call each and this walk makes none. What is proved is the drawing:
+        a block per record, the songs of one in a row under its name, and that
+        pressing one reaches the bridge with the record it is on. That last
+        one matters more than it looks: the tile is built inside the block's
+        own delegate, and a delegate that cannot see the scope around it
+        silently does nothing.
+        """
+        step("a channel's music as records")
+        key = "yt:UCsmokesmokesmokesmokes1"
+        bridge.openChannel(key)
+        settle(0.4)
+        bridge.showChannelTab("music")
+        settle(0.5)
+        bridge._channel_music_busy = False
+        bridge._channel_music = [{"key": "yt:albumsong1", "title": "One",
+                                  "artist": "Somebody", "thumbnail": ""}]
+        bridge._channel_music_groups = [
+            {"title": "A Record", "year": "2026", "kind": "album", "shuffled": False,
+             # A real file on disk. An address that never answers reaches the
+             # network here, because a record's cover is drawn straight rather
+             # than through the picture cache.
+             "picture": artwork_file(),
+             "songs": [{"key": "yt:albumsong1", "title": "One", "artist": "Somebody",
+                        "thumbnail": "", "artistId": ""},
+                       {"key": "yt:albumsong2", "title": "Two", "artist": "Somebody",
+                        "thumbnail": "", "artistId": ""}]},
+            {"title": "Singles", "year": "", "kind": "singles", "shuffled": True,
+             "picture": "",
+             "songs": [{"key": "yt:singlesong1", "title": "Alone", "artist": "Somebody",
+                        "thumbnail": "", "artistId": ""}]},
+        ]
+        bridge.channelTabChanged.emit()
+        settle(0.6)
+
+        root = window.contentItem()
+        titles = [str(read(one, "text")) for one in items_named_like(root, "groupTitle")]
+        self.check("a channel's music is drawn as one block per record",
+                   titles == ["A Record", "Singles"], ", ".join(titles))
+        notes = [str(read(one, "text")) for one in items_named_like(root, "groupNote")]
+        self.check("an album says what it is and how much is on it",
+                   notes and "Album" in notes[0] and "2 songs" in notes[0],
+                   notes[0] if notes else "no note")
+        self.check("and the singles say they are heard in no order",
+                   len(notes) > 1 and "no order" in notes[1],
+                   notes[1] if len(notes) > 1 else "no note")
+        pictures = items_named_like(root, "groupPicture")
+        drawn = [one for one in pictures if read(one, "visible")]
+        self.check("a record with no cover holds no room open for one",
+                   len(drawn) == 1, f"{len(drawn)} of {len(pictures)} drawn")
+
+        tiles = items_named_like(root, "groupSong")
+        self.check("every song on every record is drawn", len(tiles) == 3,
+                   f"{len(tiles)} tiles")
+        # The press itself, through the real signal. What is being asked is
+        # whether the tile can see which record it is on, which nothing but a
+        # press ever evaluates.
+        played = []
+        bridge._audio_play_items = None
+        real = bridge.playChannelGroupSong
+
+        def remember(group_index, index):
+            played.append((group_index, index))
+
+        bridge.playChannelGroupSong = remember
+        QMetaObject.invokeMethod(tiles[2], "chosen")
+        settle(0.3)
+        bridge.playChannelGroupSong = real
+        self.check("and pressing one names the record it is on",
+                   played == [(1, 0)], str(played))
+
+        bridge.selectGroup(-1)
+        settle(0.3)
+
+    def from_the_start(self, bridge, window) -> None:
+        """What the menus offer on a broadcast that is running.
+
+        The entry is drawn refused rather than left out where it cannot work,
+        which is what was asked for, so what is checked is that it says why.
+        """
+        step("starting a stream at the beginning of its window")
+        menu = find(window, "videoMenu")
+        write(window, "menuKey", "yt:smokevid005")
+        write(window, "menuLive", True)
+        menu.open()
+        settle(0.4)
+        entries = dict((text.strip(), item) for text, item in menu_entries(menu))
+        name = "Play from the start of the rewind window"
+        entry = entries.get(name)
+        self.check("a running broadcast can be started at the start of its window",
+                   entry is not None and read(entry, "visible") is True
+                   and read(entry, "enabled") is True,
+                   ", ".join(entries))
+        self.check("and nothing says why not, because it can",
+                   entry is not None and str(read(entry, "note")) == "",
+                   str(read(entry, "note")) if entry is not None else "no entry")
+
+        write(window, "menuKey", "twitch:somebody")
+        settle(0.3)
+        self.check("on a Twitch card it is refused rather than left out",
+                   entry is not None and read(entry, "visible") is True
+                   and read(entry, "enabled") is False,
+                   f"visible {read(entry, 'visible')} enabled {read(entry, 'enabled')}")
+        self.check("and it says why, under the words",
+                   entry is not None and "rewind" in str(read(entry, "note")),
+                   str(read(entry, "note")) if entry is not None else "no entry")
+
+        # Music favourites used to be offered only where a press already
+        # listened. A song reaches them from any card now.
+        kept = entries.get("Add to music favorites")
+        self.check("a Twitch card is offered no music favourites",
+                   kept is not None and read(kept, "visible") is False,
+                   str(read(kept, "visible")) if kept is not None else "no entry")
+        write(window, "menuKey", "yt:smokevid005")
+        write(window, "menuLive", False)
+        settle(0.3)
+        self.check("an ordinary video is, wherever it is drawn",
+                   kept is not None and read(kept, "visible") is True,
+                   str(read(kept, "visible")) if kept is not None else "no entry")
+        self.check("and a recording is offered no rewind window",
+                   entry is not None and read(entry, "visible") is False,
+                   str(read(entry, "visible")) if entry is not None else "no entry")
+        menu.close()
+        settle(0.3)
+        write(window, "menuKey", "")
+
     def channel_playlists(self, bridge, window) -> None:
         """The playlists half of a channel page.
 
@@ -1862,6 +1991,29 @@ class Smoke:
                    worst <= 0.5,
                    f"{worst:.1f} px into a {radius:.0f} px corner of a "
                    f"{card_height:.0f} px card")
+
+        # The right button on a stream card. These two are Twitch, which keeps
+        # no window to rewind into, so the entry is drawn refused and says so.
+        menu = find(window, "liveCardMenu")
+        bar = find(window, "liveBar")
+        write(bar, "askedIsTwitch", True)
+        menu.open()
+        settle(0.4)
+        entries = dict((text.strip(), item) for text, item in menu_entries(menu))
+        entry = entries.get("Play from the start of the rewind window")
+        self.check("a stream card offers the start of the rewind window",
+                   entry is not None, ", ".join(entries))
+        self.check("refused on Twitch, with the reason under it",
+                   entry is not None and read(entry, "enabled") is False
+                   and "rewind" in str(read(entry, "note")),
+                   str(read(entry, "note")) if entry is not None else "no entry")
+        write(bar, "askedIsTwitch", False)
+        settle(0.3)
+        self.check("and offered on a YouTube one",
+                   entry is not None and read(entry, "enabled") is True,
+                   str(read(entry, "enabled")) if entry is not None else "no entry")
+        menu.close()
+        settle(0.3)
 
         db = Database(paths.DB_FILE)
         db.replace_live("twitch", [])
@@ -2695,6 +2847,8 @@ class Smoke:
         self.suggestions(bridge, window)
         self.strangers(bridge, window)
         self.channel_playlists(bridge, window)
+        self.channel_albums(bridge, window)
+        self.from_the_start(bridge, window)
         self.bar(bridge, window)
         self.live_cards(bridge, window)
         self.following(bridge, window)
