@@ -1025,8 +1025,14 @@ class Smoke:
         self.check("and it is counted with the rest that were left out",
                    "2 videos" in str(read(bridge, "playlistSkippedText")),
                    str(read(bridge, "playlistSkippedText")))
+        # And says it about the right song. The one he is hearing is playing on
+        # without trouble, so a notice that says "that one" points at the wrong
+        # song and reads as a complaint about what is in his ears.
         self.check("and the window says what happened to it",
                    "deleted" in str(read(bridge, "notice")), str(read(bridge, "notice")))
+        self.check("naming the one that went and not the one playing",
+                   str(read(bridge, "notice")).startswith("The next one"),
+                   str(read(bridge, "notice")))
 
         audio._queue = []
         audio._order = []

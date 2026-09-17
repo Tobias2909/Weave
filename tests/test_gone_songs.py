@@ -240,6 +240,60 @@ class ItIsCaughtBeforeItIsReached(unittest.TestCase):
         self.assertEqual(len(self.player._queue), 2)
 
 
+class WhatTheWindowSaysAboutIt(unittest.TestCase):
+    """Which song the notice is about.
+
+    A press is about the song in front of him and "that one" is clear. The
+    look-ahead is about a song he has not reached, while the one he IS hearing
+    plays on without trouble, and "that one" there points at the wrong song and
+    reads as a complaint about what is in his ears.
+    """
+
+    class Nothing:
+        def emit(self, *_a):
+            pass
+
+    class Lists:
+        def forget_playlist_item(self, _ext_id):
+            return 1
+
+        def mark_unavailable(self, _ext_id):
+            pass
+
+    class Player:
+        def __init__(self, playing):
+            self.track = {"key": playing}
+
+    def notice_for(self, gone, playing):
+        from weave.ui.bridge import Bridge
+
+        bridge = Bridge.__new__(Bridge)
+        bridge._db = self.Lists()
+        bridge._audio = self.Player(playing)
+        said = []
+        bridge._set_notice = lambda text, **_k: said.append(text)
+        bridge._set_status = lambda *_a, **_k: None
+        bridge.playlistSkippedChanged = self.Nothing()
+        bridge.playlistsChanged = self.Nothing()
+        bridge.reload = lambda: None
+        Bridge._on_song_gone(bridge, gone)
+        return said[-1]
+
+    def test_the_one_he_pressed_is_that_one(self):
+        self.assertTrue(self.notice_for("yt:aaa", playing="yt:aaa")
+                        .startswith("That one is private"))
+
+    def test_one_found_ahead_of_him_is_the_next_one(self):
+        self.assertTrue(self.notice_for("yt:bbb", playing="yt:aaa")
+                        .startswith("The next one is private"))
+
+    def test_and_both_say_what_became_of_it(self):
+        for notice in (self.notice_for("yt:aaa", playing="yt:aaa"),
+                       self.notice_for("yt:bbb", playing="yt:aaa")):
+            self.assertIn("deleted", notice)
+            self.assertIn("out of the list", notice)
+
+
 class AskingWhetherThereIsAnythingToPlay(unittest.TestCase):
     """The sentence a failed resolve comes back with is not enough to decide
     on, so a second question is asked.

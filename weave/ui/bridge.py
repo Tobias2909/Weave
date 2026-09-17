@@ -3616,7 +3616,16 @@ class Bridge(QObject):
             return
         lists = self._db.forget_playlist_item(ext_id)
         self._db.mark_unavailable(ext_id)
-        self._set_notice("That one is private or has been deleted. "
+        # Which song is being talked about. A press is about the song in front
+        # of him and "that one" is clear; the look-ahead is about a song that
+        # has not been reached, while the one he IS hearing plays on happily,
+        # and "that one" there points at the wrong song. Worked out here rather
+        # than passed in, because the player has not taken it out of the queue
+        # yet when it says so, so this is exact for both ways in.
+        playing = (self._audio is not None
+                   and (self._audio.track or {}).get("key") == key)
+        which = "That one" if playing else "The next one"
+        self._set_notice(f"{which} is private or has been deleted. "
                          "It is out of the list now.", clear_after_s=8)
         self._set_status(f"{key} is gone from YouTube, and out of "
                          f"{lists} {'list' if lists == 1 else 'lists'}")
