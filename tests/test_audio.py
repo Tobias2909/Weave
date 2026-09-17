@@ -108,6 +108,9 @@ class FakeResolver(QObject):
 
     resolved = Signal(str, str)
     failed = Signal(str, str)
+    # Established rather than guessed: this one has nothing to play and never
+    # will, so it leaves the queue instead of being reported as a failure.
+    gone = Signal(str)
     finished = Signal()
 
     def __init__(self, key):

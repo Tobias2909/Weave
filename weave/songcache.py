@@ -1,24 +1,27 @@
-"""Music videos kept on disk, for the songs he keeps.
+"""What is kept on disk for the songs he keeps, sound and picture alike.
 
-A song's picture is a stream like its sound: yt-dlp finds an address, mpv
-reads it, and nothing is written down. That is right for a song played once,
-and wrong for the handful played over and over, which pay the whole cost every
-time. The address takes a couple of seconds to find, the picture takes a
-couple more to arrive, and both happen again on the next play of the same
-song tomorrow.
+A song is a stream at both ends: yt-dlp finds an address, mpv reads it, and
+nothing is written down. That is right for a song played once and wrong for
+the handful played over and over, which pay the whole cost every time. The
+address takes a few seconds to find, the picture a couple more to arrive, and
+all of it happens again on the next play of the same song tomorrow.
 
 So the favourites, and only the favourites, keep theirs. A favourite is a
 short list somebody curated by hand, which is what makes this bounded: on a
-real library it is eighteen songs, and a three and a half minute video at the
-default ceiling measured 29 MiB, so the whole set is about half a gigabyte
-against a ceiling this offers in gigabytes.
+real library it is eighteen songs, and at the default ceiling a three and a
+half minute video measured 29 MiB against 3.3 MiB for its sound, so the whole
+set is about half a gigabyte against a ceiling offered in gigabytes.
+
+Both halves, because keeping one and streaming the other leaves the wait in
+place. The sound is the cheaper of the two by a factor of nine and is the half
+that has to arrive before anything can be heard at all.
 
 A kept file is better than a kept address as well as faster. A signed address
 expires within hours, and a file does not expire at all.
 
-What this does NOT do is fetch anything by itself. A video is kept because it
-was played, so the first play of a favourite costs one extra download in the
-background and every play after it costs nothing. Fetching all of them up
+What this does NOT do is fetch anything by itself. Something is kept because
+it was played, so the first play of a favourite costs one extra download in
+the background and every play after it costs nothing. Fetching all of them up
 front would be half a gigabyte nobody asked for.
 """
 
@@ -32,34 +35,43 @@ from pathlib import Path
 
 # What the settings page offers as a ceiling, in megabytes. Shaped like the
 # picture cache's own list, and starting higher because one video is worth more
-# than a thousand thumbnails.
-CEILING_STEPS_MB: tuple[int, ...] = (500, 1000, 2000, 5000, 10000, 20000)
-DEFAULT_CEILING_MB = 2000
+# than a thousand thumbnails. Powers of 1024 rather than round decimal numbers,
+# because these are read back as gigabytes and 10000 MB is nine and three
+# quarters of one, which is what the button said.
+CEILING_STEPS_MB: tuple[int, ...] = (512, 1024, 2048, 5120, 10240, 20480)
+DEFAULT_CEILING_MB = 2048
 
 # A part file yt-dlp is still writing. Never counted and never handed to the
 # player, or a half written video would be played as a whole one.
 PARTIAL_SUFFIXES = (".part", ".ytdl", ".tmp")
 
 
-def _stem(key: str, height: int) -> str:
-    """What a song's video is filed under.
+# The sound of a song, as opposed to a height, which is what a picture is filed
+# under. One word rather than a number, so the two can never collide.
+SOUND = "sound"
+
+
+def _stem(key: str, mark: str | int) -> str:
+    """What one file of a song is filed under.
 
     The key is hashed rather than used, the way the picture cache does it: a
     video id is safe in a filename but a Twitch key is not, and one rule for
-    both is one rule to get wrong. The height rides along because a ceiling
-    changed later is a different file rather than a wrong one.
+    both is one rule to get wrong. The mark rides along because the sound and
+    the picture of the same song are two files, and because a picture kept at
+    one ceiling and asked for at another is a different file rather than a
+    wrong one.
     """
-    digest = hashlib.sha1(f"{key}@{int(height)}".encode()).hexdigest()
+    digest = hashlib.sha1(f"{key}@{mark}".encode()).hexdigest()
     return f"{digest[:2]}/{digest}"
 
 
-def held(directory: Path, key: str, height: int) -> Path | None:
+def held(directory: Path, key: str, mark: str | int) -> Path | None:
     """The file kept for this song, or None.
 
     Found by pattern rather than by name, since what yt-dlp writes ends in
     whatever container the format came in and that is not known in advance.
     """
-    stem = _stem(key, height)
+    stem = _stem(key, mark)
     folder = directory / Path(stem).parent
     name = Path(stem).name
     try:
@@ -77,9 +89,9 @@ def held(directory: Path, key: str, height: int) -> Path | None:
     return None
 
 
-def target(directory: Path, key: str, height: int) -> Path:
+def target(directory: Path, key: str, mark: str | int) -> Path:
     """Where to tell yt-dlp to write, extension left to it."""
-    path = directory / _stem(key, height)
+    path = directory / _stem(key, mark)
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 

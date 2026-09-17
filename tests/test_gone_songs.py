@@ -127,8 +127,7 @@ class ItLeavesTheQueue(unittest.TestCase):
         self.player.failed.connect(self.failures.append)
 
     def test_a_song_that_is_gone_leaves_the_queue_and_the_next_one_starts(self):
-        self.player._on_resolve_failed(
-            "yt:aaa", "Video unavailable. This video is not available")
+        self.player._on_resolve_gone("yt:aaa")
         self.assertEqual(self.said, ["yt:aaa"])
         self.assertEqual([entry["key"] for entry in self.player._queue],
                          ["yt:bbb", "yt:ccc"])
@@ -136,8 +135,7 @@ class ItLeavesTheQueue(unittest.TestCase):
 
     def test_and_it_is_not_reported_as_a_track_that_would_not_play(self):
         """Nothing went wrong here and there is nothing to try again."""
-        self.player._on_resolve_failed(
-            "yt:aaa", "Video unavailable. This video is not available")
+        self.player._on_resolve_gone("yt:aaa")
         self.assertEqual(self.failures, [])
 
     def test_an_ordinary_failure_still_says_so_and_keeps_the_queue(self):
@@ -146,11 +144,70 @@ class ItLeavesTheQueue(unittest.TestCase):
         self.assertEqual(self.failures, ["the address could not be read"])
         self.assertEqual(len(self.player._queue), 3)
 
-    def test_a_failure_about_some_other_song_is_dropped(self):
-        self.player._on_resolve_failed(
-            "yt:ccc", "Video unavailable. This video is not available")
+    def test_a_report_about_some_other_song_is_dropped(self):
+        self.player._on_resolve_gone("yt:ccc")
         self.assertEqual(self.said, [])
         self.assertEqual(len(self.player._queue), 3)
+
+
+class AskingWhetherThereIsAnythingToPlay(unittest.TestCase):
+    """The sentence a failed resolve comes back with is not enough to decide
+    on, so a second question is asked.
+
+    MEASURED against the two he reported: asking for an address answers
+    "Video unavailable" and nothing else, no reason and no second line, and a
+    video blocked in this country opens with those same two words. Asking for
+    the extraction instead answers in full: both of his came back rc 0,
+    availability "unlisted", a title, a channel, a length, an upload date and
+    ZERO formats. They are not deleted. They exist and YouTube offers nothing
+    to play, which from here is the same thing.
+    """
+
+    def answer(self, stdout="", stderr="", returncode=0):
+        from weave import audio
+        from weave.config import Config
+
+        class Result:
+            pass
+
+        result = Result()
+        result.stdout = stdout
+        result.stderr = stderr
+        result.returncode = returncode
+        was = audio.run_process
+        audio.run_process = lambda *a, **k: result
+        try:
+            return audio.nothing_to_play(Config(raw={}), "https://example/watch")
+        finally:
+            audio.run_process = was
+
+    def test_an_extraction_that_offers_no_format_at_all(self):
+        self.assertTrue(self.answer(stdout="unlisted|not_live|NA\n"))
+
+    def test_one_that_offers_a_format_is_playable(self):
+        self.assertFalse(self.answer(stdout="public|not_live|251\n"))
+
+    def test_a_run_that_did_not_finish_says_nothing(self):
+        """The one that matters most. A broken solver or a stale cookie makes
+        every video in the library fail, and reading that as every video being
+        gone would empty his playlists."""
+        self.assertFalse(self.answer(stdout="", returncode=1))
+        self.assertFalse(self.answer(stdout="", stderr="ERROR: no", returncode=1))
+
+    def test_nor_does_one_yt_dlp_complained_about_the_challenge_on(self):
+        said = ("WARNING: [youtube] Signature solving failed. Ensure you have a "
+                "supported JavaScript runtime and challenge solver script "
+                "distribution installed")
+        self.assertFalse(self.answer(stdout="public|not_live|NA\n", stderr=said))
+
+    def test_behind_a_membership_is_not_gone(self):
+        self.assertFalse(self.answer(stdout="subscriber_only|not_live|NA\n"))
+
+    def test_nor_is_one_that_has_not_started(self):
+        self.assertFalse(self.answer(stdout="public|is_upcoming|NA\n"))
+
+    def test_nor_is_one_on_the_air(self):
+        self.assertFalse(self.answer(stdout="public|is_live|NA\n"))
 
 
 if __name__ == "__main__":

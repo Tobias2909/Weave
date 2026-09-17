@@ -424,7 +424,7 @@ Item {
                             Label {
                                 width: view.wordWidth
                                 height: 28
-                                text: "Kept videos"
+                                text: "Kept music videos"
                                 color: Theme.colors.textMuted
                                 font.pixelSize: 12
                                 verticalAlignment: Text.AlignVCenter
@@ -446,11 +446,11 @@ Item {
                             FlatButton {
                                 id: keepCeilingButton
                                 objectName: "videoKeepCeiling"
-                                text: {
-                                    var mb = App.videoKeepCeiling
-                                    return (mb >= 1024 ? (mb / 1024) + " GB" : mb + " MB")
-                                           + "  \u25be"
-                                }
+                                // Written on the Python side, the same way
+                                // every other sentence in this window is, so
+                                // the button and the line above it cannot
+                                // disagree about what a gigabyte is.
+                                text: App.videoKeepCeilingText + "  \u25be"
                                 onClicked: keepCeilingMenu.popup(keepCeilingButton, 0,
                                                                  keepCeilingButton.height + 2)
 

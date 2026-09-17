@@ -39,7 +39,7 @@ from PySide6.QtCore import (
 
 from .config import Config
 from .cookies import args as cookie_args
-from .sources.ytdlp import explain, prepare
+from .sources.ytdlp import challenge_trouble, explain, prepare
 from .engine_libmpv import CURRENT, NEXT, LibmpvEngine
 from . import trace
 from .imagecache import plain_source
@@ -263,6 +263,66 @@ def resolve_video(cfg: Config, url: str,
     return ""
 
 
+def nothing_to_play(cfg: Config, url: str,
+                   cancel: threading.Event | None = None) -> bool:
+    """Whether YouTube will not serve this video at all, ever.
+
+    Asked only after a resolve has already failed, and worth the two and a
+    half seconds it takes, because the answer decides whether the song is
+    taken out of the lists holding it.
+
+    It exists because the sentence a failed resolve comes back with is not
+    enough to decide on. MEASURED against two real ones he reported: asking
+    for an address answers "Video unavailable" and nothing else, no reason and
+    no second line, and a video blocked in this country opens with those same
+    two words. Asking for the extraction instead answers in full: both of his
+    came back rc 0, availability "unlisted", a title, a channel, a length, an
+    upload date, and ZERO formats. So they are not deleted at all. They exist,
+    and YouTube offers nothing to play, which from here is the same thing and
+    is the state worth acting on.
+
+    Every way of being wrong about this is guarded, because being wrong means
+    throwing away something that is still there:
+
+    A run that did not finish answers no. Not being able to ask is not
+    evidence. This is the one that matters most: a broken solver or a stale
+    cookie makes every video in the library fail to resolve, and a rule that
+    read that as every video being gone would empty his playlists.
+
+    A run yt-dlp complained about the challenge on answers no, for the same
+    reason: that is this machine's own trouble and not the video's.
+
+    Behind a membership, upcoming, or on the air answers no. Each of those is
+    a video that exists and has nothing to hand us right now.
+    """
+    command = prepare(["yt-dlp", "--no-warnings", "--simulate",
+                       # Without this, no formats is itself an error and
+                       # nothing is printed, which is the state being asked
+                       # about.
+                       "--ignore-no-formats-error",
+                       *cookie_args(cfg),
+                       "--print", "%(availability)s|%(live_status)s|%(format_id)s",
+                       url])
+    try:
+        result = run_process(command, cancel=cancel, timeout=120)
+    except (OSError, Timeout):
+        return False
+    line = next((row for row in result.stdout.splitlines() if row.strip()), "")
+    if result.returncode != 0 or not line:
+        return False
+    if challenge_trouble(result.stderr or ""):
+        return False
+    parts = [part.strip() for part in line.split("|")]
+    availability = parts[0] if parts else ""
+    live_status = parts[1] if len(parts) > 1 else ""
+    format_id = parts[2] if len(parts) > 2 else ""
+    if availability == "subscriber_only":
+        return False
+    if live_status in ("is_upcoming", "is_live", "post_live"):
+        return False
+    return format_id in ("", "NA")
+
+
 def resolve_address(cfg: Config, url: str, live: bool,
                     cancel: threading.Event | None = None) -> Resolved:
     """One entry to one playable address, blocking. Takes a few seconds.
@@ -381,6 +441,9 @@ class _Resolver(QThread):
 
     resolved = Signal(str, str, list, "QVariantMap")
     failed = Signal(str, str)
+    # Established, rather than guessed from the sentence: this one has nothing
+    # to play and never will.
+    gone = Signal(str)
 
     def __init__(self, cfg: Config, key: str, url: str, live: bool,
                  parent: QObject | None = None) -> None:
@@ -400,7 +463,18 @@ class _Resolver(QThread):
         except Cancelled:
             return
         except (FileNotFoundError, Timeout, _NoAddress) as exc:
-            self.failed.emit(self.key, str(exc) or "could not resolve the track")
+            said = str(exc) or "could not resolve the track"
+            # The sentence first, since a private or a removed one says so
+            # outright and there is nothing left to ask. Otherwise ask, because
+            # what a failed resolve says about an unplayable video is only the
+            # two words "Video unavailable", which a video blocked in this
+            # country opens with as well.
+            if reads_as_gone(said) or (not self._live and not self._cancel.is_set()
+                                       and nothing_to_play(self._cfg, self._url,
+                                                           self._cancel)):
+                self.gone.emit(self.key)
+                return
+            self.failed.emit(self.key, said)
             return
         self.resolved.emit(self.key, found.address, list(found.chapters),
                            dict(found.facts or {}))
@@ -532,9 +606,16 @@ class AudioPlayer(QObject):
         # with the file when it is. Installed from outside, since which songs
         # are worth keeping is not something the player knows.
         self.local_video = None
+        # And the same for the sound. Asked before any address is looked for,
+        # which is the only wait in the whole chain.
+        self.local_audio = None
         self._video_addresses: dict[str, str] = {}
         self._video_note = ""
         self._video_showing = False
+        # Whether the picture for this song came off the disk rather than off
+        # the wire, which decides whether the artwork over it is faded away or
+        # simply goes.
+        self._video_instant = False
         self._recover_at = 0.0
         self._recover_count = 0
         self._stall_timer = QTimer(self)
@@ -809,17 +890,26 @@ class AudioPlayer(QObject):
         self._pos = 0.0
         self._dur = 0.0
         self._remember(entry)
-        # A different song needs its own picture. Without this the page kept
-        # showing nothing from the changeover onwards, and only closing and
-        # opening it again brought one back.
+        # A different song needs its own picture, so whatever was on screen
+        # stops being shown and the artwork comes back at once. Asking for the
+        # new one waits for mpv to say it has started this file: a picture is
+        # added to the file that is PLAYING, and this one has not been handed
+        # over yet, so asking here attached it to the song being left and the
+        # load that followed threw it away. That is why pressing another song
+        # in the queue showed no picture until the window was minimised and
+        # opened again, which asked a second time with the right file playing.
         self._video_showing = False
-        if self._video_wanted:
-            self._start_video()
         self.trackChanged.emit()
         self.progressChanged.emit()
         if self._resolver is not None and self._resolver.isRunning():
             self._resolver.cancel()
-        address = None if entry.get("live") else self._addresses.get(entry["key"])
+        # Kept on disk, for a song he keeps. No address to find and nothing to
+        # pull, so the sound starts at once rather than after the few seconds
+        # a resolve takes. Never for a broadcast, which has no file and no end.
+        kept = (self.local_audio(entry["key"])
+                if self.local_audio and not entry.get("live") else "")
+        address = kept or (None if entry.get("live")
+                           else self._addresses.get(entry["key"]))
         if address:
             self._loading = False
             self.stateChanged.emit()
@@ -830,6 +920,7 @@ class AudioPlayer(QObject):
         self._resolver = self._make_resolver(entry)
         self._resolver.resolved.connect(self._on_resolved)
         self._resolver.failed.connect(self._on_resolve_failed)
+        self._resolver.gone.connect(self._on_resolve_gone)
         self._resolver.start()
 
     def _on_resolved(self, key: str, address: str, chapters: list | None = None,
@@ -875,15 +966,19 @@ class AudioPlayer(QObject):
             return
         self._loading = False
         self.stateChanged.emit()
-        if reads_as_gone(message):
-            # The video is not there any more, which is a different thing from
-            # a track that would not play. It leaves the queue rather than
-            # being tried again, and what is said about it is said by whoever
-            # holds the lists it was in.
-            self.gone.emit(key)
-            self.removeFromQueue(self._queue.index(self._current()))
-            return
         self.failed.emit(message)
+
+    def _on_resolve_gone(self, key: str) -> None:
+        """Nothing to play, and there never will be. A different thing from a
+        track that would not play, so it leaves the queue rather than being
+        tried again, and what is said about it is said by whoever holds the
+        lists it was in."""
+        if self._current().get("key") != key:
+            return
+        self._loading = False
+        self.stateChanged.emit()
+        self.gone.emit(key)
+        self.removeFromQueue(self._queue.index(self._current()))
 
     # ---- the track after this one ----------------------------------------
 
@@ -915,7 +1010,10 @@ class AudioPlayer(QObject):
             self._engine.clear_after()
             self._appended = None
         entry = self._queue[wanted]
-        address = None if entry.get("live") else self._addresses.get(entry["key"])
+        kept = (self.local_audio(entry["key"])
+                if self.local_audio and not entry.get("live") else "")
+        address = kept or (None if entry.get("live")
+                           else self._addresses.get(entry["key"]))
         if address:
             self._engine.append(address)
             self._appended = wanted
@@ -1074,6 +1172,11 @@ class AudioPlayer(QObject):
             self._prepare_next()
         elif role == CURRENT:
             self._stall_timer.stop()
+            # The file mpv is playing is this one now, so a picture added goes
+            # to the right place. See _start_current for why it is not asked
+            # for any earlier.
+            if self._video_wanted:
+                self._start_video()
         self.stateChanged.emit()
 
     def _on_ended(self, reason: str) -> None:
@@ -1489,9 +1592,14 @@ class AudioPlayer(QObject):
         # window's business and not the player's.
         kept = self.local_video(key) if self.local_video else ""
         if kept:
+            # A file on disk has its first frame in a moment rather than in the
+            # seconds an address and a stream take, so the artwork over it is
+            # not faded away, it simply goes. A fade is there to cover a wait.
+            self._video_instant = True
             self._engine.add_video(kept)
             self.videoChanged.emit()
             return
+        self._video_instant = False
         known = self._video_addresses.get(key)
         if known:
             self._engine.add_video(known)
@@ -1613,6 +1721,14 @@ class AudioPlayer(QObject):
     # A frame exists. Until it does the artwork stays up, so the pane is never
     # a black box waiting.
     videoShowing = Property(bool, _get_video_showing, notify=videoChanged)
+
+    def _get_video_instant(self) -> bool:
+        return self._video_instant
+
+    # Whether this song's picture came off the disk. The page uses it to drop
+    # the fade, which is there to cover the wait for a stream's first frame and
+    # has nothing to cover when there was no wait.
+    videoInstant = Property(bool, _get_video_instant, notify=videoChanged)
 
     @Slot()
     def stop(self) -> None:

@@ -28,7 +28,7 @@ from .. import imagecache
 from .. import palette, themes
 from .. import audio
 from .. import browsers, cookies, ids
-from .. import paths, tokens, videocache
+from .. import paths, tokens, songcache
 from ..config import Config
 from ..db import GROUP_SHOWS, GROUP_SHOWS_ALL, GROUP_SHOWS_STREAMS, Database
 from ..imagecache import SECONDS_PER_DAY, plain_source, qml_source, square_source
@@ -59,9 +59,9 @@ from ..poller import (
     SearchFetcher,
     ArtistMusic,
     SongSide,
+    SongKeeper,
     SourceDetails,
     StreamCheck,
-    VideoKeeper,
     SubsImporter,
     TrackList,
     TwitchLogin,
@@ -391,7 +391,8 @@ class Bridge(QObject):
         self._channel_lists: ChannelPlaylistsFetcher | None = None
         self._channel_members: ChannelMembersFetcher | None = None
         self._stream_check: StreamCheck | None = None
-        self._keeper: VideoKeeper | None = None
+        # One keeper for each half of a song, the picture and the sound.
+        self._keepers: dict = {}
         # The press waiting on that question, as the key, the address and the
         # title. Held rather than asked for again, because the view can have
         # moved on by the time the answer arrives and the press was about the
@@ -1246,32 +1247,42 @@ class Bridge(QObject):
 
     # ---- the videos he keeps ---------------------------------------------
 
-    def _kept_video(self, key: str) -> str:
-        """The file kept for this song, or nothing.
+    def _video_height(self) -> int:
+        return self._audio.video_height() if self._audio else audio.VIDEO_HEIGHT
 
-        Asked by the player every time it is about to find a picture, so it is
-        a directory lookup and nothing more. Touching the file is what makes
-        the oldest unplayed one go first when room is needed.
+    def _kept_file(self, key: str, mark) -> str:
+        """One half of a song, kept on disk, or nothing.
+
+        Asked by the player every time it is about to look for an address, so
+        it is a directory lookup and nothing more. Touching the file is what
+        makes the one played longest ago go first when room is needed.
         """
         if not key:
             return ""
-        found = videocache.held(paths.MOVING_CACHE, key, self._audio.video_height()
-                                if self._audio else audio.VIDEO_HEIGHT)
+        found = songcache.held(paths.MOVING_CACHE, key, mark)
         if found is None:
             return ""
-        videocache.touch(found)
+        songcache.touch(found)
         return str(found)
 
-    def _keep_this_video(self) -> None:
-        """Write the picture of the song playing to disk, if it is one he keeps.
+    def _kept_video(self, key: str) -> str:
+        return self._kept_file(key, self._video_height())
+
+    def _kept_audio(self, key: str) -> str:
+        return self._kept_file(key, songcache.SOUND)
+
+    def _keep_this_song(self) -> None:
+        """Write the song playing to disk, if it is one he keeps.
 
         Only a favourite, because that is a short list somebody curated and
-        this is the only thing that makes the cost bounded. Only while a page
-        is open to show a picture, because otherwise there is no picture being
-        watched to be worth having again. And only once, since the file is
-        what the next play reads.
+        this is the only thing that makes the cost bounded. Both halves of it,
+        since keeping one and streaming the other leaves the wait in place,
+        and the sound is the cheaper by a factor of nine and the half that has
+        to arrive before anything can be heard at all. The picture only while
+        a page is open to show one, which is the rule the whole picture side
+        follows.
         """
-        if self._audio is None or not self._audio.videoWanted:
+        if self._audio is None:
             return
         track = self._audio.track or {}
         key = str(track.get("key") or "")
@@ -1280,55 +1291,83 @@ class Bridge(QObject):
             return
         if not self._db.is_music_favorite(key.split(":", 1)[1]):
             return
-        height = self._audio.video_height()
-        if videocache.held(paths.MOVING_CACHE, key, height) is not None:
-            return
-        if self._keeper is not None and self._keeper.isRunning():
-            return
-        self._keeper = VideoKeeper(self._cfg, key, url, paths.MOVING_CACHE, height, self)
-        self._keeper.kept.connect(self._on_video_kept)
-        self._keeper.failed.connect(self._on_video_not_kept)
-        self._launch(self._keeper)
+        self._keep_half(key, url, songcache.SOUND)
+        if self._audio.videoWanted:
+            self._keep_half(key, url, self._video_height())
 
-    def _on_video_kept(self, key: str, path: str) -> None:
-        self._set_status(f"kept the picture for {key}")
-        self._prune_videos()
+    def _keep_half(self, key: str, url: str, mark) -> None:
+        """One keeper at a time for each half, and none at all for a half that
+        is already on disk."""
+        if songcache.held(paths.MOVING_CACHE, key, mark) is not None:
+            return
+        held = self._keepers.get(mark)
+        if held is not None and held.isRunning():
+            return
+        keeper = SongKeeper(self._cfg, key, url, paths.MOVING_CACHE, mark, self)
+        keeper.kept.connect(self._on_song_kept)
+        keeper.failed.connect(self._on_song_not_kept)
+        self._keepers[mark] = keeper
+        if not self._launch(keeper):
+            self._keepers.pop(mark, None)
+
+    def _on_song_kept(self, key: str, half: str, path: str) -> None:
+        self._set_status(f"kept the {half} for {key}")
+        self._prune_kept()
         self.videosKeptChanged.emit()
 
-    def _on_video_not_kept(self, key: str, why: str) -> None:
+    def _on_song_not_kept(self, key: str, why: str) -> None:
         # Nothing is on screen about this. It is work nobody asked for and
         # nobody is waiting on, and the song played perfectly well without it.
-        self._set_status(f"could not keep the picture for {key}, {why}")
+        self._set_status(f"could not keep {key}, {why}")
 
-    def _prune_videos(self) -> None:
+    def _prune_kept(self) -> None:
         """Bring what is kept under its ceiling, and drop what is no longer a
         favourite, which is the only reason any of it was written down."""
-        height = self._audio.video_height() if self._audio else audio.VIDEO_HEIGHT
+        height = self._video_height()
         wanted = set()
         for row in self._db.music_favorites():
-            found = videocache.held(paths.MOVING_CACHE, f"yt:{row['ext_id']}", height)
-            if found is not None:
-                wanted.add(found)
-        videocache.prune(paths.MOVING_CACHE, self._video_ceiling_mb() * 1024 * 1024, wanted)
+            key = f"yt:{row['ext_id']}"
+            for mark in (height, songcache.SOUND):
+                found = songcache.held(paths.MOVING_CACHE, key, mark)
+                if found is not None:
+                    wanted.add(found)
+        songcache.prune(paths.MOVING_CACHE, self._video_ceiling_mb() * 1024 * 1024, wanted)
 
     def _video_ceiling_mb(self) -> int:
-        return self._db.get_int("kept_video_ceiling_mb", videocache.DEFAULT_CEILING_MB)
+        return self._db.get_int("kept_video_ceiling_mb", songcache.DEFAULT_CEILING_MB)
+
+    @staticmethod
+    def _ceiling_words(megabytes: int) -> str:
+        """A ceiling as it is written on a button.
+
+        Whole gigabytes where it divides, since the steps are powers of 1024
+        and a ceiling somebody chose as ten should not read back as nine and
+        three quarters.
+        """
+        megabytes = int(megabytes)
+        if megabytes >= 1024 and megabytes % 1024 == 0:
+            return f"{megabytes // 1024} GB"
+        if megabytes >= 1024:
+            return f"{megabytes / 1024:.1f} GB"
+        return f"{megabytes} MB"
 
     def _get_videos_kept_text(self) -> str:
-        held = videocache.held_bytes(paths.MOVING_CACHE)
-        files = len(videocache.contents(paths.MOVING_CACHE))
-        ceiling = self._video_ceiling_mb()
+        held = songcache.held_bytes(paths.MOVING_CACHE)
+        files = len(songcache.contents(paths.MOVING_CACHE))
+        ceiling = self._ceiling_words(self._video_ceiling_mb())
         if not files:
-            return f"nothing kept yet, of a {ceiling / 1024:.0f} GB ceiling"
-        return (f"{files} kept, {held / (1024 * 1024):.0f} MB "
-                f"of a {ceiling / 1024:.0f} GB ceiling")
+            return f"nothing kept yet, of a {ceiling} ceiling"
+        return (f"{files} kept, {held / (1024 * 1024):.0f} MB of a {ceiling} ceiling")
 
     videosKeptText = Property(str, _get_videos_kept_text, notify=videosKeptChanged)
     videoKeepCeiling = Property(int, _video_ceiling_mb, notify=videosKeptChanged)
     def _get_video_keep_choices(self) -> list:
-        return [{"mb": step,
-                 "label": f"{step // 1024} GB" if step >= 1024 else f"{step} MB"}
-                for step in videocache.CEILING_STEPS_MB]
+        return [{"mb": step, "label": self._ceiling_words(step)}
+                for step in songcache.CEILING_STEPS_MB]
+
+    videoKeepCeilingText = Property(
+        str, lambda self: Bridge._ceiling_words(self._video_ceiling_mb()),
+        notify=videosKeptChanged)
 
     videoKeepChoices = Property("QVariantList", _get_video_keep_choices,
                                 notify=videosKeptChanged)
@@ -1336,12 +1375,12 @@ class Bridge(QObject):
     @Slot(int)
     def setVideoKeepCeiling(self, megabytes: int) -> None:
         self._db.set_state("kept_video_ceiling_mb", str(int(megabytes)))
-        self._prune_videos()
+        self._prune_kept()
         self.videosKeptChanged.emit()
 
     @Slot()
     def forgetKeptVideos(self) -> None:
-        gone, freed = videocache.forget_all(paths.MOVING_CACHE)
+        gone, freed = songcache.forget_all(paths.MOVING_CACHE)
         if gone:
             self._set_notice(f"Dropped {gone} kept "
                              f"{'video' if gone == 1 else 'videos'}, "
@@ -3512,7 +3551,8 @@ class Bridge(QObject):
         # Where a song's picture is kept, and which songs are worth keeping
         # one for. The player asks the first and the window answers both.
         audio.local_video = self._kept_video
-        audio.trackChanged.connect(self._keep_this_video)
+        audio.local_audio = self._kept_audio
+        audio.trackChanged.connect(self._keep_this_song)
         self._player.nowPlaying.connect(lambda *_a: self._audio.pause_for_video())
         # Whether the heart is lit depends on the song playing as much as on
         # which songs are kept, so a new song has to say so too. Without this

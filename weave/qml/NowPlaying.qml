@@ -210,8 +210,12 @@ Item {
                         // while the page moves, so the picture travels with it.
                         opacity: Audio.videoShowing ? 0 : 1
                         visible: opacity > 0
+                        // A fade is there to cover the couple of seconds a
+                        // stream takes to put up its first frame. A picture
+                        // kept on disk has one in a moment, so there is
+                        // nothing to cover and the artwork simply goes.
                         Behavior on opacity {
-                            NumberAnimation { duration: 320
+                            NumberAnimation { duration: Audio.videoInstant ? 0 : 320
                                               easing.type: Easing.InOutQuad }
                         }
 
