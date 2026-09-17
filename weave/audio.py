@@ -103,6 +103,11 @@ STALL_GRACE_MS = 8000
 # worth handing to the player.
 ADDRESS_MARGIN_S = 600.0
 
+# How far one turn of the wheel over the bar moves. Five seconds is what a
+# player usually gives a wheel, far enough to be worth the gesture and short
+# enough that a handful of turns lands where it was aimed.
+SEEK_NOTCH_S = 5.0
+
 REPEAT_OFF, REPEAT_ALL, REPEAT_ONE = 0, 1, 2
 
 
@@ -890,6 +895,20 @@ class AudioPlayer(QObject):
         self._dur = seconds
         self.progressChanged.emit()
 
+    def _read_duration(self) -> float:
+        """What the player says its length is right now.
+
+        An engine written before this was needed answers nothing, which is the
+        old behaviour of starting from zero and waiting for a report.
+        """
+        ask = getattr(self._engine, "duration", None)
+        if ask is None:
+            return 0.0
+        try:
+            return max(0.0, float(ask() or 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+
     def _on_paused(self, paused: bool) -> None:
         self._paused = paused
         self.stateChanged.emit()
@@ -921,7 +940,12 @@ class AudioPlayer(QObject):
             self._appended = None
             self._forget_recovery()
             self._pos = 0.0
-            self._dur = 0.0
+            # Asked for rather than zeroed and waited for. The length arrives
+            # as a change to a property mpv observes, and a track that follows
+            # one of the same length changes nothing, so no report comes. A
+            # queue of one repeating is always that case, and the bar, which
+            # is drawn only where there is a length, went and stayed away.
+            self._dur = self._read_duration()
             self._engine.remove_before()
             # mpv moved on by itself, so the song changed without going through
             # the path that starts one. The picture has to follow here as well
@@ -1164,6 +1188,20 @@ class AudioPlayer(QObject):
     def seek(self, fraction: float) -> None:
         if self._dur > 0 and not self._idle:
             self._engine.seek(max(0.0, min(1.0, fraction)) * self._dur)
+
+    @Slot(int)
+    def nudgeSeek(self, notches: int) -> None:
+        """Move along the track by turns of the wheel over the bar.
+
+        In seconds rather than in a fraction of the whole, because the wheel
+        is the same gesture whatever is playing and a tenth of a track is a
+        different distance in every song. A broadcast has no length and no
+        place to move to, so it stays where it is.
+        """
+        if self._dur <= 0 or self._idle or not notches:
+            return
+        wanted = self._pos + notches * SEEK_NOTCH_S
+        self._engine.seek(max(0.0, min(self._dur, wanted)))
 
     @Slot(float)
     def seekToTick(self, along: float) -> None:

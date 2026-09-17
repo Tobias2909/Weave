@@ -734,6 +734,42 @@ class Smoke:
                    str(read(peek, "song")) == str(bridge._audio.songAt(read(peek, "along"))),
                    f"{read(peek, 'song')!r} against {bridge._audio.songAt(read(peek, 'along'))!r}")
 
+        # The wheel over the bar. The offscreen platform delivers no synthetic
+        # input, so what the turn does is proved in the player's own tests and
+        # what is checked here is that the bar has something to catch it.
+        wheel = find(window, "musicScrubWheel")
+        self.check("the bar catches the wheel as well as the pointer",
+                   wheel is not None and read(wheel, "enabled") is True)
+
+        # The list of songs, on the page about the song. Opened and closed
+        # again here, because the queue is replaced further down this step and
+        # replacing a model under a page that is drawing it is what leaves a
+        # row half built.
+        bridge.showNowPlaying()
+        settle(0.7)
+        button = find(window, "nowPlayingChaptersButton")
+        chapter_list = find(window, "nowPlayingChapters")
+        self.check("the page offers the chapters by name",
+                   button is not None and str(read(button, "text")).startswith("Chapters"),
+                   str(read(button, "text")) if button is not None else "no button")
+        if button is not None and chapter_list is not None:
+            call(button, "click")
+            settle(0.4)
+            self.check("and pressing it lists every one of them",
+                       read(chapter_list, "visible") is True
+                       and read(chapter_list, "count") == len(real),
+                       f"visible {read(chapter_list, 'visible')} "
+                       f"count {read(chapter_list, 'count')}")
+            self.check("and says what pressing it again would do",
+                       str(read(button, "text")).startswith("Hide the chapters"),
+                       str(read(button, "text")))
+            call(button, "click")
+            settle(0.4)
+            self.check("which puts the list away",
+                       read(chapter_list, "visible") is False)
+        bridge.closeNowPlaying()
+        settle(0.6)
+
         line = find(window, "musicSecondLine")
         self.check("the line under the title names the song, not the upload",
                    str(read(line, "text")) == "Three", str(read(line, "text")))

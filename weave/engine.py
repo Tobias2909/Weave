@@ -186,6 +186,7 @@ class MusicEngine(QObject):
         self._process: subprocess.Popen | None = None
         self._ipc: _Ipc | None = None
         self._volume = 70.0
+        self._duration = 0.0
         # Only the tests name one. See mpv_command.
         self._ao = ao
         self._log = LOG_FILE
@@ -301,6 +302,12 @@ class MusicEngine(QObject):
         if self._ipc is not None:
             self._ipc.send(["playlist-remove", 0])
 
+    def duration(self) -> float:
+        """The length last reported, for a caller that cannot wait for the
+        next report. Over a socket there is nothing to ask, so this is the
+        last thing mpv said rather than a fresh answer."""
+        return self._duration
+
     def next(self) -> None:
         if self._ipc is not None:
             self._ipc.send(["playlist-next", "force"])
@@ -339,7 +346,8 @@ class MusicEngine(QObject):
                 if isinstance(data, (int, float)):
                     self.positionChanged.emit(float(data))
             elif name == "duration":
-                self.durationChanged.emit(float(data) if isinstance(data, (int, float)) else 0.0)
+                self._duration = float(data) if isinstance(data, (int, float)) else 0.0
+                self.durationChanged.emit(self._duration)
             elif name == "pause":
                 self.pausedChanged.emit(bool(data))
             elif name == "idle-active":

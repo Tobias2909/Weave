@@ -48,9 +48,16 @@ class FakeEngine(QObject):
         super().__init__()
         self.calls = []
         self.volume = None
+        # What a read of the player's own length answers. The real one asks
+        # mpv, which keeps saying the same thing across a changeover between
+        # two tracks of the same length.
+        self.length = 0.0
 
     def _note(self, *call):
         self.calls.append(call)
+
+    def duration(self):
+        return self.length
 
     def add_video(self, url):
         self._note('add_video', url)
@@ -241,6 +248,47 @@ class Shuffle(_Base):
         self.assertEqual(sorted(self.player._order), [0, 1, 2, 3])
 
 
+class TheWheelOverTheBar(_Base):
+    """A turn of the wheel over the bar moves along the track.
+
+    In seconds, because the gesture is the same whatever is playing and a
+    share of the whole is a different distance in every song.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.queue("aaa")
+        self.cache("aaa")
+        self.player._start_current()
+        self.player._dur = 200.0
+        self.player._pos = 100.0
+        self.engine.calls.clear()
+
+    def sought(self):
+        return [where for what, where in self.engine.calls if what == "seek"]
+
+    def test_a_turn_forward_moves_a_notch_along(self):
+        self.player.nudgeSeek(1)
+        self.assertEqual(self.sought(), [105.0])
+
+    def test_a_turn_back_moves_a_notch_the_other_way(self):
+        self.player.nudgeSeek(-1)
+        self.assertEqual(self.sought(), [95.0])
+
+    def test_it_stops_at_both_ends(self):
+        self.player._pos = 1.0
+        self.player.nudgeSeek(-1)
+        self.player._pos = 199.0
+        self.player.nudgeSeek(1)
+        self.assertEqual(self.sought(), [0.0, 200.0])
+
+    def test_a_broadcast_stays_where_it_is(self):
+        # No length, so there is no place to move to.
+        self.player._dur = 0.0
+        self.player.nudgeSeek(1)
+        self.assertEqual(self.sought(), [])
+
+
 class Jumping(_Base):
     def test_jumping_out_of_range_does_nothing(self):
         self.queue("aaa", "bbb")
@@ -414,6 +462,52 @@ class MpvMovingOn(_Base):
         self.assertFalse(self.player.playing)
         self.assertEqual(self.player._at, 2)
         self.assertEqual(self.player.elapsed, 0)
+
+
+class ATrackThatFollowsItself(_Base):
+    """A queue of one, repeating, which is the case that lost the bar.
+
+    The length reaches the window as a change to a property mpv observes. Two
+    tracks of the same length in a row are no change at all, so no report
+    comes, and a queue of one repeating is always that case. The player used
+    to start from nothing and wait for the report, so the music bar, which is
+    drawn only where there is a length, went away and stayed away for the rest
+    of the listening.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.queue("aaa")
+        self.cache("aaa")
+        self.player.setRepeat(1)
+        self.player._start_current()
+        self.engine.length = 214.0
+        self.engine.durationChanged.emit(214.0)
+
+    def test_the_same_track_again_keeps_its_length(self):
+        self.player._prepare_next()
+        self.assertEqual(self.player._appended, 0)
+        self.engine.ended.emit("eof")
+        self.engine.started.emit(NEXT)
+        self.assertEqual(self.player._at, 0)
+        self.assertEqual(self.player.length, 214)
+
+    def test_the_bar_is_drawn_from_the_first_moment_of_the_second_time(self):
+        self.player._prepare_next()
+        self.engine.started.emit(NEXT)
+        # Where the bar is drawn from, which is nothing at all while the
+        # length is unknown.
+        self.assertEqual(self.player.position, 0.0)
+        self.player._on_position(107.0)
+        self.assertAlmostEqual(self.player.position, 0.5, places=3)
+
+    def test_a_player_that_cannot_say_starts_from_nothing_as_before(self):
+        # An engine written before the player asked answers nothing, and the
+        # old behaviour of waiting for the report is what is left.
+        self.engine.duration = None
+        self.player._prepare_next()
+        self.engine.started.emit(NEXT)
+        self.assertEqual(self.player.length, 0)
 
 
 class Skipping(_Base):

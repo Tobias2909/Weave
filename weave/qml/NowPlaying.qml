@@ -510,8 +510,8 @@ Item {
                     FlatButton {
                         objectName: "nowPlayingChaptersButton"
                         visible: Audio.chapters.length > 0
-                        text: (chapterList.visible ? "Hide the songs in it  ·  "
-                                                   : "Songs in it  ·  ")
+                        text: (chapterList.visible ? "Hide the chapters  ·  "
+                                                   : "Chapters  ·  ")
                               + Audio.chapters.length
                         onClicked: chapterList.visible = !chapterList.visible
                     }
@@ -525,14 +525,38 @@ Item {
                         clip: true
                         model: Audio.chapters
                         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                        // A chapter is a place in the track, so pressing one
+                        // goes there. The list already knows where each one
+                        // begins as a fraction of the whole, which is what the
+                        // marks on the bar are drawn from and what a seek
+                        // takes, so the two can never disagree.
                         delegate: Label {
                             required property var modelData
+                            required property int index
                             width: chapterList.width
                             padding: 3
                             text: modelData.title ? modelData.title : ""
-                            color: Theme.colors.textMuted
+                            // The one being played is named in its own colour,
+                            // so the list says where you are as well as where
+                            // you can go.
+                            color: hereNow ? Theme.colors.accent
+                                           : (chapterHover.hovered ? Theme.colors.text
+                                                                   : Theme.colors.textMuted)
+                            readonly property bool hereNow:
+                                Audio.currentChapter !== ""
+                                && Audio.currentChapter === modelData.title
                             font.pixelSize: 11
                             elide: Text.ElideRight
+
+                            HoverHandler {
+                                id: chapterHover
+                                cursorShape: Qt.PointingHandCursor
+                            }
+
+                            MouseArea {
+                                anchors.fill: parent
+                                onClicked: Audio.seek(modelData.at)
+                            }
                         }
                     }
                 }

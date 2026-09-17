@@ -277,6 +277,23 @@ class LibmpvEngine(QObject):
             return
         self._command("playlist-remove", "0")
 
+    def duration(self) -> float:
+        """How long what is playing is, asked rather than waited for.
+
+        An observed property reports a change and nothing else. A track that
+        follows one of the same length, which is what a queue of one repeating
+        always is, changes nothing, so the report never comes and anything
+        waiting for it waits for ever.
+        """
+        if self._mpv is None:
+            return 0.0
+        try:
+            return float(self._mpv.duration or 0.0)
+        except Exception:
+            # A property read can be refused between files, which is an
+            # unknown length rather than a fault.
+            return 0.0
+
     def next(self) -> None:
         self._command("playlist-next", "force")
 

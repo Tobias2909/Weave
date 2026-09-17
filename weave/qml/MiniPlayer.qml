@@ -177,6 +177,21 @@ Rectangle {
             yAxis.enabled: false
             onCentroidChanged: if (active) Audio.seek(centroid.position.x / scrubber.width)
         }
+        // The wheel over the bar moves along the track, in seconds rather than
+        // in a share of it, since the gesture is the same whatever is playing.
+        // Carried the way the volume carries its own, so a touchpad, which
+        // sends one turn as a pile of small ones, moves once rather than not
+        // at all.
+        WheelHandler {
+            objectName: "musicScrubWheel"
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+            property real carried: 0
+            onWheel: function (event) {
+                carried += event.angleDelta.y
+                while (carried >= 120) { carried -= 120; Audio.nudgeSeek(1) }
+                while (carried <= -120) { carried += 120; Audio.nudgeSeek(-1) }
+            }
+        }
     }
 
     Popup {
