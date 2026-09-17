@@ -100,6 +100,12 @@ Item {
     // uses it.
     property bool cinema: false
     property bool chromeAwake: true
+    // What the music bar takes at the foot of the screen. The column beside
+    // the song stops above it rather than running under it, or the bottom
+    // corner of the screen brings up both of them and they overlap. Handed
+    // down for the same reason the two above are: this file cannot see an id
+    // declared in the one that uses it.
+    property real barRoom: 0
     // Asked of the window, which owns the shape. The page never calls
     // showFullScreen itself.
     signal fullscreenToggled()
@@ -173,10 +179,18 @@ Item {
                 // there are no tabs to be level with and nothing under the
                 // picture, so it sits in the middle of the screen instead of
                 // at the top of it with a black band below.
-                anchors.top: page.cinema ? undefined : parent.top
-                anchors.verticalCenter: page.cinema ? parent.verticalCenter
-                                                    : undefined
+                //
+                // Put where it goes by hand rather than by swapping one
+                // anchor for another. Two vertical anchors at once, a top and
+                // a centre, is a combination Qt answers by SETTING THE
+                // HEIGHT, and two bindings are evaluated one after the other,
+                // so the moment between them is exactly that combination. The
+                // height written there stuck, because an item whose height
+                // has been set once stops following what is inside it, and
+                // every filled screen after the first drew the picture pushed
+                // down with a band of nothing above it.
                 anchors.horizontalCenter: parent.horizontalCenter
+                y: page.cinema ? Math.round((parent.height - height) / 2) : 0
                 width: frame.width
                 spacing: 12
 
@@ -964,6 +978,11 @@ Item {
         anchors.bottom: parent.bottom
         anchors.right: parent.right
         anchors.margins: 16
+        // Clear of the bar at the bottom, which is drawn over this and comes
+        // up at the same movement that brings this back. The room is kept
+        // whether the bar is awake or not, so the column does not lay itself
+        // out again every time the bar goes to sleep under it.
+        anchors.bottomMargin: 16 + page.barRoom
         // The right fifth of the screen, which is the strip that brings it
         // back, so what appears is exactly where the hand already is.
         width: Math.max(300, page.width / 5 - 32)

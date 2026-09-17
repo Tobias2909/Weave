@@ -1101,6 +1101,7 @@ ApplicationWindow {
             // declared in this one.
             cinema: root.cinema
             chromeAwake: root.chromeAwake
+            barRoom: miniPlayer.visible ? miniPlayer.height : 0
             onFullscreenToggled: root.toggleCinema()
         }
     }

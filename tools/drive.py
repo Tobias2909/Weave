@@ -514,11 +514,27 @@ class Smoke:
         self.check("and it takes the right fifth, or a floor under it",
                    read(slot, "width") <= max(300, read(window, "width") / 5),
                    f"{read(slot, 'width')} of {read(window, 'width')}")
+        # It stops above the bar rather than running on to the foot of the
+        # screen. The two answer to the same hand in the bottom corner, the
+        # bar to movement anywhere and the column to being near the right
+        # edge, so a column running the whole height meets the bar there and
+        # the two are drawn over each other.
+        ground = window.contentItem()
+        column_foot = slot.mapToItem(ground, 0, read(slot, "height")).y()
+        bar_top = bar.mapToItem(ground, 0, 0).y()
+        self.check("and stops above the bar instead of running under it",
+                   column_foot <= bar_top,
+                   f"column reaches {column_foot}, bar begins at {bar_top}")
         write(window_page, "sideNear", False)
         settle(0.5)
         self.check("and moving away takes it off again",
                    read(slot, "opacity") == 0 and not read(slot, "enabled"),
                    f"opacity {read(slot, 'opacity')} enabled {read(slot, 'enabled')}")
+
+        # Where the picture sits inside the page, which is what the fault
+        # below moved. Read before leaving, so there is something to compare
+        # the second filling of the screen against.
+        first_top = shown.mapToItem(find(window, "nowPlayingStage"), 0, 0).y()
 
         call(window, "leaveCinema")
         settle(0.6)
@@ -532,6 +548,27 @@ class Smoke:
                    read(find(window, "nowPlayingSide"), "parent")
                    is find(window, "nowPlayingSideCell"),
                    str(read(find(window, "nowPlayingSide"), "parent")))
+
+        # And again, because this one only went wrong the second time. The
+        # column holding the picture used to swap one vertical anchor for
+        # another, and two bindings are evaluated one after the other, so for
+        # the moment between them it carried a top AND a centre. Qt answers
+        # that pair by writing the height, and an item whose height has been
+        # written stops following what is inside it, so every screen after the
+        # first drew the picture pushed down with a band of nothing above it.
+        call(window, "enterCinema")
+        settle(0.7)
+        again = shown.mapToItem(find(window, "nowPlayingStage"), 0, 0).y()
+        self.check("and filling the screen again puts the picture in the same "
+                   "place, not lower down",
+                   abs(again - first_top) < 1 and abs(again) < 1,
+                   f"at {again}, was {first_top}")
+        self.check("with the picture still the whole of it",
+                   abs(read(shown, "height") - read(stage, "height")) < 1,
+                   f"picture {read(shown, 'height')} "
+                   f"of {read(stage, 'height')}")
+        call(window, "leaveCinema")
+        settle(0.6)
 
         bridge.closeNowPlaying()
         # The page has to be away before the queue goes, or the rows it is
