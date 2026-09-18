@@ -18,12 +18,6 @@ Rectangle {
                                     || (App.liveReady && hasStreams)
     readonly property bool expanded: !App.liveCollapsed
 
-    // Which card the menu was opened on, and whether that card can be started
-    // anywhere but at the live edge. Held out here because a delegate is built
-    // in a scope of its own and cannot see an id declared around it.
-    property string asked: ""
-    property bool askedIsTwitch: false
-
     // Folded away rather than switched off, so the first stream of the
     // evening unrolls the bar and the last one to end rolls it back up.
     // Height is what the views below anchor to, so animating it moves them
@@ -166,16 +160,6 @@ Rectangle {
 
             HoverHandler { id: cardHover }
             TapHandler { onTapped: App.playLive(streamCard.channelKeyOf) }
-            // The right button offers the one thing a running broadcast has
-            // that a press cannot give: its own past.
-            TapHandler {
-                acceptedButtons: Qt.RightButton
-                onTapped: {
-                    bar.asked = streamCard.channelKeyOf
-                    bar.askedIsTwitch = modelData.platform === "twitch"
-                    streamMenu.popup()
-                }
-            }
             readonly property string channelKeyOf: modelData.channelKey
 
             Item {
@@ -327,27 +311,6 @@ Rectangle {
                         return parts.join("  ·  ")
                     }
                 }
-            }
-        }
-    }
-
-    // What a card offers beyond being pressed. One entry, because everything
-    // else about a stream belongs to the channel rather than to the broadcast.
-    ThemedMenu {
-        id: streamMenu
-        objectName: "liveCardMenu"
-
-        ThemedMenuItem {
-            objectName: "liveFromStartEntry"
-            // What this reaches is the playlist YouTube hands out, which was
-            // measured between fifteen minutes and an hour, so it says window
-            // rather than promising the beginning of the broadcast.
-            enabled: !bar.askedIsTwitch
-            text: "Play from the start of the rewind window"
-            note: enabled ? "" : "Twitch keeps no window to rewind into"
-            onTriggered: {
-                App.playLiveFromStart(bar.asked)
-                streamMenu.dismiss()
             }
         }
     }

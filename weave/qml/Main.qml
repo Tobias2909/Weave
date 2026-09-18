@@ -47,9 +47,6 @@ ApplicationWindow {
     property string menuKey: ""
     property string menuChannelKey: ""
     property bool menuWatched: false
-    // Whether what the menu was opened on is on air. Only a running broadcast
-    // has a rewind window to be started at the beginning of.
-    property bool menuLive: false
 
     // The name popup serves boxes and groups alike, so it carries which of
     // the two it is acting on. The key is the video for a box and the channel
@@ -1685,7 +1682,6 @@ ApplicationWindow {
                     root.menuKey = model.key
                     root.menuChannelKey = model.channelKey
                     root.menuWatched = model.watched
-                    root.menuLive = model.isLive
                     videoMenu.popup()
                 }
             }
@@ -1774,26 +1770,6 @@ ApplicationWindow {
         ThemedMenuItem {
             text: "Play in mpv"
             onTriggered: { App.play(root.menuKey); videoMenu.dismiss() }
-        }
-        ThemedMenuItem {
-            objectName: "fromStartEntry"
-            // Only on something that is on air. A recording opens at its own
-            // beginning anyway and an announcement has no beginning yet.
-            //
-            // What this can reach is what YouTube still holds, which is the
-            // playlist it hands out rather than the whole broadcast. Measured
-            // on real streams it is between fifteen minutes and an hour, so
-            // the entry says window rather than promising the beginning.
-            visible: root.menuLive
-            height: visible ? implicitHeight : 0
-            enabled: !root.menuKey.startsWith("twitch:")
-            text: "Play from the start of the rewind window"
-            note: enabled ? "" : "Twitch keeps no window to rewind into"
-            onTriggered: { App.playFromStart(root.menuKey); videoMenu.dismiss() }
-        }
-        ThemedMenuItem {
-            text: "Open the channel"
-            onTriggered: { App.openChannel(root.menuChannelKey); videoMenu.dismiss() }
         }
         ThemedMenuItem {
             objectName: "musicFavoriteEntry"

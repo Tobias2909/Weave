@@ -2499,6 +2499,11 @@ class ArtistMusic(Worker):
     # two hundred calls the moment a tab is opened.
     RELEASE_CAP = 30
 
+    # How many songs a record nobody named has to show before it is drawn as
+    # one. Two is a single beside its instrumental or live version, measured:
+    # fifteen of twenty blocks on one artist were exactly that.
+    RECORD_MIN = 3
+
     def __init__(self, cfg: Config, channel_key: str, channel_id: str,
                  video_ids: list[str], known_id: str = "",
                  parent: QObject | None = None) -> None:
@@ -2599,16 +2604,74 @@ class ArtistMusic(Worker):
             # would start as everything and shrink as the records arrive,
             # which reads as songs jumping about.
             self.growing.emit(self._key, self._records(records, singles))
-        groups = self._records(records, singles)
         rest = [song for song in songs if song["key"] not in placed]
-        if rest:
+        return self._with_the_rest(records, singles, rest)
+
+    def _with_the_rest(self, records: list[dict], singles: list[dict],
+                       rest: list[dict]) -> list[dict]:
+        """Everything the page did not name, put where it belongs anyway.
+
+        An artist page names a handful of records, five albums and ten singles
+        on the two measured, while the songs behind it run past a hundred.
+        Everything else used to land in one heap called "Other songs", which
+        was most of the catalogue and told nobody anything.
+
+        Every song says which record it came out on, and that costs nothing
+        because it is in the answer already. Measured on two real artists, 60
+        of 60 and 14 of 14 of those leftovers named one. So they are gathered
+        by that name, joined to a record already drawn where the name matches,
+        and only a song naming no record at all is left over.
+
+        A gathered record of one or two songs is a single by any reading: the
+        two song ones are a single beside its instrumental or its live version,
+        which the title of the second says outright. Measured, fifteen of
+        twenty blocks were exactly that, so a record has to show three songs to
+        stand as one and the rest join the singles, where they belong.
+        """
+        known = {record["title"].strip().lower(): record for record in records}
+        gathered: dict[str, list[dict]] = {}
+        order: list[str] = []
+        loose: list[dict] = []
+        for song in rest:
+            name = str(song.get("album") or "").strip()
+            if not name:
+                loose.append(song)
+                continue
+            record = known.get(name.lower())
+            if record is not None:
+                # A record whose reading missed a track, or a track that names
+                # it without being listed on it. Either way it belongs there.
+                record["songs"].append(song)
+                continue
+            if name.lower() not in gathered:
+                gathered[name.lower()] = []
+                order.append(name)
+            gathered[name.lower()].append(song)
+
+        for name in order:
+            on_it = gathered[name.lower()]
+            if len(on_it) < self.RECORD_MIN:
+                singles.extend(on_it)
+                continue
+            records.append({
+                # No year and no cover of its own: this record was never named
+                # by the page, so what is known about it is its name and the
+                # songs claiming it. The cover is the first song's picture,
+                # which for a record is the record's own artwork anyway.
+                "title": name, "year": "",
+                "picture": on_it[0].get("thumbnail", ""),
+                "kind": "album", "shuffled": False, "songs": on_it,
+            })
+
+        groups = self._records(records, singles)
+        if loose:
             groups.append({
-                # Named for what it is. A leftover group standing alone is
-                # simply the songs, and calling those "other" invites the
-                # question of what they are other than.
+                # Named for what it is. Standing alone these are simply the
+                # songs, and calling them "other" invites the question of what
+                # they are other than.
                 "title": "Other songs" if groups else "Songs", "year": "",
-                "picture": rest[0].get("thumbnail", ""),
-                "kind": "other", "shuffled": False, "songs": rest,
+                "picture": loose[0].get("thumbnail", ""),
+                "kind": "other", "shuffled": False, "songs": loose,
             })
         return groups
 

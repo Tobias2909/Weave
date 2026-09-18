@@ -22,8 +22,8 @@ def track(video_id, title="A song"):
                  duration="3:01", thumbnail_url="https://pictures.invalid/a.jpg")
 
 
-def song(video_id, title="A song"):
-    return {"key": f"yt:{video_id}", "title": title, "thumbnail": ""}
+def song(video_id, title="A song", album=""):
+    return {"key": f"yt:{video_id}", "title": title, "thumbnail": "", "album": album}
 
 
 class Fake:
@@ -147,6 +147,59 @@ class TheSongsAreArrangedAsRecords(unittest.TestCase):
                      album="A Record", duration="3:01", thumbnail_url="")
         groups = grouped(Fake({"OLAK1": [bare]}), [release("OLAK1")], [])
         self.assertNotEqual(groups[0]["songs"][0]["thumbnail"], "")
+
+
+class WhatThePageNeverNamed(unittest.TestCase):
+    """An artist page names five albums and ten singles; the songs behind it
+    run past a hundred. Everything else used to land in one heap.
+
+    Every song says which record it came out on, and that is in the answer
+    already. Measured on two real artists, 60 of 60 and 14 of 14 of those
+    leftovers named one.
+    """
+
+    def test_a_leftover_joins_the_record_it_names(self):
+        fake = Fake({"OLAK1": [track("aaa")]})
+        groups = grouped(fake, [release("OLAK1", title="A Record")],
+                         [song("aaa"), song("zzz", album="A Record")])
+        self.assertEqual([one["title"] for one in groups], ["A Record"])
+        self.assertEqual(len(groups[0]["songs"]), 2, "the track was left outside it")
+
+    def test_the_name_is_matched_however_it_is_capitalised(self):
+        fake = Fake({"OLAK1": [track("aaa")]})
+        groups = grouped(fake, [release("OLAK1", title="A Record")],
+                         [song("zzz", album="  a record ")])
+        self.assertEqual(len(groups), 1, "the same record was drawn twice")
+
+    def test_a_record_nobody_named_is_drawn_from_the_songs_alone(self):
+        groups = grouped(Fake({}), [],
+                         [song("a", album="Hidden"), song("b", album="Hidden"),
+                          song("c", album="Hidden")])
+        self.assertEqual([one["title"] for one in groups], ["Hidden"])
+        self.assertEqual(len(groups[0]["songs"]), 3)
+
+    def test_but_two_songs_are_a_single_and_its_instrumental(self):
+        """Measured: fifteen of twenty blocks on one artist were exactly that,
+        a single beside its off vocal or its live version."""
+        groups = grouped(Fake({}), [],
+                         [song("a", album="A Single"), song("b", album="A Single")])
+        self.assertEqual([one["kind"] for one in groups], ["singles"])
+        self.assertEqual(len(groups[0]["songs"]), 2)
+
+    def test_a_song_naming_no_record_is_still_kept(self):
+        groups = grouped(Fake({}), [], [song("a"), song("b")])
+        self.assertEqual([one["title"] for one in groups], ["Songs"])
+
+    def test_nothing_is_lost_and_nothing_is_drawn_twice(self):
+        fake = Fake({"OLAK1": [track("aaa"), track("bbb")]})
+        rest = [song("aaa", album="A Record"), song("ccc", album="A Record"),
+                song("ddd", album="Hidden"), song("eee", album="Hidden"),
+                song("fff", album="Hidden"), song("ggg", album="One Off"),
+                song("hhh")]
+        groups = grouped(fake, [release("OLAK1", title="A Record")], rest)
+        keys = [one["key"] for group in groups for one in group["songs"]]
+        self.assertEqual(sorted(set(keys)), sorted(keys), "a song was drawn twice")
+        self.assertEqual(len(keys), 8, f"a song went missing: {keys}")
 
 
 class TheRecordsArriveOneAtATime(unittest.TestCase):

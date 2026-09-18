@@ -1714,54 +1714,28 @@ class Smoke:
         bridge.selectGroup(-1)
         settle(0.3)
 
-    def from_the_start(self, bridge, window) -> None:
-        """What the menus offer on a broadcast that is running.
+    def music_favourites_anywhere(self, bridge, window) -> None:
+        """A song reaches the music favourites from any card.
 
-        The entry is drawn refused rather than left out where it cannot work,
-        which is what was asked for, so what is checked is that it says why.
+        It used to be offered only where a press already listened, which is a
+        playlist marked as music and the listening history. A Twitch entry is
+        a channel rather than a video and is still left out.
         """
-        step("starting a stream at the beginning of its window")
+        step("music favourites from any card")
         menu = find(window, "videoMenu")
-        write(window, "menuKey", "yt:smokevid005")
-        write(window, "menuLive", True)
+        write(window, "menuKey", "twitch:somebody")
         menu.open()
         settle(0.4)
         entries = dict((text.strip(), item) for text, item in menu_entries(menu))
-        name = "Play from the start of the rewind window"
-        entry = entries.get(name)
-        self.check("a running broadcast can be started at the start of its window",
-                   entry is not None and read(entry, "visible") is True
-                   and read(entry, "enabled") is True,
-                   ", ".join(entries))
-        self.check("and nothing says why not, because it can",
-                   entry is not None and str(read(entry, "note")) == "",
-                   str(read(entry, "note")) if entry is not None else "no entry")
-
-        write(window, "menuKey", "twitch:somebody")
-        settle(0.3)
-        self.check("on a Twitch card it is refused rather than left out",
-                   entry is not None and read(entry, "visible") is True
-                   and read(entry, "enabled") is False,
-                   f"visible {read(entry, 'visible')} enabled {read(entry, 'enabled')}")
-        self.check("and it says why, under the words",
-                   entry is not None and "rewind" in str(read(entry, "note")),
-                   str(read(entry, "note")) if entry is not None else "no entry")
-
-        # Music favourites used to be offered only where a press already
-        # listened. A song reaches them from any card now.
         kept = entries.get("Add to music favorites")
         self.check("a Twitch card is offered no music favourites",
                    kept is not None and read(kept, "visible") is False,
                    str(read(kept, "visible")) if kept is not None else "no entry")
         write(window, "menuKey", "yt:smokevid005")
-        write(window, "menuLive", False)
         settle(0.3)
         self.check("an ordinary video is, wherever it is drawn",
                    kept is not None and read(kept, "visible") is True,
                    str(read(kept, "visible")) if kept is not None else "no entry")
-        self.check("and a recording is offered no rewind window",
-                   entry is not None and read(entry, "visible") is False,
-                   str(read(entry, "visible")) if entry is not None else "no entry")
         menu.close()
         settle(0.3)
         write(window, "menuKey", "")
@@ -1991,29 +1965,6 @@ class Smoke:
                    worst <= 0.5,
                    f"{worst:.1f} px into a {radius:.0f} px corner of a "
                    f"{card_height:.0f} px card")
-
-        # The right button on a stream card. These two are Twitch, which keeps
-        # no window to rewind into, so the entry is drawn refused and says so.
-        menu = find(window, "liveCardMenu")
-        bar = find(window, "liveBar")
-        write(bar, "askedIsTwitch", True)
-        menu.open()
-        settle(0.4)
-        entries = dict((text.strip(), item) for text, item in menu_entries(menu))
-        entry = entries.get("Play from the start of the rewind window")
-        self.check("a stream card offers the start of the rewind window",
-                   entry is not None, ", ".join(entries))
-        self.check("refused on Twitch, with the reason under it",
-                   entry is not None and read(entry, "enabled") is False
-                   and "rewind" in str(read(entry, "note")),
-                   str(read(entry, "note")) if entry is not None else "no entry")
-        write(bar, "askedIsTwitch", False)
-        settle(0.3)
-        self.check("and offered on a YouTube one",
-                   entry is not None and read(entry, "enabled") is True,
-                   str(read(entry, "enabled")) if entry is not None else "no entry")
-        menu.close()
-        settle(0.3)
 
         db = Database(paths.DB_FILE)
         db.replace_live("twitch", [])
@@ -2848,7 +2799,7 @@ class Smoke:
         self.strangers(bridge, window)
         self.channel_playlists(bridge, window)
         self.channel_albums(bridge, window)
-        self.from_the_start(bridge, window)
+        self.music_favourites_anywhere(bridge, window)
         self.bar(bridge, window)
         self.live_cards(bridge, window)
         self.following(bridge, window)

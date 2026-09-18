@@ -3295,53 +3295,6 @@ class Bridge(QObject):
             return
         self._hand_over(row["key"], url, str(row.get("title") or ""), login, live)
 
-    @Slot(str)
-    def playFromStart(self, key: str) -> None:
-        """A running broadcast, begun at the oldest point YouTube still holds.
-
-        Not the beginning of the broadcast, and the words everywhere say so.
-        What can be reached is the playlist YouTube hands out, which was
-        measured at fifteen minutes on one stream and an hour on four others.
-        A stream that has ended in the meantime simply plays as the recording
-        it has become, which begins at its own beginning, so nothing is asked
-        about it first.
-        """
-        row = self._model.row_for_key(key)
-        if not row:
-            return
-        if key.startswith("twitch:"):
-            # Resolved through streamlink, which is handed the live edge and
-            # nothing behind it. The entry is drawn refused rather than left
-            # out; this is the other half of that.
-            self._set_notice("Twitch keeps no window to rewind into", 5)
-            return
-        if not row["isLive"]:
-            self._set_notice("That is not a running broadcast", 5)
-            return
-        self._hand_over_from_start(row["key"], row["url"], str(row.get("title") or ""))
-
-    @Slot(str)
-    def playLiveFromStart(self, channel_key: str) -> None:
-        """The same, from the live bar, where a card carries a channel."""
-        row = next((entry for entry in self._get_live()
-                    if entry["channelKey"] == channel_key), None)
-        if not row:
-            return
-        if row["platform"] == "twitch":
-            self._set_notice("Twitch keeps no window to rewind into", 5)
-            return
-        self._hand_over_from_start(channel_key,
-                                   ids.watch_url("youtube", row["login"]),
-                                   str(row.get("name") or ""))
-
-    def _hand_over_from_start(self, key: str, url: str, title: str) -> None:
-        if not self._player.play_from_start(url):
-            return
-        self._set_status(f"playing {title} from the start of its window")
-        self._set_notice("Starting as far back as YouTube still holds it", 6)
-        self._set_starting(key)
-        self._step_aside_for_video()
-
     def _hand_over(self, key: str, url: str, title: str,
                    login: str | None, live: bool) -> None:
         """Give mpv the address, and say on the card that it is on its way."""
