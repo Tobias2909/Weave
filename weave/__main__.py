@@ -494,6 +494,39 @@ def _cmd_box(args) -> int:
     return 0 if changed else 1
 
 
+def _cmd_gone(args) -> int:
+    """What has been found gone from YouTube, and the way to take one back.
+
+    A finding is never made twice and never expires, which is what stops a
+    dead song being discovered again at every reading of the playlist it sits
+    in. The cost of that is a wrong one lasting for ever, so it can be undone
+    from here. A video taken back returns to the feed at once and to a
+    playlist at that playlist's next reading.
+    """
+    db = Database(paths.DB_FILE)
+    try:
+        if args.forget:
+            which = "" if args.forget == "all" else args.forget
+            count = db.forget_gone(which)
+            if which:
+                print(f"took back {count}" if count else f"nothing here about {which}")
+            else:
+                print(f"took back {count} of them")
+            return 0
+        rows = db.gone_videos()
+        if not rows:
+            print("nothing has been found gone")
+            return 0
+        for row in rows:
+            when = time.strftime("%Y-%m-%d %H:%M", time.localtime(row["gone_at"]))
+            title = row["title"] or "not in the feed, from a playlist"
+            print(f"{row['ext_id']}  {when}  {title}")
+        print(f"{len(rows)} in all, take one back with weave gone --forget <id>")
+        return 0
+    finally:
+        db.close()
+
+
 def _cmd_cache(args) -> int:
     cfg = config.load()
     directory = paths.IMAGE_CACHE
@@ -822,6 +855,12 @@ def main() -> int:
     cache.add_argument("--forget", action="store_true",
                        help="empty the record of pictures that failed, and try them again")
     cache.set_defaults(func=_cmd_cache)
+
+    missing = subparsers.add_parser(
+        "gone", help="list videos found gone from YouTube, or take one back")
+    missing.add_argument("--forget", metavar="VIDEO",
+                         help="take one back by its id, or all of them with all")
+    missing.set_defaults(func=_cmd_gone)
 
     checkup = subparsers.add_parser(
         "doctor", help="ask every part whether it is working")

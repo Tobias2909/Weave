@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 45
+SCHEMA_VERSION = 46
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -167,6 +167,23 @@ CREATE TABLE IF NOT EXISTS playlist_items (
     published_at   INTEGER,                 -- approximate, from "3 weeks ago"
     position       INTEGER NOT NULL,
     PRIMARY KEY (playlist_id, ext_id)
+);
+
+-- Videos found to be gone from YouTube, private, deleted, or taken down.
+--
+-- Apart from videos.unavailable_at because most of what a playlist holds was
+-- never a row in videos at all. Measured on a real collection: 1039 videos sat
+-- in playlists and 94 of them had a videos row, so marking the video row threw
+-- the answer away for nine songs in ten, and every reading of the playlist
+-- brought the song back to be discovered again the next time it was reached.
+--
+-- Written whenever one is found, read whenever a playlist is stored. Only ever
+-- added to, the same rule videos.unavailable_at follows and for the same
+-- reason: the alternative is asking after every gone video for ever on the
+-- chance that one of them comes back.
+CREATE TABLE IF NOT EXISTS gone_videos (
+    ext_id  TEXT PRIMARY KEY,
+    gone_at INTEGER NOT NULL
 );
 
 -- What has been listened to. Two sources meet here. A row written by Weave
@@ -593,6 +610,15 @@ class Database:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
             row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             was = int(row["value"]) if row else 0
+            if was and was < 46:
+                # Everything already found gone, moved to where a playlist
+                # reading can see it. The videos table only ever held the ones
+                # that were in a feed, which is the smaller half by far, but
+                # there is no reason to make anybody find those out twice.
+                conn.execute(
+                    "INSERT INTO gone_videos(ext_id, gone_at) "
+                    "SELECT ext_id, unavailable_at FROM videos "
+                    "WHERE unavailable_at IS NOT NULL ON CONFLICT DO NOTHING")
             if was and was < 28:
                 # Avatars asked for at their original size. Most are harmless,
                 # one measured 265 MB of pixels and could not be decoded at
@@ -1533,6 +1559,13 @@ class Database:
         """Write down that a video is gone from YouTube, returning whether this
         is news. See STILL_THERE for what finds it and why it is not deleted.
 
+        Two places, and the second one is what makes it last. The videos row is
+        marked for the feed, the boxes and everything else that reads from
+        there, and it is only marked when there is such a row. Most of what a
+        playlist holds never was one, so gone_videos is where the answer is
+        kept, and that is what a fresh reading of a playlist is filtered
+        against.
+
         Only ever set, never cleared, and cleared by nothing else either. A
         video that comes back stays marked until the row is gone, which is the
         safe way round: the alternative is asking after every gone video for
@@ -1541,12 +1574,60 @@ class Database:
         ext_id = (ext_id or "").strip()
         if not ext_id:
             return False
+        now = int(time.time())
         with self.conn as conn:
-            changed = conn.execute(
+            conn.execute(
                 "UPDATE videos SET unavailable_at = ? "
-                "WHERE ext_id = ? AND unavailable_at IS NULL",
-                (int(time.time()), ext_id)).rowcount
-        return changed > 0
+                "WHERE ext_id = ? AND unavailable_at IS NULL", (now, ext_id))
+            # News is asked of this table and not of the videos one, since a
+            # song that is in no feed still has to be news the first time.
+            told = conn.execute(
+                "INSERT INTO gone_videos(ext_id, gone_at) VALUES(?, ?) "
+                "ON CONFLICT DO NOTHING", (ext_id, now)).rowcount
+        return told > 0
+
+    def is_gone(self, ext_id: str) -> bool:
+        """Whether this video has already been found to be gone."""
+        ext_id = (ext_id or "").strip()
+        if not ext_id:
+            return False
+        return self.conn.execute(
+            "SELECT 1 FROM gone_videos WHERE ext_id = ?", (ext_id,)).fetchone() is not None
+
+    def gone_videos(self) -> list[sqlite3.Row]:
+        """Everything known to be gone, newest finding first, saying whether
+        the video is also a row in the feed's own table."""
+        return list(self.conn.execute(
+            "SELECT g.ext_id, g.gone_at, v.title AS title "
+            "FROM gone_videos g LEFT JOIN videos v ON v.ext_id = g.ext_id "
+            "ORDER BY g.gone_at DESC"))
+
+    def forget_gone(self, ext_id: str = "") -> int:
+        """Take back a finding, one video or all of them, and answer how many.
+
+        Nothing here is ever decided twice, so a wrong answer would otherwise
+        last for ever: a picture that answered 404 twice while the video was
+        alive takes a song out of every playlist it sits in, and no reading of
+        those playlists puts it back. This is the way back. Both marks go, and
+        the song returns to a playlist at its next reading and to the feed at
+        once.
+        """
+        with self.conn as conn:
+            if ext_id:
+                count = conn.execute("DELETE FROM gone_videos WHERE ext_id = ?",
+                                     (ext_id,)).rowcount
+                conn.execute("UPDATE videos SET unavailable_at = NULL WHERE ext_id = ?",
+                             (ext_id,))
+            else:
+                count = conn.execute("DELETE FROM gone_videos").rowcount
+                conn.execute("UPDATE videos SET unavailable_at = NULL")
+        return count
+
+    def gone_count(self) -> int:
+        """How many videos are known to be gone, whether or not they were ever
+        a row in videos."""
+        row = self.conn.execute("SELECT COUNT(*) AS n FROM gone_videos").fetchone()
+        return int(row["n"]) if row else 0
 
     def unavailable_count(self) -> int:
         """How many stored videos have been found to be gone. Reported rather
@@ -3017,7 +3098,19 @@ class Database:
         gone private or deleted, YouTube's own placeholder rather than an
         error. Kept on the playlist itself rather than counted from the rows
         here, since by the time they reach this call they are already gone.
+
+        A song already known to be gone is left out here as well, and counted
+        with them. The listing does not always say: a song found gone when it
+        was played came back with the next reading of the list, looking
+        playable, and was only found out again when the list next reached it.
+        The answer is kept in gone_videos precisely so it can be applied here,
+        and this is the one place every reading of a playlist passes through.
         """
+        known_gone = {row[0] for row in self.conn.execute("SELECT ext_id FROM gone_videos")}
+        if known_gone:
+            keeping = [row for row in rows if row["ext_id"] not in known_gone]
+            skipped += len(rows) - len(keeping)
+            rows = keeping
         with self.conn as conn:
             conn.execute("DELETE FROM playlist_items WHERE playlist_id=?", (playlist_id,))
             conn.executemany(

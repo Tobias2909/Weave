@@ -13,10 +13,15 @@ and a login problem are all about this copy of the application, and YouTube
 opens the country lock with the same two words as a deletion.
 """
 
+import tempfile
 import unittest
+from pathlib import Path
 
 from tests.support import scratch_db
 from weave.audio import reads_as_gone
+from weave.db import Database, VideoRow
+
+CHANNEL = "yt:UCaaaaaaaaaaaaaaaaaaaaaa"
 
 
 class WhatReadsAsGone(unittest.TestCase):
@@ -105,6 +110,131 @@ class ItLeavesEveryListThatHeldIt(unittest.TestCase):
         self.db.replace_playlist_items("PL1", [{"ext_id": "bbbbbbbbbbb",
                                                 "title": "Another"}], skipped=3)
         self.assertEqual(self.db.playlist("PL1")["skipped"], 3)
+
+
+class AndItStaysGoneWhenTheListIsReadAgain(unittest.TestCase):
+    """The half that was missing, and he found it.
+
+    A playlist is read again every so often, and the reading came back with
+    the song still in it, looking playable. The finding was written to the
+    videos row, and a song in a playlist usually has no videos row, so nothing
+    was kept and the song was discovered all over again the next time the list
+    reached it.
+    """
+
+    def setUp(self):
+        self.db = scratch_db(self)
+        self.db.replace_playlists([{"ext_id": "PL1", "title": "One"}])
+        self.rows = [{"ext_id": "aaaaaaaaaaa", "title": "A song"},
+                     {"ext_id": "bbbbbbbbbbb", "title": "Another"}]
+        self.db.replace_playlist_items("PL1", self.rows, skipped=0)
+
+    def keys(self):
+        return [row["key"] for row in self.db.playlist_items("PL1")]
+
+    def test_a_song_found_gone_is_left_out_of_the_next_reading(self):
+        self.db.mark_unavailable("aaaaaaaaaaa")
+        self.db.forget_playlist_item("aaaaaaaaaaa")
+        # YouTube hands the whole list back, this song among it.
+        self.db.replace_playlist_items("PL1", self.rows, skipped=0)
+        self.assertEqual(self.keys(), ["yt:bbbbbbbbbbb"])
+
+    def test_and_is_counted_with_the_ones_the_listing_itself_left_out(self):
+        self.db.mark_unavailable("aaaaaaaaaaa")
+        self.db.replace_playlist_items("PL1", self.rows, skipped=2)
+        self.assertEqual(self.db.playlist("PL1")["skipped"], 3)
+
+    def test_it_holds_for_a_song_that_was_never_in_the_feed(self):
+        """Which is nearly all of them. Measured on a real collection, 94 of
+        1039 songs sitting in playlists had a videos row."""
+        self.assertIsNone(self.db.conn.execute(
+            "SELECT 1 FROM videos WHERE ext_id='aaaaaaaaaaa'").fetchone())
+        self.db.mark_unavailable("aaaaaaaaaaa")
+        self.db.replace_playlist_items("PL1", self.rows, skipped=0)
+        self.assertEqual(self.keys(), ["yt:bbbbbbbbbbb"])
+
+    def test_a_list_of_nothing_but_gone_songs_comes_out_empty(self):
+        for row in self.rows:
+            self.db.mark_unavailable(row["ext_id"])
+        self.db.replace_playlist_items("PL1", self.rows, skipped=0)
+        self.assertEqual(self.keys(), [])
+        self.assertEqual(self.db.playlist("PL1")["skipped"], 2)
+
+    def test_and_a_list_with_none_of_them_is_untouched(self):
+        self.db.replace_playlist_items("PL1", self.rows, skipped=1)
+        self.assertEqual(self.keys(), ["yt:aaaaaaaaaaa", "yt:bbbbbbbbbbb"])
+        self.assertEqual(self.db.playlist("PL1")["skipped"], 1)
+
+
+class AndThereIsAWayBack(unittest.TestCase):
+    """A finding never expires, so a wrong one would last for ever."""
+
+    def setUp(self):
+        self.db = scratch_db(self)
+        self.db.replace_playlists([{"ext_id": "PL1", "title": "One"}])
+        self.rows = [{"ext_id": "aaaaaaaaaaa", "title": "A song"}]
+        self.db.replace_playlist_items("PL1", self.rows, skipped=0)
+        self.db.mark_unavailable("aaaaaaaaaaa")
+
+    def test_taking_it_back_lets_the_next_reading_hold_it_again(self):
+        self.assertEqual(self.db.forget_gone("aaaaaaaaaaa"), 1)
+        self.assertFalse(self.db.is_gone("aaaaaaaaaaa"))
+        self.db.replace_playlist_items("PL1", self.rows, skipped=0)
+        self.assertEqual([row["key"] for row in self.db.playlist_items("PL1")],
+                         ["yt:aaaaaaaaaaa"])
+
+    def test_taking_back_one_that_is_not_there_says_so(self):
+        self.assertEqual(self.db.forget_gone("zzzzzzzzzzz"), 0)
+
+    def test_and_all_of_them_at_once(self):
+        self.db.mark_unavailable("bbbbbbbbbbb")
+        self.assertEqual(self.db.forget_gone(), 2)
+        self.assertEqual(self.db.gone_count(), 0)
+
+    def test_the_feed_gets_it_back_too(self):
+        """Both marks go, or the feed would still be hiding a video that is
+        back in the playlists."""
+        self.db.add_channel(CHANNEL, "youtube", "UCaaaaaaaaaaaaaaaaaaaaaa", "A channel")
+        self.db.upsert_videos([VideoRow("youtube", "ccccccccccc", CHANNEL, "A video")])
+        self.db.mark_unavailable("ccccccccccc")
+        self.assertEqual(self.db.unavailable_count(), 1)
+        self.db.forget_gone("ccccccccccc")
+        self.assertEqual(self.db.unavailable_count(), 0)
+        self.assertEqual([row["ext_id"] for row in self.db.feed()], ["ccccccccccc"])
+
+
+class WhatAnOlderDatabaseKnew(unittest.TestCase):
+    """The upgrade carries the findings that were only in the videos table."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self._tmp.name) / "old.db"
+        self.addCleanup(self._tmp.cleanup)
+
+    def make_old(self):
+        db = Database(self.path)
+        db.add_channel(CHANNEL, "youtube", "UCaaaaaaaaaaaaaaaaaaaaaa", "A channel")
+        db.upsert_videos([VideoRow("youtube", "aaaaaaaaaaa", CHANNEL, "A song")])
+        db.mark_unavailable("aaaaaaaaaaa")
+        with db.conn as conn:
+            conn.execute("DROP TABLE gone_videos")
+            conn.execute("UPDATE meta SET value='45' WHERE key='schema_version'")
+        db.close()
+
+    def test_a_video_marked_before_the_table_existed_is_in_it_after(self):
+        self.make_old()
+        db = Database(self.path)
+        self.addCleanup(db.close)
+        self.assertTrue(db.is_gone("aaaaaaaaaaa"))
+
+    def test_and_a_playlist_read_after_the_upgrade_leaves_it_out(self):
+        self.make_old()
+        db = Database(self.path)
+        self.addCleanup(db.close)
+        db.replace_playlists([{"ext_id": "PL1", "title": "One"}])
+        db.replace_playlist_items("PL1", [{"ext_id": "aaaaaaaaaaa", "title": "A song"}],
+                                  skipped=0)
+        self.assertEqual(db.playlist_items("PL1"), [])
 
 
 class ItLeavesTheQueue(unittest.TestCase):

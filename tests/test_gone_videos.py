@@ -66,10 +66,24 @@ class AVideoThatIsGone(unittest.TestCase):
         self.assertTrue(self.db.mark_unavailable("aaaaaaaaaaa"))
         self.assertFalse(self.db.mark_unavailable("aaaaaaaaaaa"))
 
-    def test_a_video_nobody_stored_is_not_invented(self):
-        self.assertFalse(self.db.mark_unavailable("zzzzzzzzzzz"))
-        self.assertFalse(self.db.mark_unavailable(""))
+    def test_one_nobody_stored_is_remembered_without_a_row_being_invented(self):
+        """The half that used to be thrown away. Most of what a playlist holds
+        was never a row in videos, so answering no here lost the finding and
+        the next reading of that playlist brought the song back."""
+        self.assertTrue(self.db.mark_unavailable("zzzzzzzzzzz"))
+        self.assertTrue(self.db.is_gone("zzzzzzzzzzz"))
+        self.assertIsNone(self.db.conn.execute(
+            "SELECT 1 FROM videos WHERE ext_id='zzzzzzzzzzz'").fetchone())
         self.assertEqual(self.db.unavailable_count(), 0)
+
+    def test_and_is_news_once_only_like_one_that_was_stored(self):
+        self.assertTrue(self.db.mark_unavailable("zzzzzzzzzzz"))
+        self.assertFalse(self.db.mark_unavailable("zzzzzzzzzzz"))
+
+    def test_nothing_at_all_is_still_nothing(self):
+        self.assertFalse(self.db.mark_unavailable(""))
+        self.assertFalse(self.db.is_gone(""))
+        self.assertEqual(self.db.gone_count(), 0)
 
     def test_it_is_counted_so_a_short_feed_is_explained(self):
         self.db.mark_unavailable("aaaaaaaaaaa")

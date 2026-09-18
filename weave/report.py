@@ -175,7 +175,11 @@ def _numbers(db: Database, cfg: Config) -> str:
         f", gone {one('SELECT COUNT(*) FROM videos WHERE unavailable_at IS NOT NULL')}",
         f"groups {one('SELECT COUNT(*) FROM groups')}"
         f", boxes {one('SELECT COUNT(*) FROM boxes')}"
-        f", playlists {one('SELECT COUNT(*) FROM playlists')}",
+        f", playlists {one('SELECT COUNT(*) FROM playlists')}"
+        # Everything found gone, which is the larger figure of the two: most
+        # of what sits in a playlist was never a row in videos at all, and
+        # this is what a reading of a playlist is filtered against.
+        f", known gone {one('SELECT COUNT(*) FROM gone_videos')}",
         f"watched {one('SELECT COUNT(*) FROM watched')}",
         f"pictures {files} files, {pictures // (1024 * 1024)} MB",
         f"cookies from {'a browser profile' if cfg.browser_profile != 'auto' else 'auto'}",

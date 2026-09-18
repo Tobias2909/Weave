@@ -45,6 +45,16 @@ class TheCommandLine(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("no channels yet", done.stdout)
 
+    def test_a_fresh_home_has_found_nothing_gone(self):
+        done = _run(self.home, "gone")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("nothing has been found gone", done.stdout)
+
+    def test_and_taking_one_back_is_offered_by_name(self):
+        done = _run(self.home, "gone", "--forget", "zzzzzzzzzzz")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("zzzzzzzzzzz", done.stdout)
+
     def test_a_file_that_is_not_a_database_is_a_sentence_not_a_traceback(self):
         state = Path(self.home) / "xdg_state_home" / "weave"
         state.mkdir(parents=True)
