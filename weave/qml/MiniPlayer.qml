@@ -357,20 +357,34 @@ Rectangle {
         }
 
         FlatButton {
+            objectName: "previousButton"
             text: "◀◀"
+            hint: "The one before"
+            fontSize: 14
             Layout.preferredWidth: 42
             onClicked: Audio.previous()
         }
         FlatButton {
             // Fixed, because the pause and play marks are different widths and
             // everything to the right of it used to shuffle sideways.
+            objectName: "playButton"
             text: Audio.playing ? "❚❚" : "▶"
+            hint: Audio.playing ? "Pause" : "Play"
+            fontSize: 15
+            // MEASURED: both marks sit dead centre of the box. A triangle
+            // still reads as leaning left, because its weight is nearer the
+            // base than the point, so the one is carried a pixel over. The
+            // two bars are symmetrical and want nothing.
+            nudge: Audio.playing ? 0 : 1
             accent: true
             Layout.preferredWidth: 46
             onClicked: Audio.toggle()
         }
         FlatButton {
+            objectName: "nextButton"
             text: "▶▶"
+            hint: "The next one"
+            fontSize: 14
             Layout.preferredWidth: 42
             onClicked: Audio.next()
         }
@@ -402,6 +416,7 @@ Rectangle {
         FlatButton {
             objectName: "shuffleButton"
             text: "\u21c4"
+            hint: Audio.shuffle ? "Shuffle is on" : "Shuffle is off"
             fontSize: 16
             accent: Audio.shuffle
             Layout.preferredWidth: 42
@@ -413,6 +428,9 @@ Rectangle {
             // carries a 1 beside the mark.
             objectName: "repeatButton"
             text: Audio.repeat === 2 ? "\u21bb 1" : "\u21bb"
+            hint: Audio.repeatLabel === "Repeat" ? "Repeat is off"
+                                                 : (Audio.repeat === 2 ? "Repeating this song"
+                                                                       : "Repeating the queue")
             fontSize: 16
             accent: Audio.repeat > 0
             Layout.preferredWidth: 48
@@ -420,7 +438,10 @@ Rectangle {
         }
         FlatButton {
             // Two things playing at once is never wanted, but it is a choice.
+            objectName: "autoPauseButton"
             text: "Pause for video"
+            hint: Audio.autoPause ? "The music stops when a video starts"
+                                  : "The music keeps playing over a video"
             accent: Audio.autoPause
             onClicked: Audio.setAutoPause(!Audio.autoPause)
         }
@@ -447,7 +468,10 @@ Rectangle {
         }
 
         FlatButton {
+            objectName: "queueButton"
             text: "Queue"
+            hint: Audio.queue.length + (Audio.queue.length === 1 ? " song in the queue"
+                                                                 : " songs in the queue")
             enabled: Audio.queue.length > 0
             onClicked: upNext.open()
         }
@@ -458,11 +482,20 @@ Rectangle {
             // it would be naming, and every other player puts one here.
             objectName: "nowPlayingButton"
             text: App.viewKind === "nowplaying" ? "\u2304" : "\u2303"
+            hint: App.viewKind === "nowplaying" ? "Back to where you were"
+                                                : "The Now playing page"
+            fontSize: 15
             accent: App.viewKind === "nowplaying"
             enabled: Audio.queue.length > 0
             Layout.preferredWidth: 42
             onClicked: App.toggleNowPlaying()
         }
-        FlatButton { text: "✕"; onClicked: Audio.stop() }
+        FlatButton {
+            objectName: "stopButton"
+            text: "✕"
+            hint: "Stop the music"
+            fontSize: 13
+            onClicked: Audio.stop()
+        }
     }
 }

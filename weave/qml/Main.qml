@@ -697,6 +697,12 @@ ApplicationWindow {
         anchors.bottom: miniPlayer.top
         anchors.topMargin: banner.height
         width: 214
+        // Over the content rather than under it. Nothing overlaps at rest,
+        // but a page walking between two tabs travels sideways, and it has to
+        // pass behind this panel rather than across it. Still under the Now
+        // playing page, which covers the panel on purpose when the picture
+        // fills the screen.
+        z: 1
         color: root.panelColour(Theme.colors.surface)
 
         // The panel moves the window as well, from the room its list does
@@ -1103,6 +1109,8 @@ ApplicationWindow {
     DetailPanel {
         id: detailPanel
         objectName: "detailPanel"
+        // The other edge a page walks past. See the sidebar above.
+        z: 1
         anchors.right: parent.right
         anchors.top: liveBar.visible ? liveBar.bottom : parent.top
         anchors.topMargin: liveBar.visible ? 0 : banner.height
