@@ -1055,6 +1055,14 @@ class Smoke:
         labels = [text.strip() for text, _ in menu_entries(menu)]
         self.check("the video menu offers to hide it",
                    "Hide this video" in labels, ", ".join(labels))
+        # The order of that menu is a decision, not an accident: what a press
+        # does most often is at the top and the boxes stay at the foot.
+        wanted = ["Play in mpv", "Hide this video", "Mark as", "Groups for this channel",
+                  "music favorites", "Share"]
+        first = labels[:len(wanted)]
+        self.check("and its entries are in the order they were asked for",
+                   all(want in got for want, got in zip(wanted, first)),
+                   ", ".join(first))
         menu.close()
         settle(0.2)
 
@@ -1082,18 +1090,45 @@ class Smoke:
         bridge.showSettings()
         settle(0.7)
         said = find(window, "hiddenCount")
-        listed = find(window, "hiddenVideos")
         self.check("the settings page counts what is hidden",
                    said is not None and "1 video is hidden" in str(read(said, "text")),
                    str(read(said, "text")) if said is not None else "no line")
-        self.check("and lists it",
-                   listed is not None and read(listed, "visible") is True
-                   and read(listed, "count") == 1,
-                   f"count {read(listed, 'count')}" if listed is not None else "no list")
+        self.check("and offers the window that holds them",
+                   find(window, "openHidden") is not None)
         self.check("with the picture it had, stored plain",
                    str(read(bridge, "hiddenVideos")[0]["thumbnail"]).endswith(
                        "https://pictures.invalid/hidden.jpg"),
                    str(read(bridge, "hiddenVideos")[0]["thumbnail"]))
+
+        # The list itself is a window now, so the page it was on stays about
+        # ceilings and caches.
+        held = find(window, "hiddenVideosWindow")
+        call(held, "open")
+        settle(0.5)
+        listed = find(window, "hiddenVideos")
+        self.check("the window lists what is hidden",
+                   listed is not None and bool(read(held, "visible"))
+                   and read(listed, "count") == 1,
+                   f"count {read(listed, 'count')}" if listed is not None else "no list")
+
+        # A list of several hundred is searched rather than read through, and
+        # what is typed has to be able to find nothing as well as something.
+        search = find(window, "hiddenSearchField")
+        title = str(read(bridge, "hiddenVideos")[0]["title"])
+        write(search, "text", "nothing is called this")
+        settle(0.3)
+        nothing = find(window, "hiddenNothing")
+        self.check("a search that matches nothing says so",
+                   read(listed, "count") == 0 and bool(read(nothing, "visible")),
+                   f"count {read(listed, 'count')}")
+        write(search, "text", title[:6])
+        settle(0.3)
+        self.check("and one that matches finds it",
+                   read(listed, "count") == 1, f"count {read(listed, 'count')}")
+        write(search, "text", "")
+        settle(0.2)
+        call(held, "close")
+        settle(0.3)
 
         bridge.unhideVideo(key)
         settle(0.5)

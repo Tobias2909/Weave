@@ -13,6 +13,10 @@ Item {
     // asked for from here rather than opened from here.
     signal playlistsRequested()
 
+    // The videos taken out of sight are a window of their own now, opened
+    // from here and owned by the window, the same way the playlists are.
+    signal hiddenRequested()
+
     // The part that scrolls, lent out so a wheel notch can be given the same
     // distance it has over the videos. What turns a notch into a distance has
     // to be declared beside a Flickable rather than inside one, since a child
@@ -252,6 +256,8 @@ Item {
                             }
                         }
 
+                        SettingsHeading { text: "Pictures on disk" }
+
                         Label {
                             width: parent.width
                             text: "Every thumbnail, avatar and banner is kept on disk, so a view "
@@ -349,6 +355,8 @@ Item {
                             }
                         }
 
+                        SettingsHeading { text: "Music videos on disk" }
+
                         Label {
                             width: parent.width
                             text: "The music player fetches a picture only while the Now "
@@ -367,7 +375,7 @@ Item {
                             Label {
                                 width: view.wordWidth
                                 height: 28
-                                text: "Music video"
+                                text: "Quality"
                                 color: Theme.colors.textMuted
                                 font.pixelSize: 12
                                 verticalAlignment: Text.AlignVCenter
@@ -424,7 +432,7 @@ Item {
                             Label {
                                 width: view.wordWidth
                                 height: 28
-                                text: "Kept music videos"
+                                text: "Kept"
                                 color: Theme.colors.textMuted
                                 font.pixelSize: 12
                                 verticalAlignment: Text.AlignVCenter
@@ -442,6 +450,15 @@ Item {
 
                         Row {
                             spacing: 8
+
+                            Label {
+                                width: view.wordWidth
+                                height: 28
+                                text: "Ceiling"
+                                color: Theme.colors.textMuted
+                                font.pixelSize: 12
+                                verticalAlignment: Text.AlignVCenter
+                            }
 
                             FlatButton {
                                 id: keepCeilingButton
@@ -485,16 +502,18 @@ Item {
                         }
 
                         // Videos taken out of sight from a card's own menu.
-                        // Hidden is not deleted, so this is where they come
-                        // back from, and each one says what it is rather than
-                        // showing an address nobody can read.
+                        // Hidden is not deleted, and the list of them is a
+                        // window of its own, since it grew long enough to
+                        // bury every other row on this page.
+                        SettingsHeading { text: "Hidden videos" }
+
                         Label {
                             width: parent.width
                             text: "Hiding a video takes its card out of the feed, out of a "
                                   + "group and out of the suggestions. It stays in any box "
-                                  + "you put it in and it keeps whatever it was marked. "
-                                  + "Bring one back and it is drawn again wherever it "
-                                  + "belongs."
+                                  + "you put it in and it keeps whatever it was marked. The "
+                                  + "window has every one of them, the one hidden last on "
+                                  + "top, and a box to search them."
                             color: Theme.colors.textMuted
                             font.pixelSize: 11
                             wrapMode: Text.Wrap
@@ -517,82 +536,12 @@ Item {
                             }
 
                             FlatButton {
-                                objectName: "unhideEverything"
-                                visible: App.hiddenCount > 0
-                                text: "Bring them all back"
-                                onClicked: App.unhideEverything()
-                            }
-                        }
-
-                        ListView {
-                            id: hiddenList
-                            objectName: "hiddenVideos"
-                            visible: App.hiddenCount > 0
-                            width: parent.width
-                            height: visible ? Math.min(240, contentHeight) : 0
-                            clip: true
-                            spacing: 6
-                            model: App.hiddenVideos
-                            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-
-                            delegate: Item {
-                                id: hiddenRow
-                                required property var modelData
-                                width: hiddenList.width
-                                height: 44
-
-                                // Asked for while it is still a string. Read
-                                // back off the picture it is a QUrl, and a
-                                // QUrl is never equal to a string, so a test
-                                // against one is always true and a row with no
-                                // picture holds the hole open anyway.
-                                readonly property string picture: modelData.thumbnail || ""
-
-                                RoundedImage {
-                                    id: shot
-                                    objectName: "hiddenThumbnail"
-                                    visible: hiddenRow.picture !== ""
-                                    width: visible ? 68 : 0
-                                    height: 38
-                                    radius: 4
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    source: hiddenRow.picture
-                                }
-
-                                Column {
-                                    anchors.left: shot.visible ? shot.right : parent.left
-                                    anchors.leftMargin: shot.visible ? 10 : 0
-                                    anchors.right: bringBack.left
-                                    anchors.rightMargin: 10
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    spacing: 2
-
-                                    Label {
-                                        width: parent.width
-                                        text: hiddenRow.modelData.title
-                                        color: Theme.colors.text
-                                        font.pixelSize: 12
-                                        elide: Text.ElideRight
-                                    }
-
-                                    Label {
-                                        width: parent.width
-                                        visible: hiddenRow.modelData.channelTitle !== ""
-                                        text: hiddenRow.modelData.channelTitle
-                                        color: Theme.colors.textMuted
-                                        font.pixelSize: 11
-                                        elide: Text.ElideRight
-                                    }
-                                }
-
-                                FlatButton {
-                                    id: bringBack
-                                    objectName: "bringItBack"
-                                    anchors.right: parent.right
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    text: "Bring it back"
-                                    onClicked: App.unhideVideo(hiddenRow.modelData.key)
-                                }
+                                objectName: "openHidden"
+                                // Nothing to open when nothing is hidden, and
+                                // the line beside it already says so.
+                                enabled: App.hiddenCount > 0
+                                text: "The hidden videos"
+                                onClicked: view.hiddenRequested()
                             }
                         }
                     }

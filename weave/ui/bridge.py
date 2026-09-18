@@ -2063,6 +2063,9 @@ class Bridge(QObject):
             "title": row["title"] or row["key"],
             "channelTitle": row["channel_title"] or "",
             "thumbnail": qml_source(row["thumbnail_url"] or ""),
+            # When it was put away. The list is in that order, so saying it
+            # is what lets the order be read rather than taken on trust.
+            "hiddenAgo": fmt.age_text(row["hidden_at"]),
         } for row in self._db.hidden_videos()]
 
     hiddenVideos = Property("QVariantList", _get_hidden, notify=hiddenChanged)

@@ -1020,6 +1020,7 @@ ApplicationWindow {
         anchors.topMargin: liveBar.visible ? 0 : banner.height
         anchors.bottom: miniPlayer.top
         onPlaylistsRequested: playlistChooser.open()
+        onHiddenRequested: hiddenVideosWindow.open()
     }
 
     SmoothScroll {
@@ -1772,6 +1773,32 @@ ApplicationWindow {
             onTriggered: { App.play(root.menuKey); videoMenu.dismiss() }
         }
         ThemedMenuItem {
+            objectName: "hideVideoEntry"
+            // Out of sight rather than gone. A card can spoil something or
+            // simply be unpleasant to keep meeting, and what it stays in is a
+            // box, which was picked video by video.
+            text: "Hide this video"
+            onTriggered: { App.hideVideo(root.menuKey); videoMenu.dismiss() }
+        }
+        ThemedMenuItem {
+            text: root.menuWatched ? "Mark as not watched" : "Mark as watched"
+            onTriggered: {
+                if (root.menuWatched)
+                    App.markUnwatched(root.menuKey)
+                else
+                    App.markWatched(root.menuKey)
+                videoMenu.dismiss()
+            }
+        }
+        ThemedMenuItem {
+            text: "Groups for this channel"
+            onTriggered: {
+                var key = root.menuChannelKey
+                videoMenu.dismiss()
+                root.askForGroups(key)
+            }
+        }
+        ThemedMenuItem {
             objectName: "musicFavoriteEntry"
             // On any card that is a video. Keeping one is how a song reaches
             // the music favourites without being in a playlist marked as
@@ -1789,32 +1816,6 @@ ApplicationWindow {
             objectName: "copyLinkEntry"
             text: "Share"
             onTriggered: { App.copyLink(root.menuKey); videoMenu.dismiss() }
-        }
-        ThemedMenuItem {
-            objectName: "hideVideoEntry"
-            // Out of sight rather than gone. A card can spoil something or
-            // simply be unpleasant to keep meeting, and what it stays in is a
-            // box, which was picked video by video.
-            text: "Hide this video"
-            onTriggered: { App.hideVideo(root.menuKey); videoMenu.dismiss() }
-        }
-        ThemedMenuItem {
-            text: "Groups for this channel"
-            onTriggered: {
-                var key = root.menuChannelKey
-                videoMenu.dismiss()
-                root.askForGroups(key)
-            }
-        }
-        ThemedMenuItem {
-            text: root.menuWatched ? "Mark as not watched" : "Mark as watched"
-            onTriggered: {
-                if (root.menuWatched)
-                    App.markUnwatched(root.menuKey)
-                else
-                    App.markWatched(root.menuKey)
-                videoMenu.dismiss()
-            }
         }
 
         ThemedMenuSeparator { id: boxSeparator }
@@ -2088,6 +2089,10 @@ ApplicationWindow {
 
     ManageGroup {
         id: manageGroup
+    }
+
+    HiddenVideos {
+        id: hiddenVideosWindow
     }
 
     ConfirmDelete {

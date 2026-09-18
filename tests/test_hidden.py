@@ -10,6 +10,7 @@ that keeps it, deliberately, since a box was picked video by video and quietly
 dropping one out of a hand built list is a different act from tidying a feed.
 """
 
+import time
 import unittest
 
 from tests.support import scratch_db
@@ -140,6 +141,37 @@ class SuggestionsAndSearches(unittest.TestCase):
         self.assertEqual(self.db.hidden_count(), 2)
         self.assertEqual(self.db.unhide_all(), 2)
         self.assertEqual(self.db.hidden_count(), 0)
+
+
+class WhatTheWindowIsGiven(unittest.TestCase):
+    """The rows the window that offers them back is drawn from.
+
+    It is its own window rather than a list on the settings page, and it says
+    when each one was put away, since that is the order it is in and an order
+    nobody can read is one nobody trusts.
+    """
+
+    def setUp(self):
+        from weave.ui.bridge import Bridge
+
+        self.db = scratch_db(self)
+        self.bridge = Bridge.__new__(Bridge)
+        self.bridge._db = self.db
+
+    def test_a_row_says_when_it_was_hidden(self):
+        self.db.hide_video("yt:ccccccccccc", "A suggestion")
+        with self.db.conn as conn:
+            conn.execute("UPDATE hidden_videos SET hidden_at=? WHERE video_key=?",
+                         (int(time.time()) - 7200, "yt:ccccccccccc"))
+        row = self.bridge._get_hidden()[0]
+        self.assertEqual(row["title"], "A suggestion")
+        self.assertEqual(row["hiddenAgo"], "2 hours ago")
+
+    def test_the_one_hidden_last_is_the_first_row(self):
+        self.db.hide_video("yt:ccccccccccc", "First away")
+        self.db.hide_video("yt:ddddddddddd", "Second away")
+        self.assertEqual([row["title"] for row in self.bridge._get_hidden()],
+                         ["Second away", "First away"])
 
 
 if __name__ == "__main__":
