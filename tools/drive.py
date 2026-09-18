@@ -2836,14 +2836,30 @@ class Smoke:
                        view is not None and read(view, "scrolls") is not None)
 
         # The report the page can write, which is the thing somebody sends when
-        # nothing is arriving. Written for real, into the scratch home this
-        # walk runs in.
+        # nothing is arriving. Written for real, but into the scratch cache
+        # rather than where the button puts it.
+        #
+        # Where it goes is the downloads folder, and that is HOME, which no
+        # walk ever scratches: only the XDG directories are pointed somewhere
+        # safe. So every run of this walk, and so every run of the suite, left
+        # a bundle in the real downloads folder. Hundreds of them, before
+        # anybody noticed. The button is still the thing pressed, and only the
+        # place it writes to is taken away from it.
+        from weave import paths, report as report_bundle
+        went_to = paths.CACHE_DIR / "walk-report.zip"
+        elsewhere, report_bundle.default_path = report_bundle.default_path, lambda: went_to
         root = window.contentItem()
         save = item_named(root, "exportReport")
         self.check("the page offers to save a report", save is not None)
-        call(save, "clicked")
-        ok = wait_until(lambda: read(bridge, "reportPath") != "", 20.0)
+        try:
+            call(save, "clicked")
+            ok = wait_until(lambda: read(bridge, "reportPath") != "", 20.0)
+        finally:
+            report_bundle.default_path = elsewhere
         self.check("and writing one says where it went", ok, read(bridge, "reportPath"))
+        self.check("into the place this walk named, not the downloads folder",
+                   read(bridge, "reportPath") == str(went_to),
+                   str(read(bridge, "reportPath")))
         if ok:
             import zipfile
             with zipfile.ZipFile(read(bridge, "reportPath")) as bundle:
