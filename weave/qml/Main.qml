@@ -96,6 +96,39 @@ ApplicationWindow {
         root.switchTab(music, function () { App.showMusicInHistory(music) })
     }
 
+    // ---- arriving on another page ---------------------------------------
+    //
+    // Walking between the halves of one page is a step sideways. Arriving
+    // somewhere else is not: the page you asked for comes up from below and
+    // settles, which is what every window does that wants a change of place
+    // to read as one.
+    //
+    // Driven by the bridge's own arrival rather than by the presses that
+    // cause it, so every way of getting somewhere is carried, including the
+    // ones nothing in this file knows about.
+    property real pageRise: 0
+    property real pageFade: 1
+
+    Connections {
+        target: App
+        function onViewArrived() { pageWalk.restart() }
+    }
+
+    SequentialAnimation {
+        id: pageWalk
+
+        PropertyAction { target: root; property: "pageRise"; value: 26 }
+        PropertyAction { target: root; property: "pageFade"; value: 0 }
+
+        ParallelAnimation {
+            NumberAnimation {
+                target: root; property: "pageRise"; to: 0
+                duration: 190; easing.type: Easing.OutCubic
+            }
+            NumberAnimation { target: root; property: "pageFade"; to: 1; duration: 190 }
+        }
+    }
+
     SequentialAnimation {
         id: tabWalk
 
@@ -1122,6 +1155,11 @@ ApplicationWindow {
 
     MusicView {
         id: musicView
+        // Arrives like every other page. What moves is the body it lends,
+        // inside a page that clips, so nothing reaches the bars.
+        Translate { id: musicShift; y: root.pageRise }
+        Component.onCompleted: musicView.body.transform = [musicShift]
+        opacity: root.pageFade
         objectName: "musicView"
         visible: App.viewKind === "music"
         anchors.left: sidebar.right
@@ -1133,6 +1171,9 @@ ApplicationWindow {
 
     DebugView {
         id: debugView
+        Translate { id: debugShift; y: root.pageRise }
+        Component.onCompleted: debugView.scrolls.contentItem.transform = [debugShift]
+        opacity: root.pageFade
         objectName: "debugView"
         visible: App.viewKind === "debug"
         anchors.left: sidebar.right
@@ -1155,6 +1196,9 @@ ApplicationWindow {
     SettingsView {
         id: settingsView
         objectName: "settingsView"
+        Translate { id: settingsShift; y: root.pageRise }
+        Component.onCompleted: settingsView.scrolls.contentItem.transform = [settingsShift]
+        opacity: root.pageFade
         visible: App.viewKind === "settings"
         anchors.left: sidebar.right
         // The panel is drawn over this view, so step aside for it the way the
@@ -1665,9 +1709,9 @@ ApplicationWindow {
         id: channelPlaylistsView
         objectName: "channelPlaylistsView"
         // The same as the grid above: the content moves, the view does not.
-        Translate { id: playlistsShift; x: root.tabSlide }
+        Translate { id: playlistsShift; x: root.tabSlide; y: root.pageRise }
         Component.onCompleted: channelPlaylistsView.contentItem.transform = [playlistsShift]
-        opacity: root.tabFade
+        opacity: root.tabFade * root.pageFade
         visible: App.viewKind === "channel" && App.channelTab === "playlists"
         anchors.left: grid.left
         anchors.right: grid.right
@@ -1685,9 +1729,9 @@ ApplicationWindow {
     ChannelMusic {
         id: channelMusicView
         objectName: "channelMusicView"
-        Translate { id: channelMusicShift; x: root.tabSlide }
+        Translate { id: channelMusicShift; x: root.tabSlide; y: root.pageRise }
         Component.onCompleted: channelMusicView.contentItem.transform = [channelMusicShift]
-        opacity: root.tabFade
+        opacity: root.tabFade * root.pageFade
         visible: App.viewKind === "channel" && App.channelTab === "music"
         anchors.left: grid.left
         anchors.right: grid.right
@@ -1709,9 +1753,9 @@ ApplicationWindow {
         // those panels are translucent, so passing behind them still showed
         // through. What the view holds is clipped to the view, so nothing can
         // reach an edge at all.
-        Translate { id: gridShift; x: root.tabSlide }
+        Translate { id: gridShift; x: root.tabSlide; y: root.pageRise }
         Component.onCompleted: grid.contentItem.transform = [gridShift]
-        opacity: root.tabFade
+        opacity: root.tabFade * root.pageFade
         visible: App.viewKind !== "music" && App.viewKind !== "debug"
                  && App.viewKind !== "nowplaying"
                  && !(App.viewKind === "channel" && App.channelTab === "music")

@@ -6,6 +6,13 @@ import QtQuick.Layouts
 // because a library that is empty is not a place to start from.
 Item {
     id: view
+    // The page moves when you arrive on it, and what moves is drawn inside
+    // this, so it is cut off at the edges rather than reaching the bar above
+    // or the one below.
+    clip: true
+    // Lent out so the window can carry it, the way the other pages lend the
+    // part of themselves that scrolls.
+    readonly property Item body: layout
 
     // A tile and the gap after it. The two row band has to count how many fit
     // across, so the size lives here rather than being left to each tile.
@@ -95,6 +102,7 @@ Item {
     readonly property bool onShelfPage: openShelfItems.length > 0
 
     ColumnLayout {
+        id: layout
         anchors.fill: parent
         anchors.margins: 14
         spacing: 12

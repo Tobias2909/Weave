@@ -127,6 +127,7 @@ class WhatTheWindowDoes(unittest.TestCase):
         bridge._set_status = lambda *_a, **_k: None
         bridge.reload = lambda: None
         bridge.viewChanged = type("Sig", (), {"emit": staticmethod(lambda: None)})()
+        bridge.viewArrived = type("Sig", (), {"emit": staticmethod(lambda: None)})()
         bridge.fetched = []
         bridge._fetch_results = lambda start: bridge.fetched.append(start)
         self.bridge = bridge
@@ -328,6 +329,7 @@ class TheBoxSayingWhatIsShowing(unittest.TestCase):
             self.reloads += 1
         bridge.reload = reload
         bridge.viewChanged = type("Sig", (), {"emit": staticmethod(lambda: None)})()
+        bridge.viewArrived = type("Sig", (), {"emit": staticmethod(lambda: None)})()
         self.bridge = bridge
 
     def test_the_same_words_again_change_nothing(self):

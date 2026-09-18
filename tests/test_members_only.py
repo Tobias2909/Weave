@@ -473,6 +473,7 @@ class WhatThePressSays(unittest.TestCase):
         bridge._set_status = lambda *_a, **_k: None
         bridge.reload = lambda: None
         bridge.viewChanged = _Quiet()
+        bridge.viewArrived = _Quiet()
         self.bridge = bridge
 
     def note(self):

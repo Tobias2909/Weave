@@ -211,6 +211,7 @@ class Bridge(QObject):
     hideWatchedChanged = Signal()
     problemsChanged = Signal()
     emptyHintChanged = Signal()
+    viewArrived = Signal()
     groupsChanged = Signal()
     playlistsChanged = Signal()
     playlistSkippedChanged = Signal()
@@ -1654,6 +1655,11 @@ class Bridge(QObject):
             # away from.
             self.searchEnded.emit()
         self.viewChanged.emit()
+        # Arriving somewhere else, which is what the window draws a movement
+        # for. Its own signal rather than viewChanged, which a dozen other
+        # things raise, and never raised by walking between the halves of one
+        # page, since that movement is a sideways one of its own.
+        self.viewArrived.emit()
         # Which half of a group is showing belongs to the group, so arriving
         # on a different one is the moment the row of buttons is wrong.
         self.groupShowsChanged.emit()

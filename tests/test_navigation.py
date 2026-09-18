@@ -126,6 +126,10 @@ def make_bridge():
     bridge._results_label = ""
     bridge._searching = False
     bridge.viewChanged = Recorder()
+    # Arriving somewhere else is its own report, for the movement the window
+    # draws. A harness that builds a bridge by hand has to stub it like the
+    # rest, or _set_view raises out of a signal with no source.
+    bridge.viewArrived = Recorder()
     bridge.statusChanged = Recorder()
     bridge.searchEnded = Recorder()
     bridge.searchRestored = Recorder()
