@@ -8,10 +8,12 @@ settings without their secrets, counts, and every request of the last day.
 
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 from weave import config, report
 from weave.db import Database, VideoRow
@@ -88,6 +90,20 @@ class TheBundle(unittest.TestCase):
     def test_and_names_itself_by_the_hour_when_nobody_says(self):
         self.assertTrue(report.default_path().name.startswith("weave-report-"))
         self.assertTrue(report.default_path().name.endswith(".zip"))
+
+    def test_it_goes_where_the_desktop_keeps_downloads(self):
+        """Not a Downloads written into the code. The folder is named by the
+        desktop, and on a home in another language it is called something
+        else entirely."""
+        elsewhere = self.root / "Hämtningar"
+        elsewhere.mkdir()
+        with mock.patch.dict(os.environ, {"XDG_DOWNLOAD_DIR": str(elsewhere)}):
+            self.assertEqual(report.default_path().parent, elsewhere)
+
+    def test_and_falls_back_to_the_home_when_there_is_no_such_folder(self):
+        with mock.patch.dict(os.environ,
+                             {"XDG_DOWNLOAD_DIR": str(self.root / "not here")}):
+            self.assertEqual(report.default_path().parent, Path.home())
 
 
 if __name__ == "__main__":

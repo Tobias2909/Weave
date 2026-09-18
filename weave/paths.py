@@ -43,6 +43,18 @@ def bin_home() -> Path:
     return Path(os.environ.get("XDG_BIN_HOME") or Path.home() / ".local" / "bin")
 
 
+def downloads_dir() -> Path:
+    """Where a file meant to be found again goes.
+
+    Asked of the desktop rather than guessed at. XDG_DOWNLOAD_DIR in the
+    environment first, then whatever xdg-user-dirs wrote into user-dirs.dirs,
+    then a plain Downloads beside the home, which is the order platformdirs
+    answers in. A home whose downloads folder is named in another language, or
+    kept on another disk, is the ordinary case this is for.
+    """
+    return Path(_dirs.user_downloads_dir)
+
+
 def runtime_dir() -> Path:
     """Where mpv puts its IPC socket. Falls back to /tmp when unset."""
     return Path(os.environ.get("XDG_RUNTIME_DIR") or "/tmp")

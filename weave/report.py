@@ -186,8 +186,11 @@ def _numbers(db: Database, cfg: Config) -> str:
 
 def default_path() -> Path:
     """Where the bundle goes when nobody says. The downloads folder if there is
-    one, since that is where a file to attach to a message is looked for."""
-    downloads = Path.home() / "Downloads"
+    one, since that is where a file to attach to a message is looked for.
+
+    The folder the desktop names, not a Downloads written into the code, which
+    is wrong on any machine whose home is not in English."""
+    downloads = paths.downloads_dir()
     root = downloads if downloads.is_dir() else Path.home()
     return root / time.strftime("weave-report-%Y%m%d-%H%M.zip")
 
