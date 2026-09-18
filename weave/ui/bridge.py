@@ -549,6 +549,20 @@ class Bridge(QObject):
     def _get_problems(self) -> list:
         return list(self._problems)
 
+    # A feed that did not answer is news, not a task. The endpoint replies to
+    # a burst with a refusal rather than saying it is busy, it clears on its
+    # own, and there is nothing whatever to do about it but wait. On the
+    # banner it read as the application being broken, every time it was not,
+    # so it is kept off it. It still reaches How things are, and the sidebar
+    # carries a dot so it can be found without hunting for it.
+    QUIET = "feed "
+
+    def _get_loud_problems(self) -> list:
+        return [p for p in self._problems if not p.startswith(self.QUIET)]
+
+    def _get_feed_trouble(self) -> bool:
+        return any(p.startswith(self.QUIET) for p in self._problems)
+
     def _get_groups(self) -> list:
         """All first, then the configured groups. Shipped as one list so QML
         has no special case for the All row."""
@@ -703,6 +717,42 @@ class Bridge(QObject):
             return "No videos stored yet.\nPress Refresh to fetch them."
         return "Everything here is watched.\nTurn off Hide watched to see it again."
 
+    # ---- the one thing to do about an empty page -------------------------
+
+    # An empty page said what was wrong and left the doing to be found. The
+    # sentence names it, so the page may as well carry it. The key says which
+    # act it is and the window performs it, since some of them are windows of
+    # its own rather than anything here.
+    EMPTY_ACTIONS = {
+        "recommend": "Fresh recommendations",
+        "youtube": "Search YouTube",
+        "history": "Read it again",
+        "refresh": "Refresh",
+        "import": "Import subscriptions",
+        "group": "Manage this group",
+    }
+
+    def _get_empty_action(self) -> str:
+        if self._view_kind in (PLAYLIST, BOX):
+            return ""
+        if self._view_kind == RECOMMENDED:
+            return "recommend"
+        if self._view_kind == SEARCH:
+            return "" if self._search_scope == "youtube" else "youtube"
+        if self._view_kind == HISTORY:
+            return "" if self._history_music else "history"
+        if self._view_kind == CHANNEL:
+            return "refresh"
+        if not self._db.counts()["channels"]:
+            return "import"
+        if self._view_kind == GROUP:
+            found = next((row for row in self._db.groups() if row["id"] == self._view_id), None)
+            return "refresh" if found and found["members"] else "group"
+        return "refresh"
+
+    def _get_empty_action_text(self) -> str:
+        return self.EMPTY_ACTIONS.get(self._get_empty_action(), "")
+
     def _get_cache_text(self) -> str:
         """What the picture cache holds, in the words the cache subcommand
         prints, since both are reading the same two numbers."""
@@ -779,7 +829,11 @@ class Bridge(QObject):
     busy = Property(bool, _get_busy, notify=busyChanged)
     hideWatched = Property(bool, _get_hide_watched, notify=hideWatchedChanged)
     problems = Property("QVariantList", _get_problems, notify=problemsChanged)
+    loudProblems = Property("QVariantList", _get_loud_problems, notify=problemsChanged)
+    feedTrouble = Property(bool, _get_feed_trouble, notify=problemsChanged)
     emptyHint = Property(str, _get_empty_hint, notify=emptyHintChanged)
+    emptyAction = Property(str, _get_empty_action, notify=emptyHintChanged)
+    emptyActionText = Property(str, _get_empty_action_text, notify=emptyHintChanged)
     playlistSkippedText = Property(str, _get_playlist_skipped_text,
                                    notify=playlistSkippedChanged)
     groups = Property("QVariantList", _get_groups, notify=groupsChanged)
@@ -1768,9 +1822,11 @@ class Bridge(QObject):
         entries.append((RECOMMENDED, -1))
         entries.append((HISTORY, -1))
         entries.append((MUSIC, -1))
+        entries.extend((PLAYLIST, index) for index, _ in enumerate(self._sidebar_playlists()))
+        # Last, because these two are drawn at the foot of the panel rather
+        # than among the lists that are yours.
         entries.append((DEBUG, -1))
         entries.append((SETTINGS, -1))
-        entries.extend((PLAYLIST, index) for index, _ in enumerate(self._sidebar_playlists()))
         return entries
 
     @Slot(int)
@@ -5365,6 +5421,13 @@ class Bridge(QObject):
         self._judge_finished_streams()
         self._fill_lengths()
         self.reload()
+        # A round where nothing was due says nothing. The numbers were right
+        # and the sentence was useless: a poll that finds no channel ready,
+        # or one that arrives while the endpoint is being left alone, checked
+        # nothing and changed nothing, and "0 channels checked, 0 rows
+        # updated" reads as a failure rather than as a quiet minute.
+        if not channels and not touched and not failures:
+            return
         suffix = f", {failures} failed" if failures else ""
         self._set_status(f"{channels} channels checked, {touched} rows updated{suffix}")
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Property, QFileSystemWatcher, QObject, QTimer, Signal, Slot
+from PySide6.QtGui import QColor
 
 from .. import themes
 from ..db import Database
@@ -93,6 +94,47 @@ class Theme(QObject):
     names = Property("QVariantList", _get_names, notify=listChanged)
     current = Property(str, _get_current, notify=changed)
     washed = Property(bool, _get_washed, notify=changed)
+
+    # ---- one rule for a hovered or marked thing ---------------------------
+
+    @Slot(str, float, result="QColor")
+    def wash(self, colour: str, alpha: float) -> QColor:
+        """A film of one role's colour, for whatever is under the pointer.
+
+        Hover used to be painted in `surfaceRaised`, which is the colour every
+        window drawn over a page already is, so inside one the highlight was
+        the ground itself and nothing appeared to happen. A film of the accent
+        stands out on either ground and in a light theme as well as a dark
+        one.
+
+        Answered here rather than in QML because `Theme.colors` is a map of
+        strings: asking a string for `.r` gives undefined without a word, and
+        `Qt.rgba(undefined, ...)` is black. Pass the role itself
+        (`Theme.wash(Theme.colors.accent, 0.2)`) so the binding depends on the
+        map and follows a change of theme.
+        """
+        made = QColor(colour)
+        if not made.isValid():
+            return QColor(0, 0, 0, 0)
+        made.setAlphaF(max(0.0, min(1.0, alpha)))
+        return made
+
+    @Slot(str, float, str, result="QColor")
+    def washOver(self, colour: str, alpha: float, ground: str) -> QColor:
+        """The same film, already mixed into the ground it sits on.
+
+        For anything that paints itself solid. A translucent colour there
+        would show the page through the thing rather than tinting it.
+        """
+        top, under = QColor(colour), QColor(ground)
+        if not top.isValid() or not under.isValid():
+            return under if under.isValid() else QColor(0, 0, 0, 0)
+        alpha = max(0.0, min(1.0, alpha))
+        return QColor(
+            round(top.red() * alpha + under.red() * (1 - alpha)),
+            round(top.green() * alpha + under.green() * (1 - alpha)),
+            round(top.blue() * alpha + under.blue() * (1 - alpha)),
+        )
 
     # ---- actions ---------------------------------------------------------
 

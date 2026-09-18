@@ -284,8 +284,12 @@ Item {
                                 width: view.tileSize
                                 height: view.tileSize
                                 radius: 8
-                                color: seeAllHover.hovered ? Theme.colors.surfaceRaised
-                                                           : Theme.colors.surface
+                                // Solid, so the film is mixed into the
+                                // ground rather than laid over it.
+                                color: seeAllHover.hovered
+                                       ? Theme.washOver(Theme.colors.accent, 0.14,
+                                                        Theme.colors.surface)
+                                       : Theme.colors.surface
                                 border.width: 1
                                 border.color: seeAllHover.hovered ? Theme.colors.accent
                                                                   : Theme.colors.border
@@ -429,7 +433,8 @@ Item {
                 width: results.width
                 height: 52
                 radius: 6
-                color: rowHover.hovered ? Theme.colors.surfaceRaised : "transparent"
+                color: rowHover.hovered ? Theme.wash(Theme.colors.accent, 0.14)
+                                        : "transparent"
 
                 HoverHandler { id: rowHover }
                 TapHandler { onTapped: App.playResult(index) }

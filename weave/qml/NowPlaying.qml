@@ -876,7 +876,8 @@ Item {
                 width: relatedList.width
                 height: 48
                 radius: 5
-                color: relatedHover.hovered ? Theme.colors.surface : "transparent"
+                color: relatedHover.hovered ? Theme.wash(Theme.colors.accent, 0.14)
+                                            : "transparent"
 
                 HoverHandler { id: relatedHover }
 

@@ -40,9 +40,10 @@ ListView {
         radius: 5
         // The one playing stays marked, since the list holds everything rather
         // than only what is still to come.
-        color: queuedRow.playing ? Theme.colors.surfaceRaised
-                                 : (queuedHover.hovered ? Theme.colors.surface
-                                                        : "transparent")
+        color: queuedRow.playing ? Theme.wash(Theme.colors.accent, 0.26)
+                                 : (queuedHover.hovered
+                                    ? Theme.wash(Theme.colors.accent, 0.14)
+                                    : "transparent")
 
         HoverHandler { id: queuedHover }
 

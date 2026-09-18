@@ -6,24 +6,22 @@ import QtQuick.Controls
 Button {
     id: control
     property bool accent: false
+    // A mark rather than a word wants to be drawn larger, or it reads as
+    // small print beside the marks around it.
+    property int fontSize: 12
 
     implicitHeight: 28
     padding: 10
 
     contentItem: Label {
         text: control.text
-        font.pixelSize: 12
+        font.pixelSize: control.fontSize
         color: control.enabled
                ? (control.accent ? Theme.colors.badgeText : Theme.colors.text)
                : Theme.colors.textMuted
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
     }
-
-    // Theme.colors is a map of STRINGS. Asking a string for .r answers
-    // undefined without a word, and Qt.rgba(undefined, ...) is black, so the
-    // role is turned into a colour before anything is asked of it.
-    readonly property color highlight: Qt.color(Theme.colors.accent)
 
     background: Rectangle {
         radius: 6
@@ -38,11 +36,9 @@ Button {
             // nothing at all. A wash stands out on either ground and in a
             // light theme as well as a dark one.
             if (control.down)
-                return Qt.rgba(control.highlight.r, control.highlight.g,
-                               control.highlight.b, 0.34)
+                return Theme.wash(Theme.colors.accent, 0.34)
             if (control.hovered)
-                return Qt.rgba(control.highlight.r, control.highlight.g,
-                               control.highlight.b, 0.20)
+                return Theme.wash(Theme.colors.accent, 0.20)
             return "transparent"
         }
         border.width: control.accent ? 0 : 1

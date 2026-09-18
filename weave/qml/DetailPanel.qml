@@ -157,35 +157,28 @@ Rectangle {
                 }
             }
 
-            Flow {
+            // One line of facts, divided the way a card divides them. They
+            // were laid out in a Flow with a wide gap between them, so the
+            // panel and the card under the pointer said the same things in
+            // two different hands.
+            Label {
                 width: parent.width
-                spacing: 14
-
-                Repeater {
-                    model: [
-                        { label: "", value: App.detail.startsText
-                                            ? "Starts " + App.detail.startsText : "" },
-                        { label: "watching now", value: App.detail.watchingText },
-                        { label: "", value: App.detail.gameText },
-                        { label: "views", value: App.detail.viewsText },
-                        { label: "likes", value: App.detail.likesText },
-                        { label: "dislikes, estimated", value: App.detail.dislikesText },
-                        { label: "", value: App.detail.durationText },
-                        { label: "", value: App.detail.ageText },
-                    ]
-                    Label {
-                        required property var modelData
-                        // A binding is evaluated even while the item is
-                        // hidden, so an absent field has to become an empty
-                        // string here rather than reaching the text property
-                        // as undefined.
-                        readonly property string value: modelData.value ? modelData.value : ""
-                        visible: value !== ""
-                        text: modelData.label === "" ? value : value + " " + modelData.label
-                        color: Theme.colors.textMuted
-                        font.pixelSize: panel.sized(11)
-                    }
-                }
+                readonly property var facts: [
+                    App.detail.startsText ? "Starts " + App.detail.startsText : "",
+                    App.detail.watchingText ? App.detail.watchingText + " watching now" : "",
+                    App.detail.gameText || "",
+                    App.detail.viewsText ? App.detail.viewsText + " views" : "",
+                    App.detail.likesText ? App.detail.likesText + " likes" : "",
+                    App.detail.dislikesText
+                        ? App.detail.dislikesText + " dislikes, estimated" : "",
+                    App.detail.durationText || "",
+                    App.detail.ageText || "",
+                ].filter(function (one) { return one !== "" })
+                visible: facts.length > 0
+                text: facts.join("  \u00b7  ")
+                color: Theme.colors.textMuted
+                font.pixelSize: panel.sized(11)
+                wrapMode: Text.Wrap
             }
 
             Rectangle { width: parent.width; height: 1; color: Theme.colors.border }

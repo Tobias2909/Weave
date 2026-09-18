@@ -396,17 +396,26 @@ Rectangle {
 
         Item { Layout.fillWidth: true }
 
+        // Marks rather than words, like the transport beside them. Both are
+        // states rather than acts, and a word that is only lit when it is on
+        // is read as a button that does nothing the rest of the time.
         FlatButton {
-            text: "Shuffle"
+            objectName: "shuffleButton"
+            text: "\u21c4"
+            fontSize: 16
             accent: Audio.shuffle
+            Layout.preferredWidth: 42
             onClicked: Audio.setShuffle(!Audio.shuffle)
         }
         FlatButton {
-            // Off, the whole queue, or the one track. A queue that repeats and
-            // a track that repeats are different wants.
-            text: Audio.repeatLabel
+            // Off, the whole queue, or the one track. A queue that repeats
+            // and a track that repeats are different wants, so the one track
+            // carries a 1 beside the mark.
+            objectName: "repeatButton"
+            text: Audio.repeat === 2 ? "\u21bb 1" : "\u21bb"
+            fontSize: 16
             accent: Audio.repeat > 0
-            Layout.preferredWidth: 92
+            Layout.preferredWidth: 48
             onClicked: Audio.cycleRepeat()
         }
         FlatButton {

@@ -43,6 +43,89 @@ ApplicationWindow {
         else if (App.viewKind === "search") App.searchYouTube()
     }
 
+    // ---- walking between the halves of a page ----------------------------
+    //
+    // A tab that swaps the content in place gives no sense of having moved.
+    // The page leaves the way you came from and the new one arrives from the
+    // side you pressed, which is what the eye reads as a step sideways rather
+    // than as the window blinking.
+    //
+    // Carried as a transform rather than as a margin or an anchor: a
+    // translate costs nothing, while moving an anchored item re-lays out a
+    // grid of cards on every frame of it.
+    property real tabSlide: 0
+    property real tabFade: 1
+    // Held until the page is off the screen. The switch itself happens in the
+    // middle of the animation, where nothing of either half is visible, so a
+    // model being rebuilt is never seen.
+    property var tabAct: null
+    // How far the page travels. Measured against the window rather than
+    // guessed: at 48 the movement read as a flicker, at 72 it reads as a step
+    // sideways, and past about 100 it reads as slow.
+    property real tabFrom: 72
+
+    function switchTab(forward, act) {
+        // A second press while one is running would leave the page parked off
+        // to the side, so the first is finished before the second begins.
+        if (tabWalk.running)
+            tabWalk.complete()
+        root.tabAct = act
+        root.tabFrom = forward ? 72 : -72
+        tabWalk.restart()
+    }
+
+    function chooseChannelTab(key) {
+        if (key === App.channelTab)
+            return
+        var order = ["videos", "streams", "members", "playlists", "music"]
+        root.switchTab(order.indexOf(key) > order.indexOf(App.channelTab),
+                       function () { App.showChannelTab(key) })
+    }
+
+    function chooseGroupShows(key) {
+        if (key === App.groupShows)
+            return
+        var order = ["all", "videos", "streams"]
+        root.switchTab(order.indexOf(key) > order.indexOf(App.groupShows),
+                       function () { App.showInGroup(key) })
+    }
+
+    function chooseHistoryHalf(music) {
+        if (music === App.historyShowsMusic)
+            return
+        root.switchTab(music, function () { App.showMusicInHistory(music) })
+    }
+
+    SequentialAnimation {
+        id: tabWalk
+
+        ParallelAnimation {
+            NumberAnimation {
+                target: root; property: "tabSlide"; to: -root.tabFrom
+                duration: 140; easing.type: Easing.InCubic
+            }
+            NumberAnimation { target: root; property: "tabFade"; to: 0; duration: 140 }
+        }
+
+        ScriptAction {
+            script: {
+                if (root.tabAct)
+                    root.tabAct()
+                root.tabAct = null
+                // Put down on the far side, ready to be carried in.
+                root.tabSlide = root.tabFrom
+            }
+        }
+
+        ParallelAnimation {
+            NumberAnimation {
+                target: root; property: "tabSlide"; to: 0
+                duration: 190; easing.type: Easing.OutCubic
+            }
+            NumberAnimation { target: root; property: "tabFade"; to: 1; duration: 190 }
+        }
+    }
+
     // Which video the context menu is acting on.
     property string menuKey: ""
     property string menuChannelKey: ""
@@ -445,11 +528,32 @@ ApplicationWindow {
                 Item { Layout.fillWidth: true }
 
                 Label {
+                    id: statusLine
                     objectName: "status"
                     // Second to go, and the one thing here allowed to be
                     // narrower than its text, so it is down to a sliver of a
                     // line by the time it goes at all.
                     visible: root.width >= 905
+                    // News rather than a fact about the window, so it goes
+                    // once it has been read. It used to sit there for the
+                    // whole evening saying how many channels are followed,
+                    // which reads as something the bar is for.
+                    opacity: 0
+                    Behavior on opacity { NumberAnimation { duration: 400 } }
+                    // Named through the id. A bare `text` in a changed
+                    // handler reads as the signal's own injected parameter,
+                    // which Qt warns about and is on its way out.
+                    onTextChanged: {
+                        if (statusLine.text !== "") {
+                            statusLine.opacity = 1
+                            statusRest.restart()
+                        }
+                    }
+                    Timer {
+                        id: statusRest
+                        interval: 8000
+                        onTriggered: statusLine.opacity = 0
+                    }
                     text: App.status
                     color: Theme.colors.textMuted
                     font.pixelSize: 12
@@ -531,7 +635,10 @@ ApplicationWindow {
     // the settings.
     Rectangle {
         id: banner
-        visible: App.problems.length > 0
+        // What is on the banner is what somebody can act on. A feed that did
+        // not answer is not that, and it says so on How things are instead,
+        // with a dot beside that row in the panel.
+        visible: App.loudProblems.length > 0
         anchors.top: parent.top
         width: parent.width
         height: visible ? 32 : 0
@@ -543,9 +650,9 @@ ApplicationWindow {
             anchors.leftMargin: 14
             anchors.rightMargin: 12
             verticalAlignment: Text.AlignVCenter
-            text: App.problems.length + " problem"
-                  + (App.problems.length === 1 ? "" : "s") + "  ·  "
-                  + App.problems[App.problems.length - 1]
+            text: App.loudProblems.length + " problem"
+                  + (App.loudProblems.length === 1 ? "" : "s") + "  ·  "
+                  + App.loudProblems[App.loudProblems.length - 1]
             color: Theme.colors.error
             font.pixelSize: 12
             elide: Text.ElideRight
@@ -615,7 +722,7 @@ ApplicationWindow {
                         sidebarFlick.y + sidebarColumn.height - sidebarFlick.contentY)
             // Stops above the update line, so pressing that opens the release
             // page rather than taking hold of the window.
-            height: Math.max(0, parent.height - y
+            height: Math.max(0, parent.height - y - sidebarFoot.height
                                 - (updateLine.visible ? updateLine.height : 0))
             acceptedButtons: Qt.LeftButton
 
@@ -669,7 +776,8 @@ ApplicationWindow {
             anchors.right: parent.right
             anchors.bottom: parent.bottom
             height: visible ? updateColumn.height + 16 : 0
-            color: updateHover.hovered ? Theme.colors.surfaceRaised : "transparent"
+            color: updateHover.hovered ? Theme.wash(Theme.colors.accent, 0.12)
+                                       : "transparent"
             z: 2
 
             HoverHandler { id: updateHover }
@@ -711,11 +819,57 @@ ApplicationWindow {
             }
         }
 
+        // The two pages that are about the application rather than about
+        // anything of yours. Pinned to the foot, where a program keeps its
+        // settings, so the list above holds only what is yours and a long
+        // list of playlists can never push these out of reach.
+        Column {
+            id: sidebarFoot
+            objectName: "sidebarFoot"
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: updateLine.visible ? updateLine.top : parent.bottom
+            anchors.bottomMargin: 8
+            spacing: 2
+            z: 1
+
+            Rectangle {
+                width: parent.width
+                height: 1
+                color: Theme.colors.border
+            }
+
+            Item { width: 1; height: 6 }
+
+            SidebarRow {
+                objectName: "debugRow"
+                width: sidebarFoot.width
+                label: "How things are"
+                count: 0
+                // A feed that did not answer is said here rather than on the
+                // banner, since waiting is the whole of what can be done
+                // about it.
+                marked: App.feedTrouble
+                selected: App.viewKind === "debug"
+                onActivated: App.showDebug()
+            }
+
+            SidebarRow {
+                objectName: "settingsRow"
+                width: sidebarFoot.width
+                label: "Settings"
+                count: 0
+                selected: App.viewKind === "settings"
+                onActivated: App.showSettings()
+            }
+        }
+
         Flickable {
             id: sidebarFlick
             anchors.fill: parent
             anchors.topMargin: 8
-            anchors.bottomMargin: 8 + (updateLine.visible ? updateLine.height : 0)
+            anchors.bottomMargin: 8 + sidebarFoot.height
+                                  + (updateLine.visible ? updateLine.height : 0)
             contentHeight: sidebarColumn.height
             clip: true
             interactive: false
@@ -833,24 +987,6 @@ ApplicationWindow {
                     count: 0
                     selected: App.viewKind === "music"
                     onActivated: App.showMusic()
-                    onRevealRequested: root.revealRow(this)
-                }
-
-                SidebarRow {
-                    width: sidebarColumn.width
-                    label: "How things are"
-                    count: 0
-                    selected: App.viewKind === "debug"
-                    onActivated: App.showDebug()
-                    onRevealRequested: root.revealRow(this)
-                }
-
-                SidebarRow {
-                    width: sidebarColumn.width
-                    label: "Settings"
-                    count: 0
-                    selected: App.viewKind === "settings"
-                    onActivated: App.showSettings()
                     onRevealRequested: root.revealRow(this)
                 }
 
@@ -1189,19 +1325,19 @@ ApplicationWindow {
             anchors.left: parent.left
             anchors.leftMargin: 6
             anchors.verticalCenter: parent.verticalCenter
-            spacing: 8
+            spacing: 2
 
-            FlatButton {
+            Tab {
                 objectName: "historyVideos"
                 text: "Videos"
-                accent: !App.historyShowsMusic
-                onClicked: App.showMusicInHistory(false)
+                selected: !App.historyShowsMusic
+                onClicked: root.chooseHistoryHalf(false)
             }
-            FlatButton {
+            Tab {
                 objectName: "historyMusic"
                 text: "Music"
-                accent: App.historyShowsMusic
-                onClicked: App.showMusicInHistory(true)
+                selected: App.historyShowsMusic
+                onClicked: root.chooseHistoryHalf(true)
             }
         }
 
@@ -1222,59 +1358,59 @@ ApplicationWindow {
             }
         }
 
-        // A channel has two halves. Walking between them is not walking
-        // anywhere, so it is a pair of buttons rather than a view of its own.
+        // A channel has several halves. Walking between them is not walking
+        // anywhere, so it is a row of tabs rather than a view of its own.
         Row {
             objectName: "channelTabs"
             visible: viewBar.onChannel
             anchors.left: parent.left
             anchors.leftMargin: 6
             anchors.verticalCenter: parent.verticalCenter
-            spacing: 8
+            spacing: 2
 
-            FlatButton {
+            Tab {
                 objectName: "channelVideos"
                 text: "Videos"
-                accent: App.channelTab === "videos"
-                onClicked: App.showChannelTab("videos")
+                selected: App.channelTab === "videos"
+                onClicked: root.chooseChannelTab("videos")
             }
             // Only for a channel with a stream stored. Most channels have
-            // never streamed, and a button onto an empty half is worse than
-            // no button.
-            FlatButton {
+            // never streamed, and a tab onto an empty half is worse than no
+            // tab.
+            Tab {
                 objectName: "channelStreamsTab"
                 visible: App.channelInfo.streams > 0
                 text: "Streams"
-                accent: App.channelTab === "streams"
-                onClicked: App.showChannelTab("streams")
+                selected: App.channelTab === "streams"
+                onClicked: root.chooseChannelTab("streams")
             }
             // Only once something has actually been read. A channel nobody
             // pressed the button on has no such half, and neither has one
             // whose tab answered with nothing, so this never appears as an
             // empty page. Switching the button off again leaves it here, with
             // what was read before still in it.
-            FlatButton {
+            Tab {
                 objectName: "channelMembersTab"
                 visible: App.channelInfo.members > 0
                 text: "Members"
-                accent: App.channelTab === "members"
-                onClicked: App.showChannelTab("members")
+                selected: App.channelTab === "members"
+                onClicked: root.chooseChannelTab("members")
             }
-            FlatButton {
+            Tab {
                 objectName: "channelPlaylistsTab"
                 text: "Playlists"
-                accent: App.channelTab === "playlists"
-                onClicked: App.showChannelTab("playlists")
+                selected: App.channelTab === "playlists"
+                onClicked: root.chooseChannelTab("playlists")
             }
             // Always offered, unlike Streams and Members, because whether a
             // channel has a music side cannot be known without asking and
-            // asking costs a request. So the question is put when the button
-            // is pressed, and the answer is kept, an empty one included.
-            FlatButton {
+            // asking costs a request. So the question is put when the tab is
+            // pressed, and the answer is kept, an empty one included.
+            Tab {
                 objectName: "channelMusicTab"
                 text: "Music"
-                accent: App.channelTab === "music"
-                onClicked: App.showChannelTab("music")
+                selected: App.channelTab === "music"
+                onClicked: root.chooseChannelTab("music")
             }
         }
 
@@ -1493,25 +1629,25 @@ ApplicationWindow {
                 anchors.leftMargin: 6
                 anchors.top: parent.top
                 anchors.topMargin: (groupBarClip.barHeight - height) / 2
-                spacing: 8
+                spacing: 2
 
-                FlatButton {
+                Tab {
                     objectName: "groupAll"
                     text: "All"
-                    accent: App.groupShows === "all"
-                    onClicked: App.showInGroup("all")
+                    selected: App.groupShows === "all"
+                    onClicked: root.chooseGroupShows("all")
                 }
-                FlatButton {
+                Tab {
                     objectName: "groupVideos"
                     text: "Videos"
-                    accent: App.groupShows === "videos"
-                    onClicked: App.showInGroup("videos")
+                    selected: App.groupShows === "videos"
+                    onClicked: root.chooseGroupShows("videos")
                 }
-                FlatButton {
+                Tab {
                     objectName: "groupStreams"
                     text: "Streams"
-                    accent: App.groupShows === "streams"
-                    onClicked: App.showInGroup("streams")
+                    selected: App.groupShows === "streams"
+                    onClicked: root.chooseGroupShows("streams")
                 }
             }
         }
@@ -1520,6 +1656,8 @@ ApplicationWindow {
     ChannelPlaylists {
         id: channelPlaylistsView
         objectName: "channelPlaylistsView"
+        transform: Translate { x: root.tabSlide }
+        opacity: root.tabFade
         visible: App.viewKind === "channel" && App.channelTab === "playlists"
         anchors.left: grid.left
         anchors.right: grid.right
@@ -1537,6 +1675,8 @@ ApplicationWindow {
     ChannelMusic {
         id: channelMusicView
         objectName: "channelMusicView"
+        transform: Translate { x: root.tabSlide }
+        opacity: root.tabFade
         visible: App.viewKind === "channel" && App.channelTab === "music"
         anchors.left: grid.left
         anchors.right: grid.right
@@ -1552,6 +1692,9 @@ ApplicationWindow {
     GridView {
         id: grid
         objectName: "grid"
+        // Moved with the tabs. See switchTab above.
+        transform: Translate { x: root.tabSlide }
+        opacity: root.tabFade
         visible: App.viewKind !== "music" && App.viewKind !== "debug"
                  && App.viewKind !== "nowplaying"
                  && !(App.viewKind === "channel" && App.channelTab === "music")
@@ -1688,14 +1831,67 @@ ApplicationWindow {
             }
         }
 
-        Label {
+        // An empty page says what is wrong, and carries the one thing there
+        // is to do about it. The sentence named that act already and left it
+        // to be found somewhere in the window.
+        Column {
+            id: emptyHere
+            objectName: "emptyHere"
             anchors.centerIn: parent
+            width: Math.min(420, grid.width - 80)
             visible: grid.count === 0 && App.viewKind !== "music"
                      && App.viewKind !== "nowplaying"
-            horizontalAlignment: Text.AlignHCenter
-            color: Theme.colors.textMuted
-            font.pixelSize: 14
-            text: App.emptyHint
+            spacing: 10
+
+            // The first line is what happened, the rest is why or what to do
+            // about it. They were one grey paragraph before.
+            readonly property var lines: App.emptyHint.split("\n")
+
+            Label {
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                text: emptyHere.lines.length > 0 ? emptyHere.lines[0] : ""
+                color: Theme.colors.text
+                font.pixelSize: 15
+                font.weight: Font.DemiBold
+                wrapMode: Text.Wrap
+            }
+
+            Label {
+                width: parent.width
+                visible: text !== ""
+                horizontalAlignment: Text.AlignHCenter
+                text: emptyHere.lines.slice(1).join(" ")
+                color: Theme.colors.textMuted
+                font.pixelSize: 12
+                wrapMode: Text.Wrap
+            }
+
+            FlatButton {
+                objectName: "emptyAction"
+                anchors.horizontalCenter: parent.horizontalCenter
+                visible: App.emptyActionText !== ""
+                accent: true
+                text: App.emptyActionText
+                onClicked: {
+                    var act = App.emptyAction
+                    if (act === "import") App.importSubscriptions()
+                    else if (act === "recommend") App.refreshRecommended()
+                    else if (act === "youtube") App.searchYouTube()
+                    else if (act === "history") App.importHistory()
+                    else if (act === "group") {
+                        // The window names it from the group list, since
+                        // the group being read is the one this page is.
+                        var named = App.groups.filter(function (g) {
+                            return g.id === App.viewId
+                        })
+                        manageGroup.groupId = App.viewId
+                        manageGroup.groupName = named.length > 0 ? named[0].name : ""
+                        manageGroup.open()
+                    }
+                    else App.refresh()
+                }
+            }
         }
     }
 
