@@ -447,6 +447,30 @@ Item {
                                 }
                             }
 
+                            // Which step of getting the picture up is being
+                            // waited on. An address has to be found, which is
+                            // a full extraction and takes seconds, the player
+                            // then opens that stream, and a frame exists a
+                            // couple of seconds after that. Until this line
+                            // there was only the artwork sitting there, which
+                            // reads the same whether something is happening
+                            // or nothing is.
+                            //
+                            // Under the button rather than beside the words,
+                            // because it is about the picture above it. It is
+                            // empty whenever nothing is being waited on, and
+                            // a Column leaves out a child that is not there.
+                            Label {
+                                objectName: "nowPlayingVideoStage"
+                                width: parent.width
+                                horizontalAlignment: Text.AlignRight
+                                visible: text !== ""
+                                text: Audio.videoStage
+                                color: Theme.colors.textMuted
+                                font.pixelSize: 11
+                                elide: Text.ElideRight
+                            }
+
                             Label {
                                 id: artistLine
                                 objectName: "nowPlayingArtist"

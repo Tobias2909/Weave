@@ -26,6 +26,8 @@ them:
 
 from __future__ import annotations
 
+import locale
+
 from PySide6.QtCore import QObject, Signal
 
 from . import trace
@@ -65,6 +67,11 @@ OPTIONS = {
     "video_timing_offset": 0,
 }
 
+# How many rows of a playlist are worth taking off the front before giving up.
+# It holds two entries by design, so anything past a handful means something
+# else is wrong and a loop is not the place to find out about it.
+PLAYLIST_TIDY_LIMIT = 16
+
 
 class LibmpvMissing(RuntimeError):
     """python-mpv or libmpv itself is not here."""
@@ -95,6 +102,11 @@ class LibmpvEngine(QObject):
     # A frame exists, or none does any more. The page draws the artwork until
     # the first of these arrives, so a picture never appears as a black box.
     videoChanged = Signal(bool)
+    # The address and what was said, for a picture the player would not take.
+    # Its own report because the likeliest cause is an address that has aged
+    # out, and whoever holds that address is the only one who can find a fresh
+    # one.
+    videoRefused = Signal(str, str)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -136,6 +148,17 @@ class LibmpvEngine(QObject):
         except (ImportError, OSError) as exc:
             self.gone.emit(f"the player library could not be loaded, {exc}")
             return False
+        # Qt reads the numeric locale out of the environment when the
+        # application is built, and mpv ABORTS on one whose decimal point is
+        # not a point. An abort and not an exception, so there is nothing to
+        # catch and it reads as a fault in whatever ran last. The binding sets
+        # this as it is imported, which covers it only while that import
+        # happens after the application exists, and that is an order rather
+        # than a rule.
+        try:
+            locale.setlocale(locale.LC_NUMERIC, "C")
+        except locale.Error:
+            pass
         try:
             # Verbose only while tracing. The lines about frames not being
             # collected and the sound running dry are said at that level and
@@ -170,8 +193,20 @@ class LibmpvEngine(QObject):
             self._attached = ""
             role = self._roles.get(entry)
             if role:
+                if role == NEXT:
+                    # It was the one held behind the song playing and it is
+                    # the song playing now, so it stops being held. Left as it
+                    # was, the next tidying of the playlist would go looking
+                    # for what is held behind this one and take out this one.
+                    self._roles[entry] = CURRENT
                 self.started.emit(role)
             else:
+                # Either a report that beat the line recording what it was
+                # for, which is answered the moment the role lands, or an
+                # entry that should have been taken out of the playlist and
+                # was not. The second is silent by nature, since nothing is
+                # ever emitted about it, so it is written down here.
+                trace.mark("entry_unclaimed", entry=entry)
                 self._unclaimed = entry
 
         @player.event_callback("end-file")
@@ -269,13 +304,60 @@ class LibmpvEngine(QObject):
         for entry, role in list(self._roles.items()):
             if role == NEXT:
                 self._roles.pop(entry, None)
-                self._command("playlist-remove", str(entry))
+                self._drop_entry(entry)
+
+    def _drop_entry(self, entry: int) -> bool:
+        """Take one entry out of the playlist, named by its id.
+
+        The id has to be turned into a place first, and that is the whole
+        point of this. `playlist-remove` is given a PLACE and never an id, and
+        the two part company as soon as anything has been played: ids count up
+        for the life of the player while places start again at zero. Handed an
+        id, mpv refuses the command outright, and a refusal here says nothing
+        at all, so the entry stayed in the playlist and was played after the
+        one it was supposed to have replaced. Its role had already been
+        forgotten, so it began with no report of its own, which is a song
+        being heard that the window knows nothing about.
+        """
+        where = self._place_of(entry)
+        if where is None:
+            return False
+        return self._command("playlist-remove", str(where))
+
+    def _place_of(self, entry: int) -> int | None:
+        """Where an entry sits in the playlist as it stands, or None."""
+        if self._mpv is None:
+            return None
+        try:
+            rows = list(self._mpv.playlist or [])
+        except Exception:
+            return None
+        for place, row in enumerate(rows):
+            try:
+                if int(row.get("id", -1)) == entry:
+                    return place
+            except (TypeError, ValueError):
+                continue
+        return None
 
     def remove_before(self) -> None:
-        """Drop what has already played, so the playlist stays two long."""
+        """Drop what has already played, so the playlist stays two long.
+
+        Everything ahead of what is being played rather than one row, because
+        a playlist that has grown by more than one cannot be brought back by
+        taking a single row off the front of it.
+        """
         if self._mpv is None:
             return
-        self._command("playlist-remove", "0")
+        for _ in range(PLAYLIST_TIDY_LIMIT):
+            try:
+                place = self._mpv.playlist_pos
+            except Exception:
+                return
+            if place is None or int(place) <= 0:
+                return
+            if not self._command("playlist-remove", "0"):
+                return
 
     def duration(self) -> float:
         """How long what is playing is, asked rather than waited for.
@@ -353,11 +435,55 @@ class LibmpvEngine(QObject):
             # which showed as the artwork flashing over a running picture.
             return
         if url != self._attached:
-            self._command("video-add", url, "select")
-            self._attached = url
+            self._attach(url)
         self._want_video = True
         if self._can_render:
             self._set("vid", "auto")
+
+    def _attach(self, url: str) -> None:
+        """Hand the picture to the song playing, without waiting for it.
+
+        `video-add` opens the stream inside the call, and the call is made on
+        the thread that paints the whole window. MEASURED on mpv 0.41: an
+        address that answers holds that thread for 0.21 s, and one that does
+        not answer holds it for 29.2 s, which is a frozen window with nothing
+        said about why. Asked for asynchronously it returns in under a
+        millisecond and mpv answers when it has an answer.
+        """
+        self._attached = url
+        ask = getattr(self._mpv, "command_async", None)
+        if ask is None:
+            # A binding too old to ask this way. Rare enough to be worth the
+            # wait rather than a second way of doing the same thing.
+            if not self._command("video-add", url, "select"):
+                self._refused(url)
+            return
+        try:
+            ask("video-add", url, "select",
+                callback=lambda error, _result, at=url: self._answered(at, error))
+        except Exception:
+            self._refused(url)
+
+    def _answered(self, url: str, error) -> None:
+        """What mpv made of it. Raised from the player's own thread, where the
+        only thing that may be done is to say so."""
+        if error is not None:
+            self._refused(url)
+
+    def _refused(self, url: str) -> None:
+        """A picture the player would not take.
+
+        What was attached is forgotten, so asking again is not read as already
+        having it, and whoever found the address is told, because the likeliest
+        reason by far is that it has aged out and a fresh one would work.
+        """
+        if self._attached == url:
+            self._attached = ""
+        said = "the picture could not be opened"
+        trace.mark("video_refused")
+        self._complaints.append(said)
+        del self._complaints[:-8]
+        self.videoRefused.emit(url, said)
 
     def drop_video(self) -> None:
         """Switch the picture off, leaving the sound and leaving the track
@@ -436,15 +562,18 @@ class LibmpvEngine(QObject):
 
     # ---- talking to it ----------------------------------------------------
 
-    def _command(self, *args: str) -> None:
+    def _command(self, *args: str) -> bool:
+        """Whether it was taken. A refusal used to be swallowed whole, which
+        is how a playlist entry that was never removed went unnoticed."""
         if self._mpv is None:
-            return
+            return False
         try:
             self._mpv.command(*args)
         except Exception:
             # A command against a player that has gone is not worth a sentence
             # of its own; the shutdown that took it already said so.
-            pass
+            return False
+        return True
 
     def _set(self, name: str, value) -> None:
         if self._mpv is None:

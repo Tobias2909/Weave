@@ -6,7 +6,33 @@ heard, moved ahead of what is still to come, is heard again when it is
 reached, and that is the point of being allowed to move it.
 """
 
+import sys
 import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from test_audio import FakeEngine, FakeResolver, signed  # noqa: E402
+
+
+def playing(titles="abcd", at=0):
+    """A real player over a fake one, with every address already in hand so
+    nothing has to be resolved.
+
+    The queue bugs turned on what the PLAYER is holding as next against what
+    the window says is next, and a list of calls cannot answer that, so these
+    ask the engine what it holds.
+    """
+    from weave.audio import AudioPlayer
+    from weave.config import Config
+
+    one = AudioPlayer(Config(raw={}), engine=FakeEngine())
+    one._make_resolver = lambda entry: FakeResolver(entry["key"])
+    items = [{"key": f"yt:{c}", "title": c, "url": f"u{c}"} for c in titles]
+    for item in items:
+        one._addresses.put(item["key"], signed(item["key"]))
+    one.play_items(items, at)
+    return one
 
 
 def player(titles="abcdef", at=0, order=None, shuffle=False):
@@ -21,6 +47,10 @@ def player(titles="abcdef", at=0, order=None, shuffle=False):
     made._order = list(order) if order else list(range(len(titles)))
     made._at = at
     made._idle = True
+    # Where in the queue the player is holding its next entry. Nothing here
+    # reaches a player, but the edits keep it in step and would otherwise have
+    # nothing to keep it in step with.
+    made._appended = None
     made._shuffle = shuffle
     made._repeat_mode = 0
     made.queueChanged = Quiet()
@@ -280,3 +310,60 @@ class TheBridgeQueuesOne(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WhatThePlayerIsHoldingAsNext(unittest.TestCase):
+    """The queue is a list of places, and so is the note of what the player was
+    given. An edit that moves the places and leaves that note alone makes the
+    two disagree, and a disagreement here is a song being heard while the
+    window names a different one.
+    """
+
+    def next_held(self, one):
+        return one._engine.holds_next()
+
+    def next_named(self, one):
+        place = one._next_index()
+        return signed(one._queue[place]["key"]) if place is not None else None
+
+    def test_it_matches_what_the_window_says_to_begin_with(self) -> None:
+        one = playing()
+        self.assertEqual(self.next_held(one), signed("yt:b"))
+        self.assertEqual(self.next_held(one), self.next_named(one))
+
+    def test_taking_out_the_very_song_it_holds_replaces_it(self) -> None:
+        """Nothing else would ask it to. The arrangement that follows finds
+        the same place still wanted and leaves the player alone, so the song
+        taken out was the one that played."""
+        one = playing()
+        one.removeFromQueue(1)                      # b, which the player holds
+        self.assertEqual([row["title"] for row in one._queue], ["a", "c", "d"])
+        self.assertEqual(self.next_held(one), signed("yt:c"))
+        self.assertEqual(self.next_held(one), self.next_named(one))
+
+    def test_taking_one_out_before_the_song_playing_keeps_the_place(self) -> None:
+        one = playing(at=2)                          # c playing, d held
+        one.removeFromQueue(0)                       # a goes, every place moves
+        self.assertEqual(one.track["title"], "c")
+        self.assertEqual(one._appended, 2, "the note of what is held did not move")
+        one._on_started("next")
+        self.assertEqual(one.track["title"], "d",
+                         "the window named a different song from the one played")
+        self.assertTrue(one.hasQueue)
+
+    def test_a_song_put_on_the_end_is_arranged_for(self) -> None:
+        """A queue of one is the case that shows it. Without asking again the
+        player holds nothing, and the listening stops on a song that has a
+        successor."""
+        one = playing(titles="a")
+        self.assertIsNone(self.next_held(one))
+        one._addresses.put("yt:b", signed("yt:b"))
+        one.add_item({"key": "yt:b", "title": "b", "url": "ub"})
+        self.assertEqual(self.next_held(one), signed("yt:b"))
+
+    def test_a_move_leaves_the_player_holding_what_is_named(self) -> None:
+        one = playing()
+        one.moveInQueue(3, 1)                        # d brought up behind a
+        self.assertEqual(self.next_held(one), signed("yt:d"))
+        self.assertEqual(self.next_held(one), self.next_named(one))
+

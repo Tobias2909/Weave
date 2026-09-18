@@ -6,6 +6,7 @@ were: which entry an event is about, and not asking for a picture before there
 is anywhere to put one.
 """
 
+import time
 import unittest
 
 from PySide6.QtCore import QObject
@@ -159,6 +160,141 @@ class OnePictureAttachedPerSong(unittest.TestCase):
 class WhetherItIsThere(unittest.TestCase):
     def test_it_says_so_either_way(self) -> None:
         self.assertIsInstance(available(), bool)
+
+
+# A sound with no file behind it, so these need nothing but the player itself.
+TONE = "av://lavfi:sine=f={hz}:d={seconds}"
+
+
+@unittest.skipUnless(available(), "libmpv is not here")
+class TheRealPlaylist(unittest.TestCase):
+    """Driven against a real player, because the fault these exist for cannot
+    be seen from anywhere else.
+
+    Every command in here used to be answered by a stub, and a stub takes an
+    argument of the wrong kind as happily as one of the right kind. The player
+    does not: it refused the command outright, said nothing a caller could
+    read, and the entry that should have gone stayed and was played. So this is
+    the shape the rest of this file cannot have.
+    """
+
+    def setUp(self) -> None:
+        from PySide6.QtCore import QCoreApplication
+
+        self.app = QCoreApplication.instance() or QCoreApplication([])
+        self.one = LibmpvEngine()
+        if not self.one.ensure():
+            self.skipTest("the player would not start")
+        # Nothing is meant to be heard, and a runner has nowhere to put it.
+        self.one._mpv["ao"] = "null"
+        self.said: list = []
+        self.one.started.connect(self.said.append)
+
+    def tearDown(self) -> None:
+        self.one.quit()
+
+    def pump(self, seconds: float) -> None:
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            self.app.processEvents()
+            time.sleep(0.02)
+
+    def until(self, ready, seconds: float = 8.0) -> bool:
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            self.app.processEvents()
+            if ready():
+                return True
+            time.sleep(0.02)
+        return ready()
+
+    def places(self) -> list:
+        return [int(row["id"]) for row in (self.one._mpv.playlist or [])]
+
+    def test_an_entry_id_is_not_a_place_in_the_playlist(self) -> None:
+        """Which is the whole of why this went wrong. Ids count up for the
+        life of the player, places start again at zero."""
+        for hz in (100, 200, 300):
+            self.one.load(TONE.format(hz=hz, seconds=30))
+            self.pump(0.3)
+        self.one.append(TONE.format(hz=400, seconds=30))
+        self.assertTrue(self.until(lambda: len(self.places()) == 2))
+        held = self.places()[-1]
+        self.assertGreater(held, 1, "the ids never moved past their places")
+        self.assertEqual(self.one._place_of(held), 1)
+        self.assertNotEqual(held, 1, "this playlist cannot show the fault")
+
+    def test_the_next_entry_really_leaves(self) -> None:
+        self.one.load(TONE.format(hz=110, seconds=30))
+        self.pump(0.4)
+        self.one.append(TONE.format(hz=220, seconds=30))
+        self.assertTrue(self.until(lambda: len(self.places()) == 2))
+        self.one.clear_after()
+        self.assertTrue(self.until(lambda: len(self.places()) == 1),
+                        "the song taken out stayed in the playlist")
+
+    def test_and_what_is_put_there_instead_is_what_plays(self) -> None:
+        """The fault end to end. The entry that should have gone was played
+        after the one it was supposed to replace, and because its role had
+        been forgotten it began with no report at all, so nothing above ever
+        learned that the song had changed."""
+        self.one.load(TONE.format(hz=110, seconds=1))
+        self.pump(0.4)
+        self.one.append(TONE.format(hz=220, seconds=30))
+        self.assertTrue(self.until(lambda: len(self.places()) == 2))
+        # What a rearrangement of the queue does.
+        self.one.clear_after()
+        self.one.append(TONE.format(hz=330, seconds=30))
+        self.assertTrue(self.until(lambda: self.said == [CURRENT, NEXT]),
+                        f"reports were {self.said}")
+        self.assertIn("f=330", str(self.one._mpv.filename),
+                      "the song that was taken out is the one being played")
+
+    def test_what_has_played_is_taken_off_the_front(self) -> None:
+        self.one.load(TONE.format(hz=110, seconds=1))
+        self.pump(0.4)
+        self.one.append(TONE.format(hz=220, seconds=30))
+        self.assertTrue(self.until(lambda: self.said == [CURRENT, NEXT]),
+                        f"reports were {self.said}")
+        self.one.remove_before()
+        self.assertTrue(self.until(lambda: len(self.places()) == 1),
+                        "the playlist grew past the two entries it holds")
+
+    def test_a_song_that_has_begun_is_not_still_held_behind_one(self) -> None:
+        """The other half of taking the next entry out properly.
+
+        An entry the player moves on to by itself is still written down as
+        the one held BEHIND the song playing, because nothing said otherwise.
+        With the removal working, the next tidying of the playlist then went
+        looking for what is held behind this song and took out this song.
+        """
+        self.one.load(TONE.format(hz=110, seconds=1))
+        self.pump(0.4)
+        self.one.append(TONE.format(hz=220, seconds=30))
+        self.assertTrue(self.until(lambda: self.said == [CURRENT, NEXT]),
+                        f"reports were {self.said}")
+        self.one.remove_before()
+        self.one.clear_after()
+        self.pump(0.4)
+        self.assertEqual(len(self.places()), 1,
+                         "the song being played was taken out of the playlist")
+        self.assertIn("f=220", str(self.one._mpv.filename))
+
+    def test_a_picture_that_will_not_open_is_reported_and_forgotten(self) -> None:
+        """And asked for without waiting. The same call made the other way
+        held the thread that paints the window for 29.2 s, measured."""
+        refused: list = []
+        self.one.videoRefused.connect(lambda url, said: refused.append(url))
+        self.one.load(TONE.format(hz=110, seconds=30))
+        self.pump(0.4)
+        began = time.monotonic()
+        self.one.add_video("/nowhere/there-is-no-such-picture.mp4")
+        asked_in = time.monotonic() - began
+        self.assertLess(asked_in, 1.0, "the window was held while mpv opened it")
+        self.assertTrue(self.until(lambda: refused == [
+            "/nowhere/there-is-no-such-picture.mp4"]))
+        self.assertEqual(self.one._attached, "",
+                         "a picture that would not open is still believed to be there")
 
 
 if __name__ == "__main__":

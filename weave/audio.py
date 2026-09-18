@@ -110,6 +110,17 @@ SEEK_NOTCH_S = 5.0
 
 REPEAT_OFF, REPEAT_ALL, REPEAT_ONE = 0, 1, 2
 
+# What is being done about the picture, said plainly, for the line under the
+# picture. These are the real steps and not a guess at them: an address has to
+# be found, which is a full extraction and takes seconds, the player then has
+# to open that stream, and only a couple of seconds after that does a frame
+# exist to draw. Nothing is said while there is nothing to say, so a song with
+# no picture coming carries no line at all.
+STAGE_LOOKING = "Looking for the video"
+STAGE_OPENING = "Opening the video"
+STAGE_KEPT = "Opening the video kept on disk"
+STAGE_SHOWING = "Showing the video"
+
 
 @dataclass(frozen=True)
 class Resolved:
@@ -576,6 +587,9 @@ class AudioPlayer(QObject):
         # Whether a frame exists yet. The page keeps the artwork up
         # until it does, so the pane is never a black box waiting.
         self._engine.videoChanged.connect(self._on_video_frame)
+        # A picture the player would not open. Almost always an address that
+        # has aged out, and this is the only place that holds those.
+        self._engine.videoRefused.connect(self._on_video_refused)
         self._pos = 0.0
         self._dur = 0.0
         self._paused = True
@@ -609,8 +623,18 @@ class AudioPlayer(QObject):
         # And the same for the sound. Asked before any address is looked for,
         # which is the only wait in the whole chain.
         self.local_audio = None
-        self._video_addresses: dict[str, str] = {}
+        # Where each song's picture is, kept the way the sound's addresses
+        # are and not in a plain map. A signed address stops being accepted
+        # after a few hours, and a map that never forgets one hands a dead
+        # address to the player, which refuses it without a word and leaves
+        # the artwork up for the rest of the evening.
+        self._video_addresses = AddressCache()
         self._video_note = ""
+        # What is being done about the picture, in words, for the line under
+        # the button that fills the screen with it. Finding an address takes
+        # seconds and opening the stream takes a couple more, and an artwork
+        # sitting there says nothing about which of them is being waited on.
+        self._video_stage = ""
         self._video_showing = False
         # Whether the picture for this song came off the disk rather than off
         # the wire, which decides whether the artwork over it is faded away or
@@ -912,6 +936,7 @@ class AudioPlayer(QObject):
         # in the queue showed no picture until the window was minimised and
         # opened again, which asked a second time with the right file playing.
         self._video_showing = False
+        self._video_stage = ""
         self.trackChanged.emit()
         self.progressChanged.emit()
         if self._resolver is not None and self._resolver.isRunning():
@@ -1060,7 +1085,8 @@ class AudioPlayer(QObject):
             return
         entry = self._queue[wanted]
         key = entry.get("key", "")
-        if not key or key in self._video_addresses or self._refuse_video(entry):
+        if (not key or self._video_addresses.get(key)
+                or self._refuse_video(entry)):
             return
         if self.local_video and self.local_video(key):
             # Already on disk, so there is nothing to look ahead for.
@@ -1201,6 +1227,7 @@ class AudioPlayer(QObject):
             # the path that starts one. The picture has to follow here as well
             # or a gapless changeover leaves the page showing nothing.
             self._video_showing = False
+            self._video_stage = ""
             if self._video_wanted:
                 self._start_video()
             self.trackChanged.emit()
@@ -1320,8 +1347,11 @@ class AudioPlayer(QObject):
             self._order.insert(self._order.index(self._at) + 1, index)
         else:
             self._order.append(index)
-        # What mpv holds as the next file was decided before this arrived.
-        if play_next and not self._idle:
+        # What mpv holds as the next file was decided before this arrived, and
+        # a song put on the end is the next one whenever what is playing is the
+        # last. Without asking again there, the player is holding nothing, and
+        # the listening stops on a song that has a successor.
+        if not self._idle:
             self._prepare_next()
         self.queueChanged.emit()
         self.trackChanged.emit()
@@ -1383,9 +1413,24 @@ class AudioPlayer(QObject):
             return
         was_current = index == self._at
         following = self._next_index() if was_current else None
+        held = self._appended
         self._queue.pop(index)
         self._order = [i - 1 if i > index else i
                        for i in self._order if i != index]
+        # What the player is holding as next is a place in this queue, and
+        # every place after the one taken out has just moved. Left as it was
+        # it names a different song, or no song at all, and the window then
+        # announces whatever it names while the player plays what it was
+        # really given.
+        if held is not None:
+            if held == index:
+                # It is holding the very song being taken out, so it has to be
+                # told. Nothing else would: the arrangement below finds the
+                # same place still wanted and leaves the player alone.
+                self._engine.clear_after()
+                self._appended = None
+            elif held > index:
+                self._appended = held - 1
         if was_current:
             if following is None:
                 self.stop()
@@ -1393,12 +1438,14 @@ class AudioPlayer(QObject):
             self._at = following - 1 if following > index else following
             self._forget_recovery()
             self._start_current()
-        elif index < self._at:
-            self._at -= 1
-        elif not self._idle:
-            # It was one still to come, so what mpv holds as next may have
-            # been the one that just went.
-            self._prepare_next()
+        else:
+            if index < self._at:
+                self._at -= 1
+            if not self._idle:
+                # What mpv holds as next may have been the one that just went,
+                # and under shuffle or a queue that repeats it may have been
+                # one of the places that moved.
+                self._prepare_next()
         self.queueChanged.emit()
         self.trackChanged.emit()
 
@@ -1603,6 +1650,7 @@ class AudioPlayer(QObject):
             self._stop_video_resolver()
             self._stop_next_video_resolvers()
             self._video_note = ""
+            self._video_stage = ""
             self.videoChanged.emit()
             return
         self._start_video()
@@ -1615,9 +1663,13 @@ class AudioPlayer(QObject):
         entry = self._current()
         self._video_note = ""
         if not entry or not self._video_wanted or self._audio_only:
+            self._video_stage = ""
             return
         note = self._refuse_video(entry)
         if note:
+            # The note says why there will never be one, which is a better
+            # thing to read than a step that is not being taken.
+            self._video_stage = ""
             self._video_note = note
             self.videoChanged.emit()
             return
@@ -1632,15 +1684,18 @@ class AudioPlayer(QObject):
             # seconds an address and a stream take, so the artwork over it is
             # not faded away, it simply goes. A fade is there to cover a wait.
             self._video_instant = True
+            self._video_stage = STAGE_KEPT
             self._engine.add_video(kept)
             self.videoChanged.emit()
             return
         self._video_instant = False
         known = self._video_addresses.get(key)
         if known:
+            self._video_stage = STAGE_OPENING
             self._engine.add_video(known)
             self.videoChanged.emit()
             return
+        self._video_stage = STAGE_LOOKING
         self._stop_video_resolver()
         self._video_resolver = self._make_video_resolver(entry)
         self._video_resolver.resolved.connect(self._on_video_resolved)
@@ -1657,23 +1712,44 @@ class AudioPlayer(QObject):
         """
         if entry.get("live"):
             return ""
-        length = self._dur or float(entry.get("duration_s") or 0)
+        # The song's own length first, and the player's only where there is
+        # none. Across a gapless change the player is asked before it has
+        # reconfigured, so what it answers can still be the length of the song
+        # before, and a long one before a short one refused the short one a
+        # picture it should have had.
+        length = float(entry.get("duration_s") or 0) or self._dur
         if length and length > VIDEO_MAX_S:
             return f"no video over {VIDEO_MAX_S // 60} minutes"
         return ""
 
     def _on_video_resolved(self, key: str, url: str) -> None:
-        self._video_addresses[key] = url
+        self._video_addresses.put(key, url)
         if (self._current().get("key") != key or not self._video_wanted
                 or self._audio_only):
             return
+        self._video_stage = STAGE_OPENING
         self._engine.add_video(url)
         self.videoChanged.emit()
 
     def _on_video_failed(self, key: str, why: str) -> None:
         if self._current().get("key") != key:
             return
+        self._video_stage = ""
         self._video_note = why
+        self.videoChanged.emit()
+
+    def _on_video_refused(self, url: str, said: str) -> None:
+        """The player would not open the picture it was given.
+
+        The address is forgotten rather than kept, because the likeliest cause
+        by a long way is one that has aged out, and holding it means every
+        later go at that song is refused in the same silence.
+        """
+        key = self._current().get("key", "")
+        if key and self._video_addresses.get(key) == url:
+            self._video_addresses.drop(key)
+        self._video_stage = ""
+        self._video_note = said
         self.videoChanged.emit()
 
     def _make_video_resolver(self, entry: dict):
@@ -1713,6 +1789,7 @@ class AudioPlayer(QObject):
         if value:
             self._stop_video_resolver()
             self._video_note = ""
+            self._video_stage = ""
             self._engine.drop_video()
         else:
             self._start_video()
@@ -1726,6 +1803,12 @@ class AudioPlayer(QObject):
 
     def _on_video_frame(self, showing: bool) -> None:
         self._video_showing = bool(showing)
+        if showing:
+            self._video_stage = STAGE_SHOWING
+        elif self._video_stage == STAGE_SHOWING:
+            # A picture that was being shown and is not any more. What comes
+            # next decides what is said, so nothing is said until it does.
+            self._video_stage = ""
         self.videoChanged.emit()
 
     def _get_track_facts(self) -> dict:
@@ -1748,6 +1831,9 @@ class AudioPlayer(QObject):
     def _get_video_showing(self) -> bool:
         return self._video_showing
 
+    def _get_video_stage(self) -> str:
+        return self._video_stage
+
     # Views, likes and the date, from the resolve that found the address.
     trackFacts = Property("QVariantMap", _get_track_facts, notify=factsChanged)
     audioOnly = Property(bool, _get_audio_only, notify=stateChanged)
@@ -1757,6 +1843,10 @@ class AudioPlayer(QObject):
     # A frame exists. Until it does the artwork stays up, so the pane is never
     # a black box waiting.
     videoShowing = Property(bool, _get_video_showing, notify=videoChanged)
+    # Which step of getting a picture up is being waited on, in words. Empty
+    # whenever there is nothing being waited on, including for a song that is
+    # never going to have one, whose reason the note above carries instead.
+    videoStage = Property(str, _get_video_stage, notify=videoChanged)
 
     def _get_video_instant(self) -> bool:
         return self._video_instant

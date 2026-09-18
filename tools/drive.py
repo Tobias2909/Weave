@@ -415,6 +415,34 @@ class Smoke:
         self.check("and the words around it cannot become markup themselves",
                    "&lt;" in markup and "<b" not in markup, markup[:120])
 
+        # ---- the step being waited on ------------------------------------
+        #
+        # Finding an address takes seconds and opening the stream takes a
+        # couple more. Without a word about which of them is happening the
+        # artwork simply sits there, which reads the same as nothing
+        # happening at all.
+        from weave.audio import STAGE_LOOKING
+
+        stage_line = find(window, "nowPlayingVideoStage")
+        self.check("nothing is said about a picture nobody is waiting for",
+                   not read(stage_line, "visible"), str(read(stage_line, "text")))
+        audio._video_stage = STAGE_LOOKING
+        audio.videoChanged.emit()
+        settle(0.3)
+        self.check("the step being waited on is said under the picture",
+                   read(stage_line, "visible") is True
+                   and str(read(stage_line, "text")) == STAGE_LOOKING,
+                   f"{read(stage_line, 'visible')} {read(stage_line, 'text')}")
+        button = find(window, "nowPlayingFullscreen")
+        ground = find(window, "nowPlayingStage")
+        line_end = stage_line.mapToItem(ground, stage_line.width(), 0).x()
+        button_end = button.mapToItem(ground, button.width(), 0).x()
+        self.check("and it ends where the fullscreen button ends",
+                   abs(line_end - button_end) < 2, f"{line_end} against {button_end}")
+        audio._video_stage = ""
+        audio.videoChanged.emit()
+        settle(0.2)
+
         # ---- the picture filling the screen ------------------------------
         #
         # The same window made bigger, so what is asked here is that the page

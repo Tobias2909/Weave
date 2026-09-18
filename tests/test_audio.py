@@ -43,10 +43,16 @@ class FakeEngine(QObject):
     ended = Signal(str)
     gone = Signal(str)
     videoChanged = Signal(bool)
+    videoRefused = Signal(str, str)
 
     def __init__(self):
         super().__init__()
         self.calls = []
+        # What the player is holding, and not only what it was told. A list of
+        # calls cannot answer the question the queue bugs turned on, which is
+        # whether the song the window says is next is the song that would
+        # actually be played, so the fake holds a playlist the way mpv does.
+        self.playlist = []
         self.volume = None
         # What a read of the player's own length answers. The real one asks
         # mpv, which keeps saying the same thing across a changeover between
@@ -67,21 +73,31 @@ class FakeEngine(QObject):
 
     def load(self, url, start=None, video=None):
         self._note("load", url, start)
+        # A replacing load empties the playlist, measured against a real one.
+        self.playlist = [url]
 
     def append(self, url, video=None):
         self._note("append", url)
+        self.playlist.append(url)
 
     def clear_after(self):
         self._note("clear_after")
+        del self.playlist[1:]
 
     def remove_before(self):
         self._note("remove_before")
+        del self.playlist[:-1]
+
+    def holds_next(self):
+        """What would be played when this one ends, or None."""
+        return self.playlist[1] if len(self.playlist) > 1 else None
 
     def next(self):
         self._note("next")
 
     def stop(self):
         self._note("stop")
+        self.playlist = []
 
     def set_pause(self, paused):
         self._note("pause", paused)

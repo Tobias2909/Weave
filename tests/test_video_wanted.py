@@ -13,7 +13,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_audio import FakeEngine, FakeResolver  # noqa: E402
 
-from weave.audio import VIDEO_MAX_S, AudioPlayer
+from weave.audio import (
+    STAGE_KEPT,
+    STAGE_LOOKING,
+    STAGE_OPENING,
+    STAGE_SHOWING,
+    VIDEO_MAX_S,
+    AudioPlayer,
+)
 from weave.config import Config
 
 
@@ -135,13 +142,13 @@ class OnceTheAddressIsKnown(unittest.TestCase):
         self.assertNotIn(("add_video", "https://example.invalid/old"),
                          one._engine.calls)
         # Kept all the same, since going back to it should cost nothing.
-        self.assertEqual(one._video_addresses["yt:somethingelse"],
+        self.assertEqual(one._video_addresses.get("yt:somethingelse"),
                          "https://example.invalid/old")
 
     def test_a_known_address_is_not_fetched_twice(self) -> None:
         one = player()
         one.play_items([song(duration_s=200)])
-        one._video_addresses["yt:a"] = "https://example.invalid/v"
+        one._video_addresses.put("yt:a", "https://example.invalid/v")
         one.setVideoWanted(True)
         self.assertIsNone(one._video_resolver, "a picture already in hand was fetched")
         self.assertIn(("add_video", "https://example.invalid/v"), one._engine.calls)
@@ -259,7 +266,7 @@ class TheSongAfterThisOne(unittest.TestCase):
         self.assertEqual(self.looking_for(), ["yt:b"])
 
     def test_one_already_known_is_not_looked_for_again(self):
-        self.player._video_addresses["yt:b"] = "https://example/picture"
+        self.player._video_addresses.put("yt:b", "https://example/picture")
         self.player.setVideoWanted(True)
         self.assertEqual(self.looking_for(), [])
 
@@ -293,7 +300,8 @@ class TheSongAfterThisOne(unittest.TestCase):
         the song playing, which the next one does not yet."""
         self.player.setVideoWanted(True)
         self.player._on_video_resolved("yt:b", "https://example/picture")
-        self.assertEqual(self.player._video_addresses["yt:b"], "https://example/picture")
+        self.assertEqual(self.player._video_addresses.get("yt:b"),
+                         "https://example/picture")
         self.assertEqual(self.player._engine.only("add_video"), [])
 
     def test_and_is_handed_over_the_moment_that_song_is_the_one_playing(self):
@@ -362,3 +370,119 @@ class KeptOnDisk(unittest.TestCase):
         self.player.local_video = lambda key: ""
         self.player.setVideoWanted(True)
         self.assertFalse(self.player.videoInstant)
+
+
+class WhatIsBeingWaitedOn(unittest.TestCase):
+    """The line under the button that fills the screen.
+
+    An address has to be found, which is a full extraction and takes seconds,
+    the player then has to open that stream, and a frame exists a couple of
+    seconds after that. Until this said so there was the artwork sitting
+    there, which reads exactly the same whether something is happening or
+    nothing is.
+    """
+
+    def test_nothing_is_said_while_nothing_is_open_to_show_one(self) -> None:
+        one = player()
+        one.play_items([song()])
+        self.assertEqual(one.videoStage, "")
+
+    def test_looking_for_it_comes_first(self) -> None:
+        one = player()
+        one.play_items([song()])
+        one.setVideoWanted(True)
+        self.assertEqual(one.videoStage, STAGE_LOOKING)
+
+    def test_then_opening_it_once_there_is_an_address(self) -> None:
+        one = player()
+        one.play_items([song()])
+        one.setVideoWanted(True)
+        one._on_video_resolved("yt:a", "https://example.invalid/v")
+        self.assertEqual(one.videoStage, STAGE_OPENING)
+
+    def test_an_address_already_in_hand_is_not_looked_for(self) -> None:
+        one = player()
+        one.play_items([song()])
+        one._video_addresses.put("yt:a", "https://example.invalid/v")
+        one.setVideoWanted(True)
+        self.assertEqual(one.videoStage, STAGE_OPENING)
+
+    def test_one_kept_on_disk_says_which_it_is(self) -> None:
+        one = player()
+        one.play_items([song()])
+        one.local_video = lambda key: "/somewhere/kept.webm"
+        one.setVideoWanted(True)
+        self.assertEqual(one.videoStage, STAGE_KEPT)
+
+    def test_and_showing_it_once_a_frame_exists(self) -> None:
+        one = player()
+        one.play_items([song()])
+        one.setVideoWanted(True)
+        one._on_video_frame(True)
+        self.assertEqual(one.videoStage, STAGE_SHOWING)
+
+    def test_a_song_that_will_never_have_one_says_why_instead(self) -> None:
+        """A step that is not being taken is a worse thing to read than the
+        reason there will be no picture at all."""
+        one = player()
+        one.play_items([song(duration_s=VIDEO_MAX_S + 60)])
+        one.setVideoWanted(True)
+        self.assertEqual(one.videoStage, "")
+        self.assertIn("15 minutes", one.videoNote)
+
+    def test_closing_the_page_leaves_nothing_being_waited_on(self) -> None:
+        one = player()
+        one.play_items([song()])
+        one.setVideoWanted(True)
+        one.setVideoWanted(False)
+        self.assertEqual(one.videoStage, "")
+
+    def test_nor_does_sound_alone(self) -> None:
+        one = player()
+        one.play_items([song()])
+        one.setVideoWanted(True)
+        one.setAudioOnly(True)
+        self.assertEqual(one.videoStage, "")
+
+    def test_a_new_song_starts_with_nothing_said_about_its_picture(self) -> None:
+        one = player()
+        one.play_items([song(), song("yt:b")])
+        one.setVideoWanted(True)
+        one._on_video_frame(True)
+        one.jumpTo(1)
+        self.assertNotEqual(one.videoStage, STAGE_SHOWING)
+
+
+class AnAddressThePlayerWillNotTake(unittest.TestCase):
+    def test_it_is_forgotten_so_the_next_go_finds_a_fresh_one(self) -> None:
+        """Held, every later go at that song is refused in the same silence."""
+        one = player()
+        one.play_items([song()])
+        one._video_addresses.put("yt:a", "https://example.invalid/v")
+        one._on_video_refused("https://example.invalid/v", "it would not open")
+        self.assertIsNone(one._video_addresses.get("yt:a"))
+        self.assertEqual(one.videoNote, "it would not open")
+        self.assertEqual(one.videoStage, "")
+
+    def test_an_address_for_another_song_is_left_alone(self) -> None:
+        one = player()
+        one.play_items([song()])
+        one._video_addresses.put("yt:b", "https://example.invalid/other")
+        one._on_video_refused("https://example.invalid/other", "it would not open")
+        self.assertEqual(one._video_addresses.get("yt:b"),
+                         "https://example.invalid/other")
+
+    def test_one_that_has_aged_out_is_never_offered(self) -> None:
+        """The picture's addresses are signed exactly as the sound's are, and
+        a map that never forgets one hands a dead address to the player, which
+        refuses it without a word and leaves the artwork up all evening."""
+        import time
+
+        from test_audio import signed
+
+        one = player()
+        one._video_addresses.put("yt:a", signed("yt:a", expire=int(time.time()) + 60))
+        self.assertIsNone(one._video_addresses.get("yt:a"))
+        one._video_addresses.put("yt:a", signed("yt:a"))
+        self.assertIsNotNone(one._video_addresses.get("yt:a"))
+
