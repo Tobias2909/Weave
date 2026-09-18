@@ -136,16 +136,7 @@ Item {
                             }
                         }
 
-                        ThemedMenuSeparator {
-                            width: parent.width
-                        }
-
-                        Label {
-                            text: "Make your own"
-                            color: Theme.colors.text
-                            font.pixelSize: 13
-                            font.weight: Font.DemiBold
-                        }
+                        SettingsHeading { text: "Make your own" }
 
                         ThemeMaker {
                             id: maker
@@ -169,6 +160,8 @@ Item {
                                 }
                             }
                         }
+
+                        SettingsHeading { text: "Themes as files" }
 
                         Label {
                             width: parent.width
@@ -599,6 +592,8 @@ Item {
                                 onClicked: App.connectTwitch()
                             }
                         }
+
+                        SettingsHeading { text: "YouTube" }
 
                         Row {
                             spacing: 8
