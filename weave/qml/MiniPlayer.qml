@@ -361,6 +361,7 @@ Rectangle {
             text: "◀◀"
             hint: "The one before"
             fontSize: 14
+            nudgeY: -1.5
             Layout.preferredWidth: 42
             onClicked: Audio.previous()
         }
@@ -376,6 +377,7 @@ Rectangle {
             // base than the point, so the one is carried a pixel over. The
             // two bars are symmetrical and want nothing.
             nudge: Audio.playing ? 0 : 1
+            nudgeY: -1.5
             accent: true
             Layout.preferredWidth: 46
             onClicked: Audio.toggle()
@@ -385,6 +387,7 @@ Rectangle {
             text: "▶▶"
             hint: "The next one"
             fontSize: 14
+            nudgeY: -1.5
             Layout.preferredWidth: 42
             onClicked: Audio.next()
         }
@@ -418,6 +421,7 @@ Rectangle {
             text: "\u21c4"
             hint: Audio.shuffle ? "Shuffle is on" : "Shuffle is off"
             fontSize: 16
+            nudgeY: -1
             accent: Audio.shuffle
             Layout.preferredWidth: 42
             onClicked: Audio.setShuffle(!Audio.shuffle)
@@ -485,6 +489,7 @@ Rectangle {
             hint: App.viewKind === "nowplaying" ? "Back to where you were"
                                                 : "The Now playing page"
             fontSize: 15
+            nudgeY: 4
             accent: App.viewKind === "nowplaying"
             enabled: Audio.queue.length > 0
             Layout.preferredWidth: 42

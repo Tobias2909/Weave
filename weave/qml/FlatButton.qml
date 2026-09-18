@@ -13,6 +13,7 @@ Button {
     // Measured per glyph and corrected here, since the eye reads the ink
     // rather than the box around it.
     property real nudge: 0
+    property real nudgeY: 0
     // What it is for, and what it is set to, said under the pointer. A mark
     // cannot say either by itself.
     property string hint: ""
@@ -48,7 +49,7 @@ Button {
         text: control.text
         // A transform rather than an x. The control writes the content item's
         // geometry itself, so anything set here would be overwritten.
-        transform: Translate { x: control.nudge }
+        transform: Translate { x: control.nudge; y: control.nudgeY }
         font.pixelSize: control.fontSize
         color: control.enabled
                ? (control.accent ? Theme.colors.badgeText : Theme.colors.text)

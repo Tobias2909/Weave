@@ -1664,7 +1664,9 @@ ApplicationWindow {
     ChannelPlaylists {
         id: channelPlaylistsView
         objectName: "channelPlaylistsView"
-        transform: Translate { x: root.tabSlide }
+        // The same as the grid above: the content moves, the view does not.
+        Translate { id: playlistsShift; x: root.tabSlide }
+        Component.onCompleted: channelPlaylistsView.contentItem.transform = [playlistsShift]
         opacity: root.tabFade
         visible: App.viewKind === "channel" && App.channelTab === "playlists"
         anchors.left: grid.left
@@ -1683,7 +1685,8 @@ ApplicationWindow {
     ChannelMusic {
         id: channelMusicView
         objectName: "channelMusicView"
-        transform: Translate { x: root.tabSlide }
+        Translate { id: channelMusicShift; x: root.tabSlide }
+        Component.onCompleted: channelMusicView.contentItem.transform = [channelMusicShift]
         opacity: root.tabFade
         visible: App.viewKind === "channel" && App.channelTab === "music"
         anchors.left: grid.left
@@ -1700,8 +1703,14 @@ ApplicationWindow {
     GridView {
         id: grid
         objectName: "grid"
-        // Moved with the tabs. See switchTab above.
-        transform: Translate { x: root.tabSlide }
+        // The page walks by moving what the view HOLDS, never the view
+        // itself. A view that moves carries its own edges with it and paints
+        // across the panels either side of it, and on a theme with a gradient
+        // those panels are translucent, so passing behind them still showed
+        // through. What the view holds is clipped to the view, so nothing can
+        // reach an edge at all.
+        Translate { id: gridShift; x: root.tabSlide }
+        Component.onCompleted: grid.contentItem.transform = [gridShift]
         opacity: root.tabFade
         visible: App.viewKind !== "music" && App.viewKind !== "debug"
                  && App.viewKind !== "nowplaying"
