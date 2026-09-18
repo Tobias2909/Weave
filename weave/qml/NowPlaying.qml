@@ -72,9 +72,34 @@ Item {
     // Its own ground, because the page travels over whatever it was opened
     // from. Left transparent, the view behind shows through for the length of
     // the slide, which is half of every close.
-    ThemeBackground {
+    //
+    // It is the window's own ground, held still against the window while the
+    // page travels over it, so that what the page is painted at any height is
+    // what the window is painted there. Painted in the page's own box instead,
+    // it carried the colours of the arrived page the whole way up, and on a
+    // washed theme, which is twelve of the fourteen shipped, that is a band of
+    // the wrong colour crossing the window with a seam along its top edge.
+    //
+    // The clip is what keeps it to the page. The ground is the size of the
+    // whole window and placed against the window rather than against the page,
+    // so with nothing cutting it back to the page's own box it would go on
+    // covering the view behind while the page is away.
+    Item {
+        objectName: "nowPlayingGroundClip"
         anchors.fill: parent
+        clip: true
         z: -1
+
+        ThemeBackground {
+            objectName: "nowPlayingGround"
+            // Where the page sits in the window, and the slide undone: the
+            // transform above moves everything drawn inside the page along
+            // with it, and this is the one thing that must not travel.
+            x: -page.groundX
+            y: -page.groundY - shift.y
+            width: page.groundWidth
+            height: page.groundHeight
+        }
     }
 
     // Under this the column on the right does not fit beside a picture worth
@@ -106,6 +131,13 @@ Item {
     // down for the same reason the two above are: this file cannot see an id
     // declared in the one that uses it.
     property real barRoom: 0
+    // Where this page sits in the window, and how big the window's own ground
+    // is, so the ground drawn here can be held against the window rather than
+    // against the page. Handed down for the same reason the three above are.
+    property real groundX: 0
+    property real groundY: 0
+    property real groundWidth: width
+    property real groundHeight: height
     // Asked of the window, which owns the shape. The page never calls
     // showFullScreen itself.
     signal fullscreenToggled()

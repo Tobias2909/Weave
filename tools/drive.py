@@ -629,7 +629,51 @@ class Smoke:
         call(window, "leaveCinema")
         settle(0.6)
 
+        # ---- the ground the page carries ---------------------------------
+        #
+        # The page paints the window's own ground under itself and holds it
+        # still against the window while it travels, so that what the page is
+        # painted at any height is what the window is painted there. Painted
+        # in the page's own box instead, it carried the colours of the arrived
+        # page the whole way up, which on a washed theme is a band of the
+        # wrong colour crossing the window with a seam along its top edge.
+        #
+        # Asked as a position rather than looked at, and asked again while the
+        # page is moving, which is the half a transform can quietly stop
+        # compensating for and the half nothing else here would notice.
+        page_ground = find(window, "nowPlayingGround")
+        window_ground = find(window, "windowGround")
+        landed = page_ground.mapToItem(window_ground, 0, 0)
+        self.check("the ground under the page is the window's own, laid over it",
+                   abs(landed.x()) < 1 and abs(landed.y()) < 1
+                   and abs(read(page_ground, "width") - read(window_ground, "width")) < 1
+                   and abs(read(page_ground, "height") - read(window_ground, "height")) < 1,
+                   f"{landed.x():.0f},{landed.y():.0f} apart, "
+                   f"{read(page_ground, 'width'):.0f}x{read(page_ground, 'height'):.0f} "
+                   f"against {read(window_ground, 'width'):.0f}x"
+                   f"{read(window_ground, 'height'):.0f}")
+
         bridge.closeNowPlaying()
+        # How far down the page is, asked of the transform that moves it. The
+        # page itself is never moved, so where it sits says nothing.
+        moves = read(window_page, "transform")
+        shift = moves.at(0) if moves is not None and moves.count() else None
+        # Sampled as it drops back into the bar. A fixed wait would land on
+        # one moment of the movement or on none of it, so it is asked over and
+        # over and every answer has to be the same one.
+        worst, moving, furthest = 0.0, 0, 0.0
+        for _ in range(12):
+            settle(0.04)
+            at = page_ground.mapToItem(window_ground, 0, 0)
+            worst = max(worst, abs(at.x()) + abs(at.y()))
+            travelled = float(read(shift, "y")) if shift is not None else 0.0
+            furthest = max(furthest, travelled)
+            if travelled > 1:
+                moving += 1
+        self.check("and stays over it while the page travels", worst < 1,
+                   f"{worst:.0f} px apart at the worst of {moving} samples "
+                   f"taken on the way, furthest {furthest:.0f} px down")
+
         # The page has to be away before the queue goes, or the rows it is
         # still drawing are cancelled under it. And the view it lands on has
         # to be one that does not redraw itself when the queue changes, which

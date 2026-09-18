@@ -22,6 +22,7 @@ ApplicationWindow {
 
     ThemeBackground {
         id: windowGround
+        objectName: "windowGround"
         anchors.fill: parent
         z: -1
     }
@@ -1225,6 +1226,7 @@ ApplicationWindow {
     // music bar and past the bottom of the window for the length of the
     // animation, which is the opposite of coming out from behind the bar.
     Item {
+        id: nowPlayingSlot
         objectName: "nowPlayingSlot"
         clip: true
         // Over every view and over the detail panel, under the music bar.
@@ -1291,6 +1293,13 @@ ApplicationWindow {
             cinema: root.cinema
             chromeAwake: root.chromeAwake
             barRoom: miniPlayer.visible ? miniPlayer.height : 0
+            // The page paints the window's own ground under itself, held
+            // still against the window while it travels, so it needs to know
+            // where in the window it sits and how big that ground is.
+            groundX: nowPlayingSlot.x
+            groundY: nowPlayingSlot.y
+            groundWidth: windowGround.width
+            groundHeight: windowGround.height
             onFullscreenToggled: root.toggleCinema()
         }
     }
