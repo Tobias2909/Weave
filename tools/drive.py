@@ -102,14 +102,45 @@ def beat() -> int:
     return _beats
 
 
+# How long the loop has to have nothing to do before a settle is called over,
+# and the least any settle costs. Four frames at sixty, which covers a repaint
+# asked for one frame ahead and not yet queued.
+QUIET_S = 0.08
+LEAST_S = 0.03
+
+
 def settle(seconds: float) -> None:
-    """Let the event loop run for a while."""
+    """Let the event loop run until it has nothing left to do.
+
+    The seconds are a CEILING and not a duration. A walk of fixed sleeps is a
+    walk of guesses about how long a view takes to build, and nearly every one
+    of them was spent idle: 233 of them added up to 96 s of a 102 s walk, on a
+    machine where no core rose at all. Waiting for the loop to go quiet costs
+    what the work costs instead, and a machine slower than this one simply
+    stays busy longer, so nothing here is tighter than it was.
+
+    What this cannot see is a timer scheduled for later, which leaves the loop
+    quiet until it fires. Anything waiting on one of those wants wait_until,
+    which asks the question rather than counting.
+    """
     global _beats
     _beats += 1
+    # Asked through a loop of its own rather than through the application,
+    # because this is the one shape of the call that answers whether there was
+    # anything to do. It drives the same events either way.
+    loop = QEventLoop()
     end = time.monotonic() + seconds
-    app = QCoreApplication.instance()
+    least = time.monotonic() + min(LEAST_S, seconds)
+    quiet_since = None
     while time.monotonic() < end:
-        app.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 20)
+        busy = loop.processEvents(QEventLoop.ProcessEventsFlag.AllEvents)
+        now = time.monotonic()
+        if busy:
+            quiet_since = None
+        elif quiet_since is None:
+            quiet_since = now
+        elif now >= least and now - quiet_since >= QUIET_S:
+            return
         time.sleep(0.005)
 
 
@@ -670,7 +701,9 @@ class Smoke:
         call(window.contentItem(), "forceActiveFocus")
         settle(0.2)
         QTest.keyClick(window, Qt.Key_Space)
-        settle(0.4)
+        # The music comes up on a fade, which is a run of timers with a quiet
+        # loop between them, so this asks rather than counting.
+        wait_until(lambda: bool(read(audio, "playing")), 5.0)
         self.check("the space bar starts the music from anywhere",
                    bool(read(audio, "playing")))
 
@@ -760,7 +793,17 @@ class Smoke:
         # bound and never drawn is the fault being guarded against.
         if self.shot:
             self.check("music page written", screenshot(window, shot_beside(self.shot, "music")))
-        drawn = colour_count(window.grabWindow(), ARTWORK)
+        # Asked repeatedly rather than after a guess. The picture is fetched
+        # and decoded off this thread, so the loop goes quiet while it happens
+        # and a settle is over before the first pixel of it exists.
+        drawn = 0
+
+        def painted() -> bool:
+            nonlocal drawn
+            drawn = colour_count(window.grabWindow(), ARTWORK)
+            return drawn > 0
+
+        wait_until(painted, 5.0)
         self.check("the artwork is on the screen", drawn > 0, f"{drawn} pixels")
 
         popup = find(window, "upNext")
@@ -2480,7 +2523,11 @@ class Smoke:
     def run(self, engine, bridge, window) -> None:
         self.warnings = Warnings(engine)
         step("the boot")
-        settle(1.2)
+        # The window puts these up itself, on a timer of its own 900 ms after
+        # the boot. A settle stops when the loop goes quiet and the loop IS
+        # quiet while that timer runs down, so this waits for the thing rather
+        # than for a length of time.
+        wait_until(lambda: read(bridge, "wizardOpen"), 5.0)
         # A scratch home has channels seeded and no Twitch, which is exactly
         # what the getting started pages are for, so they are already open and
         # everything below is behind them until they are put away.
