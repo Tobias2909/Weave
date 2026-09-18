@@ -173,6 +173,7 @@ class FromAnOpenedList(unittest.TestCase):
                 pass
 
         bridge = Bridge.__new__(Bridge)
+        bridge._audio = None
         bridge._db = scratch_db(self)
         bridge._results = rows
         bridge._music_list = None
@@ -262,8 +263,12 @@ class TheHeartFollowsTheSong(unittest.TestCase):
                 # Nor one that cannot say what its resolve learned.
                 self.factsChanged = Wire()
                 # Whether anything is open to show a picture, which is what
-                # decides whether a song's video is worth keeping on disk.
+                # decides whether a song's video is worth keeping on disk,
+                # and the report that says it has changed. Opening the page
+                # during a song is a moment to keep its picture, so the
+                # window listens to this too.
                 self.videoWanted = False
+                self.videoChanged = Wire()
                 self.trackFacts = {}
 
             def pause_for_video(self):
@@ -274,6 +279,7 @@ class TheHeartFollowsTheSong(unittest.TestCase):
                 self.nowPlaying = Wire()
 
         bridge = Bridge.__new__(Bridge)
+        bridge._audio = None
         bridge._player = Video()
         # A track change now also empties what sits beside the song on the Now
         # playing page, and asks whether that page has outlived the music it is
@@ -442,6 +448,7 @@ class ThePicture(unittest.TestCase):
                 pass
 
         bridge = Bridge.__new__(Bridge)
+        bridge._audio = None
         bridge._db = self.db
         bridge._music_list = None
         bridge._set_notice = lambda *a, **k: None

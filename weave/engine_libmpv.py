@@ -428,11 +428,16 @@ class LibmpvEngine(QObject):
         if self._mpv is None or not url:
             return
         trace.mark("add_video", can_render=self._can_render,
-                   again=url == self._attached)
-        if url == self._attached and self._want_video:
+                   again=url == self._attached, on=self._video_on())
+        if url == self._attached and self._want_video and self._video_on():
             # Already attached and already on. Setting the track again, even
             # to the same value, makes mpv reselect it and lose the frame,
             # which showed as the artwork flashing over a running picture.
+            #
+            # Whether it is ON is the question, not whether it was asked for.
+            # Asked for and not on is a picture that never came, and reading
+            # that as already done left the artwork up for the whole song
+            # however often the page was closed and opened again.
             return
         if url != self._attached:
             self._attach(url)
@@ -451,18 +456,46 @@ class LibmpvEngine(QObject):
         millisecond and mpv answers when it has an answer.
         """
         self._attached = url
+        # `select` is what turns the picture on, and it does that whether or
+        # not there is anywhere to draw it yet. With nowhere, the player says
+        # `No render context set`, fails to open its output, and LEAVES THE
+        # TRACK DEAD for the rest of the song. Nothing recovers it, because
+        # the context arriving afterwards only sets `vid`, and by then the
+        # output has already given up.
+        #
+        # It is a race only a song kept on disk ever lost. A streamed one
+        # spends seconds finding an address, by which time the surface has
+        # long since painted and built the context; a kept one is handed over
+        # at once and beat the first paint by 105 ms, measured.
+        #
+        # So the track is added and left alone until there is somewhere for
+        # it to go, and `render_ready` turns it on.
+        flag = "select" if self._can_render else "auto"
         ask = getattr(self._mpv, "command_async", None)
         if ask is None:
             # A binding too old to ask this way. Rare enough to be worth the
             # wait rather than a second way of doing the same thing.
-            if not self._command("video-add", url, "select"):
+            if not self._command("video-add", url, flag):
                 self._refused(url)
             return
         try:
-            ask("video-add", url, "select",
+            ask("video-add", url, flag,
                 callback=lambda error, _result, at=url: self._answered(at, error))
         except Exception:
             self._refused(url)
+
+    def _video_on(self) -> bool:
+        """Whether a video track is selected in the player right now.
+
+        Asked rather than remembered, because what was asked for and what the
+        player is doing came apart exactly once and that was the fault.
+        """
+        if self._mpv is None:
+            return False
+        try:
+            return bool(self._mpv.vid)
+        except Exception:
+            return False
 
     def _answered(self, url: str, error) -> None:
         """What mpv made of it. Raised from the player's own thread, where the

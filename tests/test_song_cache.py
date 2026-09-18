@@ -164,3 +164,145 @@ class TheTwoHalvesOfASong(unittest.TestCase):
         where the sound is."""
         self.assertIsInstance(songcache.SOUND, str)
         self.assertFalse(songcache.SOUND.isdigit())
+
+
+class WhoseTurnItIsToBeWritten(unittest.TestCase):
+    """One download of each half runs at a time, and the rest wait.
+
+    They were dropped rather than made to wait, and nothing ever asked again,
+    so a favourite that began while another was still being written was never
+    kept at all. A download is tens of seconds against a song of minutes, so
+    it only showed when two favourites came close together, which is why it
+    read as arbitrary rather than as a rule.
+
+    The bridge's own method is what runs here. Only the worker is stood in
+    for, since what is being asked is who is asked to write and when.
+    """
+
+    def setUp(self):
+        from unittest import mock
+
+        from weave import paths
+        from weave.ui import bridge as bridge_module
+
+        self.dir = Path(tempfile.mkdtemp(prefix="weave-turns-"))
+        self.paths_patch = mock.patch.object(paths, "MOVING_CACHE", self.dir)
+        self.paths_patch.start()
+        self.addCleanup(self.paths_patch.stop)
+        self.addCleanup(shutil.rmtree, self.dir, True)
+
+        started = self.started = []
+
+        class Wire:
+            @staticmethod
+            def connect(*_a):
+                pass
+
+        class Keeper:
+            """Running until it is told otherwise, which is the state the
+            whole question turns on."""
+
+            def __init__(self, cfg, key, url, into, mark, parent=None):
+                self.key = key
+                self.mark = mark
+                self.running = True
+                self.kept = self.failed = self.finished = Wire()
+                started.append((key, mark))
+
+            def isRunning(self):
+                return self.running
+
+        self.keeper_patch = mock.patch.object(bridge_module, "SongKeeper", Keeper)
+        self.keeper_patch.start()
+        self.addCleanup(self.keeper_patch.stop)
+
+        bridge = bridge_module.Bridge.__new__(bridge_module.Bridge)
+        bridge._keepers = {}
+        bridge._to_keep = {}
+        bridge._cfg = None
+        bridge._db = self
+        bridge._launch = lambda thread: True
+        self.bridge = bridge
+        self.favorites = {"a", "b", "c"}
+
+    # standing in for the database
+    def is_music_favorite(self, ext_id):
+        return ext_id in self.favorites
+
+    def keep(self, key, mark=songcache.SOUND):
+        self.bridge._keep_half(key, f"u{key}", mark)
+
+    def finish(self, mark=songcache.SOUND):
+        """What a worker finishing does, through the one slot that hears it."""
+        keeper = self.bridge._keepers.get(mark)
+        keeper.running = False
+        self.bridge.sender = lambda: keeper
+        self.bridge._keep_the_next_one()
+
+    def test_the_first_one_goes_at_once(self):
+        self.keep("yt:a")
+        self.assertEqual(self.started, [("yt:a", songcache.SOUND)])
+
+    def test_the_second_waits_rather_than_being_dropped(self):
+        self.keep("yt:a")
+        self.keep("yt:b")
+        self.assertEqual(self.started, [("yt:a", songcache.SOUND)])
+        self.assertEqual(self.bridge._to_keep[songcache.SOUND], [("yt:b", "uyt:b")])
+
+    def test_and_goes_when_the_first_has_finished(self):
+        self.keep("yt:a")
+        self.keep("yt:b")
+        self.finish()
+        self.assertEqual([key for key, _ in self.started], ["yt:a", "yt:b"])
+
+    def test_a_failure_does_not_stop_the_list(self):
+        """However it ended. A failure that held the list would be the same
+        fault somewhere else."""
+        for key in ("yt:a", "yt:b", "yt:c"):
+            self.keep(key)
+        self.finish()
+        self.finish()
+        self.assertEqual([key for key, _ in self.started], ["yt:a", "yt:b", "yt:c"])
+
+    def test_the_same_song_is_only_waited_for_once(self):
+        self.keep("yt:a")
+        for _ in range(4):
+            self.keep("yt:b")
+        self.assertEqual(self.bridge._to_keep[songcache.SOUND], [("yt:b", "uyt:b")])
+
+    def test_nor_is_the_one_being_written_waited_for(self):
+        self.keep("yt:a")
+        self.keep("yt:a")
+        self.assertEqual(self.bridge._to_keep.get(songcache.SOUND, []), [])
+
+    def test_one_that_arrived_while_it_waited_is_skipped(self):
+        self.keep("yt:a")
+        self.keep("yt:b")
+        target = songcache.target(self.dir, "yt:b", songcache.SOUND)
+        Path(str(target) + ".webm").write_bytes(b"x" * 10)
+        self.finish()
+        self.assertEqual([key for key, _ in self.started], ["yt:a"])
+
+    def test_one_that_stopped_being_a_favourite_is_skipped(self):
+        """The pruning would take it away the moment it landed."""
+        self.keep("yt:a")
+        self.keep("yt:b")
+        self.favorites.discard("b")
+        self.finish()
+        self.assertEqual([key for key, _ in self.started], ["yt:a"])
+
+    def test_one_already_on_disk_is_never_asked_for(self):
+        target = songcache.target(self.dir, "yt:a", songcache.SOUND)
+        Path(str(target) + ".webm").write_bytes(b"x" * 10)
+        self.keep("yt:a")
+        self.assertEqual(self.started, [])
+
+    def test_the_two_halves_have_their_own_turns(self):
+        self.keep("yt:a")
+        self.keep("yt:a", 1080)
+        self.assertEqual(self.started,
+                         [("yt:a", songcache.SOUND), ("yt:a", 1080)])
+
+
+if __name__ == "__main__":
+    unittest.main()

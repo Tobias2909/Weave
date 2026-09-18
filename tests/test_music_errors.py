@@ -147,6 +147,9 @@ class WhatTheWindowShows(unittest.TestCase):
             # A song found to be gone from YouTube, which is a different report
             # from a failure and reaches the lists rather than the banner.
             gone = Signal(str)
+            # Opening the page during a song is a moment to keep its picture,
+            # so the window listens to this too.
+            videoChanged = Signal()
             trackFacts = {}
 
             def pause_for_video(self):

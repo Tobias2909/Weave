@@ -397,6 +397,11 @@ class Bridge(QObject):
         self._stream_check: StreamCheck | None = None
         # One keeper for each half of a song, the picture and the sound.
         self._keepers: dict = {}
+        # What is still to be written, by half, in the order it was asked
+        # for. One download of each half runs at a time, and anything asked
+        # for while one is running used to be dropped on the floor rather
+        # than made to wait, so three favourites in a row kept the first.
+        self._to_keep: dict = {}
         # The press waiting on that question, as the key, the address and the
         # title. Held rather than asked for again, because the view can have
         # moved on by the time the answer arrives and the press was about the
@@ -1290,6 +1295,13 @@ class Bridge(QObject):
         to arrive before anything can be heard at all. The picture only while
         a page is open to show one, which is the rule the whole picture side
         follows.
+
+        Asked at three moments, and it needs all three to be the rule it
+        says it is: when a song starts, when one is made a favourite while it
+        is playing, and when the page that shows a picture is opened during
+        one. With only the first, hearting a song at half way kept nothing
+        until it came round again, and opening the page mid song kept the
+        sound and never the picture.
         """
         if self._audio is None:
             return
@@ -1305,19 +1317,62 @@ class Bridge(QObject):
             self._keep_half(key, url, self._video_height())
 
     def _keep_half(self, key: str, url: str, mark) -> None:
-        """One keeper at a time for each half, and none at all for a half that
-        is already on disk."""
+        """One download at a time for each half, and the rest wait their turn.
+
+        They were dropped rather than made to wait, and nothing ever asked
+        again, so a favourite that began while another was still being written
+        was simply never kept. A download is tens of seconds and a song is
+        minutes, so this only showed when two favourites came close together,
+        which is why it read as random.
+        """
         if songcache.held(paths.MOVING_CACHE, key, mark) is not None:
+            self._stop_waiting(key, mark)
             return
         held = self._keepers.get(mark)
         if held is not None and held.isRunning():
+            waiting = self._to_keep.setdefault(mark, [])
+            if not any(one[0] == key for one in waiting) and held.key != key:
+                waiting.append((key, url))
             return
+        self._stop_waiting(key, mark)
         keeper = SongKeeper(self._cfg, key, url, paths.MOVING_CACHE, mark, self)
         keeper.kept.connect(self._on_song_kept)
         keeper.failed.connect(self._on_song_not_kept)
+        # Before the launch, so this runs before the reaper does. The reaper
+        # forgets a worker by identity, so the one started here survives it.
+        keeper.finished.connect(self._keep_the_next_one,
+                                Qt.ConnectionType.QueuedConnection)
         self._keepers[mark] = keeper
         if not self._launch(keeper):
             self._keepers.pop(mark, None)
+
+    def _stop_waiting(self, key: str, mark) -> None:
+        """Take a song out of the waiting list for one half."""
+        waiting = self._to_keep.get(mark)
+        if waiting:
+            self._to_keep[mark] = [one for one in waiting if one[0] != key]
+
+    def _keep_the_next_one(self) -> None:
+        """A download has ended, so whatever was waiting behind it goes now.
+
+        Whichever way it ended. A failure that stopped the list would be the
+        same fault in a different place.
+        """
+        keeper = self.sender()
+        mark = getattr(keeper, "mark", None)
+        if mark is None:
+            return
+        waiting = self._to_keep.get(mark) or []
+        while waiting:
+            key, url = waiting.pop(0)
+            if songcache.held(paths.MOVING_CACHE, key, mark) is not None:
+                continue
+            if not self._db.is_music_favorite(key.split(":", 1)[1]):
+                # It stopped being one while it waited, and the pruning would
+                # take the file away again the moment it landed.
+                continue
+            self._keep_half(key, url, mark)
+            return
 
     def _on_song_kept(self, key: str, half: str, path: str) -> None:
         self._set_status(f"kept the {half} for {key}")
@@ -3625,6 +3680,11 @@ class Bridge(QObject):
         audio.local_video = self._kept_video
         audio.local_audio = self._kept_audio
         audio.trackChanged.connect(self._keep_this_song)
+        # And opening the page during a song, which is the other way the
+        # picture becomes worth keeping. The rule is that a picture is kept
+        # while something is open to show one, and asking only at the track
+        # change made that true only when the page happened to be open then.
+        audio.videoChanged.connect(self._keep_this_song)
         self._player.nowPlaying.connect(lambda *_a: self._audio.pause_for_video())
         # Whether the heart is lit depends on the song playing as much as on
         # which songs are kept, so a new song has to say so too. Without this
@@ -3834,6 +3894,14 @@ class Bridge(QObject):
         self._set_status("added to favorites" if wanted else "removed from favorites")
         self.favoritesChanged.emit()
         self.musicChanged.emit()
+        # Making the song playing a favourite is the moment to write it down.
+        # Only a track change asked before, so a song hearted half way through
+        # was kept no sooner than the next time it came round, which is most
+        # of why this read as arbitrary.
+        if wanted and self._audio is not None:
+            playing = str((self._audio.track or {}).get("key") or "")
+            if playing == key:
+                self._keep_this_song()
         # Giving back the last one empties the section, and the whole page of
         # it with that. The window falls back to the sections on its own, so
         # the record of where it is follows rather than pointing at a page

@@ -2183,6 +2183,12 @@ class SongKeeper(Worker):
     def half(self) -> str:
         return "sound" if self._mark == songcache.SOUND else "picture"
 
+    @property
+    def mark(self) -> str | int:
+        """What this one is filed under, so whoever is holding a waiting list
+        can tell which list this finishing frees."""
+        return self._mark
+
     def work(self) -> None:
         from .audio import MUSIC_FORMAT, video_format
         from .cookies import args as cookie_args

@@ -93,16 +93,29 @@ class NoPictureWithoutSomewhereToPutIt(unittest.TestCase):
 
 
 class Talker:
-    """Stands in for the player and keeps what it was told."""
+    """Stands in for the player and keeps what it was told.
+
+    It models one thing rather than only recording, which is whether a video
+    track is selected. The engine asks the player that before it touches a
+    running picture, and a stub that always answered no makes the question
+    moot, which is the shape of mistake this whole area is made of.
+    """
 
     def __init__(self) -> None:
         self.said: list = []
+        # What mpv answers for `vid`: False for none, a track id otherwise.
+        self.vid = False
 
     def command(self, *args) -> None:
         self.said.append(tuple(args))
+        if args and args[0] == "video-add":
+            # `select` turns it on, `auto` adds it and leaves it alone.
+            self.vid = 1 if args[-1] == "select" else self.vid
 
     def __setitem__(self, name, value) -> None:
         self.said.append((name, value))
+        if name == "vid":
+            self.vid = False if value == "no" else 1
 
 
 class NeverWaitingOnAFrame(unittest.TestCase):
@@ -147,6 +160,47 @@ class OnePictureAttachedPerSong(unittest.TestCase):
         one.add_video("https://example.invalid/v")
         added = [s for s in one._mpv.said if s[0] == "video-add"]
         self.assertEqual(len(added), 2)
+
+    def test_it_is_not_turned_on_before_there_is_anywhere_to_draw(self) -> None:
+        """`select` is what turns the picture on, and it does that whether or
+        not there is a render context. With none, the player fails to open
+        its output and leaves the track dead for the rest of the song."""
+        one = engine()
+        one._mpv = Talker()
+        one.add_video("https://example.invalid/v")
+        self.assertIn(("video-add", "https://example.invalid/v", "auto"),
+                      one._mpv.said)
+        self.assertNotIn(("video-add", "https://example.invalid/v", "select"),
+                         one._mpv.said)
+
+    def test_and_is_turned_on_the_moment_there_is(self) -> None:
+        one = engine()
+        one._mpv = Talker()
+        one.add_video("https://example.invalid/v")
+        one._mpv.said.clear()
+        one.render_ready(True)
+        self.assertEqual(one._mpv.said, [("vid", "auto")])
+
+    def test_where_there_is_somewhere_already_it_is_asked_for_outright(self) -> None:
+        one = engine()
+        one._mpv = Talker()
+        one.render_ready(True)
+        one.add_video("https://example.invalid/v")
+        self.assertIn(("video-add", "https://example.invalid/v", "select"),
+                      one._mpv.said)
+
+    def test_asking_again_for_one_that_never_came_turns_it_on(self) -> None:
+        """Closing the page and opening it again has to be a second go. Read
+        as already done, the artwork stayed up for the whole song however
+        often it was asked for."""
+        one = engine()
+        one._mpv = Talker()
+        one.render_ready(True)
+        one.add_video("https://example.invalid/v")
+        one._mpv.vid = False                 # the player did not keep it
+        one._mpv.said.clear()
+        one.add_video("https://example.invalid/v")       # the page, opened again
+        self.assertIn(("vid", "auto"), one._mpv.said)
 
     def test_dropping_leaves_the_track_attached(self) -> None:
         one = engine()
