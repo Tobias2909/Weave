@@ -4,6 +4,6 @@
     <linearGradient id="mark" x1="0" y1="0" x2="0" y2="1"><stop offset="0.0000" stop-color="#ffc266"/><stop offset="0.2125" stop-color="#ffc266"/><stop offset="0.2875" stop-color="#ff8f52"/><stop offset="0.4625" stop-color="#ff8f52"/><stop offset="0.5375" stop-color="#ff5f7a"/><stop offset="0.7125" stop-color="#ff5f7a"/><stop offset="0.7875" stop-color="#e0507f"/><stop offset="1.0000" stop-color="#e0507f"/></linearGradient>
   </defs>
   <rect x="10.24" y="10.24" width="107.52" height="107.52" rx="23.52" fill="url(#tile)"/>
-  <path d="M 38.84 27.94 L 105.93 64.00 L 38.84 100.06 Z" fill="url(#mark)"/>
-  <path d="M 38.84 27.94 L 105.93 64.00 L 38.84 100.06 Z" fill="none" stroke="#170d14" stroke-width="2.0" stroke-linejoin="round"/>
+  <path d="M 30.45 27.94 L 97.55 64.00 L 30.45 100.06 Z" fill="url(#mark)"/>
+  <path d="M 30.45 27.94 L 97.55 64.00 L 30.45 100.06 Z" fill="none" stroke="#170d14" stroke-width="2.0" stroke-linejoin="round"/>
 </svg>

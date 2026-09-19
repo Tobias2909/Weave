@@ -71,9 +71,12 @@ OUTLINE_WIDTH = 2.0
 MARK = 0.78
 MARK_HEIGHT = 0.86
 MARK_WIDTH = 0.80
-# A triangle centred on its bounding box looks as though it is sliding left,
-# because its weight is all down the flat side. This is that correction.
-MARK_NUDGE = 0.30
+# Where the triangle's flat side sits, as a share of its own size. Half its
+# width puts the middle of the shape exactly in the middle of the tile, which
+# is what this is. A smaller number pushes it right, which is the optical
+# correction a triangle is usually given for looking left heavy, and at the
+# size an icon is actually seen that correction reads as a mistake.
+MARK_NUDGE = 0.40
 
 
 def corners() -> list[tuple[float, float]]:
