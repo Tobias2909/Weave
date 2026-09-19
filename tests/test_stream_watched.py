@@ -73,8 +73,8 @@ class Judging(unittest.TestCase):
         self.assertEqual(self.judge(), [])
 
     def test_a_few_minutes_of_a_long_stream_does_not(self):
-        # His own case. Five minutes of a six hour stream was marked watched
-        # because the live window said it was all of it.
+        # The case this exists for. Five minutes of a six hour stream was
+        # marked watched because the live window said it was all of it.
         self.stream("fewmins0001", 6 * HOUR)
         self.stopped_at("fewmins0001", 5 * 60)
         self.assertEqual(self.judge(), [])

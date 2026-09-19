@@ -825,9 +825,9 @@ class FeedPoller(Worker):
         # inside the loop, before the round could be weighed, so an episode of
         # refusals struck every channel it touched and two such rounds moved
         # them onto the mixed feed in their dozens, with Shorts coming in
-        # behind them. Measured on his library during one such episode: thirty
-        # channels carrying a strike and forty six moved over, against two the
-        # week before, while the whole round was thirty requests.
+        # behind them. Measured on a real library during one such episode:
+        # thirty channels carrying a strike and forty six moved over, against
+        # two the week before, while the whole round was thirty requests.
         pushed_back = backoff.pushing_back(total, len(refused))
         if not pushed_back:
             for key in missing:
@@ -2041,8 +2041,8 @@ class MusicSearch(Worker):
 # How many shelves of the music page are read. The limit counts shelves rather
 # than items, and YouTube pages them, so this is how far down its front page
 # Weave looks. Six stopped well short of the end: measured on a real account,
-# the page carries twenty to twenty three shelves and Forgotten favourites, the
-# one he asked for, is ALWAYS THE LAST OF THEM. Thirty is comfortably past the
+# the page carries twenty to twenty three shelves and Forgotten favourites is
+# ALWAYS THE LAST OF THEM. Thirty is comfortably past the
 # end with room for YouTube adding more. The whole set took under five seconds
 # and is kept for six hours, so the cost is per morning rather than per visit.
 HOME_SHELVES = 30
@@ -2075,9 +2075,9 @@ class MusicHome(Worker):
             if "listen again" in shelf["title"].lower():
                 found.insert(0, found.pop(index))
                 break
-        # And the one he asked for, which YouTube always puts last, where
+        # And Forgotten favourites, which YouTube always puts last, where
         # nobody scrolls. Moved up beside the other thing worth opening on,
-        # since he says he reaches for it often. Matched by name the same way
+        # since it is reached for often. Matched by name the same way
         # the line above matches, so a shelf YouTube renames simply stays where
         # it was put rather than going missing.
         pinned = 0
@@ -2154,7 +2154,7 @@ class MusicHome(Worker):
 class SongKeeper(Worker):
     """Write one half of a song to disk, so the next play of it costs nothing.
 
-    Only ever asked for a song he has kept. The address alone would not do:
+    Only ever asked for a song that is kept. The address alone would not do:
     a signed one expires within hours, and the point of this is the play
     tomorrow rather than the play in ten minutes.
 

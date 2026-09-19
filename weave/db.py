@@ -1954,7 +1954,7 @@ class Database:
         stub, and MEASURED on a real log only 12 of 49 slices in a day and 56
         of 242 in five days were covered end to end, the median slice holding
         **8 of its 15 minutes**. So it was measuring two thirds of a window and
-        comparing it against a whole one, which told him he was over the usual
+        comparing it against a whole one, which read as being over the usual
         figure everywhere while feeds was in fact running at a third of it.
 
         So the minutes that carry any request at all are numbered, and the sum
@@ -2703,7 +2703,7 @@ class Database:
             LEFT JOIN watched w ON w.video_key = 'yt:' || r.ext_id
             WHERE r.kind = ?
               -- Taken out of sight by hand, the same as in the feed. A
-              -- suggestion is where he found one worth hiding, and these rows
+              -- suggestion is where one worth hiding turns up, and these rows
               -- are addressed by their id rather than through videos, since
               -- most of them belong to channels nobody follows.
               AND 'yt:' || r.ext_id NOT IN (SELECT video_key FROM hidden_videos)

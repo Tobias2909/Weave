@@ -2300,7 +2300,7 @@ class Bridge(QObject):
         return f"Read {fmt.age_text(int(time.time()) - age)} · {count} suggestions"
 
     def _newer_version(self) -> str:
-        """The version worth telling him about, or nothing.
+        """The version worth saying something about, or nothing.
 
         Compared here rather than when the answer arrives, so a release that
         was newer once stops being announced the moment a copy of it is
@@ -3797,8 +3797,8 @@ class Bridge(QObject):
         lists = self._db.forget_playlist_item(ext_id)
         self._db.mark_unavailable(ext_id)
         # Which song is being talked about. A press is about the song in front
-        # of him and "that one" is clear; the look-ahead is about a song that
-        # has not been reached, while the one he IS hearing plays on happily,
+        # of you and "that one" is clear. The look-ahead is about a song that
+        # has not been reached, while the one playing carries on happily,
         # and "that one" there points at the wrong song. Worked out here rather
         # than passed in, because the player has not taken it out of the queue
         # yet when it says so, so this is exact for both ways in.
@@ -4853,7 +4853,7 @@ class Bridge(QObject):
         including a track mpv moved to on its own."""
         # mpv reports the file before its window is up, so the chip stays a
         # while longer rather than going while the screen is still empty. Six
-        # seconds, which is his answer to watching it happen.
+        # seconds, which is what watching it happen settled on.
         if self._starting_key:
             self._set_starting(self._starting_key, clear_after_s=6)
         self.openDetail(key)

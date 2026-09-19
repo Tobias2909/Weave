@@ -26,7 +26,7 @@ CHANNEL = "yt:UCaaaaaaaaaaaaaaaaaaaaaa"
 
 class WhatReadsAsGone(unittest.TestCase):
     def test_the_words_a_deleted_one_comes_back_with(self):
-        # Measured against two real ones he reported.
+        # Measured against two real ones.
         self.assertTrue(reads_as_gone("Video unavailable. This video is not available"))
 
     def test_a_private_one_even_though_it_also_invites_you_to_sign_in(self):
@@ -113,7 +113,7 @@ class ItLeavesEveryListThatHeldIt(unittest.TestCase):
 
 
 class AndItStaysGoneWhenTheListIsReadAgain(unittest.TestCase):
-    """The half that was missing, and he found it.
+    """The half that was missing.
 
     A playlist is read again every so often, and the reading came back with
     the song still in it, looking playable. The finding was written to the
@@ -373,10 +373,10 @@ class ItIsCaughtBeforeItIsReached(unittest.TestCase):
 class WhatTheWindowSaysAboutIt(unittest.TestCase):
     """Which song the notice is about.
 
-    A press is about the song in front of him and "that one" is clear. The
-    look-ahead is about a song he has not reached, while the one he IS hearing
-    plays on without trouble, and "that one" there points at the wrong song and
-    reads as a complaint about what is in his ears.
+    A press is about the song in front of you and "that one" is clear. The
+    look-ahead is about a song nobody has reached yet, while the one playing
+    carries on without trouble, and "that one" there points at the wrong song
+    and reads as a complaint about what is being heard.
     """
 
     class Nothing:
@@ -428,10 +428,10 @@ class AskingWhetherThereIsAnythingToPlay(unittest.TestCase):
     """The sentence a failed resolve comes back with is not enough to decide
     on, so a second question is asked.
 
-    MEASURED against the two he reported: asking for an address answers
+    MEASURED against two real ones: asking for an address answers
     "Video unavailable" and nothing else, no reason and no second line, and a
     video blocked in this country opens with those same two words. Asking for
-    the extraction instead answers in full: both of his came back rc 0,
+    the extraction instead answers in full, and both came back rc 0,
     availability "unlisted", a title, a channel, a length, an upload date and
     ZERO formats. They are not deleted. They exist and YouTube offers nothing
     to play, which from here is the same thing.
@@ -464,7 +464,7 @@ class AskingWhetherThereIsAnythingToPlay(unittest.TestCase):
     def test_a_run_that_did_not_finish_says_nothing(self):
         """The one that matters most. A broken solver or a stale cookie makes
         every video in the library fail, and reading that as every video being
-        gone would empty his playlists."""
+        gone would empty a whole playlist."""
         self.assertFalse(self.answer(stdout="", returncode=1))
         self.assertFalse(self.answer(stdout="", stderr="ERROR: no", returncode=1))
 

@@ -92,7 +92,7 @@ class TheOrderTheyAreShownIn(unittest.TestCase):
 class HowFarDownItLooks(unittest.TestCase):
     def test_it_reads_far_enough_to_reach_the_last_shelf(self):
         """Measured on a real account: twenty to twenty three shelves, and the
-        one he asked for is always the last of them."""
+        Forgotten favourites is always the last of them."""
         from weave import poller
 
         self.assertGreaterEqual(poller.HOME_SHELVES, 24)

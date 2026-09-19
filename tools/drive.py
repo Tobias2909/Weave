@@ -1004,7 +1004,7 @@ class Smoke:
         self.a_suggested_stream_that_ended(bridge, window)
 
     def a_suggested_stream_that_ended(self, bridge, window) -> None:
-        """The same answer, on the suggestions page, where he found it wrong.
+        """The same answer, on the suggestions page, where it was wrong.
 
         A suggestion is usually a channel nobody follows, so the video is not
         in `videos` at all and correcting it there reached nothing the card
@@ -1331,9 +1331,9 @@ class Smoke:
         self.check("and it is counted with the rest that were left out",
                    "2 videos" in str(read(bridge, "playlistSkippedText")),
                    str(read(bridge, "playlistSkippedText")))
-        # And says it about the right song. The one he is hearing is playing on
+        # And says it about the right song. The one playing carries on
         # without trouble, so a notice that says "that one" points at the wrong
-        # song and reads as a complaint about what is in his ears.
+        # song and reads as a complaint about what is being heard.
         self.check("and the window says what happened to it",
                    "deleted" in str(read(bridge, "notice")), str(read(bridge, "notice")))
         self.check("naming the one that went and not the one playing",
@@ -2165,7 +2165,7 @@ class Smoke:
         menu.open()
         settle(0.3)
         entries = [text.strip() for text, _ in menu_entries(menu)]
-        self.check("the box menu is in the order he asked for",
+        self.check("the box menu is in the order it is meant to be in",
                    entries == ["Rename", "Move up", "Move down", "Delete the box"],
                    ", ".join(entries))
         menu.close()
@@ -2318,7 +2318,7 @@ class Smoke:
     def sidebar_order(self, bridge, window, box_id) -> None:
         """Where the sections sit, and that the wheel agrees with the eye.
 
-        The boxes are drawn above Yours, which is the order he asked for, and
+        The boxes are drawn above Yours, which is the order they belong in, and
         the wheel walks positions rather than names, so the list behind it has
         to be moved with the sidebar or the wheel steps past a section that is
         plainly there.
@@ -2687,7 +2687,7 @@ class Smoke:
         menu.open()
         settle(0.3)
         labels = [text.strip() for text, _ in menu_entries(menu)]
-        self.check("the group menu is in the order he asked for",
+        self.check("the group menu is in the order it is meant to be in",
                    labels == ["Rename", "Move up", "Move down", "Manage the group",
                               "Delete the group"], ", ".join(labels))
         menu.close()
@@ -2722,7 +2722,7 @@ class Smoke:
         menu.close()
         settle(0.2)
 
-        # All, which for him is several hundred channels, so it is searched
+        # All, which can be several hundred channels, so it is searched
         # rather than read through, and a reload arriving while somebody is
         # scrolling must not throw them back to the top.
         from weave import paths

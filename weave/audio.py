@@ -283,11 +283,11 @@ def nothing_to_play(cfg: Config, url: str,
     taken out of the lists holding it.
 
     It exists because the sentence a failed resolve comes back with is not
-    enough to decide on. MEASURED against two real ones he reported: asking
-    for an address answers "Video unavailable" and nothing else, no reason and
-    no second line, and a video blocked in this country opens with those same
-    two words. Asking for the extraction instead answers in full: both of his
-    came back rc 0, availability "unlisted", a title, a channel, a length, an
+    enough to decide on. MEASURED against two real ones: asking for an address
+    answers "Video unavailable" and nothing else, no reason and no second line,
+    and a video blocked in this country opens with those same two words. Asking
+    for the extraction instead answers in full, and both of those came back
+    rc 0, availability "unlisted", a title, a channel, a length, an
     upload date, and ZERO formats. So they are not deleted at all. They exist,
     and YouTube offers nothing to play, which from here is the same thing and
     is the state worth acting on.
@@ -298,7 +298,7 @@ def nothing_to_play(cfg: Config, url: str,
     A run that did not finish answers no. Not being able to ask is not
     evidence. This is the one that matters most: a broken solver or a stale
     cookie makes every video in the library fail to resolve, and a rule that
-    read that as every video being gone would empty his playlists.
+    read that as every video being gone would empty a whole playlist.
 
     A run yt-dlp complained about the challenge on answers no, for the same
     reason: that is this machine's own trouble and not the video's.
@@ -377,7 +377,7 @@ def address_expiry(address: str) -> float | None:
 
 
 # What yt-dlp says when the video itself is gone rather than when something
-# went wrong on the way to it. Measured against two real ones he reported:
+# went wrong on the way to it. Measured against two real ones:
 # "Video unavailable. This video is not available". A private entry and one the
 # uploader removed each say so in their own words.
 GONE_MARKS = (
@@ -1674,7 +1674,7 @@ class AudioPlayer(QObject):
             self.videoChanged.emit()
             return
         key = entry.get("key", "")
-        # A song he has kept may have its picture on disk already, in which
+        # A song that is kept may have its picture on disk already, in which
         # case there is no address to find and nothing to pull. Asked through
         # a hook rather than reached for, because what counts as kept is the
         # window's business and not the player's.

@@ -189,7 +189,7 @@ class ColoursThatCarryAlpha(unittest.TestCase):
             with self.subTest(theme=theme.name):
                 colour = QColor(theme.colors["badgeBackground"])
                 self.assertTrue(colour.isValid())
-                # How dark the plate is is taste and he has moved it twice.
+                # How dark the plate is is taste, and it has moved twice.
                 # What this guards is the trap, a colour whose alpha ends up
                 # at nothing because it was written the wrong way round.
                 self.assertGreater(colour.alpha(), 64,

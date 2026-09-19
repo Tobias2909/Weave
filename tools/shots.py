@@ -477,7 +477,7 @@ def stub_network() -> None:
         return invented
 
     def invented_browsers(*_args):
-        # A settled looking machine, and none of his own browsers. The
+        # A settled looking machine, and nobody's real browsers. The
         # states are the ones the menu draws differently.
         return [
             browsers.Profile(family="Firefox", name="weave.default",

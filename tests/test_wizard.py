@@ -63,8 +63,8 @@ class WhenTheyAppear(unittest.TestCase):
         self.assertTrue(self.needed())
 
     def test_being_set_up_counts_as_done_on_its_own(self):
-        # His ruling. Somebody with channels and Twitch has nothing left to be
-        # walked through, and asking every launch would be nagging.
+        # Somebody with channels and Twitch has nothing left to be walked
+        # through, and asking every launch would be nagging.
         self.follow_a_channel()
         self.connected = True
         self.assertFalse(self.needed())
