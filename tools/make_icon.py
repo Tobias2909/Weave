@@ -1,20 +1,27 @@
 #!/usr/bin/env python3
 """Draw the Weave icon, and cut it to the sizes a panel asks for.
 
-The mark is a play triangle woven from four horizontal ribbons, each pushed
-sideways by a different amount so the shape reads as cloth up close and as a
-play button at sixteen pixels. The offsets are deliberately uneven, because
-four ribbons mirrored about the middle look machined rather than woven.
+The mark is a whole play triangle on a rounded tile. It was four ribbons woven
+into that triangle before, which read as cloth up close and as very little at
+sixteen pixels, and almost nobody saw a play button in it. The triangle is one
+shape now, and the weave lives on in the four colours running down it rather
+than in four pieces the eye has to assemble.
 
-The apex sits exactly on the seam between the two middle ribbons, so those two
-have to be pushed the same way. Opposite ways splits the point in half. Pushed
-the same way by different amounts, which is what happens here, the point steps
-by the difference, which reads as one ribbon lying over the other.
+The colours hold their own quarter and turn over inside a short seam, so the
+four can still be counted at the sizes where anybody looks closely, and there
+is no hard line anywhere. Below about forty eight pixels the seams are thinner
+than a pixel and it reads as one warm sweep, which is the same thing a full
+blend would do there anyway.
 
-Each band is worked out as its own polygon rather than cut out of one triangle
-with a clip. A clip would hide the outline along the horizontal cuts, since a
-clipped edge is not part of the shape being stroked, and the ribbons would be
-outlined on their slanted sides only.
+The tile is the theme's own wash taken at its deep end, so the mark separates
+from it at every size. That wash was tried on the tile at full strength as
+well, and its orange corner sits exactly where the triangle's top band does,
+which takes the top edge off the mark on that corner.
+
+The edge is the theme's background colour. It draws the triangle's shape at
+the sizes where the colours alone would smear, and by sixteen pixels it is
+thinner than a pixel and gone, which is why the bands are lifted rather than
+left at the colours the video uses.
 
 The whole drawing is scaled inside its square rather than drawn smaller,
 because a task bar gives every icon the same box. A tile that fills its box
@@ -43,80 +50,82 @@ SIZES = (16, 22, 24, 32, 48, 64, 128, 256, 512)
 BOX = 128.0
 FILL = 0.84                      # how much of the box the tile takes
 CORNER = 28.0                    # corner radius before scaling
-MARK = "#ffeef0"                 # the theme's own text colour
-STOPS = (("0", "#ffa250"), ("0.5", "#ff7a3d"), ("1", "#b03a6b"))
 
-# White on orange separates by brightness alone, which a small icon renders as
-# a smear. A dark edge gives the ribbons a boundary that survives the shrink.
-# The weight is a compromise measured at every shipped size. Below about 0.5 it
-# stops reaching the rasteriser at all, and by 1.5 it starts greying the white
-# at sixteen pixels, where each ribbon is only a couple of pixels wide.
+# The tile, which is the theme's own wash held at its deep end.
+TILE = (("0", "#8f2f5e"), ("0.45", "#4a1a38"), ("1", "#140a12"))
+
+# The four colours the mark carries, each lifted far enough to stay apart
+# from the tile under it once the icon is small.
+BANDS = ("#ffc266", "#ff8f52", "#ff5f7a", "#e0507f")
+# How much of a colour's own quarter is given to turning into the next one.
+# Nothing at all is the hard cut this replaced, and a half is a plain blend
+# with no colour of its own left anywhere.
+SEAM = 0.15
+
 OUTLINE = "#170d14"              # the theme's own background colour
-OUTLINE_WIDTH = 0.75
+OUTLINE_WIDTH = 2.0
 
-# The triangle before scaling, and the horizontal cuts through it. The seams
-# are the band edges, the offsets are how far each band slides sideways.
-LEFT, RIGHT, TOP, BOTTOM = 32.0, 102.0, 21.0, 107.0
-SEAMS = (42.5, 64.0, 85.5)
-OFFSETS = (-7.0, 2.0, 5.0, -3.0)
-GAP = 4.0
-
-
-def scaled(value: float) -> float:
-    """A coordinate moved toward the middle of the box by the fill factor."""
-    return round(BOX / 2 + (value - BOX / 2) * FILL, 2)
+# How much of the tile the triangle takes, and its proportions. Much wider
+# than it is tall reads as an arrow and much taller reads as a pointer, so it
+# sits near the ratio a play button has everywhere else.
+MARK = 0.78
+MARK_HEIGHT = 0.86
+MARK_WIDTH = 0.80
+# A triangle centred on its bounding box looks as though it is sliding left,
+# because its weight is all down the flat side. This is that correction.
+MARK_NUDGE = 0.30
 
 
-def right_edge(y: float) -> float:
-    """How far the triangle reaches at that height.
+def corners() -> list[tuple[float, float]]:
+    """The three points of the triangle, in the box's own coordinates."""
+    side = BOX * FILL * MARK
+    height = side * MARK_HEIGHT
+    middle = BOX / 2
+    left = middle - side * MARK_NUDGE
+    return [(left, middle - height / 2),
+            (left + side * MARK_WIDTH, middle),
+            (left, middle + height / 2)]
 
-    The two slanted sides meet at the apex, so the reach grows to the middle
-    and falls away again, which is what the distance from the middle measures.
+
+def triangle() -> str:
+    return "M " + " L ".join(f"{x:.2f} {y:.2f}" for x, y in corners()) + " Z"
+
+
+def stops() -> str:
+    """The four colours as one run down the mark, each holding its quarter.
+
+    Two stops per colour, at the ends of the part of its quarter it keeps, so
+    the turn happens in the seam between them rather than across the whole
+    quarter. The first and the last reach the ends of the triangle, or the
+    point and the foot would fade into something they were never given.
     """
-    middle = (TOP + BOTTOM) / 2
-    reach = 1 - abs(y - middle) / ((BOTTOM - TOP) / 2)
-    return LEFT + (RIGHT - LEFT) * reach
-
-
-def band(index: int) -> str:
-    """One ribbon, as a closed shape that can carry an outline.
-
-    The first and the last band end in a point, because their far edge is a
-    corner of the triangle rather than a cut across it.
-    """
-    edges = [TOP, *SEAMS, BOTTOM]
-    first, last = index == 0, index == len(OFFSETS) - 1
-    top = edges[index] + (0 if first else GAP / 2)
-    bottom = edges[index + 1] - (0 if last else GAP / 2)
-    slide = round(OFFSETS[index] * FILL, 2)
-
-    def point(x: float, y: float) -> str:
-        return f"{round(scaled(x) + slide, 2)} {scaled(y)}"
-
-    if first:
-        corners = [point(LEFT, top), point(right_edge(bottom), bottom), point(LEFT, bottom)]
-    elif last:
-        corners = [point(LEFT, top), point(right_edge(top), top), point(LEFT, bottom)]
-    else:
-        corners = [point(LEFT, top), point(right_edge(top), top),
-                   point(right_edge(bottom), bottom), point(LEFT, bottom)]
-    return "M " + " L ".join(corners) + " Z"
+    out = []
+    share = 1 / len(BANDS)
+    for index, colour in enumerate(BANDS):
+        low = index * share
+        high = low + share
+        first = low if index == 0 else low + share * SEAM
+        last = high if index == len(BANDS) - 1 else high - share * SEAM
+        out.append(f'<stop offset="{first:.4f}" stop-color="{colour}"/>')
+        out.append(f'<stop offset="{last:.4f}" stop-color="{colour}"/>')
+    return "".join(out)
 
 
 def draw() -> str:
-    bands = "".join(f'<path d="{band(index)}"/>' for index in range(len(OFFSETS)))
-    tile = scaled(0.0)
+    tile = round(BOX / 2 - BOX * FILL / 2, 2)
     side = round(BOX * FILL, 2)
-    gradient = "".join(f'<stop offset="{at}" stop-color="{colour}"/>' for at, colour in STOPS)
+    gradient = "".join(f'<stop offset="{at}" stop-color="{colour}"/>' for at, colour in TILE)
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {BOX:.0f} {BOX:.0f}" '
             f'width="{BOX:.0f}" height="{BOX:.0f}">\n'
             f'  <defs>\n'
             f'    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">{gradient}</linearGradient>\n'
+            f'    <linearGradient id="mark" x1="0" y1="0" x2="0" y2="1">{stops()}</linearGradient>\n'
             f'  </defs>\n'
             f'  <rect x="{tile}" y="{tile}" width="{side}" height="{side}" '
             f'rx="{round(CORNER * FILL, 2)}" fill="url(#tile)"/>\n'
-            f'  <g fill="{MARK}" stroke="{OUTLINE}" stroke-width="{OUTLINE_WIDTH}" '
-            f'stroke-linejoin="round">{bands}</g>\n'
+            f'  <path d="{triangle()}" fill="url(#mark)"/>\n'
+            f'  <path d="{triangle()}" fill="none" stroke="{OUTLINE}" '
+            f'stroke-width="{OUTLINE_WIDTH}" stroke-linejoin="round"/>\n'
             f'</svg>\n')
 
 
