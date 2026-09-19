@@ -3,9 +3,9 @@
 [![tests](https://github.com/Tobias2909/Weave/actions/workflows/tests.yml/badge.svg)](https://github.com/Tobias2909/Weave/actions/workflows/tests.yml)
 [![release](https://img.shields.io/github/v/release/Tobias2909/Weave)](https://github.com/Tobias2909/Weave/releases/latest)
 
-<video src="docs/brag.mp4" poster="docs/brag.jpg" width="880" controls muted playsinline></video>
+<video src="docs/intro.mp4" poster="docs/intro.jpg" width="880" controls muted playsinline></video>
 
-[Twenty three seconds of it working](docs/brag.mp4), if the player above does not start.
+[Twenty three seconds of it working](docs/intro.mp4), if the player above does not start.
 
 A personal YouTube and Twitch client for Linux. Weave shows what the channels
 you track have posted, sorted into groups you make yourself, and hands playback
@@ -113,11 +113,11 @@ the track playing and the one after it. The next address is resolved as the
 current track starts, so a changeover is a millisecond and going back a track
 costs nothing.
 
-Favourites are the exception, and they are kept on disk. A favourite is a short
-list somebody made by hand, played over and over, and streaming it means paying
-for the address and the wait every time. Both halves are kept, the sound and
-the picture, written the first time the song is played rather than fetched
-ahead of it. There is a ceiling on the settings page, and a song that stops
+Favourites are the exception, and they are kept on disk. Your favourites are a
+short list you mark yourself and play over and over, and streaming one means
+paying for the address and the wait every time. Both halves are kept, the
+sound and the picture, written the first time the song is played rather than
+fetched ahead of it. There is a ceiling on the settings page, and a song that stops
 being a favourite drops what was kept for it.
 
 The page behind the chevron on the bar shows the song itself, the video where
