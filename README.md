@@ -9,8 +9,8 @@
 
 A personal YouTube and Twitch client for Linux. Weave shows what the channels
 you track have posted, sorted into groups you make yourself, and hands playback
-to `mpv` instead of embedding a player of its own. Music goes to a second `mpv`
-with no window, driven from a player bar inside the app.
+to `mpv` instead of embedding a player of its own. Music plays inside the
+window, from a bar at the foot of it, and a page of its own shows the song.
 
 Your channels, your groups, your window. Nothing recommends anything in the
 feed, nothing autoplays, and there is no endless scroll of things you never
@@ -97,9 +97,8 @@ used to appear nowhere. A recording is badged as one wherever it turns up.
 with the listing, so a page of them costs the one request that read the tab
 rather than a request each.*
 
-Opening one reads it, which is also where its count comes from, because the
-listing carries names and pictures and no count at all. Keeping a playlist puts
-it in a section of its own in the sidebar, apart from yours.
+Opening one reads what is in it. Keeping a playlist puts it in a section of
+its own in the sidebar, under your own, since it belongs to somebody else.
 
 ## Music
 
@@ -108,11 +107,23 @@ it in a section of its own in the sidebar, apart from yours.
 *Bloom. The shelves YouTube Music itself opens on, favourites, saved
 addresses for a round the clock stream, and a bar that survives switching views.*
 
-Nothing is downloaded. `yt-dlp` resolves an address and a second `mpv` with no
-window plays it, which reaches the same quality the rest of your setup gets.
-Weave hands that player only the track playing and the one after it, and the
-next address is resolved as the current track starts, so a changeover is a
-millisecond and going back a track costs nothing.
+A song is a stream at both ends. `yt-dlp` resolves an address and the player
+reads it, at the same quality the rest of your setup gets, and Weave holds only
+the track playing and the one after it. The next address is resolved as the
+current track starts, so a changeover is a millisecond and going back a track
+costs nothing.
+
+Favourites are the exception, and they are kept on disk. A favourite is a short
+list somebody made by hand, played over and over, and streaming it means paying
+for the address and the wait every time. Both halves are kept, the sound and
+the picture, written the first time the song is played rather than fetched
+ahead of it. There is a ceiling on the settings page, and a song that stops
+being a favourite drops what was kept for it.
+
+The page behind the chevron on the bar shows the song itself, the video where
+there is one and the artwork where there is not, with the words, the comments
+and what is next beside it. Nothing is fetched and nothing decoded for that
+page while it is closed.
 
 Starting a video pauses the music, fading out over about a second rather than
 cutting off mid note. There is a switch in the bar if you disagree. Repeat has
@@ -224,9 +235,13 @@ python -m weave --help
 
 ## How playback works
 
-Weave never decodes a video. It hands a URL to `mpv` and reads that instance
-over its JSON IPC socket to learn what was watched, either at the end of a file
-or once 85 percent of it has been seen.
+A video you press goes to `mpv`. Weave hands it a URL, decodes nothing itself
+and reads that instance over its JSON IPC socket to learn what was watched,
+either at the end of a file or once 85 percent of it has been seen.
+
+Music is the other half and works the other way. It plays through libmpv inside
+Weave's own process, which is what lets the page draw the video of a song in
+the window rather than opening a second one somewhere else.
 
 When `mpv-ff2mpv-single.sh` is on your path Weave calls it, because that wrapper
 already canonicalizes URLs, resolves Twitch through `streamlink`, expands
