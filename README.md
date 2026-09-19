@@ -3,9 +3,9 @@
 [![tests](https://github.com/Tobias2909/Weave/actions/workflows/tests.yml/badge.svg)](https://github.com/Tobias2909/Weave/actions/workflows/tests.yml)
 [![release](https://img.shields.io/github/v/release/Tobias2909/Weave)](https://github.com/Tobias2909/Weave/releases/latest)
 
-<video src="docs/intro.mp4" poster="docs/intro.jpg" width="880" controls muted playsinline></video>
+![Twenty three seconds of Weave working](docs/intro.webp)
 
-[Twenty three seconds of it working](docs/intro.mp4), if the player above does not start.
+*The same twenty three seconds [with sound](https://github.com/Tobias2909/Weave/releases/download/v1.4.0/intro.mp4).*
 
 A personal YouTube and Twitch client for Linux. Weave shows what the channels
 you track have posted, sorted into groups you make yourself, and hands playback
