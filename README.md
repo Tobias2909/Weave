@@ -3,8 +3,6 @@
 [![tests](https://github.com/Tobias2909/Weave/actions/workflows/tests.yml/badge.svg)](https://github.com/Tobias2909/Weave/actions/workflows/tests.yml)
 [![release](https://img.shields.io/github/v/release/Tobias2909/Weave)](https://github.com/Tobias2909/Weave/releases/latest)
 
-https://github.com/user-attachments/assets/cc89faf0-0ee0-4dc1-bbb0-d89526c3ddd2
-
 A personal YouTube and Twitch client for Linux. Weave shows what the channels
 you track have posted, sorted into groups you make yourself, and hands playback
 to `mpv` instead of embedding a player of its own. Music plays inside the
@@ -15,10 +13,7 @@ feed, nothing autoplays, and there is no endless scroll of things you never
 asked for. Everything Weave knows sits in one SQLite file in your own home
 directory, and it never writes to your account.
 
-![The feed, with the live bar across the top](docs/shots/feed.png)
-
-*The feed in Aurora. Groups and boxes down the left, whoever is
-streaming along the top, and a line under a card showing where you stopped.*
+https://github.com/user-attachments/assets/cc89faf0-0ee0-4dc1-bbb0-d89526c3ddd2
 
 ## What it does
 
@@ -34,7 +29,7 @@ streaming along the top, and a line under a card showing where you stopped.*
   are watching, on its own faster timer
 * Left click plays in `mpv`, and Weave watches that `mpv` over its IPC socket to
   learn what was watched, so hide watched means something without a second
-  history to keep
+  history to keep, and a line under a card shows where you stopped
 * Shorts stay out of the feed, because Weave asks each channel for its long form
   tab, and reads the Shorts tab of a channel that has none so its rows are still
   known for what they are
