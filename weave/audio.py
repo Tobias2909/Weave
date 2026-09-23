@@ -614,6 +614,7 @@ class AudioPlayer(QObject):
         self._dur = 0.0
         self._paused = True
         self._idle = True
+        self._first_at = 0.0
         # How much of the song playing has really been heard, counted from
         # the position as it moves rather than read off it, so a seek forwards
         # adds nothing. Said once per play, when it reaches HEARD_S.
@@ -870,7 +871,7 @@ class AudioPlayer(QObject):
     # ---- the queue -------------------------------------------------------
 
     def play_items(self, items: list[dict], start: int = 0,
-                   shuffle_rest: bool = False) -> None:
+                   shuffle_rest: bool = False, at_s: float = 0.0) -> None:
         """Queue a list and begin. Each entry needs a key, a title and a url,
         and may say that it is live.
 
@@ -883,6 +884,9 @@ class AudioPlayer(QObject):
         self._queue = [dict(item) for item in items if item.get("url")]
         if not self._queue:
             return
+        # Where in the first song to begin, which a link with a time in it
+        # asks for. Only the first; everything after starts at its top.
+        self._first_at = max(0.0, float(at_s or 0.0))
         self._rebuild_order()
         self._at = max(0, min(start, len(self._queue) - 1))
         if self._shuffle or shuffle_rest:
@@ -950,7 +954,8 @@ class AudioPlayer(QObject):
         self._stall_timer.stop()
         self._appended = None
         if not self._recovering:
-            self._resume_at = 0.0
+            self._resume_at = self._first_at
+        self._first_at = 0.0
         self._pos = 0.0
         self._dur = 0.0
         self._remember(entry)

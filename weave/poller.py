@@ -2366,6 +2366,75 @@ class FavouriteMakers(Worker):
         self.ready.emit(named)
 
 
+class LinkFacts(Worker):
+    """What a video behind a pressed link is, for the card that shows it.
+
+    One call to the music service, about a tenth of a second. Nothing is
+    stored: the card is a look at something, not a decision to keep it.
+    """
+
+    ready = Signal(str, "QVariantMap")   # video id, facts
+    failed = Signal(str, str)
+
+    def __init__(self, cfg: Config, video_id: str, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._cfg = cfg
+        self._video_id = video_id
+
+    def work(self) -> None:
+        from .sources import ytmusic
+
+        try:
+            facts = ytmusic.video_facts(cookie_profile(self._cfg), self._video_id)
+        except (ytmusic.MusicError, ImportError) as exc:
+            self.failed.emit(self._video_id, str(exc))
+            return
+        self.ready.emit(self._video_id, facts)
+
+
+class LinkTarget(Worker):
+    """Which channel a channel link names, or what a playlist link is called.
+
+    A handle has to be looked up to become a channel, and a playlist opened
+    from an address has no name until something asks. One call either way,
+    about half a second, the same one adding a channel by hand makes.
+    """
+
+    channel = Signal(str, str)           # channel key, name
+    playlist = Signal(str, str)          # playlist id, title
+    failed = Signal(str)
+
+    def __init__(self, cfg: Config, link, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._cfg = cfg
+        self._link = link
+
+    def work(self) -> None:
+        from .cookies import args as cookie_args
+        from .sources import resolve as channel_resolve
+        from .sources import ytdlp
+
+        if self._link.kind == "channel":
+            try:
+                found = channel_resolve.resolve(self._link.channel, cancel=self._cancel)
+            except channel_resolve.ResolveError as exc:
+                self.failed.emit(str(exc))
+                return
+            self.channel.emit(found.key, found.title or "")
+            return
+        command = ["yt-dlp", "--no-warnings", "--flat-playlist", "--playlist-items", "0",
+                   *cookie_args(self._cfg), "--print", "playlist:%(title)s",
+                   f"https://www.youtube.com/playlist?list={self._link.playlist_id}"]
+        try:
+            result = ytdlp.run(command, RuntimeError, "reading the playlist's name",
+                               None, self._cancel, 60.0)
+        except RuntimeError as exc:
+            self.failed.emit(str(exc))
+            return
+        title = next((line.strip() for line in result.stdout.splitlines() if line.strip()), "")
+        self.playlist.emit(self._link.playlist_id, "" if title == "NA" else title)
+
+
 class ListenReporter(Worker):
     """Tell the music service that one song was listened to.
 

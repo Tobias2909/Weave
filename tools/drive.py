@@ -469,10 +469,12 @@ class Smoke:
         self.check("the whole description is there, not two lines of it",
                    read(said, "lineCount") > 8 and not read(said, "truncated"),
                    f"{read(said, 'lineCount')} lines, truncated {read(said, 'truncated')}")
-        bottom = read(area, "y") + read(area, "height")
-        self.check("in room of its own down to the foot of the page",
-                   read(area, "visible") is True
-                   and abs(bottom - read(stage_item, "height")) < 1,
+        box = find(window, "nowPlayingDescriptionBox")
+        bottom = read(box, "y") + read(box, "height")
+        self.check("in a box of its own down to the foot of the page",
+                   read(area, "visible") is True and read(box, "visible") is True
+                   and abs(bottom - read(stage_item, "height")) < 1
+                   and read(area, "y") > read(box, "y"),
                    f"ends at {bottom:.0f} of {read(stage_item, 'height'):.0f}")
         # A notch of the wheel is three lines here, not the grid's step.
         glide = [child for child in window.findChildren(QObject)
@@ -495,6 +497,8 @@ class Smoke:
         self.check("and the picture is the size it is beside two lines",
                    abs(read(frame, "height") - long_frame) < 1,
                    f"{long_frame:.0f} with a long one, {read(frame, 'height'):.0f} a short")
+        self.check("and a short one's box is only as tall as its words",
+                   read(box, "height") < 60, f"box {read(box, 'height'):.0f}")
         audio._facts[playing] = dict(audio._facts[playing], description=(
             "A line about it, see https://example.test/a?b=1&c=2 and a < b. " * 40))
         audio.factsChanged.emit()
@@ -530,6 +534,16 @@ class Smoke:
                    read(stage_line, "visible") is True
                    and str(read(stage_line, "text")) == STAGE_LOOKING,
                    f"{read(stage_line, 'visible')} {read(stage_line, 'text')}")
+        # Where it is drawn, not only that it says it is visible. A slot of no
+        # height was left at the top of its column, behind the title and the
+        # buttons, while every property here said it was showing.
+        ground_item = find(window, "nowPlayingStage")
+        artist = find(window, "nowPlayingArtist")
+        line_y = stage_line.mapToItem(ground_item, 0, 0).y()
+        artist_y = artist.mapToItem(ground_item, 0, 0).y()
+        self.check("and it is drawn on the row under the title, not behind it",
+                   abs(line_y - artist_y) < 4,
+                   f"line at {line_y:.0f}, the row under the title at {artist_y:.0f}")
         button = find(window, "nowPlayingFullscreen")
         ground = find(window, "nowPlayingStage")
         line_end = stage_line.mapToItem(ground, stage_line.width(), 0).x()
@@ -542,7 +556,8 @@ class Smoke:
         # after. The clock is shortened here; the window's own is four seconds.
         from weave.audio import STAGE_SHOWING
 
-        stage_slot = find(window, "nowPlayingVideoStageSlot")
+        artist_row = find(window, "nowPlayingArtist")
+        rest_y = artist_row.mapToItem(ground, 0, 0).y()
         write(stage_line, "restMs", 250)
         audio._video_stage = STAGE_SHOWING
         audio._video_showing = True
@@ -552,20 +567,22 @@ class Smoke:
                    read(stage_line, "visible") is True
                    and str(read(stage_line, "text")) == STAGE_SHOWING,
                    f"{read(stage_line, 'visible')} {read(stage_line, 'text')}")
-        wait_until(lambda: read(stage_slot, "height") == 0, 3.0)
-        self.check("and once it has been said it fades and gives its room back",
-                   read(stage_line, "opacity") == 0 and read(stage_slot, "height") == 0,
-                   f"opacity {read(stage_line, 'opacity')} "
-                   f"height {read(stage_slot, 'height')}")
+        shown_y = artist_row.mapToItem(ground, 0, 0).y()
+        wait_until(lambda: read(stage_line, "opacity") == 0, 3.0)
+        settle(0.3)
+        faded_y = artist_row.mapToItem(ground, 0, 0).y()
+        self.check("once it has been said it fades, and nothing under it moves",
+                   read(stage_line, "opacity") == 0 and rest_y == shown_y == faded_y,
+                   f"opacity {read(stage_line, 'opacity')} rows at "
+                   f"{rest_y:.0f} {shown_y:.0f} {faded_y:.0f}")
         audio._video_showing = False
         audio._video_stage = STAGE_LOOKING
         audio.videoChanged.emit()
-        wait_until(lambda: read(stage_line, "opacity") == 1
-                   and read(stage_slot, "height") > 0, 3.0)
+        wait_until(lambda: read(stage_line, "opacity") == 1, 3.0)
         self.check("the next step brings the line back",
-                   read(stage_line, "opacity") == 1 and read(stage_slot, "height") > 0,
-                   f"opacity {read(stage_line, 'opacity')} "
-                   f"height {read(stage_slot, 'height')}")
+                   read(stage_line, "opacity") == 1
+                   and artist_row.mapToItem(ground, 0, 0).y() == rest_y,
+                   f"opacity {read(stage_line, 'opacity')}")
         write(stage_line, "restMs", 4000)
         audio._video_stage = ""
         audio.videoChanged.emit()
@@ -1482,6 +1499,54 @@ class Smoke:
         bridge.setPanelWidth(was)
         bridge.closeDetail()
         settle(0.4)
+
+    def a_link_in_a_description(self, bridge, window) -> None:
+        """A YouTube video behind a link comes up on a card beside the press.
+
+        A video stored here is known without asking, so its card is whole at
+        once, and a link with a time in it marks that time on the picture.
+        """
+        from PySide6.QtCore import QPointF
+
+        step("a link in a description")
+        bridge.selectGroup(-1)
+        settle(0.4)
+        known = bridge._video_for_detail("yt:smokevid005") or {}
+        write(window, "lastPress", QPointF(400, 300))
+        bridge.openLink("https://www.youtube.com/watch?v=smokevid005&t=90")
+        settle(0.4)
+        card = find(window, "linkPreview")
+        title = find(window, "linkPreviewTitle")
+        self.check("a YouTube link comes up on a card rather than in a browser",
+                   card is not None and read(card, "visible") is True
+                   and str(read(title, "text")) == str(known.get("title") or ""),
+                   "missing" if card is None else str(read(title, "text")))
+        placed = card.mapToItem(None, 0, 0)
+        self.check("beside where it was pressed",
+                   350 < placed.x() < 420 and 300 < placed.y() < 340,
+                   f"at {placed.x():.0f},{placed.y():.0f}")
+        mark = find(window, "linkPreviewMark")
+        start = find(window, "linkPreviewStart")
+        timed = bool(known.get("duration_s")) and known["duration_s"] > 90
+        self.check("and the link's time is marked on the picture and said",
+                   (not timed or read(mark, "visible") is True)
+                   and "1:30" in str(read(start, "text")),
+                   f"mark {read(mark, 'visible')} {read(start, 'text')}")
+        # Sharing it puts the address on the clipboard, the link's time with
+        # it, and the card says so for a moment. The clipboard is the
+        # offscreen platform's own.
+        from PySide6.QtGui import QGuiApplication
+
+        bridge.previewShare()
+        settle(0.2)
+        share = find(window, "linkPreviewShare")
+        self.check("sharing it copies the address with its time and says so",
+                   QGuiApplication.clipboard().text().endswith("smokevid005&t=90s")
+                   and "Copied" in str(read(share, "text")),
+                   f"{QGuiApplication.clipboard().text()} {read(share, 'text')}")
+        bridge.closePreview()
+        settle(0.2)
+        self.check("and it goes away again", not read(card, "visible"))
 
     def telling_youtube_music(self, bridge, window) -> None:
         """The one write Weave can make, which is off until it is switched on.
@@ -3422,6 +3487,7 @@ class Smoke:
         self.favourite_from_a_card(bridge, window)
         self.members_in_a_playlist(bridge, window)
         self.telling_youtube_music(bridge, window)
+        self.a_link_in_a_description(bridge, window)
 
         if self.shot:
             self.check("screenshot written", screenshot(window, self.shot), self.shot)

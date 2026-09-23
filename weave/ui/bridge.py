@@ -11,6 +11,7 @@ letting them be set separately would allow combinations with no meaning.
 
 from __future__ import annotations
 
+import html
 import json
 import random
 import time
@@ -48,6 +49,8 @@ from ..poller import (
     ChannelMembersFetcher,
     ChannelPlaylistsFetcher,
     FavouriteMakers,
+    LinkFacts,
+    LinkTarget,
     ImageCacheJob,
     ListenReporter,
     LiveWatcher,
@@ -152,6 +155,13 @@ REPORT_LISTENS_STATE = "music_report_listens"
 # and for how long at most.
 LOOKING_WORDS = "Opening the channel"
 LOOKING_LIMIT_S = 30
+# How long the card says its address was copied.
+COPIED_ON_CARD_S = 2.5
+# Said beside the pointer while a playlist link is looked up.
+OPENING_PLAYLIST = "Opening the playlist"
+# How long a video handed to mpv may take to report itself and still be sent
+# to the time its link asked for.
+SEEK_ON_START_LIMIT_S = 60
 # The lookup answered after somebody had already gone somewhere else.
 CHANNEL_FOUND_LATE = "Found that channel. Press the name again to go there."
 
@@ -256,6 +266,7 @@ class Bridge(QObject):
     pageReadingChanged = Signal()
     channelLookingChanged = Signal()
     reportListensChanged = Signal()
+    linkPreviewChanged = Signal()
     updateChanged = Signal()
     wizardChanged = Signal()
     recommendedChanged = Signal()
@@ -439,6 +450,14 @@ class Bridge(QObject):
         # Songs heard long enough to count, waiting to be told to the music
         # service, one at a time. Only filled while that is switched on.
         self._listen_reporter: ListenReporter | None = None
+        # A video behind a pressed link, shown on a card beside the press
+        # rather than opened, and the lookups behind the card and the other
+        # links. A time the video is to start at once mpv reports it, since
+        # the address handed over cannot carry one through the wrapper.
+        self._preview: dict = {}
+        self._link_facts: LinkFacts | None = None
+        self._link_target: LinkTarget | None = None
+        self._seek_on_start: tuple[str, int, float] | None = None
         self._heard_waiting: list[str] = []
         self._pending_members: tuple[str, str] | None = None
         self._members_cleared = ""
@@ -957,13 +976,14 @@ class Bridge(QObject):
     def _here(self) -> tuple:
         return (self._view_kind, self._view_id, self._view_channel, self._view_playlist)
 
-    def _start_channel_looking(self) -> None:
+    def _start_channel_looking(self, words: str = "") -> None:
+        words = words or LOOKING_WORDS
         self._looking_from = self._here()
         # Bounded, so a lookup that never answers cannot leave the words up
         # for the rest of the session.
         self._looking_timer.start(LOOKING_LIMIT_S * 1000)
-        if self._channel_looking != LOOKING_WORDS:
-            self._channel_looking = LOOKING_WORDS
+        if self._channel_looking != words:
+            self._channel_looking = words
             self.channelLookingChanged.emit()
 
     def _stop_channel_looking(self) -> None:
@@ -2825,12 +2845,242 @@ class Bridge(QObject):
         the markup is built from http and https alone, and a scheme that
         slipped past that would be handed to the desktop to act on.
         """
+        # What a description's markup had to escape comes back escaped, so an
+        # address with a second parameter arrived as ...&amp;t=90s, which
+        # hides the time and hands the browser a parameter nobody wrote.
+        address = html.unescape(address or "")
         url = QUrl(address)
         if url.scheme().lower() not in ("http", "https") or not url.host():
             self._set_status("that link cannot be opened")
             return
+        # Something on YouTube is answered here rather than in a browser.
+        found = ids.youtube_link(address)
+        if found is not None and self._open_youtube_link(found):
+            return
         QDesktopServices.openUrl(url)
         self._set_status(f"opened {url.host()} in the browser")
+
+    # ---- a YouTube link pressed in a description ---------------------------
+
+    def _open_youtube_link(self, link) -> bool:
+        """Answer a YouTube address inside the window. Says whether it did.
+
+        A time in a link to the very video being played goes to that time. A
+        video is shown on a card beside the press, since most of the time what
+        is wanted is to know what it is before deciding to watch it. A channel
+        opens on its videos and a playlist opens as one, the way both do when
+        they are reached from inside the window.
+        """
+        if link.kind == "video":
+            key = ids.video_key(link.video_id)
+            if link.start_s is not None:
+                if key == self._mpv_key and self._player.seek(link.start_s):
+                    return True
+                if self._audio is not None and \
+                        str((self._audio.track or {}).get("key") or "") == key:
+                    self._audio.seekTo(link.start_s)
+                    return True
+            self._show_preview(link)
+            return True
+        if link.kind == "channel":
+            if link.channel.kind == "id":
+                self.openChannel(ids.channel_key(link.channel.value))
+                return True
+            return self._look_up_link(link)
+        if link.kind == "playlist":
+            return self._look_up_link(link)
+        return False
+
+    def _look_up_link(self, link) -> bool:
+        if self._link_target is not None and self._link_target.isRunning():
+            return True
+        self._link_target = LinkTarget(self._cfg, link, self)
+        self._link_target.channel.connect(self._on_link_channel)
+        self._link_target.playlist.connect(self._on_link_playlist)
+        self._link_target.failed.connect(self._on_link_target_failed)
+        self._start_channel_looking(OPENING_PLAYLIST if link.kind == "playlist"
+                                    else LOOKING_WORDS)
+        if not self._launch(self._link_target):
+            self._stop_channel_looking()
+            return False
+        return True
+
+    def _on_link_channel(self, key: str, _name: str) -> None:
+        self._stop_channel_looking()
+        if self._here() == self._looking_from:
+            self.openChannel(key)
+
+    def _on_link_playlist(self, playlist_id: str, title: str) -> None:
+        self._stop_channel_looking()
+        if self._here() == self._looking_from:
+            self.openChannelPlaylist(playlist_id, title or "A linked playlist")
+
+    def _on_link_target_failed(self, why: str) -> None:
+        self._stop_channel_looking()
+        self._set_status(f"could not open that link, {why}")
+
+    def _show_preview(self, link) -> None:
+        """Put the card up with what is already known, and ask for the rest.
+
+        The picture comes from the id for nothing. The title, who made it and
+        how long it is are known already for a video stored here, and asked of
+        the music service otherwise, which answers in about a tenth of a
+        second. How long it is decides where the mark for the link's time goes.
+        """
+        key = ids.video_key(link.video_id)
+        row = self._video_for_detail(key) or {}
+        # Built apart from the card. The card is a look at a video, not an
+        # entry for the queue; the one the card hands the player carries who
+        # made it, and is built in previewListen.
+        address = ids.watch_url("youtube", link.video_id)
+        self._preview = {
+            "key": key, "ext_id": link.video_id,
+            "title": str(row.get("title") or ""),
+            "channel": str(row.get("channel_title") or ""),
+            "channelKey": str(row.get("channel_key") or ""),
+            "thumbnail_url": f"https://i.ytimg.com/vi/{link.video_id}/hqdefault.jpg",
+            "duration_s": row.get("duration_s"),
+            "views": row.get("views"),
+            "start_s": link.start_s,
+            "url": address,
+            "loading": not (row.get("title") and row.get("duration_s")),
+        }
+        self.linkPreviewChanged.emit()
+        if not self._preview["loading"]:
+            return
+        if self._link_facts is not None and self._link_facts.isRunning():
+            self._link_facts.cancel()
+        self._link_facts = LinkFacts(self._cfg, link.video_id, self)
+        self._link_facts.ready.connect(self._on_link_facts)
+        self._link_facts.failed.connect(self._on_link_facts_failed)
+        if not self._launch(self._link_facts):
+            self._preview["loading"] = False
+
+    def _on_link_facts(self, video_id: str, facts: dict) -> None:
+        if self._preview.get("ext_id") != video_id:
+            return
+        preview = dict(self._preview, loading=False)
+        for name, into in (("title", "title"), ("channel", "channel"),
+                           ("duration_s", "duration_s"), ("views", "views")):
+            if not preview.get(into) and facts.get(name):
+                preview[into] = facts[name]
+        if not preview.get("channelKey") and ids.CHANNEL_ID.match(facts.get("channel_id") or ""):
+            preview["channelKey"] = ids.channel_key(facts["channel_id"])
+        self._preview = preview
+        self.linkPreviewChanged.emit()
+
+    def _on_link_facts_failed(self, video_id: str, why: str) -> None:
+        if self._preview.get("ext_id") != video_id:
+            return
+        self._preview = dict(self._preview, loading=False)
+        self.linkPreviewChanged.emit()
+        self._set_status(f"could not say what that video is, {why}")
+
+    def _get_link_preview(self) -> dict:
+        """The card, in the shape the window draws."""
+        found = self._preview
+        if not found:
+            return {}
+        length = found.get("duration_s")
+        start = found.get("start_s")
+        return {
+            "key": found["key"],
+            "title": found.get("title") or "A video on YouTube",
+            "channel": found.get("channel") or "",
+            "channelKey": found.get("channelKey") or "",
+            "thumbnail": qml_source(found["thumbnail_url"]),
+            "durationText": fmt.duration_text(length),
+            "viewsText": fmt.count_text(found.get("views")),
+            "startText": fmt.duration_text(start) if start else "",
+            # Where the link's time falls along the video, for the mark on the
+            # picture. Unknown until the length is.
+            "startAt": (min(1.0, start / length) if start and length else -1.0),
+            "loading": bool(found.get("loading")),
+            "copied": bool(found.get("copied")),
+        }
+
+    linkPreview = Property("QVariantMap", _get_link_preview, notify=linkPreviewChanged)
+
+    @Slot()
+    def closePreview(self) -> None:
+        if self._preview:
+            self._preview = {}
+            self.linkPreviewChanged.emit()
+
+    @Slot()
+    def previewPlay(self) -> None:
+        """Watch it in mpv, from the link's time if it gave one."""
+        found = self._preview
+        if not found:
+            return
+        start = found.get("start_s")
+        if start:
+            self._seek_on_start = (found["key"], int(start), time.monotonic())
+        self._hand_over(found["key"], found["url"], found.get("title") or "", None, False)
+        self.closePreview()
+
+    @Slot()
+    def previewListen(self) -> None:
+        """Listen to it, from the link's time if it gave one."""
+        found = self._preview
+        if not found or self._audio is None:
+            return
+        self._audio.play_items([{
+            "key": found["key"], "title": found.get("title") or "",
+            "artist": found.get("channel") or "",
+            "thumbnail": square_source(qml_source(found["thumbnail_url"])),
+            "artistId": (found.get("channelKey") or "").split(":", 1)[-1],
+            "live": False, "url": found["url"],
+        }], at_s=float(found.get("start_s") or 0))
+        self.closePreview()
+
+    @Slot(int)
+    def previewToBox(self, box_id: int) -> None:
+        found = self._preview
+        if not found:
+            return
+        channel = (found.get("channelKey") or "").split(":", 1)[-1]
+        row = {"key": found["key"], "ext_id": found["ext_id"],
+               "title": found.get("title") or "", "channel_name": found.get("channel"),
+               "channel_ext_id": channel if ids.CHANNEL_ID.match(channel) else None,
+               "duration_s": found.get("duration_s"), "views": found.get("views"),
+               "thumbnail_url": found["thumbnail_url"], "published_at": None}
+        if not self._db.add_to_box(box_id, found["key"], row):
+            self._set_status("that video could not be stored")
+            return
+        self.boxesChanged.emit()
+        self._set_status("put in the box")
+        self.closePreview()
+
+    @Slot()
+    def previewShare(self) -> None:
+        """Put the address on the clipboard, with the link's time if it had
+        one, and say so on the card for a moment."""
+        found = self._preview
+        if not found:
+            return
+        start = found.get("start_s")
+        QGuiApplication.clipboard().setText(
+            found["url"] + (f"&t={int(start)}s" if start else ""))
+        self._set_status("address copied")
+        self._preview = dict(found, copied=True)
+        self.linkPreviewChanged.emit()
+        key = found["key"]
+        QTimer.singleShot(int(COPIED_ON_CARD_S * 1000), lambda: self._uncopy_preview(key))
+
+    def _uncopy_preview(self, key: str) -> None:
+        if self._preview.get("key") == key and self._preview.get("copied"):
+            self._preview = dict(self._preview, copied=False)
+            self.linkPreviewChanged.emit()
+
+    @Slot()
+    def previewInBrowser(self) -> None:
+        found = self._preview
+        if not found:
+            return
+        start = found.get("start_s")
+        QDesktopServices.openUrl(QUrl(found["url"] + (f"&t={int(start)}s" if start else "")))
+        self.closePreview()
 
     @Slot(str)
     def openChannel(self, channel_key: str) -> None:
@@ -5225,6 +5475,15 @@ class Bridge(QObject):
             self._set_starting(self._starting_key, clear_after_s=6)
         self._mpv_key = key
         self.openDetail(key)
+        pending = self._seek_on_start
+        if pending and pending[0] == key:
+            self._seek_on_start = None
+            # Asked for twice, once as the file opens and once when it has
+            # surely loaded, since a seek sent before mpv can take it is lost.
+            # The same absolute time twice changes nothing.
+            if time.monotonic() - pending[2] < SEEK_ON_START_LIMIT_S:
+                for delay in (800, 2500):
+                    QTimer.singleShot(delay, lambda at=pending[1]: self._player.seek(at))
 
     @Slot(int)
     def seekVideo(self, seconds: int) -> None:
@@ -5534,6 +5793,12 @@ class Bridge(QObject):
         elif worker is self._channel_lists:
             self._channel_playlists_busy = False
             self.channelTabChanged.emit()
+        elif worker is self._link_facts:
+            if self._preview:
+                self._preview = dict(self._preview, loading=False)
+                self.linkPreviewChanged.emit()
+        elif worker is self._link_target:
+            self._stop_channel_looking()
         elif worker is self._listen_reporter:
             # Holds no flag. The next song waiting is told on its own finish,
             # which a crash still emits.

@@ -2044,6 +2044,277 @@ ApplicationWindow {
         }
     }
 
+    // A video behind a link pressed in a description, shown rather than
+    // opened. Most of the time what is wanted is to know what it is before
+    // deciding to watch it, so it comes up on a card beside the press with
+    // what it is and what can be done with it. A press anywhere else, or
+    // Escape, puts it away.
+    MouseArea {
+        objectName: "linkPreviewDismiss"
+        anchors.fill: parent
+        z: 68
+        visible: linkCard.visible
+        acceptedButtons: Qt.AllButtons
+        onPressed: App.closePreview()
+    }
+
+    Rectangle {
+        id: linkCard
+        objectName: "linkPreview"
+        readonly property var card: App.linkPreview
+        readonly property bool open: card.key !== undefined && card.key !== ""
+        // Which card was placed, so a card that fills in after its lookup
+        // answers stays where it came up rather than jumping.
+        property string placedFor: ""
+        property point at: Qt.point(0, 0)
+        visible: open
+        z: 69
+        width: 410
+        height: cardBody.implicitHeight + 20
+        radius: 10
+        color: Theme.colors.surfaceRaised
+        border.width: 1
+        border.color: Theme.colors.border
+        x: Math.round(Math.max(8, Math.min(parent.width - width - 8, at.x - 24)))
+        y: Math.round(at.y + 16 + height > parent.height - 8
+                      ? Math.max(8, at.y - height - 12) : at.y + 16)
+        focus: open
+        Keys.onEscapePressed: App.closePreview()
+
+        Connections {
+            target: App
+            function onLinkPreviewChanged() {
+                var key = App.linkPreview.key ? App.linkPreview.key : ""
+                if (key === "" || key === linkCard.placedFor) {
+                    if (key === "")
+                        linkCard.placedFor = ""
+                    return
+                }
+                linkCard.placedFor = key
+                var here = linkCard.parent.mapFromItem(null, root.lastPress.x,
+                                                       root.lastPress.y)
+                linkCard.at = Qt.point(here.x, here.y)
+                linkCard.forceActiveFocus()
+            }
+        }
+
+        // A press on the card itself is the card's, not a press elsewhere.
+        MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
+
+        Column {
+            id: cardBody
+            x: 10
+            y: 10
+            width: parent.width - 20
+            spacing: 10
+
+            Row {
+                width: parent.width
+                spacing: 10
+
+                Item {
+                    id: cardPicture
+                    width: 150
+                    height: 84
+
+                    RoundedImage {
+                        anchors.fill: parent
+                        radius: 6
+                        source: linkCard.card.thumbnail ? linkCard.card.thumbnail : ""
+                    }
+
+                    Rectangle {
+                        visible: (linkCard.card.durationText || "") !== ""
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+                        anchors.margins: 5
+                        radius: 3
+                        color: "#b0000000"
+                        width: cardLength.implicitWidth + 8
+                        height: cardLength.implicitHeight + 3
+                        Label {
+                            id: cardLength
+                            anchors.centerIn: parent
+                            text: linkCard.card.durationText || ""
+                            color: "white"
+                            font.pixelSize: 10
+                            font.weight: Font.DemiBold
+                        }
+                    }
+
+                    // Where the link's time falls along the video, drawn the way
+                    // a card draws how far a video was watched, in the accent
+                    // so the two are not taken for one another.
+                    Item {
+                        objectName: "linkPreviewMark"
+                        visible: (linkCard.card.startAt || -1) >= 0
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+                        height: 3
+                        clip: true
+                        Rectangle {
+                            width: parent.width * Math.max(0, linkCard.card.startAt || 0)
+                            height: parent.height
+                            color: Theme.colors.accent
+                        }
+                    }
+                }
+
+                Column {
+                    width: parent.width - cardPicture.width - parent.spacing
+                    spacing: 3
+
+                    Label {
+                        objectName: "linkPreviewTitle"
+                        width: parent.width
+                        text: linkCard.card.title || ""
+                        color: Theme.colors.text
+                        font.pixelSize: 13
+                        font.weight: Font.DemiBold
+                        wrapMode: Text.Wrap
+                        maximumLineCount: 2
+                        elide: Text.ElideRight
+                    }
+
+                    Label {
+                        width: parent.width
+                        visible: text !== ""
+                        text: linkCard.card.channel || ""
+                        color: cardChannelHover.hovered && (linkCard.card.channelKey || "") !== ""
+                               ? Theme.colors.text : Theme.colors.textMuted
+                        font.pixelSize: 12
+                        elide: Text.ElideRight
+                        HoverHandler { id: cardChannelHover }
+                        TapHandler {
+                            enabled: (linkCard.card.channelKey || "") !== ""
+                            onTapped: {
+                                var key = linkCard.card.channelKey
+                                App.closePreview()
+                                App.openChannel(key)
+                            }
+                        }
+                    }
+
+                    Label {
+                        width: parent.width
+                        visible: text !== ""
+                        text: linkCard.card.loading ? "Looking it up"
+                              : [linkCard.card.durationText || "",
+                                 linkCard.card.viewsText ? linkCard.card.viewsText + " views" : ""]
+                                .filter(function (one) { return one !== "" }).join("  \u00b7  ")
+                        color: Theme.colors.textMuted
+                        font.pixelSize: 11
+                        elide: Text.ElideRight
+                    }
+
+                    Label {
+                        objectName: "linkPreviewStart"
+                        visible: text !== ""
+                        text: linkCard.card.startText ? "The link starts at " + linkCard.card.startText
+                                                      : ""
+                        color: Theme.colors.accent
+                        font.pixelSize: 11
+                    }
+                }
+            }
+
+            Item {
+                width: parent.width
+                height: cardButtons.height
+
+            Row {
+                id: cardButtons
+                spacing: 6
+
+                FlatButton {
+                    objectName: "linkPreviewPlay"
+                    text: linkCard.card.startText ? "\u25b6  Play from " + linkCard.card.startText
+                                                  : "\u25b6  Play"
+                    accent: true
+                    onClicked: App.previewPlay()
+                }
+                FlatButton {
+                    objectName: "linkPreviewListen"
+                    text: "Listen"
+                    onClicked: App.previewListen()
+                }
+                FlatButton {
+                    id: cardBoxButton
+                    objectName: "linkPreviewBox"
+                    visible: App.boxes.length > 0
+                    text: "Box  \u25be"
+                    onClicked: cardBoxMenu.popup(cardBoxButton, 0, cardBoxButton.height + 2)
+
+                    ThemedMenu {
+                        id: cardBoxMenu
+                        Repeater {
+                            model: App.boxes
+                            ThemedMenuItem {
+                                required property var modelData
+                                text: modelData.name
+                                onTriggered: {
+                                    cardBoxMenu.dismiss()
+                                    App.previewToBox(modelData.id)
+                                }
+                            }
+                        }
+                    }
+                }
+                FlatButton {
+                    objectName: "linkPreviewBrowser"
+                    text: "Browser  \u2197"
+                    onClicked: App.previewInBrowser()
+                }
+            }
+
+            // Its address on the clipboard, with the link's time if it had
+            // one. A mark rather than a word, since the row has no room for
+            // another word, and a word for a moment once it has been done.
+            FlatButton {
+                id: cardShare
+                objectName: "linkPreviewShare"
+                readonly property bool copied: linkCard.card.copied === true
+                anchors.right: parent.right
+                width: copied ? implicitWidth : 34
+                text: copied ? "\u2713  Copied" : ""
+                accent: copied
+                hint: copied ? "" : "Copy the address"
+                onClicked: App.previewShare()
+
+                Canvas {
+                    id: shareMark
+                    visible: !cardShare.copied
+                    anchors.centerIn: parent
+                    width: 16
+                    height: 16
+                    readonly property color ink: Theme.colors.text
+                    onInkChanged: requestPaint()
+                    onPaint: {
+                        var g = getContext("2d")
+                        g.reset()
+                        var dots = [[12.5, 3.5], [3.5, 8], [12.5, 12.5]]
+                        g.strokeStyle = ink
+                        g.lineWidth = 1.4
+                        g.beginPath()
+                        g.moveTo(dots[1][0], dots[1][1])
+                        g.lineTo(dots[0][0], dots[0][1])
+                        g.moveTo(dots[1][0], dots[1][1])
+                        g.lineTo(dots[2][0], dots[2][1])
+                        g.stroke()
+                        g.fillStyle = ink
+                        for (var i = 0; i < dots.length; ++i) {
+                            g.beginPath()
+                            g.arc(dots[i][0], dots[i][1], 2.4, 0, 2 * Math.PI)
+                            g.fill()
+                        }
+                    }
+                }
+            }
+            }
+        }
+    }
+
     // Something is happening and there is nothing else on screen to say so.
     // Handing a video to mpv takes several seconds, and so does a search.
     Rectangle {

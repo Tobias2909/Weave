@@ -487,6 +487,41 @@ def home(profile_path: str | None, limit: int = 6) -> list[dict]:
     return out
 
 
+def video_facts(profile_path: str | None, video_id: str) -> dict:
+    """What one video is, for a card about it: its title, who made it, how long
+    it is and how often it has been watched.
+
+    The music service's own player call answers this for any video, music or
+    not, in about a tenth of a second, where a full extraction takes two. It
+    says the video cannot be played in a music context for most of them, which
+    does not matter here, since what is wanted is only what it is.
+    """
+    try:
+        song = client(profile_path).get_song(video_id)
+    except MusicError:
+        raise
+    except Exception as exc:
+        raise _blame("what that video is", exc) from exc
+    details = (song or {}).get("videoDetails") or {}
+    if not details.get("title"):
+        raise MusicError("the music service did not say what that video is")
+
+    def whole(value):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    return {
+        "title": str(details.get("title") or ""),
+        "channel": str(details.get("author") or ""),
+        "channel_id": str(details.get("channelId") or ""),
+        "duration_s": whole(details.get("lengthSeconds")),
+        "views": whole(details.get("viewCount")),
+        "live": bool(details.get("isLive")),
+    }
+
+
 def report_heard(profile_path: str | None, video_id: str) -> None:
     """Tell the music service a song was listened to.
 

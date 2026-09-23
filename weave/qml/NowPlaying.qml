@@ -500,24 +500,26 @@ Item {
                             // a Column leaves out a child that is not there.
                             //
                             // The last step is not a wait any more, so it is
-                            // said for a few seconds and then goes: it fades,
-                            // and only once it has faded does the room it
-                            // took close, so the rows under it slide up
-                            // rather than jump. The slot's height is read off
-                            // the words and the fade, never off whether the
-                            // line is visible, because a wrapper sized by its
-                            // child's visibility hides them both for good.
+                            // said for a few seconds and then fades.
+                            //
+                            // It takes no room of its own. It is drawn over
+                            // the right hand end of the row under it, which
+                            // leaves that end free for it, so nothing below
+                            // moves when it comes, when it goes or while it
+                            // is there. A row of its own made the whole
+                            // description move up the moment it faded.
+                            //
+                            // One pixel tall, never none, and always there. A
+                            // Column neither places nor draws a child whose
+                            // height is 0, so a slot of nothing left the words
+                            // at the top of the column, behind the title and
+                            // the buttons, where nobody could see them.
                             Item {
                                 id: stageSlot
                                 objectName: "nowPlayingVideoStageSlot"
                                 width: parent.width
-                                height: stageLine.text !== "" && stageLine.opacity > 0
-                                        ? stageLine.implicitHeight : 0
-                                Behavior on height {
-                                    NumberAnimation { duration: 160; easing.type: Easing.OutQuad }
-                                }
-                                visible: height > 0
-                                clip: true
+                                height: 1
+                                z: 1
 
                                 Label {
                                     id: stageLine
@@ -577,7 +579,10 @@ Item {
                                 // ordinary video does not.
                                 readonly property string leadsTo:
                                     Audio.track.artistId ? Audio.track.artistId : ""
-                                width: parent.width
+                                // Short of the step line drawn over its right
+                                // hand end, while that line is there.
+                                width: parent.width - (stageLine.text !== "" && stageLine.opacity > 0
+                                                       ? stageLine.implicitWidth + 12 : 0)
                                 visible: text !== ""
                                 // What the music service filed it under, or
                                 // failing that what the extraction named,
@@ -750,21 +755,39 @@ Item {
                 step: Math.round(3 * descriptionLines.lineSpacing)
             }
 
+            // In the same lighter box the panel beside the feed draws its
+            // description in, so the two read as one thing. As tall as the
+            // words and no taller, down to the foot of the page at most.
+            Rectangle {
+                id: descriptionBox
+                objectName: "nowPlayingDescriptionBox"
+                readonly property real pad: 8
+                visible: descriptionArea.writing !== "" && words.visible
+                x: middle.x
+                y: middle.y + middle.height + descriptionArea.gap
+                width: middle.width
+                height: Math.min(Math.max(0, stage.height - y),
+                                 description.height + 2 * pad)
+                radius: 8
+                color: Theme.wash(Theme.colors.text, 0.06)
+            }
+
             Flickable {
                 id: descriptionArea
                 objectName: "nowPlayingDescriptionArea"
                 readonly property string writing: App.nowDetail.descriptionText
                                                   ? App.nowDetail.descriptionText : ""
                 // What the picture leaves for it however long it is: the gap
-                // above and two lines, which is what it always had at rest.
+                // above, the box's own edges and two lines, which is what it
+                // always had at rest.
                 readonly property real reserve: writing !== "" && words.visible
-                    ? gap + 2 * descriptionLines.lineSpacing : 0
+                    ? gap + 2 * descriptionBox.pad + 2 * descriptionLines.lineSpacing : 0
                 readonly property real gap: 8
-                visible: writing !== "" && words.visible
-                x: middle.x
-                y: middle.y + middle.height + gap
-                width: middle.width
-                height: Math.max(0, stage.height - y)
+                visible: descriptionBox.visible
+                x: descriptionBox.x + descriptionBox.pad
+                y: descriptionBox.y + descriptionBox.pad
+                width: descriptionBox.width - 2 * descriptionBox.pad
+                height: Math.max(0, descriptionBox.height - 2 * descriptionBox.pad)
                 contentWidth: width
                 contentHeight: description.height
                 clip: true
@@ -790,8 +813,8 @@ Item {
                     // never under it.
                     width: descriptionArea.width - 10
                     text: descriptionArea.writing
-                    color: Theme.colors.textMuted
-                    font.pixelSize: 11
+                    color: Theme.colors.text
+                    font.pixelSize: 12
                     wrapMode: Text.Wrap
                     // Already markup when it arrives, addresses and all, and
                     // always markup even when there is nothing in it to press.

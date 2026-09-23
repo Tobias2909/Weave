@@ -79,6 +79,62 @@ def youtube_video_id(text: str) -> str | None:
     return None
 
 
+# A start time as a link writes it: 90, 90s, 1m30s, 1h2m3s.
+_START = re.compile(r"^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s?)?$")
+
+
+def start_seconds(text: str) -> int | None:
+    """The second a link asks to start at, or None for one it does not."""
+    found = _START.match((text or "").strip().lower())
+    if not found or not any(found.groups()):
+        return None
+    hours, minutes, seconds = (int(part or 0) for part in found.groups())
+    return hours * 3600 + minutes * 60 + seconds
+
+
+@dataclass(frozen=True)
+class YouTubeLink:
+    """What an address written somewhere points at on YouTube.
+
+    One of a video (with the second it starts at, if it says), a playlist, or
+    a channel, so a press on it can be answered inside the window rather than
+    by a browser.
+    """
+
+    kind: str                       # "video", "playlist" or "channel"
+    video_id: str = ""
+    start_s: int | None = None
+    playlist_id: str = ""
+    channel: ChannelRef | None = None
+
+
+def youtube_link(url: str) -> YouTubeLink | None:
+    """Read an address as something on YouTube, or None for anything else."""
+    text = (url or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = urlparse(text if "://" in text else "https://" + text)
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").lower()
+    if host not in _YOUTUBE_HOSTS and host not in _YOUTU_BE_HOSTS:
+        return None
+    query = parse_qs(parsed.query)
+    video = youtube_video_id(text)
+    if video:
+        start = start_seconds((query.get("t") or query.get("start") or [""])[0])
+        return YouTubeLink("video", video_id=video, start_s=start,
+                           playlist_id=(query.get("list") or [""])[0])
+    segments = [s for s in parsed.path.split("/") if s]
+    if segments and segments[0] == "playlist" and query.get("list"):
+        return YouTubeLink("playlist", playlist_id=query["list"][0])
+    ref = parse_channel_ref(text)
+    if ref is not None and ref.platform == "youtube":
+        return YouTubeLink("channel", channel=ref)
+    return None
+
+
 def twitch_login(text: str) -> str | None:
     """Pull a channel login out of a twitch.tv URL, or accept a bare login."""
     text = (text or "").strip().lstrip("@")
