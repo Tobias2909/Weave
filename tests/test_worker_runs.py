@@ -1058,7 +1058,7 @@ class WorkerRuns(unittest.TestCase):
         holders = ("_poller", "_importer", "_adder", "_details", "_searcher", "_recommended",
                    "_history", "_search", "_tracks", "_station", "_detail", "_cache_job",
                    "_twitch", "_checkup", "_playlists", "_playlist_items", "_lengths",
-                   "_channel_members", "_now_side", "_now_detail",
+                   "_channel_members", "_channel_lists", "_now_side", "_now_detail",
                    "_artist_music", "_artist_open", "_stream_check")
 
         def make(held: str):
@@ -1084,6 +1084,7 @@ class WorkerRuns(unittest.TestCase):
             bridge._detail_loading = True
             bridge._now_busy = "words"
             bridge._channel_music_busy = True
+            bridge._channel_playlists_busy = True
             bridge._cache_working = True
             bridge._twitch_status = "asking Twitch for a code"
             # The members button crashing has to put itself back to off, which
@@ -1148,6 +1149,11 @@ class WorkerRuns(unittest.TestCase):
         bridge, worker = make("_artist_open")
         Bridge._on_worker_crashed(bridge, worker, "x")
         self.assertIn("x", bridge._status, "a dead lookup said nothing")
+
+        bridge, worker = make("_channel_lists")
+        Bridge._on_worker_crashed(bridge, worker, "x")
+        self.assertFalse(bridge._channel_playlists_busy,
+                         "a crashed playlists read left the page saying it was reading")
 
         bridge, worker = make("_cache_job")
         Bridge._on_worker_crashed(bridge, worker, "x")

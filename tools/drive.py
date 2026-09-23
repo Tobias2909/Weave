@@ -1903,9 +1903,14 @@ class Smoke:
 
         key = "yt:UCsmokesmokesmokesmokes1"
         listed = Database(paths.DB_FILE)
+        # More than a screenful on purpose: the box for finding one by name
+        # only appears once there is enough to look through, and the view
+        # builds the tiles it draws rather than all of them, so both need a
+        # list longer than a row.
         listed.replace_channel_playlists(key, [
-            Playlist(f"PL{n:022d}", f"List {n}", f"https://i.ytimg.com/vi/list{n}/hq.jpg")
-            for n in range(3)])
+            Playlist(f"PL{n:022d}", f"List {n}" + (" of songs" if n % 2 else ""),
+                     f"https://i.ytimg.com/vi/list{n}/hq.jpg")
+            for n in range(40)])
         listed.close()
         bridge.openChannel(key)
         settle(0.5)
@@ -1947,7 +1952,7 @@ class Smoke:
         bridge.showChannelTab("playlists")
         settle(0.6)
         tiles = read(bridge, "channelPlaylists")
-        self.check("and its playlists are a half of their own", len(tiles) == 3,
+        self.check("and its playlists are a half of their own", len(tiles) == 40,
                    f"{len(tiles)} listed")
         self.check("with no count until one is opened",
                    all(tile["itemsText"] == "" for tile in tiles))
@@ -1955,6 +1960,35 @@ class Smoke:
                    all(tile["thumbnail"] != "" for tile in tiles),
                    ", ".join(str(tile["thumbnail"])[:24] for tile in tiles))
         self.check("drawn as tiles", item_named(root, "playlistTile") is not None)
+
+        # A Flow of every tile built a card, a picture and a fetch for all of
+        # them at once, which is what a channel listing a thousand playlists
+        # made expensive. A view builds what it draws and a little ahead.
+        built = len(items_named_like(root, "playlistTile"))
+        self.check("and built by the view rather than all at once", built < len(tiles),
+                   f"{built} of {len(tiles)} built")
+
+        finder = item_named(root, "playlistSearchField")
+        counted = item_named(root, "playlistCount")
+        self.check("a box for finding one by name is offered",
+                   finder is not None and read(finder, "visible") is True)
+        self.check("with how many there are beside it",
+                   "40 playlists" in str(read(counted, "text")), str(read(counted, "text")))
+        write(finder, "text", "of songs")
+        settle(0.4)
+        self.check("typing in it leaves the ones that match",
+                   "20 of 40" in str(read(counted, "text")), str(read(counted, "text")))
+        self.check("and it looks through what is stored, so nothing is asked for",
+                   len(read(bridge, "channelPlaylists")) == 40)
+        write(finder, "text", "nothing is called this")
+        settle(0.4)
+        word = item_named(root, "playlistsWord")
+        self.check("a name nothing carries says so rather than drawing nothing",
+                   read(word, "visible") is True
+                   and "No playlist here by that name." == str(read(word, "text")),
+                   str(read(word, "text")))
+        write(finder, "text", "")
+        settle(0.4)
 
         bridge.openChannelPlaylist(tiles[0]["key"], tiles[0]["title"])
         settle(0.5)

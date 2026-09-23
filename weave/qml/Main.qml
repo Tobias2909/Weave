@@ -1719,7 +1719,7 @@ ApplicationWindow {
         objectName: "channelPlaylistsView"
         // The same as the grid above: the content moves, the view does not.
         Translate { id: playlistsShift; x: root.tabSlide; y: root.pageRise }
-        Component.onCompleted: channelPlaylistsView.contentItem.transform = [playlistsShift]
+        Component.onCompleted: channelPlaylistsView.walkItem.transform = [playlistsShift]
         opacity: root.tabFade * root.pageFade
         visible: App.viewKind === "channel" && App.channelTab === "playlists"
         anchors.left: grid.left
@@ -1731,7 +1731,7 @@ ApplicationWindow {
     // The same distance a notch moves the videos. Beside the view rather than
     // inside it, since a child of a Flickable rides in the content.
     SmoothScroll {
-        flickable: channelPlaylistsView
+        flickable: channelPlaylistsView.flick
         step: channelPlaylistsView.rowHeight * App.scrollRowsPerNotch
     }
 

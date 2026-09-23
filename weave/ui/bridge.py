@@ -32,6 +32,7 @@ from .. import paths, tokens, songcache
 from ..config import Config
 from ..db import GROUP_SHOWS, GROUP_SHOWS_ALL, GROUP_SHOWS_STREAMS, Database
 from ..imagecache import SECONDS_PER_DAY, plain_source, qml_source, square_source
+from ..sources import playlists as playlist_source
 from ..sources import release as release_source
 from ..sources import progress as mpv_progress
 from ..player.mpv import Player
@@ -394,6 +395,7 @@ class Bridge(QObject):
         self._cache_job: ImageCacheJob | None = None
         self._channel_feed: ChannelFeedFetcher | None = None
         self._channel_lists: ChannelPlaylistsFetcher | None = None
+        self._channel_playlists_busy = False
         self._channel_members: ChannelMembersFetcher | None = None
         self._stream_check: StreamCheck | None = None
         # One keeper for each half of a song, the picture and the sound.
@@ -2981,6 +2983,8 @@ class Bridge(QObject):
     channelMusicBy = Property(str, _get_channel_music_by, notify=channelTabChanged)
     channelMusicBusy = Property(bool, lambda self: self._channel_music_busy,
                                 notify=channelTabChanged)
+    channelPlaylistsBusy = Property(bool, lambda self: self._channel_playlists_busy,
+                                    notify=channelTabChanged)
 
     def _fetch_channel_playlists(self, force: bool = False) -> None:
         """Read the tab, once a day unless asked again.
@@ -3003,15 +3007,32 @@ class Bridge(QObject):
         self._channel_lists = ChannelPlaylistsFetcher(
             self._db, self._cfg, self._view_channel, found["ext_id"], self)
         self._channel_lists.fetched.connect(self._on_channel_playlists)
-        self._channel_lists.failed.connect(
-            lambda _key, message: self._set_status(f"could not read the playlists, {message}"))
-        self._launch(self._channel_lists)
+        self._channel_lists.failed.connect(self._on_channel_playlists_failed)
+        # Said before it starts rather than after it lands. A channel with a
+        # thousand playlists takes seconds to read, and a page that says
+        # nothing for six seconds reads as a page that found nothing.
+        self._channel_playlists_busy = True
+        self.channelTabChanged.emit()
+        if not self._launch(self._channel_lists):
+            self._channel_playlists_busy = False
+            self.channelTabChanged.emit()
 
     def _on_channel_playlists(self, channel_key: str, count: int) -> None:
-        if self._view_channel == channel_key:
-            self.channelTabChanged.emit()
+        self._channel_playlists_busy = False
+        self.channelTabChanged.emit()
         if not count:
             self._set_status("that channel lists no playlists")
+        elif count >= playlist_source.CHANNEL_LIST_CAP:
+            # The stop was reached, so the box that finds one by name is
+            # looking through part of a tab rather than all of it, and saying
+            # so is the difference between a short list and a wrong one.
+            self._set_status(f"that channel lists more than {count} playlists, "
+                             "so this is the first of them")
+
+    def _on_channel_playlists_failed(self, _channel_key: str, message: str) -> None:
+        self._channel_playlists_busy = False
+        self.channelTabChanged.emit()
+        self._set_status(f"could not read the playlists, {message}")
 
     @Slot(str, str)
     def openChannelPlaylist(self, playlist_id: str, title: str) -> None:
@@ -5146,6 +5167,9 @@ class Bridge(QObject):
             self.nowChanged.emit()
         elif worker is self._artist_music:
             self._channel_music_busy = False
+            self.channelTabChanged.emit()
+        elif worker is self._channel_lists:
+            self._channel_playlists_busy = False
             self.channelTabChanged.emit()
         elif worker is self._artist_open:
             # Holds no flag. It puts a line up while it looks for the channel,

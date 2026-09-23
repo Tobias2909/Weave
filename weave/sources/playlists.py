@@ -37,6 +37,16 @@ PLAYLIST_ID = re.compile(r"^(?:PL|LL|FL|UU|OL|RD)[A-Za-z0-9_-]{0,40}$")
 
 ITEM_FIELDS = FIELDS
 
+# How far down a channel's playlists tab is read. It used to be a hundred,
+# which is a ceiling a real channel reaches: past it a playlist could not be
+# seen at all, and a box for finding one by name could not find what was never
+# read. Measured against the tab of a channel carrying 1135 playlists, a
+# hundred cost 0.7 s, five hundred 2.0 s, a thousand 5.6 s and the whole tab
+# 6.2 s, all of it one call. So the cost of reading everything is seconds once
+# a day, and this number is a stop against a listing that never ends rather
+# than a limit anybody is meant to reach.
+CHANNEL_LIST_CAP = 5000
+
 # A playlist entry is the same thing a recommendation and a search result are,
 # so it is read by the same parser.
 PlaylistItem = FlatVideo
@@ -108,15 +118,20 @@ def fetch_list(cfg: Config, limit: int = 100, throttle: Throttle | None = None,
     raise ytdlp.blame(result, PlaylistError, "the playlist list")
 
 
-def fetch_channel_lists(cfg: Config, channel_id: str, limit: int = 100,
-                        throttle: Throttle | None = None, timeout: float = 180.0,
+def fetch_channel_lists(cfg: Config, channel_id: str, limit: int = CHANNEL_LIST_CAP,
+                        throttle: Throttle | None = None, timeout: float = 600.0,
                         cancel: threading.Event | None = None) -> list[Playlist]:
     """The playlists a channel has made, by id and title.
 
-    One call for the whole tab, measured at half a second. It carries no video
-    count: the count field in this listing is the number of playlists, not the
-    number of videos in each, and a real count is a call per playlist. So the
-    count comes later, free, from opening one.
+    One call for the whole tab. It carries no video count: the count field in
+    this listing is the number of playlists, not the number of videos in each,
+    and a real count is a call per playlist. So the count comes later, free,
+    from opening one.
+
+    The whole tab rather than the first page of it, because the box that finds
+    a playlist by name looks through what was read, so anything left unread is
+    a playlist that cannot be found at all. See CHANNEL_LIST_CAP for what that
+    costs.
 
     An empty answer is a real thing here, unlike the feed of your own
     playlists. A channel with no playlists is ordinary, so this says nothing

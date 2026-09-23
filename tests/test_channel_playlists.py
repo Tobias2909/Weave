@@ -259,3 +259,96 @@ class TheirOwnSection(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HowFarDownTheTabIsRead(unittest.TestCase):
+    """A hundred was a ceiling a real channel reaches, and the box that finds
+    a playlist by name looks through what was read, so a tab read in part is a
+    playlist that cannot be found at all."""
+
+    def setUp(self):
+        from weave.config import Config
+        self.cfg = Config()
+        self.sent: list[list[str]] = []
+
+    def _answer(self, stdout: str):
+        from weave.sources import playlists as source
+
+        class Result:
+            def __init__(self, text):
+                self.stdout = text
+                self.stderr = ""
+                self.code = 0
+
+        def run(command, *_a, **_k):
+            self.sent.append(command)
+            return Result(stdout)
+
+        self._was = source.ytdlp.run
+        source.ytdlp.run = run
+        self.addCleanup(setattr, source.ytdlp, "run", self._was)
+        return source
+
+    def test_the_whole_tab_is_asked_for_by_default(self):
+        source = self._answer(f"{ONE}\tTheirs\thttps://pictures.invalid/a.jpg\n")
+        source.fetch_channel_lists(self.cfg, "UCaaaaaaaaaaaaaaaaaaaaaa")
+        command = self.sent[0]
+        self.assertIn("--playlist-end", command)
+        self.assertEqual(command[command.index("--playlist-end") + 1],
+                         str(source.CHANNEL_LIST_CAP))
+
+    def test_and_the_stop_is_far_past_what_a_channel_lists(self):
+        from weave.sources import playlists as source
+        self.assertGreaterEqual(source.CHANNEL_LIST_CAP, 2000)
+
+
+class SayingItIsReading(unittest.TestCase):
+    """Reading a tab of a thousand playlists takes seconds. Until the page
+    said so, an empty page was the only answer a channel gave while its own
+    list was on its way."""
+
+    def _bridge(self):
+        from weave.ui.bridge import Bridge
+
+        class Recorder:
+            def __init__(self):
+                self.count = 0
+
+            def emit(self, *_a):
+                self.count += 1
+
+        bridge = Bridge.__new__(Bridge)
+        bridge._channel_playlists_busy = True
+        bridge._status = ""
+        bridge._view_channel = CHANNEL
+        bridge.channelTabChanged = Recorder()
+        bridge.statusChanged = Recorder()
+        return bridge
+
+    def test_a_listing_that_lands_stops_the_word(self):
+        from weave.ui.bridge import Bridge
+        bridge = self._bridge()
+        Bridge._on_channel_playlists(bridge, CHANNEL, 12)
+        self.assertFalse(bridge._channel_playlists_busy)
+        self.assertEqual(bridge._status, "")
+        self.assertTrue(bridge.channelTabChanged.count)
+
+    def test_a_listing_that_fails_stops_it_too_and_says_why(self):
+        from weave.ui.bridge import Bridge
+        bridge = self._bridge()
+        Bridge._on_channel_playlists_failed(bridge, CHANNEL, "yt-dlp said no")
+        self.assertFalse(bridge._channel_playlists_busy)
+        self.assertIn("yt-dlp said no", bridge._status)
+
+    def test_a_tab_that_reaches_the_stop_says_it_is_only_the_first_of_them(self):
+        from weave.sources import playlists as source
+        from weave.ui.bridge import Bridge
+        bridge = self._bridge()
+        Bridge._on_channel_playlists(bridge, CHANNEL, source.CHANNEL_LIST_CAP)
+        self.assertIn("first of them", bridge._status)
+
+    def test_and_an_empty_one_says_that_instead(self):
+        from weave.ui.bridge import Bridge
+        bridge = self._bridge()
+        Bridge._on_channel_playlists(bridge, CHANNEL, 0)
+        self.assertIn("no playlists", bridge._status)
