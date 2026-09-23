@@ -153,7 +153,7 @@ Flickable {
                             subtitleLeads: (modelData.artistId || "") !== ""
 
                             onChosen: App.playChannelGroupSong(groupBlock.index, index)
-                            onSubtitleChosen: App.openArtistMusic(modelData.artistId)
+                            onSubtitleChosen: App.openArtistChannel(modelData.artistId)
                             onAskedFor: {
                                 root.askedGroup = groupBlock.index
                                 root.asked = index

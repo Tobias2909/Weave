@@ -1997,6 +1997,52 @@ ApplicationWindow {
         }
     }
 
+    // Where the last press landed, anywhere in the window. Watched from an
+    // item over everything with a handler that only looks: it takes no grab
+    // that stops the press, so whatever is underneath gets it exactly as it
+    // would without this. Read by the words that belong beside the pointer.
+    property point lastPress: Qt.point(width / 2, height / 2)
+    Item {
+        objectName: "pressWatch"
+        anchors.fill: parent
+        z: 1000
+        PointHandler {
+            acceptedButtons: Qt.AllButtons
+            onActiveChanged: if (active) root.lastPress = point.scenePosition
+        }
+    }
+
+    // A name was pressed and the channel behind it has to be looked up, which
+    // takes a second or two. Said beside the pointer, where the eye is after
+    // the press, because the line in the corner went unseen and the press
+    // read as having done nothing. Below and to the right of it like a tip,
+    // and above it where that would leave the window.
+    BusyWord {
+        id: lookingPill
+        objectName: "lookingPill"
+        z: 70
+        text: App.channelLooking
+        // Where the press was, in the coordinates this sits in. A press is
+        // read in the window's own, which begin above the bar at the top.
+        property point at: Qt.point(0, 0)
+        x: Math.round(Math.max(8, Math.min(parent.width - width - 8, at.x + 14)))
+        y: Math.round(at.y + 18 + height > parent.height - 8
+                      ? Math.max(8, at.y - height - 10) : at.y + 18)
+
+        // Placed when it appears and then left alone, so it does not follow
+        // the pointer around while the lookup runs.
+        Connections {
+            target: App
+            function onChannelLookingChanged() {
+                if (App.channelLooking === "")
+                    return
+                var here = lookingPill.parent.mapFromItem(null, root.lastPress.x,
+                                                          root.lastPress.y)
+                lookingPill.at = Qt.point(here.x, here.y)
+            }
+        }
+    }
+
     // Something is happening and there is nothing else on screen to say so.
     // Handing a video to mpv takes several seconds, and so does a search.
     Rectangle {

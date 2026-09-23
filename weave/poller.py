@@ -2257,6 +2257,52 @@ class MusicHistoryReader(Worker):
         self.ready.emit(len(rows))
 
 
+class FavouriteMakers(Worker):
+    """Who made each music favourite that does not say.
+
+    The name under a favourite leads to whoever made it only when that is
+    known, and a song made a favourite from a card and never played as music
+    afterwards never learned it. What is already stored names most of them
+    for nothing. The rest are asked of the music service one at a time, which
+    is one call each to its browse endpoint and the same question the channel
+    music tab asks, and the answer is kept, an empty one included, so each
+    favourite is asked at most once.
+    """
+
+    ready = Signal(int)
+
+    # Far more than any launch should find. A bound on a list that might have
+    # grown some other way, not a figure expected to be reached.
+    ASK_CAP = 40
+
+    def __init__(self, db: Database, cfg: Config, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._db = db
+        self._cfg = cfg
+
+    def work(self) -> None:
+        named = self._db.fill_favourite_makers()
+        waiting = self._db.favourites_without_maker(self.ASK_CAP)
+        if waiting:
+            from .sources import ytmusic
+
+            profile = cookie_profile(self._cfg)
+            for ext_id in waiting:
+                if self.cancelled:
+                    break
+                try:
+                    makers = ytmusic.artist_of(profile, ext_id)
+                # A machine without the music library has nobody to ask.
+                except (ytmusic.MusicError, ImportError):
+                    # Offline, signed out, or the service being difficult.
+                    # Nothing is written, so the next launch asks again.
+                    break
+                maker = next((one["id"] for one in makers if one.get("id")), "")
+                self._db.set_favourite_maker(ext_id, maker)
+                named += 1 if maker else 0
+        self.ready.emit(named)
+
+
 class TrackList(Worker):
     """Tracks for one thing that was chosen. A playlist from YouTube Music, or
     the liked videos from YouTube, which are a different list entirely."""
@@ -2488,6 +2534,11 @@ class ArtistMusic(Worker):
     """
 
     ready = Signal(str, "QVariantMap")
+    # Who it is and which channel to stand on, said the moment the artist page
+    # answers and before a single record is read. Somebody who pressed a name
+    # is waiting to be taken somewhere, and the records can arrive on the page
+    # they were taken to rather than keep them standing where they pressed.
+    identified = Signal(str, str, str)       # artist id, channel id, name
     # The records read so far, said as each one lands. Sixteen calls and eight
     # seconds for a channel with fifteen records is a long time to look at an
     # empty page, and every one of them is worth looking at on its own.
@@ -2512,13 +2563,16 @@ class ArtistMusic(Worker):
 
     def __init__(self, cfg: Config, channel_key: str, channel_id: str,
                  video_ids: list[str], known_id: str = "",
-                 parent: QObject | None = None) -> None:
+                 parent: QObject | None = None, identify_only: bool = False) -> None:
         super().__init__(parent)
         self._cfg = cfg
         self._key = channel_key
         self._channel_id = channel_id
         self._video_ids = list(video_ids)[:self.SAMPLE]
         self._known_id = known_id
+        # Only who it is and where to stand, which is what a pressed name
+        # needs. The records are the tab's to read, if it is ever opened.
+        self._identify_only = identify_only
 
     def work(self) -> None:
         from .sources import ytmusic
@@ -2535,6 +2589,10 @@ class ArtistMusic(Worker):
             found = ytmusic.artist(profile, artist_id)
         except ytmusic.MusicError as exc:
             self.failed.emit(str(exc))
+            return
+        self.identified.emit(artist_id, self._real_channel(
+            artist_id, found.get("channel_id", "")), found["name"] or name)
+        if self._identify_only:
             return
         songs = [self._song(track) for track in found["songs"]]
         self.ready.emit(self._key, {

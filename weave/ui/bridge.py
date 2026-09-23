@@ -47,6 +47,7 @@ from ..poller import (
     ChannelFeedFetcher,
     ChannelMembersFetcher,
     ChannelPlaylistsFetcher,
+    FavouriteMakers,
     ImageCacheJob,
     LiveWatcher,
     MusicHistoryReader,
@@ -134,6 +135,13 @@ MEMBERS_NOTICE = "that one is for members of the channel"
 
 # Said on a card whose address was just put on the clipboard.
 COPIED_NOTE = "Copied, ready to paste"
+
+# Said beside the pointer while the channel behind a pressed name is looked up,
+# and for how long at most.
+LOOKING_WORDS = "Opening the channel"
+LOOKING_LIMIT_S = 30
+# The lookup answered after somebody had already gone somewhere else.
+CHANNEL_FOUND_LATE = "Found that channel. Press the name again to go there."
 
 # What the channel page says after the members button has been pressed. Said
 # there rather than only in the bar at the foot, because the bar clears itself
@@ -234,6 +242,7 @@ class Bridge(QObject):
     startingChanged = Signal()
     cardNoteChanged = Signal()
     pageReadingChanged = Signal()
+    channelLookingChanged = Signal()
     updateChanged = Signal()
     wizardChanged = Signal()
     recommendedChanged = Signal()
@@ -487,6 +496,16 @@ class Bridge(QObject):
         # page, which part of it, and the words.
         self._page_reading = ("", "", "")
         self.viewChanged.connect(self.pageReadingChanged)
+        # A name pressed whose channel has to be looked up first, which takes a
+        # second or two. Said beside the pointer rather than in the corner.
+        # Which view the press came from,
+        # so an answer arriving after somebody has gone elsewhere does not pull
+        # the window away from them.
+        self._channel_looking = ""
+        self._looking_from: tuple = ()
+        self._looking_timer = QTimer(self)
+        self._looking_timer.setSingleShot(True)
+        self._looking_timer.timeout.connect(self._stop_channel_looking)
         # What the last measurement found, so lowering the ceiling knows
         # whether anything actually has to be dropped.
         self._cache_held = 0
@@ -513,6 +532,7 @@ class Bridge(QObject):
         self._favorites_order: list[str] = []
         self._theme = None
         self._music_history: MusicHistoryReader | None = None
+        self._favourite_makers: FavouriteMakers | None = None
         # Every view landed on, walked by the back and forward mouse buttons.
         # Seeded with the view the window opens on, so the first step back has
         # somewhere to land rather than one fewer place than was visited.
@@ -549,6 +569,9 @@ class Bridge(QObject):
         self._challenge = _ChallengeProbe()
         self._challenge.answered.connect(self._on_challenge_answered)
         QTimer.singleShot(2000, lambda: QThreadPool.globalInstance().start(self._challenge))
+        # Favourites that do not say who made them learn it, a little after
+        # the window is up. Once each: an answer is kept, an empty one too.
+        QTimer.singleShot(4000, self._name_favourite_makers)
 
         # A stream watched live is judged once it has ended, so the answer
         # arrives on the pass after the one that read its length.
@@ -895,6 +918,27 @@ class Bridge(QObject):
         return words
 
     pageReading = Property(str, _get_page_reading, notify=pageReadingChanged)
+
+    channelLooking = Property(str, lambda self: self._channel_looking,
+                              notify=channelLookingChanged)
+
+    def _here(self) -> tuple:
+        return (self._view_kind, self._view_id, self._view_channel, self._view_playlist)
+
+    def _start_channel_looking(self) -> None:
+        self._looking_from = self._here()
+        # Bounded, so a lookup that never answers cannot leave the words up
+        # for the rest of the session.
+        self._looking_timer.start(LOOKING_LIMIT_S * 1000)
+        if self._channel_looking != LOOKING_WORDS:
+            self._channel_looking = LOOKING_WORDS
+            self.channelLookingChanged.emit()
+
+    def _stop_channel_looking(self) -> None:
+        self._looking_timer.stop()
+        if self._channel_looking:
+            self._channel_looking = ""
+            self.channelLookingChanged.emit()
     updateVersion = Property(str, lambda self: self._newer_version(), notify=updateChanged)
     # What is running, for the line that says a newer one exists.
     version = Property(str, lambda _self: __version__, constant=True)
@@ -4044,7 +4088,8 @@ class Bridge(QObject):
     playingIsFavorite = Property(bool, _get_playing_favorite, notify=favoritesChanged)
 
     def _mark_favorite(self, key: str, title: str, artist: str | None,
-                       thumbnail: str | None, keep: bool | None = None) -> None:
+                       thumbnail: str | None, keep: bool | None = None,
+                       artist_id: str | None = None) -> None:
         """Keep a song or stop keeping it, and say which just happened."""
         if not key.startswith("yt:"):
             return
@@ -4053,7 +4098,11 @@ class Bridge(QObject):
         # Stored plain. What comes from the window has been wrapped for the
         # cache already, and wrapping it again would leave nothing at all.
         self._db.set_music_favorite(ext_id, wanted, title or "", artist,
-                                    plain_source(thumbnail))
+                                    plain_source(thumbnail), artist_id=artist_id)
+        if wanted and not artist_id:
+            # Nothing said who made it, so it is looked for the way the old
+            # ones are, rather than left with a name that leads nowhere.
+            self._name_favourite_makers()
         self._set_notice("Added to favorites" if wanted else "Removed from favorites",
                          clear_after_s=4)
         self._set_status("added to favorites" if wanted else "removed from favorites")
@@ -4082,8 +4131,13 @@ class Bridge(QObject):
         """From a card, in a playlist that holds music or in the listening
         history, where a video is a song and the card is how it is reached."""
         row = self._model.row_for_key(key) or {}
+        # The channel the video is on, which is who made it as far as a card
+        # knows. Without it the name under the favourite led nowhere.
+        channel = str(row.get("channelKey") or "")
+        maker = channel.split(":", 1)[1] if channel.startswith("yt:") else ""
         self._mark_favorite(key, row.get("title", ""), row.get("channelTitle"),
-                            row.get("thumbnail"))
+                            row.get("thumbnail"),
+                            artist_id=maker if ids.CHANNEL_ID.match(maker) else None)
 
     @Slot()
     def toggleFavorite(self) -> None:
@@ -4091,7 +4145,8 @@ class Bridge(QObject):
         track = (self._audio.track if self._audio else {}) or {}
         key = str(track.get("key") or "")
         self._mark_favorite(key, str(track.get("title") or ""),
-                            track.get("artist"), track.get("thumbnail"))
+                            track.get("artist"), track.get("thumbnail"),
+                            artist_id=str(track.get("artistId") or "") or None)
 
     def _queue_track(self, track: dict | None, play_next: bool) -> None:
         """Put one song in the queue, and say so."""
@@ -4136,61 +4191,94 @@ class Bridge(QObject):
         found = self._track_items([row])
         self._queue_track(found[0] if found else None, play_next)
 
+    def _name_favourite_makers(self) -> None:
+        """Find who made the favourites that do not say. No request for those
+        what is stored already names, one music call each for the rest."""
+        if self._favourite_makers is not None and self._favourite_makers.isRunning():
+            return
+        self._favourite_makers = FavouriteMakers(self._db, self._cfg, self)
+        self._favourite_makers.ready.connect(self._on_favourite_makers)
+        self._launch(self._favourite_makers)
+
+    def _on_favourite_makers(self, named: int) -> None:
+        if named:
+            self.favoritesChanged.emit()
+            self.musicChanged.emit()
+
     @Slot(str)
-    def openArtistMusic(self, artist_id: str) -> None:
-        """Open whoever made this, on their music.
+    def openArtistChannel(self, artist_id: str) -> None:
+        """Open whoever made this, on their channel's videos.
 
         The id on a song is the artist as the music service files them, and that
         is frequently a generated channel carrying the songs and nothing else,
         with no videos, no pictures and no streams. Standing there is worse than
         standing on the channel itself, so the real one is found first.
 
-        Free where it is already known, and otherwise found by the same call
-        that fetches the songs, so asking costs nothing extra.
+        A name is a channel name, so it opens the channel the way any other
+        channel name in the window does, on its videos. Its music is one tab
+        away and reads itself when that tab is opened.
+
+        Free where it is already known, and otherwise one call to the artist
+        page, which is what says which channel to stand on.
         """
         if not artist_id or not ids.CHANNEL_ID.match(artist_id):
             return
         known = self._db.channel_for_artist(artist_id)
         if known:
             self.openChannel(known)
-            self.showChannelTab("music")
+            return
+        # The id may be the channel itself, which is what a favourite made
+        # from a card carries: the channel its video is on. One Weave already
+        # knows is opened straight away.
+        channel = self._db.channel(ids.channel_key(artist_id))
+        if channel:
+            self.openChannel(channel["key"])
             return
         if self._artist_open is not None and self._artist_open.isRunning():
             return
         self._set_status("Looking for the channel")
         self._artist_open = ArtistMusic(self._cfg, "", artist_id, [], artist_id,
-                                        parent=self)
-        self._artist_open.ready.connect(self._on_artist_opened)
-        self._artist_open.failed.connect(self._on_artist_open_failed)
-        self._launch(self._artist_open)
+                                        parent=self, identify_only=True)
+        self._artist_open.identified.connect(self._on_artist_identified)
+        self._artist_open.failed.connect(
+            lambda message, asked=artist_id: self._on_artist_open_failed(message, asked))
+        self._start_channel_looking()
+        if not self._launch(self._artist_open):
+            self._stop_channel_looking()
 
-    def _on_artist_opened(self, _key: str, found: dict) -> None:
-        """Go to the channel the artist page points at, not the one asked for.
+    def _on_artist_identified(self, artist_id: str, channel_id: str, name: str) -> None:
+        """The artist page answered, so there is somewhere to go.
 
-        The songs came back with it, so they are put in front of the tab rather
-        than fetched a second time on arrival.
+        Only if the window is still where the name was pressed. Somebody who
+        moved on in the meantime is left where they went, and the answer is
+        kept, so pressing the name again goes there at once.
         """
-        artist_id = str(found.get("artistId") or "")
-        real = str(found.get("channelId") or "")
-        target = real if ids.CHANNEL_ID.match(real) else artist_id
-        if not target:
+        self._stop_channel_looking()
+        target = channel_id if ids.CHANNEL_ID.match(channel_id) else artist_id
+        if not ids.CHANNEL_ID.match(target):
             return
         key = ids.channel_key(target)
+        if self._here() != self._looking_from:
+            if not self._db.channel(key):
+                self._db.remember_channel(key, "youtube", target)
+            self._db.set_channel_music(key, artist_id, name)
+            self._set_notice(CHANNEL_FOUND_LATE, clear_after_s=5)
+            return
         self.openChannel(key)
         row = self._db.channel(key) or {}
-        self._db.set_channel_music(key, artist_id,
-                                   found.get("artistName") or str(row.get("title") or ""))
-        self._channel_music_key = key
-        self._channel_music = found.get("songs") or []
-        self._channel_music_groups = found.get("groups") or []
-        self._keep_channel_music(key, self._channel_music, self._channel_music_groups)
-        self._channel_music_name = found.get("artistName") or ""
+        # Kept, so the music tab knows who this is without asking again, and
+        # so the next press on the same name costs nothing.
+        self._db.set_channel_music(key, artist_id, name or str(row.get("title") or ""))
         self._set_status("")
-        self.showChannelTab("music")
-        self.channelTabChanged.emit()
 
-    def _on_artist_open_failed(self, message: str) -> None:
+    def _on_artist_open_failed(self, message: str, asked: str = "") -> None:
+        """The music service had no artist page for it. An ordinary channel
+        is not an artist to the music service, and it is still a channel, so
+        the name goes to that channel's own page rather than nowhere."""
+        self._stop_channel_looking()
         self._set_status(message)
+        if asked and ids.CHANNEL_ID.match(asked) and self._here() == self._looking_from:
+            self.openChannel(ids.channel_key(asked))
 
     @Slot(int)
     def playChannelMusic(self, index: int) -> None:
@@ -5258,12 +5346,10 @@ class Bridge(QObject):
             self._channel_playlists_busy = False
             self.channelTabChanged.emit()
         elif worker is self._artist_open:
-            # Holds no flag. It puts a line up while it looks for the channel,
-            # and the line below replaces that with what went wrong, which is
-            # the more useful of the two. Named here all the same, because the
-            # inventory test insists every worker with a handle on the bridge
-            # is.
-            pass
+            # The words beside the pointer and the busy pointer itself are this
+            # worker's, so they come down here like any other flag.
+            self._stop_channel_looking()
+            self._opened_key, self._opened_moved = "", False
         elif worker is self._cache_job:
             self._cache_working = False
             self.cacheChanged.emit()

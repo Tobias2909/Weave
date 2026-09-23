@@ -187,7 +187,7 @@ ListView {
                         enabled: queuedArtist.leadsTo !== ""
                         width: Math.min(queuedArtist.implicitWidth, parent.width)
                         height: parent.height
-                        onClicked: App.openArtistMusic(queuedArtist.leadsTo)
+                        onClicked: App.openArtistChannel(queuedArtist.leadsTo)
                     }
                 }
             }

@@ -178,12 +178,28 @@ class TheRealChannel(unittest.TestCase):
         self.bridge._channel_music_key = ""
         self.bridge._channel_music_busy = False
         self.bridge._artist_open = None
+        self.bridge._artist_music = None
+        self.bridge._view_channel = ""
+        self.bridge._channel_music_groups = []
+        self.bridge._channel_music_from_cache = False
+        # Where the window is, which a test moves to say somebody went
+        # elsewhere while the lookup ran.
+        self.where = ["music"]
+        self.bridge._here = lambda: tuple(self.where)
+        self.looking: list = []
+        self.bridge._start_channel_looking = lambda: (
+            self.looking.append("start"), setattr(self.bridge, "_looking_from",
+                                                  tuple(self.where)))
+        self.bridge._stop_channel_looking = lambda: self.looking.append("stop")
+        self.notices: list = []
+        self.bridge._set_notice = lambda text, *_a, **_k: self.notices.append(text)
         self.opened: list = []
         self.tabs: list = []
         # The real one keeps a row for a channel it has never seen, which is
         # what the write below then has something to write to.
         def open_channel(key):
             self.opened.append(key)
+            self.bridge._view_channel = key
             if not self.db.channel(key):
                 self.db.conn.execute(
                     "INSERT INTO channels(key, platform, ext_id, title, added_at) "
@@ -210,39 +226,79 @@ class TheRealChannel(unittest.TestCase):
             self.db.set_channel_music(key, artist_id, title)
 
     def test_a_channel_already_known_costs_no_request(self) -> None:
+        """And it opens on the channel's videos, the way any channel name in
+        the window does, rather than on its music."""
         self.add_channel("yt:" + REAL, REAL, "The Band", artist_id=TOPIC)
-        Bridge.openArtistMusic(self.bridge, TOPIC)
+        Bridge.openArtistChannel(self.bridge, TOPIC)
         self.assertEqual(self.opened, ["yt:" + REAL])
-        self.assertEqual(self.tabs, ["music"])
+        self.assertEqual(self.tabs, [])
         self.assertEqual(self.started, [], "a known answer was looked up again")
 
     def test_the_lookup_finds_the_channel_the_artist_page_points_at(self) -> None:
-        Bridge._on_artist_opened(self.bridge, "", {
-            "artistId": TOPIC, "artistName": "The Band",
-            "channelId": REAL, "songs": [{"key": "yt:s1"}]})
+        Bridge.openArtistChannel(self.bridge, TOPIC)
+        Bridge._on_artist_identified(self.bridge, TOPIC, REAL, "The Band")
         self.assertEqual(self.opened, ["yt:" + REAL],
                          "landed on the generated channel rather than the real one")
+        self.assertEqual(self.tabs, [])
         # And the mapping is written down, so the next press costs nothing.
         self.assertEqual(self.db.channel_for_artist(TOPIC), "yt:" + REAL)
 
-    def test_the_songs_come_with_it(self) -> None:
-        Bridge._on_artist_opened(self.bridge, "", {
-            "artistId": TOPIC, "artistName": "The Band",
-            "channelId": REAL, "songs": [{"key": "yt:s1"}, {"key": "yt:s2"}]})
-        self.assertEqual(len(self.bridge._channel_music), 2,
-                         "the songs already in hand were thrown away")
-        self.assertEqual(self.bridge._channel_music_key, "yt:" + REAL)
+    def test_only_who_it_is_is_asked_for(self) -> None:
+        """The records are the music tab's to read, if it is ever opened."""
+        Bridge.openArtistChannel(self.bridge, TOPIC)
+        self.assertTrue(self.started[0]._identify_only)
 
     def test_without_a_real_channel_the_artist_is_where_it_goes(self) -> None:
-        Bridge._on_artist_opened(self.bridge, "", {
-            "artistId": TOPIC, "artistName": "The Band",
-            "channelId": "", "songs": []})
+        Bridge.openArtistChannel(self.bridge, TOPIC)
+        Bridge._on_artist_identified(self.bridge, TOPIC, "", "The Band")
         self.assertEqual(self.opened, ["yt:" + TOPIC])
 
     def test_a_channel_that_is_not_one_is_refused(self) -> None:
-        Bridge.openArtistMusic(self.bridge, "not-a-channel")
+        Bridge.openArtistChannel(self.bridge, "not-a-channel")
         self.assertEqual(self.opened, [])
         self.assertEqual(self.started, [])
+
+    def test_the_channel_a_video_is_on_opens_straight_away(self) -> None:
+        """A favourite made from a card names the channel its video is on,
+        which is a channel and not an artist page, so it is simply opened,
+        with nothing asked."""
+        self.add_channel("yt:" + REAL, REAL, "Somebody")
+        Bridge.openArtistChannel(self.bridge, REAL)
+        self.assertEqual(self.opened, ["yt:" + REAL])
+        self.assertEqual(self.tabs, [])
+        self.assertEqual(self.started, [])
+
+    def test_a_channel_the_music_service_has_no_page_for_is_still_opened(self) -> None:
+        """An ordinary channel is not an artist to the music service. The name
+        still leads to the channel rather than nowhere."""
+        Bridge.openArtistChannel(self.bridge, REAL)
+        self.assertEqual(len(self.started), 1, "a stranger is looked up first")
+        Bridge._on_artist_open_failed(self.bridge, "no artist page", REAL)
+        self.assertEqual(self.opened, ["yt:" + REAL])
+
+    def test_a_lookup_is_said_until_it_answers(self) -> None:
+        """A second or two with nothing to show read as a press that did
+        nothing, so the wait is said beside the pointer until it ends."""
+        Bridge.openArtistChannel(self.bridge, TOPIC)
+        self.assertEqual(self.looking, ["start"])
+        Bridge._on_artist_identified(self.bridge, TOPIC, REAL, "The Band")
+        self.assertEqual(self.looking[-1], "stop")
+
+    def test_somebody_who_moved_on_is_left_where_they_went(self) -> None:
+        """An answer arriving after they went elsewhere must not pull the
+        window away. It is kept, so the next press goes there at once."""
+        Bridge.openArtistChannel(self.bridge, TOPIC)
+        self.where = ["feed"]
+        Bridge._on_artist_identified(self.bridge, TOPIC, REAL, "The Band")
+        self.assertEqual(self.opened, [])
+        self.assertEqual(self.db.channel_for_artist(TOPIC), "yt:" + REAL)
+        self.assertTrue(self.notices)
+
+    def test_a_failure_after_moving_on_opens_nothing(self) -> None:
+        Bridge.openArtistChannel(self.bridge, REAL)
+        self.where = ["feed"]
+        Bridge._on_artist_open_failed(self.bridge, "no artist page", REAL)
+        self.assertEqual(self.opened, [])
 
 
 class TheTab(unittest.TestCase):

@@ -2449,30 +2449,88 @@ class Database:
     def set_music_favorite(self, ext_id: str, favorite: bool, title: str = "",
                            artist: str | None = None,
                            thumbnail_url: str | None = None,
-                           duration_s: int | None = None) -> None:
+                           duration_s: int | None = None,
+                           artist_id: str | None = None) -> None:
         """Keep a song, or stop keeping it.
 
         A song that has never been played here has no row yet, so one is made
         for it. Nothing about what was played is disturbed either way.
+
+        Who made it is kept with it. Without that the name under a favourite
+        leads nowhere, and a song made a favourite from a card and never played
+        as music afterwards had no other way of learning it.
         """
         now = int(time.time())
         with self.conn as conn:
             conn.execute(
-                "INSERT INTO music_history(ext_id, title, artist, thumbnail_url, "
+                "INSERT INTO music_history(ext_id, title, artist, artist_id, thumbnail_url, "
                 "                          duration_s, favorite, favorite_at, source) "
-                "VALUES(?,?,?,?,?,?,?,'weave') "
+                "VALUES(?,?,?,?,?,?,?,?,'weave') "
                 "ON CONFLICT(ext_id) DO UPDATE SET "
                 "  title=CASE WHEN excluded.title = '' THEN music_history.title "
                 "             ELSE excluded.title END, "
                 "  artist=COALESCE(excluded.artist, music_history.artist), "
+                # One already known wins. It came from the music service,
+                # which says who made a song more exactly than a card does.
+                "  artist_id=COALESCE(NULLIF(music_history.artist_id, ''), "
+                "                     excluded.artist_id, music_history.artist_id), "
                 "  thumbnail_url=COALESCE(excluded.thumbnail_url, "
                 "                         music_history.thumbnail_url), "
                 "  duration_s=COALESCE(excluded.duration_s, music_history.duration_s), "
                 "  favorite=excluded.favorite, "
                 "  favorite_at=excluded.favorite_at",
-                (ext_id, title, artist, thumbnail_url, duration_s,
+                (ext_id, title, artist, artist_id or None, thumbnail_url, duration_s,
                  1 if favorite else 0, now if favorite else None),
             )
+
+    # Where a favourite's maker can be read off what is already stored, best
+    # first: a video Weave follows, then a playlist, a listing, and the owner
+    # lookup behind the history. Each carries the channel the video is on.
+    _FAVOURITE_MAKER = """
+        COALESCE(
+          (SELECT c.ext_id FROM videos v JOIN channels c ON c.key = v.channel_key
+            WHERE v.ext_id = music_history.ext_id AND c.platform = 'youtube'),
+          (SELECT p.channel_ext_id FROM playlist_items p
+            WHERE p.ext_id = music_history.ext_id AND p.channel_ext_id IS NOT NULL
+              AND p.channel_ext_id <> '' LIMIT 1),
+          (SELECT k.channel_ext_id FROM cached_videos k
+            WHERE k.ext_id = music_history.ext_id AND k.channel_ext_id IS NOT NULL
+              AND k.channel_ext_id <> '' LIMIT 1),
+          (SELECT o.channel_ext_id FROM video_owners o
+            WHERE o.ext_id = music_history.ext_id AND o.channel_ext_id IS NOT NULL
+              AND o.channel_ext_id <> ''))
+    """
+
+    def fill_favourite_makers(self) -> int:
+        """Name who made the favourites that do not say, from what is stored.
+
+        Costs no request. Only a favourite that knows nothing is touched, so a
+        maker the music service named is never replaced by the channel a video
+        happens to be on.
+        """
+        with self.conn as conn:
+            before = conn.total_changes
+            conn.execute(
+                f"UPDATE music_history SET artist_id = {self._FAVOURITE_MAKER} "
+                "WHERE favorite = 1 AND artist_id IS NULL "
+                f"  AND {self._FAVOURITE_MAKER} IS NOT NULL")
+            return conn.total_changes - before
+
+    def favourites_without_maker(self, limit: int = 20) -> list[str]:
+        """Favourites nothing stored can name the maker of, and never asked.
+
+        An empty string is a favourite that was asked about and has no answer,
+        which is kept so it is not asked again on every launch.
+        """
+        return [row["ext_id"] for row in self.conn.execute(
+            "SELECT ext_id FROM music_history WHERE favorite = 1 AND artist_id IS NULL "
+            "ORDER BY favorite_at DESC LIMIT ?", (limit,))]
+
+    def set_favourite_maker(self, ext_id: str, artist_id: str) -> None:
+        with self.conn as conn:
+            conn.execute(
+                "UPDATE music_history SET artist_id=? WHERE ext_id=? "
+                "AND (artist_id IS NULL OR artist_id = '')", (artist_id, ext_id))
 
     def is_music_favorite(self, ext_id: str) -> bool:
         row = self.conn.execute(

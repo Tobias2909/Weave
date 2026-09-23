@@ -1071,6 +1071,11 @@ class WorkerRuns(unittest.TestCase):
             bridge._status = ""
             bridge._notice = "Working"
             bridge._notice_timer = Timer()
+            bridge._channel_looking = "Opening the channel"
+            bridge._looking_timer = Timer()
+            bridge._busy_pointer = False
+            bridge._opened_key = ""
+            bridge._opened_moved = False
             # Which page is said to be read again at its top, for the three
             # workers that read a page.
             bridge._page_reading = {"_recommended": ("recommended", "", "Asking"),
@@ -1101,7 +1106,8 @@ class WorkerRuns(unittest.TestCase):
             for signal in ("problemsChanged", "statusChanged", "noticeChanged", "busyChanged",
                            "importChanged", "addChanged", "musicChanged", "detailChanged",
                            "cacheChanged", "twitchChanged", "viewChanged",
-                           "nowChanged", "channelTabChanged", "pageReadingChanged"):
+                           "nowChanged", "channelTabChanged", "pageReadingChanged",
+                           "channelLookingChanged", "cardNoteChanged"):
                 setattr(bridge, signal, Recorder())
             return bridge, worker
 
@@ -1126,6 +1132,12 @@ class WorkerRuns(unittest.TestCase):
             Bridge._on_worker_crashed(bridge, worker, "x")
             self.assertFalse(bridge._loading_more, held)
             self.assertEqual(bridge._notice, "", held)
+
+        # The words beside the pointer come down with the lookup that put
+        # them up.
+        bridge, worker = make("_artist_open")
+        Bridge._on_worker_crashed(bridge, worker, "x")
+        self.assertEqual(bridge._channel_looking, "")
 
         # A page said to be read again at its top stops saying so.
         for held in ("_recommended", "_history", "_music_history", "_playlist_items"):

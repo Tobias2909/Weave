@@ -2047,6 +2047,63 @@ class Smoke:
         settle(0.3)
         write(window, "menuKey", "")
 
+
+    def favourite_from_a_card(self, bridge, window) -> None:
+        """A favourite made from a card keeps the channel it is on.
+
+        After scrolling, like every step that leaves the feed and comes back,
+        since that check reads where the grid sits after a view change.
+        """
+        step("a favourite made from a card")
+        bridge.selectGroup(-1)
+        settle(0.4)
+        # Made a favourite from a card, it keeps the channel its video is on,
+        # and the name under it leads to that channel. It kept no channel at
+        # all before, so pressing the name did nothing.
+        row = bridge._model.row_for_key("yt:smokevid005") or {}
+        channel = str(row.get("channelKey") or "")
+        bridge.favoriteVideo("yt:smokevid005")
+        settle(0.2)
+        kept_row = next((found for found in bridge._db.music_favorites()
+                         if found["key"] == "yt:smokevid005"), None)
+        maker = kept_row["artist_id"] if kept_row is not None else None
+        self.check("a favourite made from a card keeps the channel it is on",
+                   channel.startswith("yt:") and maker == channel.split(":", 1)[1],
+                   f"channel {channel} kept {maker}")
+        if maker:
+            bridge.openArtistChannel(maker)
+            settle(0.4)
+            self.check("and its name leads to that channel, on its videos",
+                       read(bridge, "viewKind") == "channel"
+                       and bridge._view_channel == channel
+                       and read(bridge, "channelTab") == "videos",
+                       f"{read(bridge, 'viewKind')} {bridge._view_channel} "
+                       f"{read(bridge, 'channelTab')}")
+        bridge.favoriteVideo("yt:smokevid005")
+        settle(0.2)
+        bridge.selectGroup(-1)
+        settle(0.4)
+
+        # A name whose channel has to be looked up says so beside where it was
+        # pressed, until the answer. The press itself
+        # cannot be made offscreen, so where it landed is written instead.
+        from PySide6.QtCore import QPointF
+
+        write(window, "lastPress", QPointF(300, 400))
+        bridge._start_channel_looking()
+        settle(0.3)
+        pill = find(window, "lookingPill")
+        placed = pill.mapToItem(None, 0, 0) if pill is not None else None
+        self.check("a name being looked up says so beside the press",
+                   pill is not None and read(pill, "visible") is True
+                   and placed is not None
+                   and 300 < placed.x() < 340 and 400 < placed.y() < 440,
+                   "missing" if placed is None else f"at {placed.x():.0f},{placed.y():.0f}")
+        bridge._stop_channel_looking()
+        settle(0.3)
+        self.check("and it goes when it answers", not read(pill, "visible"),
+                   f"visible {read(pill, 'visible')}")
+
     def channel_playlists(self, bridge, window) -> None:
         """The playlists half of a channel page.
 
@@ -3194,6 +3251,7 @@ class Smoke:
         self.hiding(bridge, window)
         self.a_stream_that_ended(bridge, window)
         self.a_song_that_is_gone(bridge, window)
+        self.favourite_from_a_card(bridge, window)
 
         if self.shot:
             self.check("screenshot written", screenshot(window, self.shot), self.shot)

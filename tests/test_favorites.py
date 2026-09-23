@@ -6,8 +6,12 @@ come apart when a title or a picture changes on one side only.
 """
 
 import unittest
+from unittest import mock
 
 from tests.support import scratch_db
+
+MAKER = "UC" + "m" * 22
+OTHER = "UC" + "o" * 22
 
 
 class KeepingASong(unittest.TestCase):
@@ -42,6 +46,18 @@ class KeepingASong(unittest.TestCase):
         self.db.set_music_favorite("aaaaaaaaaaa", True)
         self.assertEqual(self.db.music_favorites()[0]["title"], "A song")
 
+    def test_who_made_it_is_kept_with_it(self) -> None:
+        self.db.set_music_favorite("aaaaaaaaaaa", True, "A song", "An artist", None,
+                                   artist_id=MAKER)
+        self.assertEqual(self.db.music_favorites()[0]["artist_id"], MAKER)
+
+    def test_a_maker_the_music_service_named_is_not_replaced_by_a_card(self) -> None:
+        """The music service says who made a song more exactly than the
+        channel a video happens to be on."""
+        self.db.remember_played("aaaaaaaaaaa", "A song", "An artist", None, artist_id=MAKER)
+        self.db.set_music_favorite("aaaaaaaaaaa", True, artist_id=OTHER)
+        self.assertEqual(self.db.music_favorites()[0]["artist_id"], MAKER)
+
     def test_giving_one_back(self) -> None:
         self.db.set_music_favorite("aaaaaaaaaaa", True, "A song", None, None)
         self.db.set_music_favorite("aaaaaaaaaaa", False)
@@ -68,6 +84,114 @@ class KeepingASong(unittest.TestCase):
                          ["bbbbbbbbbbb", "aaaaaaaaaaa"])
 
 
+class TheMakersOfOldFavourites(unittest.TestCase):
+    """Favourites kept before who made them was kept with them.
+
+    What is stored already names most of them for nothing, and only the rest
+    are asked of the music service.
+    """
+
+    def setUp(self) -> None:
+        self.db = scratch_db(self)
+
+    def keep(self, ext_id: str) -> None:
+        self.db.set_music_favorite(ext_id, True, "A song", "An artist", None)
+
+    def test_a_video_weave_follows_names_its_channel(self) -> None:
+        self.db.conn.execute(
+            "INSERT INTO channels(key, platform, ext_id, title, added_at) "
+            "VALUES(?, 'youtube', ?, 'Somebody', 1)", ("yt:" + MAKER, MAKER))
+        self.db.conn.execute(
+            "INSERT INTO videos(key, platform, ext_id, channel_key, title, first_seen_at) "
+            "VALUES('yt:aaaaaaaaaaa', 'youtube', 'aaaaaaaaaaa', ?, 'A song', 1)",
+            ("yt:" + MAKER,))
+        self.db.conn.commit()
+        self.keep("aaaaaaaaaaa")
+        self.assertEqual(self.db.fill_favourite_makers(), 1)
+        self.assertEqual(self.db.music_favorites()[0]["artist_id"], MAKER)
+
+    def test_so_do_a_playlist_a_listing_and_the_owner_lookup(self) -> None:
+        for table, ext_id in (("playlist_items", "bbbbbbbbbbb"),
+                              ("cached_videos", "ccccccccccc"),
+                              ("video_owners", "ddddddddddd")):
+            if table == "playlist_items":
+                self.db.conn.execute(
+                    "INSERT OR IGNORE INTO playlists(ext_id, title, position, seen_at) "
+                    "VALUES('PL1', 'A list', 0, 1)")
+                self.db.conn.execute(
+                    "INSERT INTO playlist_items(playlist_id, ext_id, title, channel_ext_id, "
+                    "position) VALUES('PL1', ?, 't', ?, 0)", (ext_id, MAKER))
+            elif table == "cached_videos":
+                self.db.conn.execute(
+                    "INSERT INTO cached_videos(kind, ext_id, title, channel_ext_id, position, "
+                    "seen_at) VALUES('recommended', ?, 't', ?, 0, 1)", (ext_id, MAKER))
+            else:
+                self.db.conn.execute(
+                    "INSERT INTO video_owners(ext_id, channel_name, channel_ext_id, seen_at) "
+                    "VALUES(?, 'Somebody', ?, 1)", (ext_id, MAKER))
+            self.keep(ext_id)
+        self.db.conn.commit()
+        self.assertEqual(self.db.fill_favourite_makers(), 3)
+        self.assertEqual({row["artist_id"] for row in self.db.music_favorites()}, {MAKER})
+
+    def test_one_already_named_is_left_alone(self) -> None:
+        self.db.set_music_favorite("aaaaaaaaaaa", True, "A song", None, None,
+                                   artist_id=OTHER)
+        self.db.conn.execute(
+            "INSERT INTO cached_videos(kind, ext_id, title, channel_ext_id, position, "
+            "seen_at) VALUES('recommended', 'aaaaaaaaaaa', 't', ?, 0, 1)", (MAKER,))
+        self.db.conn.commit()
+        self.assertEqual(self.db.fill_favourite_makers(), 0)
+        self.assertEqual(self.db.music_favorites()[0]["artist_id"], OTHER)
+
+    def test_what_nothing_names_is_what_is_asked_about(self) -> None:
+        self.keep("aaaaaaaaaaa")
+        self.keep("bbbbbbbbbbb")
+        self.assertEqual(sorted(self.db.favourites_without_maker()),
+                         ["aaaaaaaaaaa", "bbbbbbbbbbb"])
+        # Asked, and nobody made it as far as the service knows. That is kept
+        # so it is not asked again on every launch.
+        self.db.set_favourite_maker("aaaaaaaaaaa", "")
+        self.assertEqual(self.db.favourites_without_maker(), ["bbbbbbbbbbb"])
+
+    def test_the_lookup_names_what_is_left_and_keeps_every_answer(self) -> None:
+        from weave.config import Config
+        from weave.poller import FavouriteMakers
+        from weave.sources import ytmusic
+
+        self.keep("aaaaaaaaaaa")
+        self.keep("bbbbbbbbbbb")
+        answers = {"aaaaaaaaaaa": [{"name": "Somebody", "id": MAKER}],
+                   "bbbbbbbbbbb": []}
+        named = []
+        worker = FavouriteMakers(self.db, Config(raw={}))
+        worker.ready.connect(named.append)
+        with mock.patch.object(ytmusic, "artist_of",
+                               lambda _profile, ext_id: answers[ext_id]), \
+                mock.patch("weave.poller.cookie_profile", lambda _cfg: None):
+            worker.work()
+        self.assertEqual(named, [1])
+        kept = {row["ext_id"]: row["artist_id"] for row in self.db.music_favorites()}
+        self.assertEqual(kept, {"aaaaaaaaaaa": MAKER, "bbbbbbbbbbb": ""})
+        self.assertEqual(self.db.favourites_without_maker(), [])
+
+    def test_a_service_that_will_not_answer_leaves_them_to_ask_again(self) -> None:
+        from weave.config import Config
+        from weave.poller import FavouriteMakers
+        from weave.sources import ytmusic
+
+        self.keep("aaaaaaaaaaa")
+
+        def refuse(_profile, _ext_id):
+            raise ytmusic.MusicError("offline")
+
+        worker = FavouriteMakers(self.db, Config(raw={}))
+        with mock.patch.object(ytmusic, "artist_of", refuse), \
+                mock.patch("weave.poller.cookie_profile", lambda _cfg: None):
+            worker.work()
+        self.assertEqual(self.db.favourites_without_maker(), ["aaaaaaaaaaa"])
+
+
 class TheBridgeMarksThem(unittest.TestCase):
     def bridge(self):
         from weave.ui.bridge import Bridge
@@ -79,6 +203,7 @@ class TheBridgeMarksThem(unittest.TestCase):
                 pass
 
         bridge = Bridge.__new__(Bridge)
+        bridge._name_favourite_makers = lambda: None
         bridge._db = db
         bridge._audio = None
         bridge._music_list = None
@@ -92,6 +217,8 @@ class TheBridgeMarksThem(unittest.TestCase):
         bridge.notices = []
         bridge.favoritesChanged = Quiet()
         bridge.musicChanged = Quiet()
+        bridge.asked_makers = []
+        bridge._name_favourite_makers = lambda: bridge.asked_makers.append(True)
         return bridge
 
     def test_a_tile_keeps_the_song_it_was_opened_on(self) -> None:
@@ -146,6 +273,37 @@ class TheBridgeMarksThem(unittest.TestCase):
         self.assertEqual(row["title"], "A video")
         self.assertEqual(row["channel_title"], "Someone")
 
+    def test_a_card_keeps_the_channel_its_video_is_on(self) -> None:
+        """Without it the name under the favourite led nowhere, and pressing
+        it did nothing at all."""
+        from weave.ui.bridge import Bridge
+
+        bridge = self.bridge()
+
+        class Model:
+            def row_for_key(self, key):
+                return {"key": key, "title": "A video", "channelTitle": "Someone",
+                        "channelKey": "yt:" + MAKER, "thumbnail": ""}
+
+        bridge._model = Model()
+        Bridge.favoriteVideo(bridge, "yt:aaaaaaaaaaa")
+        self.assertEqual(bridge._db.music_favorites()[0]["artist_id"], MAKER)
+        self.assertEqual(bridge.asked_makers, [], "a card that says asked anyway")
+
+    def test_a_card_that_names_no_channel_asks_who_made_it(self) -> None:
+        from weave.ui.bridge import Bridge
+
+        bridge = self.bridge()
+
+        class Model:
+            def row_for_key(self, key):
+                return {"key": key, "title": "A song", "channelTitle": "Someone",
+                        "channelKey": "", "thumbnail": ""}
+
+        bridge._model = Model()
+        Bridge.favoriteVideo(bridge, "yt:aaaaaaaaaaa")
+        self.assertEqual(bridge.asked_makers, [True])
+
     def test_a_twitch_row_is_not_a_song(self) -> None:
         from weave.ui.bridge import Bridge
 
@@ -173,6 +331,7 @@ class FromAnOpenedList(unittest.TestCase):
                 pass
 
         bridge = Bridge.__new__(Bridge)
+        bridge._name_favourite_makers = lambda: None
         bridge._audio = None
         bridge._db = scratch_db(self)
         bridge._results = rows
@@ -279,6 +438,7 @@ class TheHeartFollowsTheSong(unittest.TestCase):
                 self.nowPlaying = Wire()
 
         bridge = Bridge.__new__(Bridge)
+        bridge._name_favourite_makers = lambda: None
         bridge._audio = None
         bridge._player = Video()
         # A track change now also empties what sits beside the song on the Now
@@ -329,6 +489,7 @@ class WithNothingKept(unittest.TestCase):
                 self.queues.append(list(items))
 
         bridge = Bridge.__new__(Bridge)
+        bridge._name_favourite_makers = lambda: None
         bridge._db = db
         bridge._audio = Audio()
         bridge._shelves = []
@@ -448,6 +609,7 @@ class ThePicture(unittest.TestCase):
                 pass
 
         bridge = Bridge.__new__(Bridge)
+        bridge._name_favourite_makers = lambda: None
         bridge._audio = None
         bridge._db = self.db
         bridge._music_list = None

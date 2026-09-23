@@ -321,7 +321,7 @@ Rectangle {
                     enabled: secondLine.leadsTo !== ""
                     width: Math.min(secondLine.implicitWidth, parent.width)
                     height: parent.height
-                    onClicked: App.openArtistMusic(secondLine.leadsTo)
+                    onClicked: App.openArtistChannel(secondLine.leadsTo)
                 }
             }
         }

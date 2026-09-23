@@ -566,7 +566,7 @@ Item {
                                 id: artistLine
                                 objectName: "nowPlayingArtist"
                                 // Pressed, it goes to whoever made this, on
-                                // their music. Only where the song carries an
+                                // their channel. Only where the song carries an
                                 // address for them, which a song from an
                                 // ordinary video does not.
                                 readonly property string leadsTo:
@@ -599,7 +599,7 @@ Item {
                                     enabled: artistLine.leadsTo !== ""
                                     width: Math.min(artistLine.implicitWidth, parent.width)
                                     height: parent.height
-                                    onClicked: App.openArtistMusic(artistLine.leadsTo)
+                                    onClicked: App.openArtistChannel(artistLine.leadsTo)
                                 }
                             }
 
@@ -1041,7 +1041,7 @@ Item {
                                 width: Math.min(relatedArtist.implicitWidth,
                                                 parent.width)
                                 height: parent.height
-                                onClicked: App.openArtistMusic(relatedArtist.leadsTo)
+                                onClicked: App.openArtistChannel(relatedArtist.leadsTo)
                             }
                         }
                     }
