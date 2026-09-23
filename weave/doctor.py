@@ -83,6 +83,10 @@ def _weave(db: Database, report: Report) -> None:
     elif release_source.is_newer(tag, __version__):
         report.add("Weave", OK, f"{__version__}, newest {newest}",
                    "A newer release is out, see the foot of the panel or the settings page")
+    elif release_source.standing(tag, __version__) == "older":
+        # A checkout past the last release, or an answer asked before this
+        # copy was installed. Either way not the newest there is.
+        report.add("Weave", OK, f"{__version__}, ahead of the newest release known, {newest}")
     else:
         report.add("Weave", OK, f"{__version__}, the newest there is")
 

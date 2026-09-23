@@ -994,10 +994,9 @@ class Bridge(QObject):
     updateVersion = Property(str, lambda self: self._newer_version(), notify=updateChanged)
     # What is running, for the line that says a newer one exists.
     version = Property(str, lambda _self: __version__, constant=True)
-    # The newest release the check has heard of, whether or not it is above
+    # The newest release the check has heard of and where it stands against
     # this one, so the settings page can state it either way.
-    latestVersion = Property(str, lambda self: release_source.numbers_text(self._update_tag),
-                             notify=updateChanged)
+    newestWords = Property(str, lambda self: self._newest_words(), notify=updateChanged)
     hasRelease = Property(bool, lambda self: bool(self._update_address), notify=updateChanged)
     wizardOpen = Property(bool, lambda self: self._wizard_open, notify=wizardChanged)
     wizardStep = Property(int, lambda self: self._wizard_step, notify=wizardChanged)
@@ -2490,6 +2489,22 @@ class Bridge(QObject):
             return "Nothing read yet"
         return f"Read {fmt.age_text(int(time.time()) - age)} · {count} suggestions"
 
+    def _newest_words(self) -> str:
+        """What the settings page says about the newest release.
+
+        Three answers and not two. A stored answer older than this copy used
+        to read as this copy, so a check asked the morning before an upgrade
+        said the old version was the one running.
+        """
+        newest = release_source.numbers_text(self._update_tag)
+        if not newest:
+            return "not asked yet"
+        return {
+            "newer": f"{newest}, newer than this one",
+            "older": f"{newest}, older than this one",
+            "same": f"{newest}, which is this one",
+        }.get(release_source.standing(self._update_tag, __version__), newest)
+
     def _newer_version(self) -> str:
         """The version worth saying something about, or nothing.
 
@@ -2508,11 +2523,17 @@ class Bridge(QObject):
         One request to the repository, no account and nothing sent but the
         request. Held to a day by a stamp in the database rather than by the
         process, or restarting the program would ask every time.
+
+        The day holds only for an answer this version was given. One asked
+        before an upgrade says nothing about what came after it, and was
+        trusted until the next day: the release that was just installed was
+        not known to exist, and the page named the one before it.
         """
         if self._update is not None and self._update.isRunning():
             return
         asked = self._db.get_int("update_checked_at", 0)
-        if time.time() - asked < UPDATE_INTERVAL_S:
+        if (time.time() - asked < UPDATE_INTERVAL_S
+                and self._db.get_state("update_checked_by") == __version__):
             return
         self._update = UpdateCheck(self._cfg, self)
         self._update.found.connect(self._on_update_found)
@@ -2524,6 +2545,7 @@ class Bridge(QObject):
         self._db.set_state("update_tag", tag)
         self._db.set_state("update_address", address)
         self._db.set_state("update_checked_at", str(int(time.time())))
+        self._db.set_state("update_checked_by", __version__)
         self.updateChanged.emit()
 
     @Slot()

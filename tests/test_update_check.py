@@ -44,6 +44,12 @@ class ReadingATag(unittest.TestCase):
         self.assertFalse(release.is_newer("latest", "1.0.0"))
         self.assertFalse(release.is_newer("1.1.0", "not a version"))
 
+    def test_where_a_release_stands(self):
+        self.assertEqual(release.standing("v1.4.1", "1.4.0"), "newer")
+        self.assertEqual(release.standing("v1.4.0", "1.4.1"), "older")
+        self.assertEqual(release.standing("v1.4", "1.4.0"), "same")
+        self.assertEqual(release.standing("latest", "1.4.0"), "")
+
     def test_older_and_equal_are_not_newer(self):
         self.assertFalse(release.is_newer("1.0.0", "1.0.1"))
         self.assertFalse(release.is_newer("1.0.0", "1.0.0"))
@@ -131,6 +137,11 @@ class WhatTheDoctorSays(unittest.TestCase):
         self.assertIn("the newest", self.line().detail)
         self.assertEqual(self.line().fix, "")
 
+    def test_an_older_release_is_not_called_the_newest(self):
+        self.db.set_state("update_tag", "v0.9.0")
+        self.assertIn("ahead of the newest release known, 0.9.0", self.line().detail)
+        self.assertNotIn("the newest there is", self.line().detail)
+
     def test_it_is_never_a_warning(self):
         # Being a version behind is not a fault, and the foot of the panel
         # already says so where it can be acted on.
@@ -210,6 +221,9 @@ class WhatTheWindowIsTold(unittest.TestCase):
     def newer(self):
         return Bridge._newer_version(self.bridge)
 
+    def words(self):
+        return Bridge.newestWords.fget(self.bridge)
+
     def test_nothing_is_said_before_anything_is_known(self):
         self.assertEqual(self.newer(), "")
 
@@ -233,10 +247,20 @@ class WhatTheWindowIsTold(unittest.TestCase):
         # The banner only speaks when there is something newer. The page
         # states the newest whatever it is, which is how somebody checks the
         # version they are running without a terminal.
-        self.assertEqual(Bridge.latestVersion.fget(self.bridge), "")
+        self.assertEqual(self.words(), "not asked yet")
         Bridge._on_update_found(self.bridge, f"v{__version__}", "https://example.invalid/r")
-        self.assertEqual(Bridge.latestVersion.fget(self.bridge), __version__)
+        self.assertEqual(self.words(), f"{__version__}, which is this one")
         self.assertEqual(self.newer(), "")
+
+    def test_a_newer_one_is_said_to_be_newer(self):
+        Bridge._on_update_found(self.bridge, "v99.0.0", "https://example.invalid/r")
+        self.assertEqual(self.words(), "99.0.0, newer than this one")
+
+    def test_an_older_answer_is_never_this_one(self):
+        """An answer asked the morning before an upgrade. It said the version
+        left behind was the one running."""
+        Bridge._on_update_found(self.bridge, "v0.9.0", "https://example.invalid/r")
+        self.assertEqual(self.words(), "0.9.0, older than this one")
 
     def test_the_release_page_is_offered_only_once_there_is_one(self):
         self.assertFalse(Bridge.hasRelease.fget(self.bridge))
@@ -263,6 +287,23 @@ class WhatTheWindowIsTold(unittest.TestCase):
         self.db.set_state("update_checked_at", str(stale))
         Bridge.checkForUpdate(self.bridge)
         self.assertEqual(len(self.launched), 1)
+
+    def test_an_answer_from_before_an_upgrade_is_asked_again_at_once(self):
+        Bridge._on_update_found(self.bridge, "v0.9.0", "")
+        self.db.set_state("update_checked_by", "0.9.0")
+        Bridge.checkForUpdate(self.bridge)
+        self.assertEqual(len(self.launched), 1)
+
+    def test_and_so_is_one_that_never_said_who_asked(self):
+        # Every answer stored before the version was written down beside it.
+        Bridge._on_update_found(self.bridge, "v0.9.0", "")
+        self.db.set_state("update_checked_by", "")
+        Bridge.checkForUpdate(self.bridge)
+        self.assertEqual(len(self.launched), 1)
+
+    def test_the_answer_says_which_version_asked(self):
+        Bridge._on_update_found(self.bridge, "v99.0.0", "")
+        self.assertEqual(self.db.get_state("update_checked_by"), __version__)
 
     def test_a_failed_check_leaves_the_day_uncounted(self):
         # The worker reports nothing on a failure, so nothing is stamped and

@@ -827,13 +827,8 @@ Item {
                             Label {
                                 objectName: "newestVersion"
                                 height: 28
-                                // Three answers, and the third is the one a
-                                // fresh start shows for a second or two.
-                                text: App.updateVersion !== ""
-                                      ? App.updateVersion + ", newer than this one"
-                                      : (App.latestVersion !== ""
-                                         ? App.latestVersion + ", which is this one"
-                                         : "not asked yet")
+                                // Newer, older, the same, or not asked yet.
+                                text: App.newestWords
                                 color: App.updateVersion !== "" ? Theme.colors.accent
                                                                 : Theme.colors.text
                                 font.pixelSize: 12

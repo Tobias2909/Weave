@@ -54,6 +54,23 @@ def is_newer(offered: str, running: str) -> bool:
     return padded > mine
 
 
+def standing(offered: str, running: str) -> str:
+    """Where a release stands against the running copy.
+
+    "newer" or "older" than it, "same", or nothing when either cannot be
+    read. Older is a real answer and not a kind of same: a copy run from a
+    checkout past the last release is ahead of it, and so is any copy whose
+    stored answer was asked before it was installed.
+    """
+    if numbers_of(offered) is None or numbers_of(running) is None:
+        return ""
+    if is_newer(offered, running):
+        return "newer"
+    if is_newer(running, offered):
+        return "older"
+    return "same"
+
+
 def numbers_text(tag: str) -> str:
     """A tag as a version to show, so a v or anything after the numbers does
     not reach the window."""
