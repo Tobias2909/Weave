@@ -11,6 +11,7 @@ window could never be found again.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import time
@@ -19,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 47
+SCHEMA_VERSION = 48
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -577,6 +578,11 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # which ones they are; each is found the next time its picture is asked
     # for, which costs one request apiece and then never again.
     ("videos", "unavailable_at", "INTEGER"),
+    # Where the songs inside a track begin, as the last look up said, in JSON.
+    # A kept song is played from disk with nothing asked of anybody, and this
+    # is what gives it its songs on the bar while there is nobody to ask.
+    # NULL means never looked up, an empty list means looked up and none.
+    ("music_history", "chapters", "TEXT"),
 )
 
 
@@ -2557,6 +2563,30 @@ class Database:
             conn.execute(
                 "UPDATE music_history SET artist_id=? WHERE ext_id=? "
                 "AND (artist_id IS NULL OR artist_id = '')", (artist_id, ext_id))
+
+    def song_chapters(self, ext_id: str) -> list[dict] | None:
+        """The chapters last seen for a song, or None when never looked up."""
+        row = self.conn.execute(
+            "SELECT chapters FROM music_history WHERE ext_id=?", (ext_id,)).fetchone()
+        if not row or row["chapters"] is None:
+            return None
+        try:
+            found = json.loads(row["chapters"])
+        except ValueError:
+            return None
+        return found if isinstance(found, list) else None
+
+    def set_song_chapters(self, ext_id: str, chapters: Sequence[dict]) -> None:
+        """Note what a look up said, written only where it differs.
+
+        Only onto a song that has a row already, which every song played has,
+        so this never makes a song appear in the history by itself.
+        """
+        said = json.dumps(list(chapters), sort_keys=True)
+        with self.conn as conn:
+            conn.execute(
+                "UPDATE music_history SET chapters=? "
+                "WHERE ext_id=? AND chapters IS NOT ?", (said, ext_id, said))
 
     def is_music_favorite(self, ext_id: str) -> bool:
         row = self.conn.execute(

@@ -577,6 +577,9 @@ class AudioPlayer(QObject):
         self._loading = False
         self._resolver: _Resolver | None = None
         self._next_resolvers: list[_Resolver] = []
+        # Look ups for songs played from disk, which need no address but still
+        # have a description, counts and chapters that only a look up knows.
+        self._fact_resolvers: list[_Resolver] = []
         self._addresses = AddressCache()
         # What each track's chapters are, by track key. A video that is really
         # an album marks its songs in them, and they came free with the address
@@ -987,6 +990,8 @@ class AudioPlayer(QObject):
         if address:
             self._loading = False
             self.stateChanged.emit()
+            if kept:
+                self._from_disk(entry)
             self._hand_over(entry, address)
             return
         self._loading = True
@@ -1002,11 +1007,7 @@ class AudioPlayer(QObject):
         # Kept whoever it was for. A resolve that arrives after the choice has
         # moved on still learned where that track's songs are, and it will be
         # wanted the moment anybody goes back to it.
-        if chapters:
-            self._chapters[key] = tuple(chapters)
-        if facts:
-            self._facts[key] = dict(facts)
-            self.factsChanged.emit()
+        self._learned(key, chapters, facts)
         entry = self._current()
         if entry.get("key") != key:
             return                       # a later choice overtook this one
@@ -1091,6 +1092,8 @@ class AudioPlayer(QObject):
         if address:
             self._engine.append(address)
             self._appended = wanted
+            if kept:
+                self._from_disk(entry)
             return
         if any(r.key == entry["key"] and r.isRunning() for r in self._next_resolvers):
             return
@@ -1152,16 +1155,18 @@ class AudioPlayer(QObject):
         self._next_video_resolvers = []
 
     def _on_next_resolved(self, key: str, address: str,
-                          chapters: list | None = None) -> None:
+                          chapters: list | None = None,
+                          facts: dict | None = None) -> None:
         """Whatever the queue looks like by now, the address is worth keeping.
         It is only handed to mpv if that track is still the one coming up.
 
-        The songs inside it are worth keeping for the same reason, and they
-        would otherwise be thrown away here: PySide hands a slot only as many
-        arguments as it takes, so a shorter one drops them without a word.
+        The songs inside it and the facts are worth keeping for the same
+        reason, and they would otherwise be thrown away here: PySide hands a
+        slot only as many arguments as it takes, so a shorter one drops them
+        without a word. The facts were, which left every song reached by
+        moving on with no description and no counts under its picture.
         """
-        if chapters:
-            self._chapters[key] = tuple(chapters)
+        self._learned(key, chapters, facts)
         wanted = self._next_index()
         entry = self._queue[wanted] if wanted is not None else {}
         if not entry.get("live"):
@@ -1194,6 +1199,69 @@ class AudioPlayer(QObject):
 
     def _sweep_resolvers(self) -> None:
         self._next_resolvers = [r for r in self._next_resolvers if r.isRunning()]
+
+    # ---- what a look up says beside the address ---------------------------
+
+    def _learned(self, key: str, chapters: list | None,
+                 facts: dict | None) -> None:
+        """Keep what a look up said about a song, whichever look up it was.
+
+        The chapters are written down as well, so a song kept on disk still
+        has its songs on the bar when there is nobody to ask. None is a look
+        up that said nothing about them, which leaves what is stored alone; an
+        empty list is one that found none.
+        """
+        if chapters:
+            self._chapters[key] = tuple(chapters)
+        if chapters is not None and self._db is not None and key.startswith("yt:"):
+            self._db.set_song_chapters(key.split(":", 1)[1], list(chapters))
+        if facts:
+            self._facts[key] = dict(facts)
+            self.factsChanged.emit()
+
+    def _from_disk(self, entry: dict) -> None:
+        """A song played from disk still gets what a look up would say.
+
+        Its chapters from what was written down, at once and with no
+        connection needed. Its description and counts from a look up of its
+        own, in the background, since the sound needs none and does not wait:
+        the same one call every other song costs, and nothing lost but the
+        words under the picture when there is no connection to make it. Once
+        per song for the life of the process, like everything else a look up
+        brings.
+        """
+        key = entry.get("key", "")
+        if not key.startswith("yt:") or entry.get("live"):
+            return
+        if key not in self._chapters and self._db is not None:
+            stored = self._db.song_chapters(key.split(":", 1)[1])
+            if stored:
+                self._chapters[key] = tuple(stored)
+        if key in self._facts:
+            return
+        if any(r.key == key and r.isRunning() for r in self._fact_resolvers):
+            return
+        resolver = self._make_resolver(entry)
+        resolver.resolved.connect(self._on_looked_up)
+        # Nothing is said about a failure or a song found gone. It plays from
+        # disk either way, which is the whole point of keeping it, and taking
+        # it out of the queue for want of a description would be worse than
+        # the missing words. The trace still hears of it.
+        resolver.failed.connect(self._on_look_up_failed)
+        resolver.finished.connect(self._sweep_fact_resolvers)
+        self._fact_resolvers.append(resolver)
+        resolver.start()
+
+    def _on_looked_up(self, key: str, address: str, chapters: list | None = None,
+                      facts: dict | None = None) -> None:
+        self._addresses.put(key, address)
+        self._learned(key, chapters, facts)
+
+    def _on_look_up_failed(self, key: str, why: str) -> None:
+        trace.mark("look_up_failed", key=key, why=why[:80])
+
+    def _sweep_fact_resolvers(self) -> None:
+        self._fact_resolvers = [r for r in self._fact_resolvers if r.isRunning()]
 
     # ---- what mpv reports ------------------------------------------------
 
@@ -1976,7 +2044,8 @@ class AudioPlayer(QObject):
         # a short session easily: it spends seconds asking for an
         # address nobody is waiting for any more.
         self._stop_video_resolver()
-        held = [self._resolver, *self._next_resolvers, *self._next_video_resolvers]
+        held = [self._resolver, *self._next_resolvers, *self._next_video_resolvers,
+                *self._fact_resolvers]
         for resolver in held:
             if resolver is not None and resolver.isRunning():
                 resolver.cancel()

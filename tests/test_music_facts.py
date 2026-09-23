@@ -15,6 +15,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from PySide6.QtCore import QObject, Signal  # noqa: E402
 from support import scratch_db  # noqa: E402
 from test_audio import FakeEngine, FakeResolver  # noqa: E402
 from test_video_wanted import FakeVideoResolver, song  # noqa: E402
@@ -138,6 +139,151 @@ class WhatThePlayerKeeps(unittest.TestCase):
         one.factsChanged.connect(lambda: said.append("facts"))
         one._on_resolved("yt:a", "https://example.invalid/a", [], {"views": 12})
         self.assertEqual(said, ["facts"])
+
+
+class Says(QObject):
+    """The shape a real look up answers in, which is what the slot has to take."""
+
+    resolved = Signal(str, str, list, "QVariantMap")
+
+
+class ASongPlayedFromDisk(unittest.TestCase):
+    """A kept song has no address to find, so nothing looked it up, and the
+    page had no description and no counts for it. The sound still comes off
+    the disk at once; the look up happens beside it."""
+
+    DISK = "/nowhere/kept.opus"
+
+    def player(self, db=None, kept=("yt:a",)) -> audio.AudioPlayer:
+        one = audio.AudioPlayer(Config(raw={}), db=db, engine=FakeEngine())
+        self.made: list = []
+
+        def make(entry):
+            self.made.append(FakeResolver(entry["key"]))
+            return self.made[-1]
+
+        one._make_resolver = make
+        one._make_video_resolver = lambda entry: FakeVideoResolver(entry["key"])
+        one.local_audio = lambda key: self.DISK if key in kept else ""
+        return one
+
+    def looked_up(self, key: str) -> list:
+        return [r for r in self.made if r.key == key and r.isRunning()]
+
+    def test_it_is_looked_up_all_the_same(self) -> None:
+        one = self.player()
+        one.play_items([song()])
+        self.assertEqual(len(self.looked_up("yt:a")), 1)
+        one._on_looked_up("yt:a", "https://example.invalid/a", [],
+                          {"description": "What was written under it."})
+        self.assertEqual(one.trackFacts["description"], "What was written under it.")
+
+    def test_the_sound_does_not_wait_for_it(self) -> None:
+        one = self.player()
+        one.play_items([song()])
+        self.assertEqual(one._engine.only("load"), [("load", self.DISK, None)])
+
+    def test_once_per_song(self) -> None:
+        one = self.player()
+        one.play_items([song()])
+        one._on_looked_up("yt:a", "https://example.invalid/a", [], {"views": 3})
+        self.made[0].running = False
+        one.play_items([song()])
+        self.assertEqual(len(self.made), 1, "a song already looked up was asked again")
+
+    def test_a_kept_song_coming_up_is_looked_up_before_it_arrives(self) -> None:
+        one = self.player(kept=("yt:b",))
+        one._addresses.put("yt:a", "https://example.invalid/a")
+        one.play_items([song(), song("yt:b")])
+        self.assertEqual(len(self.looked_up("yt:b")), 1)
+        one._on_looked_up("yt:b", "https://example.invalid/b", [], {"description": "Second."})
+        one._engine.started.emit(audio.NEXT)
+        self.assertEqual(one.track["key"], "yt:b")
+        self.assertEqual(one.trackFacts["description"], "Second.")
+
+    def test_a_song_arrived_at_by_moving_on_keeps_what_the_look_ahead_said(self) -> None:
+        """PySide hands a slot only the arguments it takes. The look ahead's
+        took three, so the facts, the fourth, never arrived."""
+        one = self.player(kept=())
+        one._addresses.put("yt:a", "https://example.invalid/a")
+        one.play_items([song(), song("yt:b")])
+        says = Says()
+        says.resolved.connect(one._on_next_resolved)
+        says.resolved.emit("yt:b", "https://example.invalid/b", [], {"description": "Next."})
+        one._engine.started.emit(audio.NEXT)
+        self.assertEqual(one.trackFacts["description"], "Next.")
+
+    def test_a_failed_look_up_leaves_it_playing(self) -> None:
+        one = self.player()
+        one.play_items([song()])
+        one._on_look_up_failed("yt:a", "no connection")
+        self.assertEqual([t["key"] for t in one._queue], ["yt:a"])
+        self.assertEqual(one._engine.only("load"), [("load", self.DISK, None)])
+
+
+KEY = "yt:aaaaaaaaaaa"
+
+
+class ChaptersKeptWithTheSong(unittest.TestCase):
+    """Where the songs inside a track begin, written down, so a kept song has
+    them on the bar with no connection at all. A look up that says something
+    different replaces what was written."""
+
+    TWO = [{"title": "First", "start": 0.0, "end": 60.0},
+           {"title": "Second", "start": 60.0, "end": 120.0}]
+
+    def setUp(self) -> None:
+        self.db = scratch_db(self)
+        self.db.remember_played("aaaaaaaaaaa", "One", "Somebody", None, 120)
+
+    def player(self, kept=()) -> audio.AudioPlayer:
+        one = audio.AudioPlayer(Config(raw={}), db=self.db, engine=FakeEngine())
+        one._make_resolver = lambda entry: FakeResolver(entry["key"])
+        one._make_video_resolver = lambda entry: FakeVideoResolver(entry["key"])
+        one.local_audio = lambda key: "/nowhere/kept.opus" if key in kept else ""
+        return one
+
+    def test_a_look_up_writes_them_down(self) -> None:
+        one = self.player()
+        one.play_items([song(KEY)])
+        one._on_resolved(KEY, "https://example.invalid/a", self.TWO, {})
+        self.assertEqual(self.db.song_chapters("aaaaaaaaaaa"), self.TWO)
+
+    def test_a_kept_song_has_them_with_nobody_to_ask(self) -> None:
+        self.db.set_song_chapters("aaaaaaaaaaa", self.TWO)
+        one = self.player(kept=(KEY,))
+        one.play_items([song(KEY)])
+        one._engine.durationChanged.emit(120.0)
+        self.assertEqual([c["title"] for c in one.chapters], ["First", "Second"])
+
+    def test_a_different_answer_replaces_them(self) -> None:
+        self.db.set_song_chapters("aaaaaaaaaaa", self.TWO)
+        one = self.player(kept=(KEY,))
+        one.play_items([song(KEY)])
+        one._on_looked_up(KEY, "https://example.invalid/a", self.TWO[:1], {})
+        self.assertEqual(self.db.song_chapters("aaaaaaaaaaa"), self.TWO[:1])
+
+    def test_an_answer_of_none_is_written_as_none(self) -> None:
+        self.db.set_song_chapters("aaaaaaaaaaa", self.TWO)
+        one = self.player()
+        one.play_items([song(KEY)])
+        one._on_resolved(KEY, "https://example.invalid/a", [], {})
+        self.assertEqual(self.db.song_chapters("aaaaaaaaaaa"), [])
+
+    def test_a_look_up_that_said_nothing_about_them_leaves_them(self) -> None:
+        self.db.set_song_chapters("aaaaaaaaaaa", self.TWO)
+        one = self.player()
+        one.play_items([song(KEY)])
+        one._on_resolved(KEY, "https://example.invalid/a")
+        self.assertEqual(self.db.song_chapters("aaaaaaaaaaa"), self.TWO)
+
+    def test_never_looked_up_is_not_the_same_as_none(self) -> None:
+        self.assertIsNone(self.db.song_chapters("aaaaaaaaaaa"))
+        self.assertIsNone(self.db.song_chapters("nobody"))
+
+    def test_writing_them_never_adds_a_song_to_the_history(self) -> None:
+        self.db.set_song_chapters("bbbbbbbbbbb", self.TWO)
+        self.assertIsNone(self.db.song_chapters("bbbbbbbbbbb"))
 
 
 class WhatTheWindowDrawsFromThem(unittest.TestCase):
