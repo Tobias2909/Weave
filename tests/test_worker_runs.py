@@ -1059,7 +1059,7 @@ class WorkerRuns(unittest.TestCase):
                    "_history", "_search", "_tracks", "_station", "_detail", "_cache_job",
                    "_twitch", "_checkup", "_playlists", "_playlist_items", "_lengths",
                    "_channel_members", "_channel_lists", "_now_side", "_now_detail",
-                   "_artist_music", "_artist_open", "_stream_check")
+                   "_artist_music", "_artist_open", "_stream_check", "_music_history")
 
         def make(held: str):
             bridge = Bridge.__new__(Bridge)
@@ -1071,6 +1071,13 @@ class WorkerRuns(unittest.TestCase):
             bridge._status = ""
             bridge._notice = "Working"
             bridge._notice_timer = Timer()
+            # Which page is said to be read again at its top, for the three
+            # workers that read a page.
+            bridge._page_reading = {"_recommended": ("recommended", "", "Asking"),
+                                    "_history": ("history", "videos", "Reading"),
+                                    "_music_history": ("history", "music", "Reading"),
+                                    "_playlist_items": ("playlist", "PL1", "Reading"),
+                                    }.get(held, ("", "", ""))
             bridge._busy = True
             bridge._import_state = "working"
             bridge._import_message = ""
@@ -1094,7 +1101,7 @@ class WorkerRuns(unittest.TestCase):
             for signal in ("problemsChanged", "statusChanged", "noticeChanged", "busyChanged",
                            "importChanged", "addChanged", "musicChanged", "detailChanged",
                            "cacheChanged", "twitchChanged", "viewChanged",
-                           "nowChanged", "channelTabChanged"):
+                           "nowChanged", "channelTabChanged", "pageReadingChanged"):
                 setattr(bridge, signal, Recorder())
             return bridge, worker
 
@@ -1119,6 +1126,12 @@ class WorkerRuns(unittest.TestCase):
             Bridge._on_worker_crashed(bridge, worker, "x")
             self.assertFalse(bridge._loading_more, held)
             self.assertEqual(bridge._notice, "", held)
+
+        # A page said to be read again at its top stops saying so.
+        for held in ("_recommended", "_history", "_music_history", "_playlist_items"):
+            bridge, worker = make(held)
+            Bridge._on_worker_crashed(bridge, worker, "x")
+            self.assertEqual(bridge._page_reading, ("", "", ""), held)
 
         bridge, worker = make("_channel_members")
         Bridge._on_worker_crashed(bridge, worker, "x")

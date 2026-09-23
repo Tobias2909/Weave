@@ -32,6 +32,10 @@ Rectangle {
     // On its way to mpv. Said here rather than in a corner of the window,
     // since this is where the press happened and where the eye already is.
     property bool starting: false
+    // Something just done to this card that leaves nothing else to see, said
+    // in the same place. A copied address is the one there is. Starting wins
+    // if both are ever asked for at once, since it is still going on.
+    property string note: ""
 
     signal playRequested()
     signal channelRequested()
@@ -121,7 +125,7 @@ Rectangle {
             Rectangle {
                 id: startingWash
                 objectName: "startingWash"
-                visible: card.starting
+                visible: card.starting || card.note !== ""
                 anchors.fill: thumbnailFrame
                 radius: thumbnailFrame.radius
                 color: Qt.rgba(0, 0, 0, 0.55)
@@ -144,13 +148,14 @@ Rectangle {
                         // The same turning mark the window used to show at the
                         // bottom, so the two read as one thing moved.
                         Rectangle {
+                            visible: card.starting
                             anchors.verticalCenter: parent.verticalCenter
                             width: 9
                             height: 9
                             radius: 2
                             color: Theme.colors.accent
                             RotationAnimator on rotation {
-                                running: startingWash.visible
+                                running: startingWash.visible && card.starting
                                 loops: Animation.Infinite
                                 from: 0
                                 to: 360
@@ -158,9 +163,21 @@ Rectangle {
                             }
                         }
 
+                        // Done rather than going on, so a mark that stands
+                        // still in place of the one that turns.
                         Label {
+                            visible: !card.starting
                             anchors.verticalCenter: parent.verticalCenter
-                            text: "Starting in mpv"
+                            text: "\u2713"
+                            color: Theme.colors.accent
+                            font.pixelSize: 12
+                            font.weight: Font.DemiBold
+                        }
+
+                        Label {
+                            objectName: "startingWord"
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: card.starting ? "Starting in mpv" : card.note
                             color: Theme.colors.text
                             font.pixelSize: 11
                         }

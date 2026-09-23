@@ -492,15 +492,74 @@ Item {
                             // because it is about the picture above it. It is
                             // empty whenever nothing is being waited on, and
                             // a Column leaves out a child that is not there.
-                            Label {
-                                objectName: "nowPlayingVideoStage"
+                            //
+                            // The last step is not a wait any more, so it is
+                            // said for a few seconds and then goes: it fades,
+                            // and only once it has faded does the room it
+                            // took close, so the rows under it slide up
+                            // rather than jump. The slot's height is read off
+                            // the words and the fade, never off whether the
+                            // line is visible, because a wrapper sized by its
+                            // child's visibility hides them both for good.
+                            Item {
+                                id: stageSlot
+                                objectName: "nowPlayingVideoStageSlot"
                                 width: parent.width
-                                horizontalAlignment: Text.AlignRight
-                                visible: text !== ""
-                                text: Audio.videoStage
-                                color: Theme.colors.textMuted
-                                font.pixelSize: 11
-                                elide: Text.ElideRight
+                                height: stageLine.text !== "" && stageLine.opacity > 0
+                                        ? stageLine.implicitHeight : 0
+                                Behavior on height {
+                                    NumberAnimation { duration: 160; easing.type: Easing.OutQuad }
+                                }
+                                visible: height > 0
+                                clip: true
+
+                                Label {
+                                    id: stageLine
+                                    objectName: "nowPlayingVideoStage"
+                                    // How long the picture arriving is said
+                                    // before it goes. A property so the walk
+                                    // need not wait the whole of it.
+                                    property int restMs: 4000
+                                    property bool rested: false
+                                    // What was said last, so a report that
+                                    // changes nothing about the words neither
+                                    // brings a rested line back nor starts
+                                    // its clock again.
+                                    property string lastSaid: ""
+                                    width: parent.width
+                                    horizontalAlignment: Text.AlignRight
+                                    visible: text !== ""
+                                    text: Audio.videoStage
+                                    color: Theme.colors.textMuted
+                                    font.pixelSize: 11
+                                    elide: Text.ElideRight
+                                    opacity: rested ? 0 : 1
+                                    Behavior on opacity { NumberAnimation { duration: 400 } }
+
+                                    Timer {
+                                        id: stageRest
+                                        interval: stageLine.restMs
+                                        onTriggered: stageLine.rested = true
+                                    }
+
+                                    Connections {
+                                        target: Audio
+                                        function onVideoChanged() {
+                                            if (Audio.videoStage === stageLine.lastSaid)
+                                                return
+                                            stageLine.lastSaid = Audio.videoStage
+                                            stageLine.rested = false
+                                            // Only the picture being up is a
+                                            // step that ends. Every other one
+                                            // is something still being waited
+                                            // on, and stays until it is done.
+                                            if (Audio.videoShowing && Audio.videoStage !== "")
+                                                stageRest.restart()
+                                            else
+                                                stageRest.stop()
+                                        }
+                                    }
+                                }
                             }
 
                             Label {

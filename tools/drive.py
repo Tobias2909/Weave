@@ -182,6 +182,18 @@ def item_named(root, name: str):
     return None
 
 
+def find_reply_left(words, ground) -> float:
+    """Where the reply holding these words begins, picture and all.
+
+    The words sit beside the reply's picture, so the reply's own left edge is
+    the edge of the list the words belong to, found by going up to it.
+    """
+    item = words
+    while item is not None and QQmlProperty.read(item, "objectName") != "commentReplies":
+        item = item.parentItem()
+    return item.mapToItem(ground, 0, 0).x() if item is not None else float("nan")
+
+
 def items_named_like(root, prefix: str) -> list:
     """Every named item below this one whose name begins with the prefix.
 
@@ -470,6 +482,37 @@ class Smoke:
         button_end = button.mapToItem(ground, button.width(), 0).x()
         self.check("and it ends where the fullscreen button ends",
                    abs(line_end - button_end) < 2, f"{line_end} against {button_end}")
+
+        # The picture being up is the last step and not a wait, so it is said
+        # for a moment and then leaves, fading first and giving its room back
+        # after. The clock is shortened here; the window's own is four seconds.
+        from weave.audio import STAGE_SHOWING
+
+        stage_slot = find(window, "nowPlayingVideoStageSlot")
+        write(stage_line, "restMs", 250)
+        audio._video_stage = STAGE_SHOWING
+        audio._video_showing = True
+        audio.videoChanged.emit()
+        settle(0.15)
+        self.check("the picture arriving is said",
+                   read(stage_line, "visible") is True
+                   and str(read(stage_line, "text")) == STAGE_SHOWING,
+                   f"{read(stage_line, 'visible')} {read(stage_line, 'text')}")
+        wait_until(lambda: read(stage_slot, "height") == 0, 3.0)
+        self.check("and once it has been said it fades and gives its room back",
+                   read(stage_line, "opacity") == 0 and read(stage_slot, "height") == 0,
+                   f"opacity {read(stage_line, 'opacity')} "
+                   f"height {read(stage_slot, 'height')}")
+        audio._video_showing = False
+        audio._video_stage = STAGE_LOOKING
+        audio.videoChanged.emit()
+        wait_until(lambda: read(stage_line, "opacity") == 1
+                   and read(stage_slot, "height") > 0, 3.0)
+        self.check("the next step brings the line back",
+                   read(stage_line, "opacity") == 1 and read(stage_slot, "height") > 0,
+                   f"opacity {read(stage_line, 'opacity')} "
+                   f"height {read(stage_slot, 'height')}")
+        write(stage_line, "restMs", 4000)
         audio._video_stage = ""
         audio.videoChanged.emit()
         settle(0.2)
@@ -923,6 +966,32 @@ class Smoke:
         self.check("a failure takes the chip away", read(bridge, "startingKey") == "",
                    str(read(bridge, "startingKey")))
 
+        # Sharing is said on the card too, in the same place and the same
+        # shape, since a copied address leaves nothing else on screen. The
+        # clipboard written here is the offscreen platform's own.
+        from weave.ui.bridge import COPIED_NOTE
+
+        bridge.copyLink("yt:smokevid005")
+        settle(0.3)
+        noted = [found for found in
+                 (item_named(card, "startingWash")
+                  for card in visible_children(read(grid, "contentItem")))
+                 if found is not None and read(found, "visible")]
+        words = item_named(noted[0], "startingWord") if noted else None
+        self.check("sharing a card says so on that card and no other",
+                   len(noted) == 1 and words is not None
+                   and str(read(words, "text")) == COPIED_NOTE,
+                   f"{len(noted)} cards, "
+                   f"{read(words, 'text') if words is not None else 'no words'}")
+        self.check("and not at the foot of the window",
+                   read(bridge, "notice") == "", str(read(bridge, "notice")))
+        self.check("and it goes again by itself",
+                   bridge._card_note_timer.isActive()
+                   and bridge._card_note_timer.interval() == 3000,
+                   f"active {bridge._card_note_timer.isActive()}")
+        bridge._set_card_note("", "")
+        settle(0.2)
+
     def a_stream_that_ended(self, bridge, window) -> None:
         """A card that says live about a broadcast which has finished.
 
@@ -1215,10 +1284,19 @@ class Smoke:
         settle(0.8)
         # Comments of this shape rather than real ones, since what is measured
         # is how big they are drawn and the walk is offline.
+        from weave.imagecache import qml_source
+
         bridge._detail_comments = [{
             "author": "Somebody", "text": "A comment long enough to wrap over a line.",
-            "when": "2 days ago", "likes": 12, "avatar": "", "pinned": False,
-            "byUploader": False, "replies": [],
+            "when": "2 days ago", "likes": 12,
+            "avatar": qml_source("https://pictures.invalid/a.jpg"),
+            "pinned": False, "byUploader": False,
+            "replies": [{
+                "author": "Somebody else", "text": "An answer to it.",
+                "when": "1 day ago", "likes": 2,
+                "avatar": qml_source("https://pictures.invalid/b.jpg"),
+                "pinned": False, "byUploader": False,
+            }],
         }]
         bridge._detail_loading = False
         bridge.detailChanged.emit()
@@ -1240,6 +1318,24 @@ class Smoke:
             bridge.setPanelWidth(was)
             bridge.closeDetail()
             return
+        # A reply starts where the words it answers start, past that
+        # comment's picture, so the two cannot be read as one list. At the old
+        # eighteen pixels its picture sat half under its parent's.
+        said = items_named_like(window.contentItem(), "commentText")
+        if len(said) >= 2:
+            parent_x = said[0].mapToItem(panel, 0, 0).x()
+            reply_picture_x = find_reply_left(said[1], panel)
+            self.check("a reply begins where the words it answers begin",
+                       abs(reply_picture_x - parent_x) < 1,
+                       f"reply {reply_picture_x:.0f} words {parent_x:.0f}")
+        else:
+            self.check("a reply begins where the words it answers begin", False,
+                       f"{len(said)} comments drawn")
+        line = item_named(window.contentItem(), "commentThreadLine")
+        self.check("and a line runs down beside the replies",
+                   line is not None and read(line, "visible") is True
+                   and read(line, "height") > 0,
+                   "none" if line is None else f"height {read(line, 'height')}")
         narrow_title = float(read(title, "font.pixelSize"))
         narrow_words = float(read(words, "font.pixelSize"))
         self.check("at its narrowest it is the size it always was",
@@ -1735,8 +1831,35 @@ class Smoke:
                    and read(item_named(root, "gridHeader"), "height") > 0,
                    f"height {read(item_named(root, 'gridHeader'), 'height')}")
 
+        # Asking again is said at the top, beside the button that asked, where
+        # it can be seen. At the foot of the window it went unnoticed. Handed
+        # over rather than asked for, since the walk is offline; what is
+        # checked is where the words land and that the answer takes them away.
+        from weave.ui.bridge import RECOMMENDED
+
+        bridge._set_page_reading(RECOMMENDED, "", "Asking YouTube what it suggests")
+        settle(0.3)
+        reading = item_named(root, "recommendedReading")
+        self.check("asking for fresh suggestions is said at the top of the page",
+                   reading is not None and read(reading, "visible") is True
+                   and not read(item_named(root, "recommendedState"), "visible"),
+                   "missing" if reading is None else f"visible {read(reading, 'visible')}")
+        self.check("and not at the foot of the window",
+                   not read(find(window, "noticeBar"), "visible"),
+                   str(read(bridge, "notice")))
+        bridge._on_recommended_failed("offline")
+        settle(0.3)
+        self.check("and the answer takes the words away again",
+                   not read(reading, "visible")
+                   and read(item_named(root, "recommendedState"), "visible") is True,
+                   f"reading {read(reading, 'visible')}")
+        bridge._set_page_reading(RECOMMENDED, "", "Asking YouTube what it suggests")
+
         bridge.selectGroup(-1)
         settle(0.4)
+        self.check("the words do not follow the feed home",
+                   read(bridge, "pageReading") == "", str(read(bridge, "pageReading")))
+        bridge._set_page_reading()
         self.check("and none of it follows the feed home",
                    item_named(root, "recommendedRefresh") is None
                    or not read(item_named(root, "recommendedRefresh"), "visible"))
@@ -2398,6 +2521,25 @@ class Smoke:
                        str(read(again, "text")))
             bridge.showMusicInHistory(False)
             settle(0.3)
+            # Reading it again is said beside the button, and only over the
+            # half being read.
+            from weave.ui.bridge import HISTORY
+
+            reading = find(window, "historyReading")
+            bridge._set_page_reading(HISTORY, "videos", "Reading your history")
+            settle(0.3)
+            over_it = reading is not None and read(reading, "visible") is True
+            bridge._history_music = True
+            bridge.viewChanged.emit()
+            settle(0.3)
+            over_other = reading is not None and read(reading, "visible") is True
+            bridge._history_music = False
+            bridge.viewChanged.emit()
+            bridge._set_page_reading()
+            settle(0.2)
+            self.check("reading the history again is said beside its button",
+                       over_it and not over_other,
+                       f"over it {over_it}, over the other half {over_other}")
         action = find(window, "viewAction")
         self.check("and the bar no longer offers it",
                    action is not None and not read(action, "visible"),

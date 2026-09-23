@@ -85,6 +85,12 @@ VIDEO_MAX_S = 15 * 60
 # wait before the video starts.
 FADE_MS = 500
 
+# Pausing and carrying on, pressed by hand. Half the fade above, because here
+# the press itself is the thing waited on, and at 500 ms the music was heard
+# answering late. Still a fade and never a cut, which is what a stop in the
+# middle of a note sounds like.
+TOGGLE_FADE_MS = 250
+
 # A signed address can stop being accepted, which is ordinary rather than
 # exceptional over a long listen, so it is recovered from rather than
 # reported. These bound that: a few goes at one track, not in a tight loop,
@@ -1306,7 +1312,7 @@ class AudioPlayer(QObject):
     @Slot()
     def toggle(self) -> None:
         if self._get_playing():
-            self._fade_to(0.0, pause_after=True)
+            self._fade_to(0.0, pause_after=True, duration_ms=TOGGLE_FADE_MS)
             return
         if self._queue:
             if self._idle:
@@ -1318,7 +1324,8 @@ class AudioPlayer(QObject):
                 self._set_output(0.0)
                 self._engine.set_pause(False)
                 self._paused = False
-                self._fade_to(self._level, pause_after=False)
+                self._fade_to(self._level, pause_after=False,
+                              duration_ms=TOGGLE_FADE_MS)
         self.stateChanged.emit()
 
     @Slot(int)
@@ -1554,9 +1561,11 @@ class AudioPlayer(QObject):
         self._pause_after_fade = False
         self._set_output(self._level)
 
-    def _fade_to(self, level: float, pause_after: bool) -> None:
+    def _fade_to(self, level: float, pause_after: bool,
+                 duration_ms: int = FADE_MS) -> None:
         self._fade.stop()
         self._pause_after_fade = pause_after
+        self._fade.setDuration(duration_ms)
         self._fade.setStartValue(float(self._output))
         self._fade.setEndValue(float(max(0.0, min(1.0, level))))
         self._fade.start()

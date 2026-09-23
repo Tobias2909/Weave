@@ -82,6 +82,12 @@ class Bridge:
     def _set_notice(self, *_a, **_k):
         self.notices.append(True)
 
+    def _set_page_reading(self, *_a, **_k):
+        self.notices.append(True)
+
+    def _stop_page_reading(self, *_a, **_k):
+        pass
+
     def _fetch_recommended(self, force=False, start=1, append=False):
         self.asked.append(start)
         self._recommended_next = start + self.PAGE * 2

@@ -6,14 +6,17 @@ test say what mpv reported back. What mpv really does is pinned down in
 """
 
 import unittest
+from unittest import mock
 
 from PySide6.QtCore import QCoreApplication, QObject, Signal
 
 from weave.audio import (
     ADDRESS_MARGIN_S,
+    FADE_MS,
     RECOVER_COOLDOWN_S,
     RECOVER_LIMIT,
     RECOVER_WINDOW_S,
+    TOGGLE_FADE_MS,
     AddressCache,
     AudioPlayer,
     address_expiry,
@@ -748,6 +751,24 @@ class Fading(_Base):
         self.player.toggle()
         self.assertEqual(self.engine.only("pause")[-1], ("pause", False))
         self.assertNotEqual(self.player._fade.state(), self.player._fade.State.Stopped)
+
+    def test_a_press_fades_in_half_the_time_a_video_does(self):
+        """Pausing and carrying on by hand is the press being waited on, so it
+        answers in half the time. Stepping aside for a video keeps the longer
+        fade."""
+        self.assertEqual(TOGGLE_FADE_MS * 2, FADE_MS)
+        self.player._paused = True
+        self.player._set_output(0.0)
+        self.player.toggle()
+        self.assertEqual(self.player._fade.duration(), TOGGLE_FADE_MS)
+        self.player._fade.stop()
+        with mock.patch.object(self.player, "_get_playing", return_value=True):
+            self.player.toggle()
+            self.assertEqual(self.player._fade.duration(), TOGGLE_FADE_MS)
+            self.player._fade.stop()
+            self.player._auto_pause = True
+            self.player.pause_for_video()
+        self.assertEqual(self.player._fade.duration(), FADE_MS)
 
     def test_toggling_when_idle_starts_the_track(self):
         self.engine.idleChanged.emit(True)

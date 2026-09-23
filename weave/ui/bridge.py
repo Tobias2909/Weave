@@ -132,6 +132,9 @@ MUSIC_SEARCH_LABEL = "Search results"
 # reason.
 MEMBERS_NOTICE = "that one is for members of the channel"
 
+# Said on a card whose address was just put on the clipboard.
+COPIED_NOTE = "Copied, ready to paste"
+
 # What the channel page says after the members button has been pressed. Said
 # there rather than only in the bar at the foot, because the bar clears itself
 # and this is an answer about the page being looked at. Three answers, because
@@ -229,6 +232,8 @@ class Bridge(QObject):
     videoQualityChanged = Signal()
     cookiesChanged = Signal()
     startingChanged = Signal()
+    cardNoteChanged = Signal()
+    pageReadingChanged = Signal()
     updateChanged = Signal()
     wizardChanged = Signal()
     recommendedChanged = Signal()
@@ -469,6 +474,19 @@ class Bridge(QObject):
         self._starting_timer = QTimer(self)
         self._starting_timer.setSingleShot(True)
         self._starting_timer.timeout.connect(lambda: self._set_starting(""))
+        # A word said on one card, over its picture, for something done to
+        # that card that leaves nothing else on screen, the way a copied
+        # address does. Which card, and what it says.
+        self._card_note_key = ""
+        self._card_note = ""
+        self._card_note_timer = QTimer(self)
+        self._card_note_timer.setSingleShot(True)
+        self._card_note_timer.timeout.connect(lambda: self._set_card_note("", ""))
+        # A page being read again, said at the top of that page beside the
+        # button that asked for it rather than at the foot of the window. Which
+        # page, which part of it, and the words.
+        self._page_reading = ("", "", "")
+        self.viewChanged.connect(self.pageReadingChanged)
         # What the last measurement found, so lowering the ceiling knows
         # whether anything actually has to be dropped.
         self._cache_held = 0
@@ -846,6 +864,37 @@ class Bridge(QObject):
     cacheText = Property(str, _get_cache_text, notify=cacheChanged)
     cacheWorking = Property(bool, lambda self: self._cache_working, notify=cacheChanged)
     startingKey = Property(str, lambda self: self._starting_key, notify=startingChanged)
+    cardNoteKey = Property(str, lambda self: self._card_note_key, notify=cardNoteChanged)
+    cardNote = Property(str, lambda self: self._card_note, notify=cardNoteChanged)
+
+    def _set_page_reading(self, kind: str = "", part: str = "", words: str = "") -> None:
+        """Say that a page is being read again, or stop saying it."""
+        if (kind, part, words) != self._page_reading:
+            self._page_reading = (kind, part, words)
+            self.pageReadingChanged.emit()
+
+    def _stop_page_reading(self, kind: str) -> None:
+        """The answer for one page came, whichever way it came."""
+        if self._page_reading[0] == kind:
+            self._set_page_reading()
+
+    def _get_page_reading(self) -> str:
+        """The words, only while the page they belong to is the one open.
+
+        Kept while another page is looked at, so coming back to one still being
+        read says so again. A history has two halves read by two different
+        things, and a playlist is only the one it was read for.
+        """
+        kind, part, words = self._page_reading
+        if not words or kind != self._view_kind:
+            return ""
+        if kind == HISTORY and part != ("music" if self._history_music else "videos"):
+            return ""
+        if kind == PLAYLIST and part != self._view_playlist:
+            return ""
+        return words
+
+    pageReading = Property(str, _get_page_reading, notify=pageReadingChanged)
     updateVersion = Property(str, lambda self: self._newer_version(), notify=updateChanged)
     # What is running, for the line that says a newer one exists.
     version = Property(str, lambda _self: __version__, constant=True)
@@ -1604,6 +1653,21 @@ class Bridge(QObject):
         if key and clear_after_s > 0:
             self._starting_timer.start(int(clear_after_s * 1000))
 
+    def _set_card_note(self, key: str, text: str, clear_after_s: float = 3.0) -> None:
+        """Say something on the card it happened to, and stop saying it.
+
+        The same place and the same shape as the word that a video is starting,
+        since both answer a press whose result is otherwise invisible, and the
+        eye is still on the card that was pressed.
+        """
+        self._card_note_timer.stop()
+        if (key, text) != (self._card_note_key, self._card_note):
+            self._card_note_key = key
+            self._card_note = text
+            self.cardNoteChanged.emit()
+        if key and text and clear_after_s > 0:
+            self._card_note_timer.start(int(clear_after_s * 1000))
+
     def _set_notice(self, text: str, clear_after_s: float = 0) -> None:
         """Say what is happening, and stop saying it when it stops.
 
@@ -2032,11 +2096,18 @@ class Bridge(QObject):
             return
         self._music_history = MusicHistoryReader(self._db, self._cfg, self)
         self._music_history.ready.connect(self._on_music_history)
-        self._music_history.failed.connect(
-            lambda message: self._set_status(f"music history, {message}"))
+        self._music_history.failed.connect(self._on_music_history_failed)
+        # Said beside the button like the other half's, where it used to say
+        # nothing at all while the listening was asked for.
+        self._set_page_reading(HISTORY, "music", "Reading the listening")
         self._launch(self._music_history)
 
+    def _on_music_history_failed(self, message: str) -> None:
+        self._stop_page_reading(HISTORY)
+        self._set_status(f"music history, {message}")
+
     def _on_music_history(self, count: int) -> None:
+        self._stop_page_reading(HISTORY)
         self._set_status(f"{count} songs from your listening history")
         if self._view_kind == HISTORY and self._history_music:
             self.reload()
@@ -2174,15 +2245,18 @@ class Bridge(QObject):
         if not force and stamp and int(time.time()) - int(stamp) < PLAYLIST_TRUST_S:
             return
         self._set_status("reading the playlist")
-        self._set_notice("Reading the playlist", clear_after_s=120)
+        self._set_page_reading(PLAYLIST, playlist_id, "Reading the playlist")
         self._playlist_items = PlaylistItemsFetcher(self._db, self._cfg, playlist_id, self)
         self._playlist_items.ready.connect(self._on_playlist_items)
-        self._playlist_items.failed.connect(
-            lambda _id, message: self._set_status(f"playlist, {message}"))
+        self._playlist_items.failed.connect(self._on_playlist_items_failed)
         self._launch(self._playlist_items)
 
+    def _on_playlist_items_failed(self, _playlist_id: str, message: str) -> None:
+        self._stop_page_reading(PLAYLIST)
+        self._set_status(f"playlist, {message}")
+
     def _on_playlist_items(self, playlist_id: str, count: int) -> None:
-        self._set_notice("")
+        self._stop_page_reading(PLAYLIST)
         self._set_status(f"{count} videos in this playlist")
         self.playlistsChanged.emit()
         if self._view_kind == PLAYLIST and self._view_playlist == playlist_id:
@@ -2551,8 +2625,10 @@ class Bridge(QObject):
         self._loading_more = append
         self._set_status("asking YouTube for more" if append
                          else "asking YouTube what it suggests")
-        self._set_notice("Loading more" if append else "Asking YouTube what it suggests",
-                         clear_after_s=90)
+        if append:
+            self._set_notice("Loading more", clear_after_s=90)
+        else:
+            self._set_page_reading(RECOMMENDED, "", "Asking YouTube what it suggests")
         # Where the next helping starts, counted in the positions asked for
         # rather than in the rows that survived. A slice is filtered on the way
         # in, radio rows and rows with no title among them, so deriving the
@@ -2571,6 +2647,7 @@ class Bridge(QObject):
         foot of the page never asks for anything again."""
         self._loading_more = False
         self._set_notice("")
+        self._stop_page_reading(RECOMMENDED)
         self._set_status(f"recommendations, {message}")
 
     def _on_recommended(self, count: int) -> None:
@@ -2580,6 +2657,7 @@ class Bridge(QObject):
         self.recommendedChanged.emit()
         self._loading_more = False
         self._set_notice("")
+        self._stop_page_reading(RECOMMENDED)
         held = self._db.recommended_count()
         if count:
             self._empty_slices = 0
@@ -3563,9 +3641,10 @@ class Bridge(QObject):
             url = ids.playlist_watch_url(key.split(":", 1)[1], self._view_playlist)
         QGuiApplication.clipboard().setText(url)
         self._set_status("address copied")
-        # The same line that says a video is starting, since a copy is just as
-        # invisible as mpv taking a few seconds to put a window up.
-        self._set_notice("Address copied, ready to paste", clear_after_s=4)
+        # On the card that was shared, the way a video starting is said on the
+        # card that was pressed, since a copy is just as invisible and the eye
+        # is still there rather than at the foot of the window.
+        self._set_card_note(key, COPIED_NOTE)
 
     @Slot(str)
     def markWatched(self, key: str) -> None:
@@ -4986,8 +5065,10 @@ class Bridge(QObject):
             return
         self._loading_more = append
         self._set_status("reading your YouTube history")
-        self._set_notice("Loading more" if append else "Reading your history",
-                         clear_after_s=120)
+        if append:
+            self._set_notice("Loading more", clear_after_s=120)
+        else:
+            self._set_page_reading(HISTORY, "videos", "Reading your history")
         self._history = HistoryImporter(self._db, self._cfg, PAGE * 2, start, append,
                                         parent=self)
         self._history.imported.connect(self._on_history)
@@ -4999,11 +5080,13 @@ class Bridge(QObject):
         foot of the page never asks for anything again."""
         self._loading_more = False
         self._set_notice("")
+        self._stop_page_reading(HISTORY)
         self._set_status(f"history, {message}")
 
     def _on_history(self, added: int, marked: int) -> None:
         self._loading_more = False
         self._set_notice("")
+        self._stop_page_reading(HISTORY)
         total = self._db.cached_count(self._db.HISTORY)
         self._exhausted = added == 0 and total > 0
         note = f"{total} in your history"
@@ -5156,6 +5239,9 @@ class Bridge(QObject):
         elif worker in (self._searcher, self._recommended, self._history):
             self._loading_more = False
             self._set_notice("")
+            self._stop_page_reading(RECOMMENDED if worker is self._recommended else HISTORY)
+        elif worker is self._music_history:
+            self._stop_page_reading(HISTORY)
         elif worker in (self._search, self._tracks, self._station):
             self._searching = False
             self.musicChanged.emit()
@@ -5186,6 +5272,8 @@ class Bridge(QObject):
             self.twitchChanged.emit()
         elif worker in (self._checkup, self._playlists, self._playlist_items):
             self._set_notice("")
+            if worker is self._playlist_items:
+                self._stop_page_reading(PLAYLIST)
         elif worker is self._channel_members:
             # The button was pressed and nothing came of it, so it goes back
             # to off rather than sitting on with an empty half behind it.

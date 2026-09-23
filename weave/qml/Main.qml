@@ -623,6 +623,15 @@ ApplicationWindow {
                 // One button for whatever the open view can do, kept beside
                 // Refresh so it is always in the same place rather than buried in
                 // the middle of the bar.
+                // A playlist being read again, beside the button that asked.
+                // Only a playlist puts words here: the suggestions and the
+                // history say it on their own row, beside their own button.
+                BusyWord {
+                    objectName: "viewActionReading"
+                    text: App.viewKind === "playlist" && root.width >= 530
+                          ? App.pageReading : ""
+                }
+
                 FlatButton {
                     objectName: "viewAction"
                     // Fourth to go, and only below the narrowest window
@@ -1406,7 +1415,17 @@ ApplicationWindow {
         // feed, so it sits at this end of the page's own row the way the
         // suggestions button does. It was in the bar at the top, where a
         // button reads as belonging to the window rather than to the view.
+        // Said beside the button while either half is being read again.
+        BusyWord {
+            objectName: "historyReading"
+            anchors.right: historyAgain.left
+            anchors.rightMargin: 12
+            anchors.verticalCenter: parent.verticalCenter
+            text: viewBar.onHistory ? App.pageReading : ""
+        }
+
         FlatButton {
+            id: historyAgain
             objectName: "historyRefresh"
             visible: viewBar.onHistory
             anchors.right: parent.right
@@ -1535,8 +1554,20 @@ ApplicationWindow {
             anchors.verticalCenter: parent.verticalCenter
             height: 28
 
+            // While they are being asked for again, that is said beside the
+            // button, and how old the ones on screen are is not said at all,
+            // since it is about to stop being true.
+            BusyWord {
+                objectName: "recommendedReading"
+                anchors.right: askAgain.left
+                anchors.rightMargin: 12
+                anchors.verticalCenter: parent.verticalCenter
+                text: App.pageReading
+            }
+
             Label {
                 objectName: "recommendedState"
+                visible: App.pageReading === ""
                 anchors.left: parent.left
                 anchors.right: askAgain.left
                 anchors.rightMargin: 10
@@ -1889,6 +1920,7 @@ ApplicationWindow {
                 canListen: !App.pressIsMusic
                 progress: model.progress
                 starting: App.startingKey === model.key
+                note: App.cardNoteKey === model.key ? App.cardNote : ""
                 onPlayRequested: App.play(model.key)
                 onListenRequested: App.playAudio(model.key)
                 onChannelRequested: App.openChannel(model.channelKey)
