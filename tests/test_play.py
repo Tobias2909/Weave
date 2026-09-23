@@ -86,6 +86,18 @@ def make_bridge(rows):
     # recorded is that it was asked and what the press did with the answer.
     bridge._stream_check = None
     bridge._pending_play = None
+    # The question a press on a card marked for members asks. Recorded, not
+    # asked, like the live one.
+    bridge._members_check = None
+    bridge._pending_members = None
+    bridge._members_cleared = ""
+    bridge._web_results = []
+    bridge.launched = []
+    bridge._launch = lambda worker: bridge.launched.append(worker) or True
+    bridge.card_notes = []
+    bridge._card_note_key = ""
+    bridge._set_card_note = lambda key, text, **_k: (
+        bridge.card_notes.append((key, text)), setattr(bridge, "_card_note_key", key))
     # The music, which steps aside for anything handed to mpv. Recorded here
     # rather than played.
     bridge._audio = Music()

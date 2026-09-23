@@ -50,6 +50,7 @@ from ..poller import (
     FavouriteMakers,
     ImageCacheJob,
     LiveWatcher,
+    MembersCheck,
     MusicHistoryReader,
     MusicHome,
     MusicSearch,
@@ -135,6 +136,12 @@ MEMBERS_NOTICE = "that one is for members of the channel"
 
 # Said on a card whose address was just put on the clipboard.
 COPIED_NOTE = "Copied, ready to paste"
+
+# Said on a card marked for members while it is asked whether it still is, and
+# what the press was for.
+CHECKING_MEMBERS_NOTE = "Checking the membership"
+WATCH = "watch"
+LISTEN = "listen"
 
 # Said beside the pointer while the channel behind a pressed name is looked up,
 # and for how long at most.
@@ -412,6 +419,12 @@ class Bridge(QObject):
         self._channel_playlists_busy = False
         self._channel_members: ChannelMembersFetcher | None = None
         self._stream_check: StreamCheck | None = None
+        # A press on a card marked for members, asked about before it is
+        # refused. What the press was, so the answer can carry it out, and the
+        # one key allowed past the mark while that happens.
+        self._members_check: MembersCheck | None = None
+        self._pending_members: tuple[str, str] | None = None
+        self._members_cleared = ""
         # One keeper for each half of a song, the picture and the sound.
         self._keepers: dict = {}
         # What is still to be written, by half, in the order it was asked
@@ -488,6 +501,7 @@ class Bridge(QObject):
         # address does. Which card, and what it says.
         self._card_note_key = ""
         self._card_note = ""
+        self._card_note_busy = False
         self._card_note_timer = QTimer(self)
         self._card_note_timer.setSingleShot(True)
         self._card_note_timer.timeout.connect(lambda: self._set_card_note("", ""))
@@ -889,6 +903,7 @@ class Bridge(QObject):
     startingKey = Property(str, lambda self: self._starting_key, notify=startingChanged)
     cardNoteKey = Property(str, lambda self: self._card_note_key, notify=cardNoteChanged)
     cardNote = Property(str, lambda self: self._card_note, notify=cardNoteChanged)
+    cardNoteBusy = Property(bool, lambda self: self._card_note_busy, notify=cardNoteChanged)
 
     def _set_page_reading(self, kind: str = "", part: str = "", words: str = "") -> None:
         """Say that a page is being read again, or stop saying it."""
@@ -1697,17 +1712,21 @@ class Bridge(QObject):
         if key and clear_after_s > 0:
             self._starting_timer.start(int(clear_after_s * 1000))
 
-    def _set_card_note(self, key: str, text: str, clear_after_s: float = 3.0) -> None:
+    def _set_card_note(self, key: str, text: str, clear_after_s: float = 3.0,
+                       busy: bool = False) -> None:
         """Say something on the card it happened to, and stop saying it.
 
         The same place and the same shape as the word that a video is starting,
         since both answer a press whose result is otherwise invisible, and the
-        eye is still on the card that was pressed.
+        eye is still on the card that was pressed. Busy is something still
+        going on, drawn with the turning mark rather than the one that says
+        it is done.
         """
         self._card_note_timer.stop()
-        if (key, text) != (self._card_note_key, self._card_note):
+        if (key, text, busy) != (self._card_note_key, self._card_note, self._card_note_busy):
             self._card_note_key = key
             self._card_note = text
+            self._card_note_busy = busy
             self.cardNoteChanged.emit()
         if key and text and clear_after_s > 0:
             self._card_note_timer.start(int(clear_after_s * 1000))
@@ -3518,15 +3537,15 @@ class Bridge(QObject):
         row = self._model.row_for_key(key)
         if not row:
             return
-        if row.get("isLocked"):
-            # Behind a membership that is not held. There is nothing to hand
-            # mpv: what comes back is a sentence about joining the channel, and
-            # mpv would open a window to say so. It is said here instead,
-            # because a press that is simply ignored reads as the application
-            # being broken, which is what the card's own mark is there to
-            # prevent. A membership that IS held plays like anything else and
-            # keeps only the mark.
-            self._set_notice(MEMBERS_NOTICE, 6)
+        if row.get("isLocked") and key != self._members_cleared:
+            # Marked as behind a membership that is not held. There would be
+            # nothing to hand mpv, only a sentence about joining the channel,
+            # but the mark is what a listing said when it was read and a video
+            # made for members first opens to everybody later. So it is asked
+            # about first, and refused only if it still is. A membership that
+            # is known to be held is not locked at all and plays like anything
+            # else, with nothing asked.
+            self._ask_about_the_membership(key, WATCH)
             return
         if row.get("isUpcoming"):
             # An announced stream is still just a listing. Handing its watch
@@ -3648,6 +3667,76 @@ class Bridge(QObject):
         _, url, title = pending
         self._set_status(f"could not tell whether {title} is still live, {why}")
         self._hand_over(key, url, title, None, True)
+
+    def _ask_about_the_membership(self, key: str, then: str) -> None:
+        """Find out whether a card marked for members still is, then do what
+        the press asked for or say why not. One at a time: a second press while
+        the first is being answered is the same question."""
+        if self._members_check is not None and self._members_check.isRunning():
+            return
+        row = self._model.row_for_key(key) or {}
+        ext_id = key.split(":", 1)[1] if key.startswith("yt:") else ""
+        if not ext_id:
+            self._set_notice(MEMBERS_NOTICE, 6)
+            return
+        self._pending_members = (key, then)
+        self._members_check = MembersCheck(self._db, self._cfg, key, ext_id,
+                                           str(row.get("channelKey") or ""), self)
+        self._members_check.answered.connect(self._on_membership_checked)
+        self._members_check.failed.connect(self._on_membership_check_failed)
+        if not self._launch(self._members_check):
+            self._pending_members = None
+            self._set_notice(MEMBERS_NOTICE, 6)
+            return
+        # A bound on the words, in case the answer never comes.
+        self._set_card_note(key, CHECKING_MEMBERS_NOTE, clear_after_s=90, busy=True)
+        self._set_status(f"checking whether {row.get('title') or 'that one'} "
+                         "is still for members")
+
+    def _on_membership_checked(self, key: str, verdict: str) -> None:
+        pending = self._pending_members
+        self._pending_members = None
+        if self._card_note_key == key:
+            self._set_card_note("", "")
+        if pending is None or pending[0] != key:
+            return
+        if verdict == MembersCheck.STILL_LOCKED:
+            self._set_notice(MEMBERS_NOTICE, 6)
+            self._set_status("still for members of the channel")
+            return
+        # The worker has written what it found. A search is held here rather
+        # than read back from the database, so its rows are told as well.
+        row = next((one for one in self._web_results if one.get("key") == key), None)
+        if verdict == MembersCheck.OPEN:
+            if row is not None:
+                row["members_only"] = 0
+            self._set_status("open to everybody now")
+        elif row is not None:
+            for one in self._web_results:
+                if one.get("channel_key") == row.get("channel_key"):
+                    one["member_of"] = 1
+        self.reload()
+        # Carried out now it is known to be fine, past the mark once, which
+        # the reload has usually taken off anyway.
+        self._members_cleared = key
+        try:
+            if pending[1] == LISTEN:
+                self.playAudio(key)
+            else:
+                self.play(key)
+        finally:
+            self._members_cleared = ""
+
+    def _on_membership_check_failed(self, key: str, why: str) -> None:
+        """The question could not be asked, so the mark is taken at its word."""
+        pending = self._pending_members
+        self._pending_members = None
+        if self._card_note_key == key:
+            self._set_card_note("", "")
+        if pending is None or pending[0] != key:
+            return
+        self._set_notice(MEMBERS_NOTICE, 6)
+        self._set_status(f"could not tell whether it is still for members, {why}")
 
     def _get_press_is_music(self) -> bool:
         """Whether a plain press in the open view already means listening.
@@ -4697,14 +4786,17 @@ class Bridge(QObject):
         row = self._model.row_for_key(video_key) or {}
         if not self._audio or not row:
             return
-        if row.get("isLocked"):
+        if row.get("isLocked") and video_key != self._members_cleared:
             # The headphone reaches the same address the card does, so it is
-            # refused for the same reason.
-            self._set_notice(MEMBERS_NOTICE, 6)
+            # asked about in the same way.
+            self._ask_about_the_membership(video_key, LISTEN)
             return
         if self._view_kind == PLAYLIST:
-            queue = [self._as_track(self._model.row_at(index))
-                     for index in range(self._model.rowCount())]
+            # A members video in the list is left out rather than reached and
+            # failed on, which would stop the listening at the song before it.
+            rows = [self._model.row_at(index) for index in range(self._model.rowCount())]
+            queue = [self._as_track(one) for one in rows
+                     if one and not one.get("isLocked")]
             queue = [track for track in queue if track]
             start = next((i for i, track in enumerate(queue)
                           if track["key"] == video_key), 0)
@@ -5345,11 +5437,13 @@ class Bridge(QObject):
         elif worker is self._channel_lists:
             self._channel_playlists_busy = False
             self.channelTabChanged.emit()
+        elif worker is self._members_check:
+            self._pending_members = None
+            self._set_card_note("", "")
         elif worker is self._artist_open:
-            # The words beside the pointer and the busy pointer itself are this
-            # worker's, so they come down here like any other flag.
+            # The words beside the pointer are this worker's, so they come
+            # down here like any other flag.
             self._stop_channel_looking()
-            self._opened_key, self._opened_moved = "", False
         elif worker is self._cache_job:
             self._cache_working = False
             self.cacheChanged.emit()

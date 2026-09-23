@@ -1737,6 +1737,68 @@ class StreamCheck(Worker):
         self.answered.emit(self._key, state.still_live, state.upcoming)
 
 
+class MembersCheck(Worker):
+    """Whether a video marked for members is still for members, asked the
+    moment it is pressed.
+
+    A mark is what a listing said when it was read, and a video made for
+    members first is opened to everybody later without its mark having to
+    follow. So a press on one is not refused on the mark alone. One call says
+    which of three it is now: still behind a membership that is not held, in
+    which case the press is refused as before; behind one that is held after
+    all, which is written down for the channel so the next press plays without
+    asking; or open to everybody, which takes the mark off wherever it is
+    stored. Never asked for a video whose membership is known to be held,
+    since that one plays with nothing to find out.
+    """
+
+    STILL_LOCKED = "locked"
+    MEMBER = "member"
+    OPEN = "open"
+
+    answered = Signal(str, str)          # key, one of the three above
+    failed = Signal(str, str)
+
+    def __init__(self, db: Database, cfg: Config, key: str, ext_id: str,
+                 channel_key: str, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._db = db
+        self._cfg = cfg
+        self._key = key
+        self._ext_id = ext_id
+        self._channel_key = channel_key
+        self._throttle = self._throttle_for(cfg)
+
+    def work(self) -> None:
+        # Spent rather than weighed, like the stream check: one deliberate press.
+        _spend(self._db, self._cfg, PLAYER)
+        try:
+            state = livecheck.check(self._cfg, self._ext_id, self._throttle, self._cancel)
+        except ProcessCancelled:
+            return
+        except livecheck.LiveCheckError as exc:
+            _spend(self._db, self._cfg, PLAYER, count=0, refused=1)
+            self.failed.emit(self._key, str(exc))
+            return
+        if self._cancel.is_set():
+            return
+        if state.members_only and state.playable:
+            # Formats came back, which is what a member is given and nobody
+            # else. Kept on the channel, so its videos stop asking.
+            if self._channel_key.startswith("yt:"):
+                if not self._db.channel(self._channel_key):
+                    self._db.remember_channel(self._channel_key, "youtube",
+                                              self._channel_key.split(":", 1)[1])
+                self._db.set_member_of(self._channel_key, True)
+            verdict = self.MEMBER
+        elif state.members_only:
+            verdict = self.STILL_LOCKED
+        else:
+            self._db.set_open_to_everybody(self._ext_id)
+            verdict = self.OPEN
+        self.answered.emit(self._key, verdict)
+
+
 class LiveWatcher(Worker):
     """Who is live right now. Runs on its own timer, far more often than the
     feed, because a live bar that is fifteen minutes stale is wrong."""

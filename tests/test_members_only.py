@@ -311,13 +311,90 @@ class KeepingTheMark(unittest.TestCase):
         self.db.upsert_videos([self.row(True)])
         self.assertEqual(self.db.video("yt:aaaaaaaaaaa")["members_only"], 1)
 
-    def test_and_another_feed_mentioning_it_does_not_unmark_it(self):
-        # Every other source is silent about this rather than saying no, so a
-        # zero from one of them is not an answer. Getting this wrong would
-        # unmark a video the moment anything else listed it.
+    def test_and_a_source_that_cannot_tell_does_not_unmark_it(self):
+        # Most sources are silent about this rather than saying no, so nothing
+        # from one of them is an answer. Getting this wrong would unmark a
+        # video the moment anything else listed it.
+        self.db.upsert_videos([self.row(True)])
+        self.db.upsert_videos([self.row(None)])
+        self.assertEqual(self.db.video("yt:aaaaaaaaaaa")["members_only"], 1)
+
+    def test_a_tab_that_says_it_is_public_does(self):
+        """Made for members first and opened to everybody later: the same
+        video, turning up in the long form tab, which never carries one that
+        is still behind the membership."""
         self.db.upsert_videos([self.row(True)])
         self.db.upsert_videos([self.row(False)])
-        self.assertEqual(self.db.video("yt:aaaaaaaaaaa")["members_only"], 1)
+        self.assertEqual(self.db.video("yt:aaaaaaaaaaa")["members_only"], 0)
+
+    def test_a_new_row_from_a_silent_source_is_not_marked(self):
+        self.db.upsert_videos([self.row(None)])
+        self.assertEqual(self.db.video("yt:aaaaaaaaaaa")["members_only"], 0)
+
+
+class WhichTabsSaySo(unittest.TestCase):
+    def test_each_tab_says_what_it_knows(self):
+        from weave.sources import rss
+
+        self.assertIs(rss.members_mark(rss.MEMBERS), True)
+        self.assertIs(rss.members_mark(rss.VIDEOS), False)
+        self.assertIs(rss.members_mark(rss.LIVE), False)
+        # Never measured for it, so neither is taken as an answer.
+        self.assertIsNone(rss.members_mark(rss.SHORTS))
+        self.assertIsNone(rss.members_mark(rss.CHANNEL))
+
+
+class InAListing(unittest.TestCase):
+    """A playlist, a search, the suggestions and the history all come from a
+    flat listing, and the listing carries the members badge for nothing."""
+
+    LINE = ("aaaaaaaaaaa\tTheirs\tOne\tUCaaaaaaaaaaaaaaaaaaaaaa\t600\tNA\t12\tNA"
+            "\tNA\tNA\t{}")
+
+    def test_the_badge_is_read(self):
+        from weave.sources import flatlist
+
+        marked = flatlist.parse(self.LINE.format("subscriber_only"))[0]
+        public = flatlist.parse(self.LINE.format("NA"))[0]
+        self.assertTrue(marked.members_only)
+        self.assertFalse(public.members_only)
+        self.assertTrue(flatlist.as_row(marked)["members_only"])
+
+    def test_a_line_from_before_the_field_existed_is_not_marked(self):
+        from weave.sources import flatlist
+
+        old = "\t".join(self.LINE.split("\t")[:10])
+        self.assertFalse(flatlist.parse(old)[0].members_only)
+
+    def test_a_playlist_keeps_it_and_the_card_is_locked(self):
+        from weave.ui.feed_model import FeedModel
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        db = Database(Path(tmp.name) / "t.db")
+        self.addCleanup(db.close)
+        db.conn.execute("INSERT INTO playlists(ext_id, title, position, seen_at) "
+                        "VALUES('PL1', 'A list', 0, 1)")
+        db.conn.commit()
+        db.replace_playlist_items("PL1", [
+            {"ext_id": "aaaaaaaaaaa", "title": "Theirs", "members_only": True},
+            {"ext_id": "bbbbbbbbbbb", "title": "Open", "members_only": False}])
+        built = {row["key"]: FeedModel._build(row) for row in db.playlist_items("PL1")}
+        self.assertTrue(built["yt:aaaaaaaaaaa"]["isMembers"])
+        self.assertTrue(built["yt:aaaaaaaaaaa"]["isLocked"])
+        self.assertFalse(built["yt:bbbbbbbbbbb"]["isMembers"])
+
+    def test_a_suggestion_and_a_search_result_keep_it_too(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        db = Database(Path(tmp.name) / "t.db")
+        self.addCleanup(db.close)
+        db.replace_cached(db.RECOMMENDED, [
+            {"ext_id": "aaaaaaaaaaa", "title": "Theirs", "members_only": True}])
+        self.assertEqual(db.cached(db.RECOMMENDED)[0]["members_only"], 1)
+        flat = db.cached_flat(db.RECOMMENDED)
+        self.assertEqual(db.decorate(flat)[0]["members_only"], 1)
+        self.assertEqual(db.decorate(flat)[0]["member_of"], 0)
 
 
 class AskingForTheMembersTab(unittest.TestCase):
@@ -542,7 +619,9 @@ class _Quiet:
 
 
 class PressingIt(unittest.TestCase):
-    """The press is refused in both places that reach the same address."""
+    """A card marked for members is asked about before it is refused, in both
+    places that reach the same address. One whose membership is held is not
+    locked at all and is never asked about."""
 
     def bridge(self, members: bool):
         from tests.test_play import make_bridge
@@ -550,26 +629,66 @@ class PressingIt(unittest.TestCase):
         # isLocked is the one the press reads: the mark says what a video is,
         # this says whether it can go anywhere. A membership you hold is
         # marked and still plays.
-        row = {"key": "yt:aaaaaaaaaaa", "title": "Theirs",
+        row = {"key": "yt:aaaaaaaaaaa", "title": "Theirs", "channelKey": "yt:UC1",
                "url": "https://example/watch", "isLive": False, "isUpcoming": False,
                "scheduledText": "", "isMembers": members, "isLocked": members}
         made = make_bridge([row])
+        # A real object underneath, since the question is a worker and a
+        # worker needs something to belong to.
+        from PySide6.QtCore import QObject
+
+        from weave.config import Config
+
+        QObject.__init__(made)
+        made._cfg = Config(raw={})
         made.said = []
         made._set_notice = lambda text, *_a, **_k: made.said.append(text)
         return made
 
-    def test_a_members_only_video_never_reaches_mpv(self):
+    def test_a_press_is_asked_about_rather_than_handed_to_mpv(self):
+        from weave.poller import MembersCheck
         from weave.ui.bridge import Bridge
 
         made = self.bridge(True)
         Bridge.play(made, "yt:aaaaaaaaaaa")
         self.assertEqual(made._player.calls, [])
+        self.assertEqual([type(one) for one in made.launched], [MembersCheck])
+        self.assertEqual(made.card_notes[-1][0], "yt:aaaaaaaaaaa",
+                         "the card pressed does not say it is being asked about")
 
-    def test_and_the_window_says_why(self):
+    def test_still_for_members_is_refused_and_says_why(self):
         from weave.ui.bridge import Bridge
 
         made = self.bridge(True)
         Bridge.play(made, "yt:aaaaaaaaaaa")
+        Bridge._on_membership_checked(made, "yt:aaaaaaaaaaa", "locked")
+        self.assertEqual(made._player.calls, [])
+        self.assertEqual(made.said, ["that one is for members of the channel"])
+
+    def test_open_to_everybody_now_plays(self):
+        from weave.ui.bridge import Bridge
+
+        made = self.bridge(True)
+        Bridge.play(made, "yt:aaaaaaaaaaa")
+        Bridge._on_membership_checked(made, "yt:aaaaaaaaaaa", "open")
+        self.assertEqual(len(made._player.calls), 1)
+        self.assertTrue(made.reloaded, "the card went on saying members")
+
+    def test_a_membership_found_to_be_held_plays(self):
+        from weave.ui.bridge import Bridge
+
+        made = self.bridge(True)
+        Bridge.play(made, "yt:aaaaaaaaaaa")
+        Bridge._on_membership_checked(made, "yt:aaaaaaaaaaa", "member")
+        self.assertEqual(len(made._player.calls), 1)
+
+    def test_a_question_that_cannot_be_asked_takes_the_mark_at_its_word(self):
+        from weave.ui.bridge import Bridge
+
+        made = self.bridge(True)
+        Bridge.play(made, "yt:aaaaaaaaaaa")
+        Bridge._on_membership_check_failed(made, "yt:aaaaaaaaaaa", "offline")
+        self.assertEqual(made._player.calls, [])
         self.assertEqual(made.said, ["that one is for members of the channel"])
 
     def test_an_ordinary_one_still_plays(self):
@@ -578,8 +697,9 @@ class PressingIt(unittest.TestCase):
         made = self.bridge(False)
         Bridge.play(made, "yt:aaaaaaaaaaa")
         self.assertEqual(len(made._player.calls), 1)
+        self.assertEqual(made.launched, [])
 
-    def test_and_so_does_one_whose_membership_you_hold(self):
+    def test_one_whose_membership_is_held_plays_with_nothing_asked(self):
         from weave.ui.bridge import Bridge
 
         made = self.bridge(True)
@@ -587,7 +707,52 @@ class PressingIt(unittest.TestCase):
         Bridge.play(made, "yt:aaaaaaaaaaa")
         self.assertEqual(len(made._player.calls), 1,
                          "a membership that is held was refused anyway")
+        self.assertEqual(made.launched, [], "a held membership was asked about")
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AQueueOfAPlaylist(unittest.TestCase):
+    """Listening to a playlist queues the whole of it, and a members video in
+    it would be reached and fail, which stops the listening at the song before
+    it. So it is left out."""
+
+    def test_a_locked_song_is_left_out(self):
+        from weave.ui.bridge import Bridge
+
+        rows = [
+            {"key": "yt:aaaaaaaaaaa", "title": "One", "channelTitle": "", "thumbnail": "",
+             "isLive": False, "url": "u1", "isLocked": False},
+            {"key": "yt:bbbbbbbbbbb", "title": "Two", "channelTitle": "", "thumbnail": "",
+             "isLive": False, "url": "u2", "isLocked": True},
+            {"key": "yt:ccccccccccc", "title": "Three", "channelTitle": "", "thumbnail": "",
+             "isLive": False, "url": "u3", "isLocked": False},
+        ]
+
+        class Model:
+            def row_for_key(self, key):
+                return next((row for row in rows if row["key"] == key), None)
+
+            def row_at(self, index):
+                return rows[index]
+
+            def rowCount(self):
+                return len(rows)
+
+        class Audio:
+            def __init__(self):
+                self.played = None
+
+            def play_items(self, items, start=0):
+                self.played = ([item["key"] for item in items], start)
+
+        bridge = Bridge.__new__(Bridge)
+        bridge._model = Model()
+        bridge._audio = Audio()
+        bridge._view_kind = "playlist"
+        bridge._set_status = lambda *a, **k: None
+        bridge._set_notice = lambda *a, **k: None
+        Bridge.playAudio(bridge, "yt:ccccccccccc")
+        self.assertEqual(bridge._audio.played, (["yt:aaaaaaaaaaa", "yt:ccccccccccc"], 1))

@@ -705,7 +705,7 @@ class WorkerRuns(unittest.TestCase):
                     "ChannelFeedFetcher", "ChannelPlaylistsFetcher",
                     "ChannelMembersFetcher",
                     "DetailFetcher", "ChannelAvatarsFetcher", "OwnerFetcher",
-                    "LengthFiller", "StreamCheck"}
+                    "LengthFiller", "StreamCheck", "MembersCheck"}
         # The checkup runs the doctor, which counts its own requests.
         run_here.add("Checkup")
         source = Path("weave/poller.py").read_text()
@@ -1018,6 +1018,45 @@ class WorkerRuns(unittest.TestCase):
         self.assertEqual(row["live_status"], "was_live")
         self.assertIsNone(row["live_viewers"])
 
+    def test_the_members_check(self):
+        """A press on a card marked for members, asked about before it is
+        refused. Three answers, and what each one writes down."""
+        from weave.db import VideoRow
+
+        self.db.add_channel("yt:UC8", "youtube", "UC8", "One")
+        self.db.upsert_videos([VideoRow("youtube", "eeeeeeeeeee", "yt:UC8", "Theirs",
+                                        published_at=1_700_000_000, members_only=True)])
+        State = poller.livecheck.LiveState
+
+        def ask():
+            answers = []
+            worker = poller.MembersCheck(self.db, self.cfg, "yt:eeeeeeeeeee",
+                                         "eeeeeeeeeee", "yt:UC8")
+            worker.answered.connect(lambda *args: answers.append(args))
+            said = self.run_worker(worker)
+            self.assertFalse([word for word in MISTAKES if word in said])
+            return answers
+
+        # Still behind it, nothing to play: refused, and nothing is changed.
+        self.patch(poller.livecheck, "check",
+                   lambda *a, **k: State("eeeeeeeeeee", None, False, None, False, True, False))
+        self.assertEqual(ask(), [("yt:eeeeeeeeeee", "locked")])
+        self.assertEqual(self.db.video("yt:eeeeeeeeeee")["members_only"], 1)
+        self.assertEqual(self.db.channel("yt:UC8")["member_of"], 0)
+
+        # Formats came back, which only a member is given. Kept on the
+        # channel, so the next press plays without asking.
+        self.patch(poller.livecheck, "check",
+                   lambda *a, **k: State("eeeeeeeeeee", None, False, None, False, True, True))
+        self.assertEqual(ask(), [("yt:eeeeeeeeeee", "member")])
+        self.assertEqual(self.db.channel("yt:UC8")["member_of"], 1)
+
+        # Open to everybody now, so the mark comes off.
+        self.patch(poller.livecheck, "check",
+                   lambda *a, **k: State("eeeeeeeeeee", None, False, None, False, False, True))
+        self.assertEqual(ask(), [("yt:eeeeeeeeeee", "open")])
+        self.assertEqual(self.db.video("yt:eeeeeeeeeee")["members_only"], 0)
+
     def test_a_stream_check_that_cannot_ask_says_so_rather_than_crashing(self):
         def refuse(*_a, **_k):
             raise poller.livecheck.LiveCheckError("yt-dlp said: no")
@@ -1059,7 +1098,8 @@ class WorkerRuns(unittest.TestCase):
                    "_history", "_search", "_tracks", "_station", "_detail", "_cache_job",
                    "_twitch", "_checkup", "_playlists", "_playlist_items", "_lengths",
                    "_channel_members", "_channel_lists", "_now_side", "_now_detail",
-                   "_artist_music", "_artist_open", "_stream_check", "_music_history")
+                   "_artist_music", "_artist_open", "_stream_check", "_music_history",
+                   "_members_check")
 
         def make(held: str):
             bridge = Bridge.__new__(Bridge)
@@ -1073,9 +1113,11 @@ class WorkerRuns(unittest.TestCase):
             bridge._notice_timer = Timer()
             bridge._channel_looking = "Opening the channel"
             bridge._looking_timer = Timer()
-            bridge._busy_pointer = False
-            bridge._opened_key = ""
-            bridge._opened_moved = False
+            bridge._pending_members = ("yt:x", "watch")
+            bridge._card_note_key = "yt:x"
+            bridge._card_note = "Checking the membership"
+            bridge._card_note_busy = True
+            bridge._card_note_timer = Timer()
             # Which page is said to be read again at its top, for the three
             # workers that read a page.
             bridge._page_reading = {"_recommended": ("recommended", "", "Asking"),
@@ -1132,6 +1174,12 @@ class WorkerRuns(unittest.TestCase):
             Bridge._on_worker_crashed(bridge, worker, "x")
             self.assertFalse(bridge._loading_more, held)
             self.assertEqual(bridge._notice, "", held)
+
+        # A members check that dies takes its note off the card.
+        bridge, worker = make("_members_check")
+        Bridge._on_worker_crashed(bridge, worker, "x")
+        self.assertIsNone(bridge._pending_members)
+        self.assertEqual(bridge._card_note, "")
 
         # The words beside the pointer come down with the lookup that put
         # them up.

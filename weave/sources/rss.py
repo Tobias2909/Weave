@@ -75,6 +75,24 @@ def is_members_kind(kind: str) -> bool:
     return kind in _MEMBERS_ONLY
 
 
+# The tabs that never carry a members video, measured: one is absent from the
+# long form tab and from the streams tab alike. So a video in one of them is
+# open to everybody, which is how one made for members first and opened to
+# everybody afterwards loses its mark. The Shorts tab and the mixed feed were
+# never measured for it and say nothing either way.
+_PUBLIC_ONLY = frozenset({VIDEOS, LIVE})
+
+
+def members_mark(kind: str) -> bool | None:
+    """What a feed of this kind says about the membership: behind it, open to
+    everybody, or nothing at all."""
+    if kind in _MEMBERS_ONLY:
+        return True
+    if kind in _PUBLIC_ONLY:
+        return False
+    return None
+
+
 def is_short_kind(kind: str) -> bool | None:
     """What a feed of this kind says about what it carries. None for the mixed
     feed, which says nothing, and which is the whole reason for the others."""
@@ -158,7 +176,7 @@ def parse(xml: bytes, kind: str = VIDEOS) -> FeedResult:
     feed_channel = _author_channel_id(root)
     feed_title = root.findtext("atom:author/atom:name", namespaces=_NS)
     is_short = is_short_kind(kind)
-    members_only = is_members_kind(kind)
+    members_only = members_mark(kind)
 
     videos: list[VideoRow] = []
     for entry in root.findall("atom:entry", _NS):

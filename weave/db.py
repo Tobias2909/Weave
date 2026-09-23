@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 46
+SCHEMA_VERSION = 47
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -388,10 +388,13 @@ class VideoRow:
     # Only used to name a channel Weave has never heard of, which a feed can
     # hand over, so it is never written over a name already stored.
     channel_title: str | None = None
-    # Behind the channel's membership. Known at insert time for anything that
-    # came out of the members tab, since that tab carries nothing else, and
-    # never guessed anywhere else.
-    members_only: bool = False
+    # Behind the channel's membership. True for anything out of the members
+    # tab, which carries nothing else. False for a source that says it is
+    # public: the long form and the streams tabs never carry a members video,
+    # measured, so a video found in one of them is not behind the membership
+    # any more, which is what a video made for members first and opened to
+    # everybody later does. None for every other source, which cannot tell.
+    members_only: bool | None = None
 
     @property
     def key(self) -> str:
@@ -452,6 +455,13 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # player being handed an address that answers with a sentence about
     # joining the channel.
     ("videos", "members_only", "INTEGER NOT NULL DEFAULT 0"),
+    # The same mark on a playlist entry and on a listing row. A playlist is
+    # the one place a members video turns up among everything else, and the
+    # listing carries the badge that says so, so each reading stores it and
+    # the next reading stores it again, which is what lets a video that stops
+    # being for members only lose the mark by itself.
+    ("playlist_items", "members_only", "INTEGER NOT NULL DEFAULT 0"),
+    ("cached_videos", "members_only", "INTEGER NOT NULL DEFAULT 0"),
     # Where a playlist row came from. mine is one of yours, read from your own
     # playlists feed. channel is one you kept off a channel page, which your
     # feed knows nothing about and must never delete. temp is one you opened
@@ -610,6 +620,12 @@ class Database:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
             row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             was = int(row["value"]) if row else 0
+            if was and was < 47:
+                # Playlists read before the mark existed carry none. Their next
+                # opening reads them again rather than trusting a reading made
+                # without it, which costs one request, and only for a list that
+                # is opened.
+                conn.execute("UPDATE playlists SET items_at=NULL")
             if was and was < 46:
                 # Everything already found gone, moved to where a playlist
                 # reading can see it. The videos table only ever held the ones
@@ -1342,7 +1358,9 @@ class Database:
             (
                 r.key, r.platform, r.ext_id, r.channel_key, r.title, r.published_at,
                 r.thumbnail_url, r.duration_s, r.views, r.likes, r.live_status,
-                None if r.is_short is None else int(r.is_short), int(r.members_only), now,
+                None if r.is_short is None else int(r.is_short),
+                int(bool(r.members_only)), now,
+                None if r.members_only is None else int(r.members_only),
             )
             for r in rows
         ]
@@ -1374,7 +1392,7 @@ class Database:
                 INSERT INTO videos(key, platform, ext_id, channel_key, title, published_at,
                                    thumbnail_url, duration_s, views, likes, live_status,
                                    is_short, members_only, first_seen_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
                 ON CONFLICT(key) DO UPDATE SET
                     title         = excluded.title,
                     published_at  = COALESCE(excluded.published_at, videos.published_at),
@@ -1384,12 +1402,12 @@ class Database:
                     likes         = COALESCE(excluded.likes, videos.likes),
                     live_status   = COALESCE(excluded.live_status, videos.live_status),
                     is_short      = COALESCE(videos.is_short, excluded.is_short),
-                    -- Raised, never lowered. The members tab is the only
-                    -- source that can say yes, and every other source is
+                    -- Raised by the members tab and lowered only by a tab
+                    -- that says the video is public. Every other source is
                     -- silent rather than saying no, so letting one of those
                     -- write a zero would unmark a video the moment any other
                     -- feed mentioned it.
-                    members_only  = MAX(videos.members_only, excluded.members_only)
+                    members_only  = COALESCE(?15, videos.members_only)
                 """,
                 payload,
             )
@@ -1817,6 +1835,14 @@ class Database:
         with self.conn as conn:
             conn.execute("UPDATE videos SET members_only=? WHERE key=?",
                          (1 if members_only else 0, key))
+
+    def set_open_to_everybody(self, ext_id: str) -> None:
+        """A video that was behind a membership is not any more. The mark
+        comes off everywhere it is stored: the feed, a playlist and a listing."""
+        with self.conn as conn:
+            conn.execute("UPDATE videos SET members_only=0 WHERE ext_id=?", (ext_id,))
+            conn.execute("UPDATE playlist_items SET members_only=0 WHERE ext_id=?", (ext_id,))
+            conn.execute("UPDATE cached_videos SET members_only=0 WHERE ext_id=?", (ext_id,))
 
     def settle_stream(self, key: str) -> None:
         with self.conn as conn:
@@ -2630,13 +2656,13 @@ class Database:
             conn.executemany(
                 "INSERT INTO cached_videos(kind, ext_id, title, channel_name, "
                 "  channel_ext_id, duration_s, thumbnail_url, views, published_at, "
-                "  live_status, scheduled_at, position, seen_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                "  live_status, scheduled_at, members_only, position, seen_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
                 [(kind, row["ext_id"], row["title"], row.get("channel_name"),
                   row.get("channel_ext_id"), row.get("duration_s"),
                   row.get("thumbnail_url"), row.get("views"),
                   row.get("published_at"), row.get("live_status"),
-                  row.get("scheduled_at"), index, now)
+                  row.get("scheduled_at"), int(bool(row.get("members_only"))), index, now)
                  for index, row in enumerate(rows)],
             )
         if not kind.startswith(self.SEARCH):
@@ -2664,13 +2690,14 @@ class Database:
             conn.executemany(
                 "INSERT INTO cached_videos(kind, ext_id, title, channel_name, "
                 "  channel_ext_id, duration_s, thumbnail_url, views, published_at, "
-                "  live_status, scheduled_at, position, seen_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                "  live_status, scheduled_at, members_only, position, seen_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
                 [(kind, row["ext_id"], row["title"], row.get("channel_name"),
                   row.get("channel_ext_id"), row.get("duration_s"),
                   row.get("thumbnail_url"), row.get("views"),
                   row.get("published_at"), row.get("live_status"),
-                  row.get("scheduled_at"), start + index, now)
+                  row.get("scheduled_at"), int(bool(row.get("members_only"))),
+                  start + index, now)
                  for index, row in enumerate(rows)],
             )
             return conn.total_changes - before
@@ -2685,7 +2712,8 @@ class Database:
         """
         return [dict(row) for row in self.conn.execute(
             "SELECT ext_id, title, channel_name, channel_ext_id, duration_s, "
-            "       thumbnail_url, views, published_at, live_status, scheduled_at "
+            "       thumbnail_url, views, published_at, live_status, scheduled_at, "
+            "       members_only "
             "FROM cached_videos WHERE kind=? ORDER BY position LIMIT ?",
             (kind, limit))]
 
@@ -2746,7 +2774,9 @@ class Database:
                             named.title, o.channel_name)            AS channel_title,
                    COALESCE(c.avatar_url, own.avatar_url,
                             named.avatar_url)                       AS avatar_url,
-                   w.video_key IS NOT NULL     AS watched
+                   w.video_key IS NOT NULL     AS watched,
+                   r.members_only              AS members_only,
+                   COALESCE(c.member_of, own.member_of, 0)          AS member_of
             FROM cached_videos r
             LEFT JOIN channels c ON c.ext_id = r.channel_ext_id AND c.platform = 'youtube'
             LEFT JOIN videos v ON v.ext_id = r.ext_id AND v.platform = 'youtube'
@@ -2870,7 +2900,7 @@ class Database:
         if channel_ids:
             marks = ",".join("?" * len(channel_ids))
             known = {row["ext_id"]: row for row in self.conn.execute(
-                f"SELECT ext_id, key, title, avatar_url FROM channels "
+                f"SELECT ext_id, key, title, avatar_url, member_of FROM channels "
                 f"WHERE platform='youtube' AND ext_id IN ({marks})", channel_ids)}
         marks = ",".join("?" * len(keys))
         watched = {row[0] for row in self.conn.execute(
@@ -2904,6 +2934,10 @@ class Database:
                                  or row.get("channel_name") or "",
                 "avatar_url": channel["avatar_url"] if channel else None,
                 "watched": key in watched,
+                # The listing's own badge, and whether the membership behind it
+                # is one that is held, which only a channel known here can say.
+                "members_only": int(bool(row.get("members_only"))),
+                "member_of": int(bool(channel["member_of"])) if channel else 0,
             })
         return out
 
@@ -3174,12 +3208,12 @@ class Database:
             conn.executemany(
                 "INSERT INTO playlist_items(playlist_id, ext_id, title, channel_name, "
                 "  channel_ext_id, duration_s, thumbnail_url, views, published_at, "
-                "  position) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                "  members_only, position) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
                 [(playlist_id, row["ext_id"], row["title"], row.get("channel_name"),
                   row.get("channel_ext_id"), row.get("duration_s"),
                   row.get("thumbnail_url"), row.get("views"), row.get("published_at"),
-                  index)
+                  int(bool(row.get("members_only"))), index)
                  for index, row in enumerate(rows)],
             )
             conn.execute("UPDATE playlists SET items_at=?, skipped=? WHERE ext_id=?",
@@ -3238,7 +3272,9 @@ class Database:
                    NULL                        AS live_status,
                    COALESCE(c.title, i.channel_name) AS channel_title,
                    c.avatar_url                AS avatar_url,
-                   w.video_key IS NOT NULL     AS watched
+                   w.video_key IS NOT NULL     AS watched,
+                   i.members_only              AS members_only,
+                   COALESCE(c.member_of, 0)    AS member_of
             FROM playlist_items i
             LEFT JOIN channels c ON c.ext_id = i.channel_ext_id AND c.platform = 'youtube'
             LEFT JOIN watched w ON w.video_key = 'yt:' || i.ext_id

@@ -36,6 +36,9 @@ Rectangle {
     // in the same place. A copied address is the one there is. Starting wins
     // if both are ever asked for at once, since it is still going on.
     property string note: ""
+    // The note is about something still going on, and turns like the word
+    // that a video is starting rather than standing still like a finished one.
+    property bool noteBusy: false
 
     signal playRequested()
     signal channelRequested()
@@ -148,14 +151,15 @@ Rectangle {
                         // The same turning mark the window used to show at the
                         // bottom, so the two read as one thing moved.
                         Rectangle {
-                            visible: card.starting
+                            visible: card.starting || card.noteBusy
                             anchors.verticalCenter: parent.verticalCenter
                             width: 9
                             height: 9
                             radius: 2
                             color: Theme.colors.accent
                             RotationAnimator on rotation {
-                                running: startingWash.visible && card.starting
+                                running: startingWash.visible
+                                         && (card.starting || card.noteBusy)
                                 loops: Animation.Infinite
                                 from: 0
                                 to: 360
@@ -166,7 +170,7 @@ Rectangle {
                         // Done rather than going on, so a mark that stands
                         // still in place of the one that turns.
                         Label {
-                            visible: !card.starting
+                            visible: !card.starting && !card.noteBusy
                             anchors.verticalCenter: parent.verticalCenter
                             text: "\u2713"
                             color: Theme.colors.accent

@@ -1395,6 +1395,62 @@ class Smoke:
         bridge.closeDetail()
         settle(0.4)
 
+    def members_in_a_playlist(self, bridge, window) -> None:
+        """A members video in a playlist says so on its card.
+
+        A playlist is where one turns up among everything else, since the
+        feeds keep them apart. The listing carries the badge, so the card is
+        marked from the reading itself, and pressing it is refused with the
+        same sentence the channel's members half gives, rather than handed to
+        mpv to fail there.
+        """
+        from weave import paths
+        from weave.db import Database
+        from weave.ui.bridge import MEMBERS_NOTICE
+
+        step("a members video in a playlist")
+        listed = Database(paths.DB_FILE)
+        listed.replace_playlists([{"ext_id": "PL0000000000000000000010", "title": "Mixed"}])
+        listed.replace_playlist_items("PL0000000000000000000010", [
+            {"ext_id": "smokememb01", "title": "For members", "channel_name": "Smoke",
+             "members_only": True},
+            {"ext_id": "smokeopen01", "title": "For everybody", "channel_name": "Smoke"},
+        ])
+        listed.close()
+        bridge.selectPlaylist("PL0000000000000000000010")
+        settle(0.7)
+        grid = find(window, "grid")
+        call(grid, "forceLayout")
+        settle(0.3)
+        badges = [found for found in
+                  (item_named(card, "membersBadge")
+                   for card in visible_children(read(grid, "contentItem")))
+                  if found is not None and read(found, "visible")]
+        self.check("a members video in a playlist is badged, and only that one",
+                   len(badges) == 1, f"{len(badges)} badged")
+        # Pressed, it is asked about first, since a video made for members
+        # first opens to everybody later, and the card says so while it is.
+        # Offline the question cannot be answered, so the mark is taken at its
+        # word and the press is refused with the reason.
+        from weave.ui.bridge import CHECKING_MEMBERS_NOTE
+
+        bridge._set_notice("")
+        bridge.play("yt:smokememb01")
+        self.check("pressing it asks whether it is still for members, on the card",
+                   read(bridge, "cardNoteKey") == "yt:smokememb01"
+                   and read(bridge, "cardNote") == CHECKING_MEMBERS_NOTE
+                   and read(bridge, "cardNoteBusy") is True,
+                   f"{read(bridge, 'cardNoteKey')} {read(bridge, 'cardNote')!r}")
+        wait_until(lambda: read(bridge, "notice") == MEMBERS_NOTICE, 5.0)
+        self.check("and still for members it says why rather than handing it to mpv",
+                   read(bridge, "notice") == MEMBERS_NOTICE
+                   and read(bridge, "startingKey") == ""
+                   and read(bridge, "cardNote") == "",
+                   f"notice {read(bridge, 'notice')!r} starting {read(bridge, 'startingKey')!r}")
+        bridge._set_notice("")
+        bridge.selectGroup(-1)
+        settle(0.4)
+
     def a_song_that_is_gone(self, bridge, window) -> None:
         """A song pressed and found to be no longer on YouTube.
 
@@ -3252,6 +3308,7 @@ class Smoke:
         self.a_stream_that_ended(bridge, window)
         self.a_song_that_is_gone(bridge, window)
         self.favourite_from_a_card(bridge, window)
+        self.members_in_a_playlist(bridge, window)
 
         if self.shot:
             self.check("screenshot written", screenshot(window, self.shot), self.shot)

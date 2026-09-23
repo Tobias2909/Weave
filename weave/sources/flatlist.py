@@ -28,7 +28,15 @@ FIELDS = ("%(id)s\t%(title)s\t%(channel)s\t%(channel_id)s\t%(duration)s"
           # costs a request, so what the feed already knows about one is known
           # in a search and in the suggestions too. Ordinary videos answer NA
           # to both, measured, rather than saying not_live.
-          "\t%(live_status)s\t%(release_timestamp)s")
+          "\t%(live_status)s\t%(release_timestamp)s"
+          # Whether it is behind the channel's membership. yt-dlp reads it off
+          # the badge the listing itself carries, so it costs nothing either:
+          # measured on a members tab, subscriber_only on every entry, and NA
+          # on every entry of the same channel's public tabs.
+          "\t%(availability)s")
+
+# What the availability field says about a video behind a membership.
+MEMBERS_ONLY = "subscriber_only"
 
 # What turns "3 weeks ago" in the listing into a date. YouTube sends the age of
 # a video in every listing as a relative phrase, and yt-dlp parses it only when
@@ -50,6 +58,7 @@ class FlatVideo:
     published_at: int | None = None
     live_status: str | None = None
     scheduled_at: int | None = None
+    members_only: bool = False
 
 
 # The exact titles YouTube substitutes for a playlist entry it will not
@@ -104,6 +113,7 @@ def parse(text: str) -> list[FlatVideo]:
             published_at=_number(parts[7]) if len(parts) > 7 else None,
             live_status=_field(parts, 8),
             scheduled_at=_number(parts[9]) if len(parts) > 9 else None,
+            members_only=_field(parts, 10) == MEMBERS_ONLY,
         ))
     return out
 
@@ -116,4 +126,5 @@ def as_row(item: FlatVideo) -> dict:
         "duration_s": item.duration_s, "thumbnail_url": item.thumbnail_url,
         "views": item.views, "published_at": item.published_at,
         "live_status": item.live_status, "scheduled_at": item.scheduled_at,
+        "members_only": item.members_only,
     }

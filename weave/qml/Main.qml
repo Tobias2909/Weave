@@ -1921,6 +1921,7 @@ ApplicationWindow {
                 progress: model.progress
                 starting: App.startingKey === model.key
                 note: App.cardNoteKey === model.key ? App.cardNote : ""
+                noteBusy: App.cardNoteKey === model.key && App.cardNoteBusy
                 onPlayRequested: App.play(model.key)
                 onListenRequested: App.playAudio(model.key)
                 onChannelRequested: App.openChannel(model.channelKey)
