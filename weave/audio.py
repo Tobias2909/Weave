@@ -85,6 +85,17 @@ VIDEO_MAX_S = 15 * 60
 # wait before the video starts.
 FADE_MS = 500
 
+# How long a song has to be heard before it counts as listened to, which is
+# what is said to the music service when that is switched on. Close to how
+# YouTube itself counts a play, and long enough that a song skipped past after
+# a few seconds is never counted, since a skip is not a listen.
+HEARD_S = 30.0
+
+# The most one report of the position can move while it counts as listening.
+# mpv reports it several times a second, so a longer step is a seek, and a
+# seek forwards is not the song being heard.
+HEARD_STEP_S = 2.0
+
 # Pausing and carrying on, pressed by hand. Half the fade above, because here
 # the press itself is the thing waited on, and at 500 ms the music was heard
 # answering late. Still a fade and never a cut, which is what a stop in the
@@ -551,6 +562,9 @@ class AudioPlayer(QObject):
     # a failure, because nothing went wrong here and there is nothing to try
     # again: what is wanted is for the lists holding it to stop holding it.
     gone = Signal(str)
+    # A song has been heard for long enough to count as listened to. Once per
+    # play, with the queue entry it was.
+    heard = Signal("QVariantMap")
 
     def __init__(self, cfg: Config, db=None, parent: QObject | None = None,
                  engine: LibmpvEngine | None = None) -> None:
@@ -600,6 +614,13 @@ class AudioPlayer(QObject):
         self._dur = 0.0
         self._paused = True
         self._idle = True
+        # How much of the song playing has really been heard, counted from
+        # the position as it moves rather than read off it, so a seek forwards
+        # adds nothing. Said once per play, when it reaches HEARD_S.
+        self._heard_entry: dict | None = None
+        self._heard_s = 0.0
+        self._heard_last: float | None = None
+        self._heard_said = False
         self._buffering = False
 
         stored = db.get_int("music_volume", 70) if db else 70
@@ -933,6 +954,10 @@ class AudioPlayer(QObject):
         self._pos = 0.0
         self._dur = 0.0
         self._remember(entry)
+        # A recovery loads the same song again from where it broke off, which
+        # is the same listening, so it keeps what was already heard.
+        if not self._recovering:
+            self._begin_hearing(entry)
         # A different song needs its own picture, so whatever was on screen
         # stops being shown and the artwork comes back at once. Asking for the
         # new one waits for mpv to say it has started this file: a picture is
@@ -1170,8 +1195,36 @@ class AudioPlayer(QObject):
     def _on_position(self, seconds: float) -> None:
         before = int(self._pos * 10)
         self._pos = seconds
+        self._count_heard(seconds)
         if int(seconds * 10) != before:
             self.progressChanged.emit()
+
+    # ---- what has been heard ---------------------------------------------
+
+    def _begin_hearing(self, entry: dict) -> None:
+        self._heard_entry = dict(entry) if str(entry.get("key") or "").startswith("yt:") else None
+        self._heard_s = 0.0
+        self._heard_last = None
+        self._heard_said = False
+
+    def _count_heard(self, seconds: float) -> None:
+        """Add what the position moved by, if it moved the way listening does.
+
+        A short song is heard once most of it has been, since it can never
+        reach the full HEARD_S.
+        """
+        if self._heard_entry is None or self._heard_said:
+            return
+        last, self._heard_last = self._heard_last, seconds
+        if last is None or self._paused:
+            return
+        step = seconds - last
+        if 0 < step <= HEARD_STEP_S:
+            self._heard_s += step
+        needed = HEARD_S if self._dur <= 0 else min(HEARD_S, self._dur * 0.9)
+        if self._heard_s >= needed:
+            self._heard_said = True
+            self.heard.emit(dict(self._heard_entry))
 
     def _on_duration(self, seconds: float) -> None:
         self._dur = seconds
@@ -1229,6 +1282,13 @@ class AudioPlayer(QObject):
             # is drawn only where there is a length, went and stayed away.
             self._dur = self._read_duration()
             self._engine.remove_before()
+            # Played as surely as a song pressed by hand, and most of a queue
+            # arrives this way. Only a press used to be noted, so a queue
+            # listened to from start to end left one song in the history.
+            entry = self._current()
+            if entry:
+                self._remember(entry)
+                self._begin_hearing(entry)
             # mpv moved on by itself, so the song changed without going through
             # the path that starts one. The picture has to follow here as well
             # or a gapless changeover leaves the page showing nothing.

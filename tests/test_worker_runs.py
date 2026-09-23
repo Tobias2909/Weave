@@ -1099,7 +1099,7 @@ class WorkerRuns(unittest.TestCase):
                    "_twitch", "_checkup", "_playlists", "_playlist_items", "_lengths",
                    "_channel_members", "_channel_lists", "_now_side", "_now_detail",
                    "_artist_music", "_artist_open", "_stream_check", "_music_history",
-                   "_members_check")
+                   "_members_check", "_listen_reporter")
 
         def make(held: str):
             bridge = Bridge.__new__(Bridge)

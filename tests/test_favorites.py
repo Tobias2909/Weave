@@ -419,6 +419,9 @@ class TheHeartFollowsTheSong(unittest.TestCase):
                 # Nor one that cannot report a song that has gone from
                 # YouTube, which is its own report and not a failure.
                 self.gone = Wire()
+                # Nor one that cannot say a song has been heard long enough
+                # to count as listened to.
+                self.heard = Wire()
                 # Nor one that cannot say what its resolve learned.
                 self.factsChanged = Wire()
                 # Whether anything is open to show a picture, which is what

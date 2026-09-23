@@ -487,6 +487,37 @@ def home(profile_path: str | None, limit: int = 6) -> list[dict]:
     return out
 
 
+def report_heard(profile_path: str | None, video_id: str) -> None:
+    """Tell the music service a song was listened to.
+
+    The one write anything here makes, and only once it has been switched on.
+    It is the note the service's own player sends when a song plays: the song
+    is asked for, which hands back an address for exactly this, and that
+    address is visited once. What it does is put the song in the account's
+    listening history, which the history and the suggestions on every other
+    device are built from. Both halves go through the same client, as the
+    library asks, so the note is made under the identity the song was asked
+    for under.
+    """
+    if not video_id:
+        return
+    try:
+        signed_in = client(profile_path)
+        song = signed_in.get_song(video_id)
+        tracking = ((song or {}).get("playbackTracking") or {}).get("videostatsPlaybackUrl")
+        if not (tracking or {}).get("baseUrl"):
+            raise MusicError("the music service gave nothing to note the listen with")
+        answer = signed_in.add_history_item(song)
+    except MusicError:
+        raise
+    except Exception as exc:
+        raise _blame("noting what was heard", exc) from exc
+    # 204 is what the library documents as done.
+    if getattr(answer, "status_code", 0) not in (200, 204):
+        raise MusicError(f"the music service answered {getattr(answer, 'status_code', '?')} "
+                         "when told what was heard")
+
+
 def artist_of(profile_path: str | None, video_id: str) -> list[dict]:
     """Who the music service says made this video.
 

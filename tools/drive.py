@@ -1483,6 +1483,30 @@ class Smoke:
         bridge.closeDetail()
         settle(0.4)
 
+    def telling_youtube_music(self, bridge, window) -> None:
+        """The one write Weave can make, which is off until it is switched on.
+
+        Only the switch and what it says are walked. What it sends is a request
+        to somebody's account, and the walk is offline and nobody's account.
+        """
+        step("telling YouTube Music what was heard")
+        bridge.showSettings()
+        settle(0.6)
+        switch = find(window, "reportListens")
+        self.check("telling YouTube Music is off until switched on",
+                   switch is not None and read(bridge, "reportListens") is False
+                   and str(read(switch, "text")) == "Kept to Weave",
+                   "missing" if switch is None else str(read(switch, "text")))
+        bridge.setReportListens(True)
+        settle(0.2)
+        self.check("and says so once it is on",
+                   str(read(switch, "text")) == "Told to YouTube Music"
+                   and read(switch, "accent") is True, str(read(switch, "text")))
+        bridge.setReportListens(False)
+        settle(0.2)
+        bridge.selectGroup(-1)
+        settle(0.4)
+
     def members_in_a_playlist(self, bridge, window) -> None:
         """A members video in a playlist says so on its card.
 
@@ -3397,6 +3421,7 @@ class Smoke:
         self.a_song_that_is_gone(bridge, window)
         self.favourite_from_a_card(bridge, window)
         self.members_in_a_playlist(bridge, window)
+        self.telling_youtube_music(bridge, window)
 
         if self.shot:
             self.check("screenshot written", screenshot(window, self.shot), self.shot)

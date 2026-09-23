@@ -11,7 +11,8 @@ window, from a bar at the foot of it, and a page of its own shows the song.
 Your channels, your groups, your window. Nothing recommends anything in the
 feed, nothing autoplays, and there is no endless scroll of things you never
 asked for. Everything Weave knows sits in one SQLite file in your own home
-directory, and it never writes to your account.
+directory, and it writes nothing to your account unless you switch on the one
+thing that does, telling YouTube Music which songs you heard.
 
 https://github.com/user-attachments/assets/cc89faf0-0ee0-4dc1-bbb0-d89526c3ddd2
 
@@ -313,10 +314,13 @@ anybody's account.
 Weave is one person's own program, not made by, endorsed by or connected to
 YouTube, Google or Twitch in any way.
 
-It reads and never writes to your account, no likes, no subscriptions, no
-comments, no playlist edits. Reading a public feed and playing a video outside
-their player is the line every external client sits on, and the same line your
-`mpv` and `yt-dlp` setup already sits on.
+It reads your account and writes nothing to it, no likes, no subscriptions, no
+comments, no playlist edits. The one exception stays off until you switch it on
+in Settings. It adds each song you listen to for at least 30 seconds to your
+YouTube Music history, with the same note its own player sends, so the history
+and the suggestions on your phone follow what you heard in Weave. Reading a
+public feed and playing a video outside their player is the line every external
+client sits on, and the same line your `mpv` and `yt-dlp` setup already sits on.
 
 ## License
 

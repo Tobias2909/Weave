@@ -49,6 +49,7 @@ from ..poller import (
     ChannelPlaylistsFetcher,
     FavouriteMakers,
     ImageCacheJob,
+    ListenReporter,
     LiveWatcher,
     MembersCheck,
     MusicHistoryReader,
@@ -142,6 +143,10 @@ COPIED_NOTE = "Copied, ready to paste"
 CHECKING_MEMBERS_NOTE = "Checking the membership"
 WATCH = "watch"
 LISTEN = "listen"
+
+# Where the switch for telling YouTube Music what was heard is kept. Off by
+# default, since it is the one write Weave can make to an account.
+REPORT_LISTENS_STATE = "music_report_listens"
 
 # Said beside the pointer while the channel behind a pressed name is looked up,
 # and for how long at most.
@@ -250,6 +255,7 @@ class Bridge(QObject):
     cardNoteChanged = Signal()
     pageReadingChanged = Signal()
     channelLookingChanged = Signal()
+    reportListensChanged = Signal()
     updateChanged = Signal()
     wizardChanged = Signal()
     recommendedChanged = Signal()
@@ -430,6 +436,10 @@ class Bridge(QObject):
         # refused. What the press was, so the answer can carry it out, and the
         # one key allowed past the mark while that happens.
         self._members_check: MembersCheck | None = None
+        # Songs heard long enough to count, waiting to be told to the music
+        # service, one at a time. Only filled while that is switched on.
+        self._listen_reporter: ListenReporter | None = None
+        self._heard_waiting: list[str] = []
         self._pending_members: tuple[str, str] | None = None
         self._members_cleared = ""
         # One keeper for each half of a song, the picture and the sound.
@@ -3985,6 +3995,59 @@ class Bridge(QObject):
         self._set_notice(f"Threw away {name}", clear_after_s=4)
         return True
 
+    # ---- telling the music service what was heard -------------------------
+
+    def _get_report_listens(self) -> bool:
+        """Whether a song heard for long enough is told to YouTube Music.
+
+        The one write Weave can make to an account, so it is off until it is
+        switched on, and a copy that has never been told otherwise writes
+        nothing at all.
+        """
+        return self._db.get_state(REPORT_LISTENS_STATE, "0") == "1"
+
+    reportListens = Property(bool, _get_report_listens, notify=reportListensChanged)
+
+    @Slot(bool)
+    def setReportListens(self, wanted: bool) -> None:
+        self._db.set_state(REPORT_LISTENS_STATE, "1" if wanted else "0")
+        if not wanted:
+            self._heard_waiting = []
+        self.reportListensChanged.emit()
+        self._set_status("YouTube Music is told what you listen to" if wanted
+                         else "YouTube Music is told nothing")
+
+    def _on_song_heard(self, entry: dict) -> None:
+        """A song reached the point where it counts as listened to."""
+        if not self._get_report_listens():
+            return
+        key = str(entry.get("key") or "")
+        if not key.startswith("yt:"):
+            return
+        self._heard_waiting.append(key.split(":", 1)[1])
+        self._report_next_listen()
+
+    def _report_next_listen(self) -> None:
+        if self._listen_reporter is not None and self._listen_reporter.isRunning():
+            return
+        if not self._heard_waiting:
+            return
+        ext_id = self._heard_waiting.pop(0)
+        self._listen_reporter = ListenReporter(self._cfg, ext_id, self)
+        self._listen_reporter.reported.connect(self._on_listen_reported)
+        self._listen_reporter.failed.connect(self._on_listen_report_failed)
+        self._listen_reporter.finished.connect(self._report_next_listen)
+        self._launch(self._listen_reporter)
+
+    def _on_listen_reported(self, _ext_id: str) -> None:
+        self._set_status("told YouTube Music what you listened to")
+
+    def _on_listen_report_failed(self, _ext_id: str, why: str) -> None:
+        """Said once, in the status line. A missed note is harmless, since the
+        song is still in the history here, and asking again would repeat a
+        write rather than a read."""
+        self._set_status(f"could not tell YouTube Music what you listened to, {why}")
+
     def attach_audio(self, audio) -> None:
         """Given after construction, since the player needs the config the
         bridge already holds."""
@@ -3995,6 +4058,7 @@ class Bridge(QObject):
         # nothing at all.
         audio.failed.connect(self._on_audio_failed)
         audio.gone.connect(self._on_song_gone)
+        audio.heard.connect(self._on_song_heard)
         # Where a song's picture is kept, and which songs are worth keeping
         # one for. The player asks the first and the window answers both.
         audio.local_video = self._kept_video
@@ -5470,6 +5534,10 @@ class Bridge(QObject):
         elif worker is self._channel_lists:
             self._channel_playlists_busy = False
             self.channelTabChanged.emit()
+        elif worker is self._listen_reporter:
+            # Holds no flag. The next song waiting is told on its own finish,
+            # which a crash still emits.
+            pass
         elif worker is self._members_check:
             self._pending_members = None
             self._set_card_note("", "")

@@ -147,6 +147,8 @@ class WhatTheWindowShows(unittest.TestCase):
             # A song found to be gone from YouTube, which is a different report
             # from a failure and reaches the lists rather than the banner.
             gone = Signal(str)
+            # A song heard long enough to count as listened to.
+            heard = Signal("QVariantMap")
             # Opening the page during a song is a moment to keep its picture,
             # so the window listens to this too.
             videoChanged = Signal()

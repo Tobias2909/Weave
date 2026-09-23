@@ -2366,6 +2366,34 @@ class FavouriteMakers(Worker):
         self.ready.emit(named)
 
 
+class ListenReporter(Worker):
+    """Tell the music service that one song was listened to.
+
+    Only ever started for a song heard for long enough, and only while that
+    has been switched on in the settings. A music call, so it is not counted
+    against a feed budget; it is one small call and one visit per song, at the
+    pace of somebody listening, which cannot burst.
+    """
+
+    reported = Signal(str)          # ext id
+    failed = Signal(str, str)       # ext id, why
+
+    def __init__(self, cfg: Config, ext_id: str, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._cfg = cfg
+        self._ext_id = ext_id
+
+    def work(self) -> None:
+        from .sources import ytmusic
+
+        try:
+            ytmusic.report_heard(cookie_profile(self._cfg), self._ext_id)
+        except (ytmusic.MusicError, ImportError) as exc:
+            self.failed.emit(self._ext_id, str(exc))
+            return
+        self.reported.emit(self._ext_id)
+
+
 class TrackList(Worker):
     """Tracks for one thing that was chosen. A playlist from YouTube Music, or
     the liked videos from YouTube, which are a different list entirely."""

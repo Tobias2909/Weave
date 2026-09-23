@@ -727,6 +727,43 @@ Item {
                             font.pixelSize: 11
                             wrapMode: Text.Wrap
                         }
+
+                        Row {
+                            spacing: 8
+
+                            Label {
+                                width: view.wordWidth
+                                height: 28
+                                text: "Your listening"
+                                color: Theme.colors.textMuted
+                                font.pixelSize: 12
+                                verticalAlignment: Text.AlignVCenter
+                            }
+
+                            FlatButton {
+                                objectName: "reportListens"
+                                text: App.reportListens ? "Told to YouTube Music"
+                                                        : "Kept to Weave"
+                                accent: App.reportListens
+                                onClicked: App.setReportListens(!App.reportListens)
+                            }
+                        }
+
+                        // What switching it on writes, said in full, since it
+                        // is the one thing Weave can write to an account.
+                        Label {
+                            objectName: "reportListensWords"
+                            width: parent.width
+                            text: "Off, Weave writes nothing to your account. On, a song you "
+                                  + "listen to for 30 seconds is added to your YouTube Music "
+                                  + "history with the same note its own player sends, so the "
+                                  + "history and the suggestions on your other devices follow "
+                                  + "what you heard here. A song skipped sooner is never sent, "
+                                  + "and nothing else is written."
+                            color: Theme.colors.textMuted
+                            font.pixelSize: 11
+                            wrapMode: Text.Wrap
+                        }
                     }
                 }
 

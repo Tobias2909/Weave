@@ -777,6 +777,65 @@ class Fading(_Base):
         self.assertEqual(self.engine.only("load"), [("load", signed("aaa"), None)])
 
 
+class Hearing(_Base):
+    """How much of a song has really been heard, which is what decides whether
+    it counts as listened to. Counted from the position as it moves, so a seek
+    forwards and a pause add nothing, and said once per play."""
+
+    def start(self, duration=240.0):
+        self.queue("aaa", "bbb")
+        self.player._begin_hearing(self.player._current())
+        self.player._paused = False
+        self.player._dur = duration
+        self.said = []
+        self.player.heard.connect(lambda entry: self.said.append(entry["key"]))
+
+    def play_to(self, seconds, step=0.25, start=0.0):
+        at = start
+        while at < seconds:
+            at = round(at + step, 3)
+            self.player._on_position(at)
+
+    def test_thirty_seconds_of_listening_counts_once(self):
+        self.start()
+        self.play_to(29.5)
+        self.assertEqual(self.said, [])
+        self.play_to(60, start=29.5)
+        self.assertEqual(self.said, ["yt:aaa"])
+
+    def test_a_seek_forwards_is_not_listening(self):
+        self.start()
+        self.play_to(5)
+        self.player._on_position(200.0)
+        self.play_to(210, start=200.0)
+        self.assertEqual(self.said, [], "a jump to near the end counted as heard")
+
+    def test_nothing_is_counted_while_paused(self):
+        self.start()
+        self.player._paused = True
+        self.play_to(60)
+        self.assertEqual(self.said, [])
+
+    def test_a_short_song_counts_once_most_of_it_is_heard(self):
+        self.start(duration=20.0)
+        self.play_to(18.5)
+        self.assertEqual(self.said, ["yt:aaa"])
+
+    def test_a_song_the_queue_moved_to_is_remembered_and_counted_afresh(self):
+        """Most of a queue arrives this way, and only a press used to be
+        noted, so a queue heard from start to end left one song behind."""
+        self.start()
+        self.play_to(40)
+        remembered = []
+        self.player._remember = lambda entry: remembered.append(entry["key"])
+        self.player._appended = 1
+        self.player._on_started(NEXT)
+        self.assertEqual(remembered, ["yt:bbb"])
+        self.player._paused = False
+        self.play_to(35)
+        self.assertEqual(self.said, ["yt:aaa", "yt:bbb"])
+
+
 class Addresses(unittest.TestCase):
     def test_the_expiry_is_read_out_of_the_address(self):
         self.assertEqual(address_expiry(signed("a", expire=1788631030)), 1788631030.0)
