@@ -465,6 +465,22 @@ class MpvMovingOn(_Base):
         self.assertEqual(self.changed, ["bbb"])
         self.assertEqual(self.engine.only("load"), [("load", signed("aaa"), None)])
 
+    def test_an_idle_report_older_than_the_handover_keeps_the_next_one(self):
+        """A player that has just been started says it is idle only after
+        the first song and the next have both been handed to it. Taken at its
+        word, the next one was forgotten and mpv moved on into it unfollowed."""
+        self.engine.idleChanged.emit(True)
+        self.engine.idleChanged.emit(False)
+        self.assertEqual(self.player._appended, 1)
+        self.engine.started.emit(NEXT)
+        self.assertEqual(self.player._at, 1)
+        self.assertEqual(self.changed, ["bbb"])
+
+    def test_idle_with_nothing_held_still_forgets_the_next_one(self):
+        self.engine.playlist = [signed("aaa")]
+        self.engine.idleChanged.emit(True)
+        self.assertIsNone(self.player._appended)
+
     def test_the_finished_entry_is_dropped_from_mpv_and_the_next_one_queued(self):
         self.engine.started.emit(NEXT)
         self.assertEqual(self.engine.only("remove_before"), [("remove_before",)])

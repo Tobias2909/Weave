@@ -8,9 +8,12 @@ is anywhere to put one.
 
 import time
 import unittest
+from unittest import mock
 
 from PySide6.QtCore import QObject
 
+from weave.audio import AudioPlayer
+from weave.config import Config
 from weave.engine_libmpv import CURRENT, NEXT, OPTIONS, LibmpvEngine, available
 
 
@@ -483,3 +486,44 @@ class ThePlayerStarting(unittest.TestCase):
             self.assertEqual(asked, [True])
         finally:
             one.quit()
+
+
+@unittest.skipUnless(available(), "libmpv is not here")
+class ANewPlayerMovingOnByItself(unittest.TestCase):
+    """Two songs kept on disk, played by a player that does not exist yet.
+
+    Both are handed over at once, before the new player has said anything, and
+    the first thing it says is that it is idle. That was taken to mean nothing
+    was held behind the first song, so when mpv moved on into the second one
+    nothing followed it, and the window showed the first song for the whole of
+    the second. Only a real player can say it this late.
+    """
+
+    def test_the_window_follows_it_into_the_second_song(self) -> None:
+        from PySide6.QtCore import QCoreApplication
+
+        app = QCoreApplication.instance() or QCoreApplication([])
+        kept = {"yt:aaaaaaaaaaa": TONE.format(hz=220, seconds=1),
+                "yt:bbbbbbbbbbb": TONE.format(hz=440, seconds=30)}
+        songs = [{"key": key, "title": key,
+                  "url": f"https://www.youtube.com/watch?v={key[3:]}"} for key in kept]
+        # Nothing is meant to be heard, and it has to be said before the
+        # player exists, because the player starting inside the first load is
+        # the whole of the case.
+        with mock.patch.dict(OPTIONS, ao="null"):
+            one = AudioPlayer(Config(raw={}))
+            one.local_audio = lambda key: kept.get(key, "")
+            try:
+                one.play_items(songs)
+                if not one._engine.running():
+                    self.skipTest("the player would not start")
+                self.assertEqual(one._appended, 1)
+                end = time.monotonic() + 8.0
+                while time.monotonic() < end and one._at != 1:
+                    app.processEvents()
+                    time.sleep(0.02)
+                self.assertEqual(one.track.get("key"), "yt:bbbbbbbbbbb",
+                                 "mpv moved on and the window did not")
+                self.assertIsNone(one._engine.holds_next())
+            finally:
+                one.shutdown()

@@ -319,6 +319,19 @@ class LibmpvEngine(QObject):
                 self._roles.pop(entry, None)
                 self._drop_entry(entry)
 
+    def holds_next(self) -> int | None:
+        """The entry held behind the one playing, or None.
+
+        Read from the roles rather than asked of the player. A role goes the
+        moment its entry ends, starts or is taken out, on whichever thread
+        hears of it first, so this is never older than a report still on its
+        way to the window, and checking such a report is what it is for.
+        """
+        for entry, role in list(self._roles.items()):
+            if role == NEXT:
+                return entry
+        return None
+
     def _drop_entry(self, entry: int) -> bool:
         """Take one entry out of the playlist, named by its id.
 

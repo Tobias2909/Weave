@@ -1257,7 +1257,16 @@ class AudioPlayer(QObject):
         self._idle = idle
         if idle:
             self._stall_timer.stop()
-            self._appended = None
+            # Idle means nothing is held behind the song, unless the player
+            # says it still holds one, and then the report is older than the
+            # handover. A player that has just been started reports its idle
+            # first state only after the first song and the next have both
+            # been given to it, which is at once when both are kept on disk.
+            # Forgetting the next one here left mpv to move on into it
+            # unfollowed, and the window stayed on the song before for the
+            # whole of the next one, its last frame included.
+            if not self._engine.holds_next():
+                self._appended = None
             self._pos = 0.0
             self.progressChanged.emit()
         self.stateChanged.emit()
@@ -1311,6 +1320,12 @@ class AudioPlayer(QObject):
             # for any earlier.
             if self._video_wanted:
                 self._start_video()
+        elif role == NEXT:
+            # mpv moved on into a song Weave had stopped counting as held.
+            # Nothing on screen changes for it, which is why it is written
+            # down: seen from the window it is indistinguishable from a song
+            # that never ended.
+            trace.mark("next_unfollowed", at=self._at)
         self.stateChanged.emit()
 
     def _on_ended(self, reason: str) -> None:
