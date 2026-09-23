@@ -129,6 +129,10 @@ class VideoSurface(QQuickFramebufferObject):
         # are drawn.
         self._drawing = True
         self.frameReady.connect(self._redraw)
+        # Told to paint when the player has something to draw and nowhere to
+        # draw it, which is how the render context gets built at all.
+        if _engine is not None and hasattr(_engine, "surfaceWanted"):
+            _engine.surfaceWanted.connect(self._nudge)
         # The window closing is what takes the picture down in a running
         # application, and nothing else does. Freed at destruction instead, the
         # context outlives the scene that made it and the process dies on the
@@ -157,6 +161,13 @@ class VideoSurface(QQuickFramebufferObject):
     drawing = Property(bool, _get_drawing, _set_drawing, notify=drawingChanged)
 
     @Slot()
+    def _nudge(self) -> None:
+        """Paint once more, while the page wants drawing. A closed page costs
+        nothing: it builds its context the next time it is opened."""
+        if self._drawing:
+            trace.mark("surface_nudged")
+            self.update()
+
     def _redraw(self) -> None:
         # A frame arrived. Always collected, whether or not it is painted,
         # because a frame left waiting holds the player's output thread for

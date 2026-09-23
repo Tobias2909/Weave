@@ -105,17 +105,31 @@ class Talker:
         self.said: list = []
         # What mpv answers for `vid`: False for none, a track id otherwise.
         self.vid = False
+        # The picture tracks on the song, which the engine reads to choose one
+        # by its number. Each video-add adds one.
+        self.tracks: list[int] = []
+
+    @property
+    def track_list(self) -> list:
+        return [{"id": number, "type": "video", "selected": self.vid == number}
+                for number in self.tracks]
 
     def command(self, *args) -> None:
         self.said.append(tuple(args))
         if args and args[0] == "video-add":
+            self.tracks.append(len(self.tracks) + 1)
             # `select` turns it on, `auto` adds it and leaves it alone.
-            self.vid = 1 if args[-1] == "select" else self.vid
+            self.vid = self.tracks[-1] if args[-1] == "select" else self.vid
 
     def __setitem__(self, name, value) -> None:
         self.said.append((name, value))
         if name == "vid":
-            self.vid = False if value == "no" else 1
+            if value == "no":
+                self.vid = False
+            elif value == "auto":
+                self.vid = self.tracks[-1] if self.tracks else False
+            else:
+                self.vid = int(value)
 
 
 class NeverWaitingOnAFrame(unittest.TestCase):
@@ -137,7 +151,9 @@ class OnePictureAttachedPerSong(unittest.TestCase):
         one.add_video("https://example.invalid/v")
         added = [s for s in one._mpv.said if s[0] == "video-add"]
         self.assertEqual(len(added), 1, "the same picture was attached twice")
-        self.assertIn(("vid", "auto"), first)
+        # On after the first, which `select` did by itself, so nothing was
+        # set on top of it.
+        self.assertTrue(one._video_on(), "the picture was never switched on")
         # And a picture already running is left alone. Setting the track
         # again makes mpv reselect it and lose the frame.
         self.assertEqual(one._mpv.said, first, "a running picture was touched")
@@ -150,7 +166,7 @@ class OnePictureAttachedPerSong(unittest.TestCase):
         one.drop_video()
         one._mpv.said.clear()
         one.add_video("https://example.invalid/v")
-        self.assertEqual(one._mpv.said, [("vid", "auto")])
+        self.assertEqual(one._mpv.said, [("vid", 1)])
 
     def test_a_new_song_forgets_what_was_attached(self) -> None:
         one = engine()
@@ -179,7 +195,7 @@ class OnePictureAttachedPerSong(unittest.TestCase):
         one.add_video("https://example.invalid/v")
         one._mpv.said.clear()
         one.render_ready(True)
-        self.assertEqual(one._mpv.said, [("vid", "auto")])
+        self.assertEqual(one._mpv.said, [("vid", 1)])
 
     def test_where_there_is_somewhere_already_it_is_asked_for_outright(self) -> None:
         one = engine()
@@ -200,7 +216,7 @@ class OnePictureAttachedPerSong(unittest.TestCase):
         one._mpv.vid = False                 # the player did not keep it
         one._mpv.said.clear()
         one.add_video("https://example.invalid/v")       # the page, opened again
-        self.assertIn(("vid", "auto"), one._mpv.said)
+        self.assertIn(("vid", 1), one._mpv.said)
 
     def test_dropping_leaves_the_track_attached(self) -> None:
         one = engine()
@@ -353,3 +369,117 @@ class TheRealPlaylist(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+@unittest.skipUnless(available(), "libmpv is not here")
+class APictureLeftUnchosen(unittest.TestCase):
+    """A picture on the song but not chosen, against a real player.
+
+    Choosing used to be `vid=auto`, which mpv answers only when it is a change,
+    so a picture that arrived unchosen with `auto` already said stayed that way
+    for the rest of the song. It is chosen by its number now, which is chosen
+    whatever `vid` says, and opening the page again chooses it.
+    """
+
+    def setUp(self) -> None:
+        from PySide6.QtCore import QCoreApplication
+
+        self.app = QCoreApplication.instance() or QCoreApplication([])
+        self.one = LibmpvEngine()
+        if not self.one.ensure():
+            self.skipTest("the player would not start")
+        # Decoded with nowhere to show it, which is what a runner can do. The
+        # choosing is the same whatever draws it.
+        self.one._mpv["ao"] = "null"
+        self.one._mpv["vo"] = "null"
+        self.said: list = []
+        self.one.started.connect(self.said.append)
+
+    def tearDown(self) -> None:
+        self.one.quit()
+
+    def until(self, ready, seconds: float = 6.0) -> bool:
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            self.app.processEvents()
+            if ready():
+                return True
+            time.sleep(0.02)
+        return ready()
+
+    def unchosen_picture(self) -> str:
+        picture = "av://lavfi:testsrc=size=160x90:rate=25:duration=60"
+        self.one.load("av://lavfi:sine=frequency=440:duration=60")
+        self.assertTrue(self.until(lambda: self.said), "the song did not start")
+        self.one.render_ready(True)
+        self.one.add_video(picture)
+        self.assertTrue(self.until(lambda: any(
+            track.get("type") == "video" for track in self.one._mpv.track_list)))
+        self.one._mpv["vid"] = "no"
+        self.assertTrue(self.until(lambda: not self.one._video_on()))
+        return picture
+
+    def test_it_is_chosen_by_its_number(self):
+        self.unchosen_picture()
+        self.one._choose_video()
+        self.assertTrue(self.until(self.one._video_on, 3.0))
+        self.assertNotEqual(self.one._mpv["vid"], "auto")
+
+    def test_opening_the_page_again_chooses_it(self):
+        picture = self.unchosen_picture()
+        self.one.add_video(picture)
+        self.assertTrue(self.until(self.one._video_on, 3.0),
+                        "asked for again, the picture stayed unchosen")
+
+
+class TheSurfaceIsToldToPaint(unittest.TestCase):
+    """The surface builds its render context only when it paints, and it has
+    no reason of its own to paint. A page opened before the first song gave it
+    one paint while there was no player, and it gave up for as long as the
+    page stayed open. Measured in a trace: the page open at 4.8 s, the picture
+    ready at 8.1 s, no render context until the page was closed."""
+
+    def test_a_picture_with_nowhere_to_go_asks_for_a_paint(self) -> None:
+        one = engine()
+        one._mpv = Talker()
+        asked = []
+        one.surfaceWanted.connect(lambda: asked.append(True))
+        one.add_video("https://example.invalid/v")
+        self.assertEqual(asked, [True])
+
+    def test_one_with_somewhere_to_go_does_not(self) -> None:
+        one = engine()
+        one._mpv = Talker()
+        one.render_ready(True)
+        asked = []
+        one.surfaceWanted.connect(lambda: asked.append(True))
+        one.add_video("https://example.invalid/v")
+        self.assertEqual(asked, [])
+
+    def test_a_picture_gone_from_the_song_is_asked_for_again_once_it_can_be_drawn(self):
+        one = engine()
+        one._mpv = Talker()
+        one.add_video("https://example.invalid/v")
+        one._mpv.tracks.clear()
+        one._mpv.said.clear()
+        one.render_ready(True)
+        again = [s for s in one._mpv.said if s[0] == "video-add"]
+        self.assertEqual(again, [("video-add", "https://example.invalid/v", "select")])
+
+
+@unittest.skipUnless(available(), "libmpv is not here")
+class ThePlayerStarting(unittest.TestCase):
+    def test_starting_asks_the_surface_to_paint(self) -> None:
+        from PySide6.QtCore import QCoreApplication
+
+        QCoreApplication.instance() or QCoreApplication([])
+        one = LibmpvEngine()
+        asked = []
+        one.surfaceWanted.connect(lambda: asked.append(True))
+        try:
+            if not one.ensure():
+                self.skipTest("the player would not start")
+            self.assertEqual(asked, [True])
+        finally:
+            one.quit()

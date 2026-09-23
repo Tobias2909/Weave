@@ -107,9 +107,17 @@ class LibmpvEngine(QObject):
     # out, and whoever holds that address is the only one who can find a fresh
     # one.
     videoRefused = Signal(str, str)
+    # The player has taken a picture's address. Said from the player's own
+    # thread and answered on this one, which is where the track is chosen.
+    _videoTaken = Signal(str)
+    # There is something the surface could draw and nowhere yet to draw it.
+    # The surface builds its render context only when it paints, and it has
+    # no reason of its own to paint, so it is told.
+    surfaceWanted = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
+        self._videoTaken.connect(self._on_video_taken)
         self._mpv = None
         self._roles: dict[int, str] = {}
         # An entry mpv began playing before the load that made it had
@@ -172,6 +180,11 @@ class LibmpvEngine(QObject):
             return False
         self._observe()
         self.set_volume(self._volume)
+        # A page opened before the first song gave the surface its one paint
+        # while there was no player, and it gave up. Measured in a trace: the
+        # page open at 4.8 s, the picture ready at 8.1 s, and no render context
+        # at all until the page was closed two minutes later.
+        self.surfaceWanted.emit()
         return True
 
     def _observe(self) -> None:
@@ -442,8 +455,9 @@ class LibmpvEngine(QObject):
         if url != self._attached:
             self._attach(url)
         self._want_video = True
-        if self._can_render:
-            self._set("vid", "auto")
+        self._choose_video()
+        if not self._can_render:
+            self.surfaceWanted.emit()
 
     def _attach(self, url: str) -> None:
         """Hand the picture to the song playing, without waiting for it.
@@ -502,6 +516,51 @@ class LibmpvEngine(QObject):
         only thing that may be done is to say so."""
         if error is not None:
             self._refused(url)
+        else:
+            self._videoTaken.emit(url)
+
+    def _on_video_taken(self, url: str) -> None:
+        if url == self._attached:
+            self._choose_video()
+
+    def _choose_video(self) -> None:
+        """Turn the picture on, if it is wanted and there is somewhere to draw it.
+
+        By the number of the track rather than by `vid=auto`. MEASURED on mpv
+        0.41: `auto` chooses a track only at the moment it is set, so set
+        while the picture was still on its way it chose nothing, the picture
+        then arrived unchosen, and setting `auto` again changed nothing, since
+        it already said `auto`. That is a picture stuck on its way for the rest
+        of the song, which opening the page again could not mend. Naming the
+        track chooses it whatever `vid` says.
+
+        Never for a track already chosen, since choosing it again makes the
+        player lose the frame it is showing.
+        """
+        if self._mpv is None or not (self._can_render and self._want_video):
+            return
+        if self._video_on():
+            return
+        try:
+            tracks = [track for track in (self._mpv.track_list or [])
+                      if track.get("type") == "video"]
+        except Exception:
+            tracks = []
+        if tracks:
+            number = max(int(track["id"]) for track in tracks)
+            trace.mark("choose_video", track=number)
+            self._set("vid", number)
+        elif self._attached:
+            # Asked for and not on the song. Seen once in a trace, cause not
+            # found: asked again, chosen this time, since there is now
+            # somewhere to draw it.
+            trace.mark("choose_video", track="asked again")
+            url, self._attached = self._attached, ""
+            self._attach(url)
+        else:
+            # Nothing has been asked for yet. The track is chosen when it is.
+            trace.mark("choose_video", track="none yet")
+            self._set("vid", "auto")
 
     def _refused(self, url: str) -> None:
         """A picture the player would not take.
@@ -547,7 +606,7 @@ class LibmpvEngine(QObject):
         self._can_render = bool(ready)
         trace.mark("render_ready", ready=self._can_render, want_video=self._want_video)
         if self._can_render and self._want_video:
-            self._set("vid", "auto")
+            self._choose_video()
         elif not self._can_render:
             self._set("vid", "no")
             if self._had_frame:
