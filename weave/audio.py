@@ -1499,6 +1499,14 @@ class AudioPlayer(QObject):
             self._engine.seek(max(0.0, min(1.0, fraction)) * self._dur)
 
     @Slot(int)
+    def seekTo(self, seconds: int) -> None:
+        """Go to a time in the track, the way a time written in a description
+        does. Past the end is the end, and a broadcast has nowhere to go."""
+        if self._dur <= 0 or self._idle:
+            return
+        self._engine.seek(max(0.0, min(self._dur, float(seconds))))
+
+    @Slot(int)
     def nudgeSeek(self, notches: int) -> None:
         """Move along the track by turns of the wheel over the bar.
 

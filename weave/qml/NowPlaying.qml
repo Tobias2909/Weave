@@ -239,8 +239,14 @@ Item {
                     objectName: "nowPlayingFrame"
                     // What is left once the words have taken their room, and
                     // the whole of it when there are no words.
+                    //
+                    // A description is not part of that: it has room of its own
+                    // under the words and scrolls there, and the picture is
+                    // sized as if two lines of it were all there is. So a long
+                    // one never shrinks the picture, and scrolling it moves
+                    // nothing above it.
                     readonly property real spare: words.visible
-                        ? stage.height - words.height - middle.spacing
+                        ? stage.height - words.height - middle.spacing - descriptionArea.reserve
                         : stage.height
                     readonly property real room: Math.min(stage.width,
                                                           Math.max(90, spare) * 16 / 9)
@@ -674,72 +680,6 @@ Item {
 
                     Item { width: 1; height: 4 }
 
-                    // What was written under the video, in the same call that
-                    // found the address. Two lines at rest and eight when it
-                    // is pressed, because the picture is given whatever room
-                    // the words leave and a long description would shrink it
-                    // to nothing. Anything past eight lines belongs on a page
-                    // of its own rather than under a song.
-                    Label {
-                        id: description
-                        objectName: "nowPlayingDescription"
-                        property bool open: false
-                        width: parent.width
-                        visible: text !== ""
-                        text: App.nowDetail.descriptionText
-                              ? App.nowDetail.descriptionText : ""
-                        color: Theme.colors.textMuted
-                        font.pixelSize: 11
-                        wrapMode: Text.Wrap
-                        maximumLineCount: open ? 8 : 2
-                        elide: Text.ElideRight
-                        // Already markup when it arrives, addresses and all,
-                        // and always markup even when there is nothing in it
-                        // to press. Told once rather than switched between
-                        // two formats, which would lay the page out again on
-                        // every song.
-                        textFormat: Text.StyledText
-                        linkColor: Theme.colors.accent
-
-                        // A different song is a different description, and one
-                        // left open would open the next one at whatever length
-                        // it happens to be.
-                        Connections {
-                            target: Audio
-                            function onTrackChanged() { description.open = false }
-                        }
-
-                        // One handler for both things the words do, because
-                        // two would fight over the press. An address under the
-                        // pointer wins: opening it is what somebody aiming at
-                        // it meant, and the rest of the words still open and
-                        // close the paragraph.
-                        MouseArea {
-                            id: descriptionPress
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            property string link: ""
-                            property bool foldable: description.truncated
-                                                    || description.open
-                            onPositionChanged: function (mouse) {
-                                link = description.linkAt(mouse.x, mouse.y)
-                            }
-                            onExited: link = ""
-                            cursorShape: (link !== "" || foldable)
-                                         ? Qt.PointingHandCursor : Qt.ArrowCursor
-                            onClicked: function (mouse) {
-                                var here = description.linkAt(mouse.x, mouse.y)
-                                if (here !== "") {
-                                    App.openLink(here)
-                                    return
-                                }
-                                if (foldable)
-                                    description.open = !description.open
-                            }
-                        }
-                    }
-
-                    Item { width: 1; height: 6 }
 
                     // A track that is really several songs says so, and the
                     // whole list of them is one press away.
@@ -793,6 +733,93 @@ Item {
                                 anchors.fill: parent
                                 onClicked: Audio.seek(modelData.at)
                             }
+                        }
+                    }
+                }
+            }
+
+            // What was written under the video, in the same call that found
+            // the address. All of it, in room of its own from under the words
+            // to the foot of the page, scrolling there when there is more
+            // than fits. The picture, the title and the facts stand still
+            // while it scrolls, because none of them is inside it.
+            // Three lines a notch. The page's own step is sized for a grid of
+            // cards and sent a room this small past most of what it holds.
+            SmoothScroll {
+                flickable: descriptionArea
+                step: Math.round(3 * descriptionLines.lineSpacing)
+            }
+
+            Flickable {
+                id: descriptionArea
+                objectName: "nowPlayingDescriptionArea"
+                readonly property string writing: App.nowDetail.descriptionText
+                                                  ? App.nowDetail.descriptionText : ""
+                // What the picture leaves for it however long it is: the gap
+                // above and two lines, which is what it always had at rest.
+                readonly property real reserve: writing !== "" && words.visible
+                    ? gap + 2 * descriptionLines.lineSpacing : 0
+                readonly property real gap: 8
+                visible: writing !== "" && words.visible
+                x: middle.x
+                y: middle.y + middle.height + gap
+                width: middle.width
+                height: Math.max(0, stage.height - y)
+                contentWidth: width
+                contentHeight: description.height
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                FontMetrics {
+                    id: descriptionLines
+                    font.pixelSize: description.font.pixelSize
+                }
+
+                // A different song is a different description, read from the
+                // top rather than from wherever the last one was left.
+                Connections {
+                    target: Audio
+                    function onTrackChanged() { descriptionArea.contentY = 0 }
+                }
+
+                Label {
+                    id: description
+                    objectName: "nowPlayingDescription"
+                    // Short of the scroll bar, so the last word of a line is
+                    // never under it.
+                    width: descriptionArea.width - 10
+                    text: descriptionArea.writing
+                    color: Theme.colors.textMuted
+                    font.pixelSize: 11
+                    wrapMode: Text.Wrap
+                    // Already markup when it arrives, addresses and all, and
+                    // always markup even when there is nothing in it to press.
+                    // Told once rather than switched between two formats,
+                    // which would lay the page out again on every song.
+                    textFormat: Text.StyledText
+                    linkColor: Theme.colors.accent
+
+                    // An address opens in the browser and a time in the text
+                    // goes to that point in the song, the way both do under a
+                    // video on YouTube.
+                    MouseArea {
+                        id: descriptionPress
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        acceptedButtons: Qt.LeftButton
+                        property string link: ""
+                        onPositionChanged: function (mouse) {
+                            link = description.linkAt(mouse.x, mouse.y)
+                        }
+                        onExited: link = ""
+                        cursorShape: link !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor
+                        onClicked: function (mouse) {
+                            var here = description.linkAt(mouse.x, mouse.y)
+                            if (here.indexOf("weave-seek:") === 0)
+                                Audio.seekTo(parseInt(here.slice(11)))
+                            else if (here !== "")
+                                App.openLink(here)
                         }
                     }
                 }

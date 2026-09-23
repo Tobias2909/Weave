@@ -444,6 +444,24 @@ class Player(QObject):
         """Collect the players that have exited since the last look."""
         self._children = [child for child in self._children if child.poll() is None]
 
+    def seek(self, seconds: float) -> bool:
+        """Send the playing mpv to a time in what it is playing.
+
+        Over its own socket, as a second client beside the watcher, which mpv
+        takes without complaint. One short connection that says one thing and
+        goes, so nothing about the watcher's own reading has to change.
+        """
+        path = resolve_socket(self._cfg)
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.settimeout(0.5)
+                sock.connect(str(path))
+                sock.sendall(json.dumps(
+                    {"command": ["seek", max(0.0, float(seconds)), "absolute"]}).encode() + b"\n")
+            return True
+        except OSError:
+            return False
+
     def play(self, url: str, twitch_login: str | None = None, live: bool = False) -> bool:
         if not self._command:
             self.failed.emit(self._error or "no player configured")

@@ -134,3 +134,33 @@ class TheBrowserIsOnlyEverGivenAnAddress(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TimesInIt(unittest.TestCase):
+    """A time written in a description goes to that point, the way it does
+    under a video on YouTube. Only when asked for, and only a time that can
+    exist in the video."""
+
+    def test_a_time_is_pressable_when_asked_for(self):
+        self.assertEqual(linked("3:25 the middle", times=True),
+                         '<a href="weave-seek:205">3:25</a> the middle')
+
+    def test_hours_as_well(self):
+        self.assertIn('href="weave-seek:3723"', linked("at 1:02:03", times=True))
+
+    def test_and_not_unless_asked(self):
+        self.assertEqual(linked("3:25 the middle"), "3:25 the middle")
+
+    def test_one_that_cannot_be_a_time_stays_words(self):
+        said = linked("12:99 and 2024:10:11 and 99:99:99", times=True)
+        self.assertNotIn("weave-seek", said)
+
+    def test_one_past_the_end_of_the_video_stays_words(self):
+        said = linked("0:30 start, 45:00 somebody else's video", times=True, within_s=600)
+        self.assertIn('href="weave-seek:30"', said)
+        self.assertNotIn("weave-seek:2700", said)
+
+    def test_never_inside_an_address(self):
+        said = linked("https://x.test/watch?t=1:20 then 1:20", times=True)
+        self.assertEqual(said.count("weave-seek:80"), 1)
+        self.assertIn('<a href="https://x.test/watch?t=1:20">', said)

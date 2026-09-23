@@ -168,7 +168,39 @@ def _escaped(text: str) -> str:
     return (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
 
-def linked(text: str) -> str:
+# A time written in a description, 3:25 or 1:02:03, standing on its own rather
+# than inside a longer run of digits and colons.
+_TIME = re.compile(r"(?<![\d:])(?:(\d{1,2}):)?(\d{1,2}):(\d{2})(?![\d:])")
+
+# Where a pressed time goes. Not an address anybody could type, so nothing a
+# description says can be mistaken for one.
+SEEK = "weave-seek:"
+
+
+def _seconds(found: re.Match) -> int | None:
+    hours, minutes, seconds = found.group(1), int(found.group(2)), int(found.group(3))
+    if seconds >= 60 or (hours is not None and minutes >= 60):
+        return None
+    return (int(hours) * 3600 if hours else 0) + minutes * 60 + seconds
+
+
+def _timed(escaped: str, within_s: float | None) -> str:
+    """Times in a piece of already escaped text, made pressable.
+
+    Only a time that exists in the video, the way YouTube does it, so a date
+    or a score written in the description stays words. Escaping leaves digits
+    and colons alone, so this can run on what was escaped.
+    """
+    def one(found: re.Match) -> str:
+        at = _seconds(found)
+        if at is None or (within_s is not None and at > within_s):
+            return found.group(0)
+        return f'<a href="{SEEK}{at}">{found.group(0)}</a>'
+
+    return _TIME.sub(one, escaped)
+
+
+def linked(text: str, times: bool = False, within_s: float | None = None) -> str:
     """A description as markup, with its addresses made pressable.
 
     Qt draws this as StyledText, which is the only format that gives a Label
@@ -184,22 +216,31 @@ def linked(text: str) -> str:
     Always returns markup, even for a description with no address in it, so
     the Label can be told once what format it is reading instead of switching
     between two and re-laying itself out on every song.
+
+    With `times`, a time written in it becomes pressable too, pointing at
+    `SEEK` and the second it names, and only up to `within_s` when the length
+    is known. Never inside an address, which is linked as a whole first.
     """
     if not text:
         return ""
+
+    def words(part: str) -> str:
+        escaped = _escaped(part)
+        return _timed(escaped, within_s) if times else escaped
+
     out: list[str] = []
     at = 0
     for found in _ADDRESS.finditer(text):
         address, after = _tidy(found.group(0))
         if not address:
             continue
-        out.append(_escaped(text[at:found.start()]))
+        out.append(words(text[at:found.start()]))
         # An address written from www alone is still an address. The scheme is
         # assumed for the browser and left out of what is drawn, which is what
         # was written.
         target = address if address.lower().startswith("http") else "https://" + address
         out.append(f'<a href="{_escaped(target)}">{_escaped(address)}</a>')
-        out.append(_escaped(after))
+        out.append(words(after))
         at = found.end()
-    out.append(_escaped(text[at:]))
+    out.append(words(text[at:]))
     return "".join(out).replace("\n", "<br>")

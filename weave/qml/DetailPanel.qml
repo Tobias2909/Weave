@@ -181,10 +181,104 @@ Rectangle {
                 wrapMode: Text.Wrap
             }
 
+            // What was written under the video, which the call that brings the
+            // comments carries whole, so it costs nothing of its own. Three
+            // lines at rest and all of it when asked, the way YouTube shows it,
+            // in a box of its own so where it ends and the comments begin is
+            // plain. An address opens in the browser, and a time goes to that
+            // point in the video mpv is playing.
+            Rectangle {
+                id: descriptionBox
+                objectName: "detailDescriptionBox"
+                readonly property string said: App.detail.descriptionText
+                                               ? App.detail.descriptionText : ""
+                // Another video is another description, which starts closed.
+                readonly property string forKey: App.detail.key ? App.detail.key : ""
+                property bool open: false
+                onForKeyChanged: descriptionBox.open = false
+                visible: said !== ""
+                width: parent.width
+                height: descriptionColumn.implicitHeight + 16
+                radius: 8
+                color: Theme.wash(Theme.colors.text, 0.06)
+
+                Column {
+                    id: descriptionColumn
+                    x: 8
+                    y: 8
+                    width: parent.width - 16
+                    spacing: 4
+
+                    Label {
+                        id: descriptionWords
+                        objectName: "detailDescription"
+                        width: parent.width
+                        text: descriptionBox.said
+                        color: Theme.colors.text
+                        font.pixelSize: panel.sized(12)
+                        wrapMode: Text.Wrap
+                        maximumLineCount: descriptionBox.open ? 100000 : 3
+                        elide: Text.ElideRight
+                        // Already markup when it arrives, and always markup,
+                        // so the format is told once rather than switched.
+                        textFormat: Text.StyledText
+                        linkColor: Theme.colors.accent
+
+                        // One handler for both things the words do, because
+                        // two would fight over the press. An address or a time
+                        // under the pointer wins, and anywhere else opens the
+                        // rest or closes it, as the box does on YouTube.
+                        MouseArea {
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            property string link: ""
+                            onPositionChanged: function (mouse) {
+                                link = descriptionWords.linkAt(mouse.x, mouse.y)
+                            }
+                            onExited: link = ""
+                            cursorShape: (link !== "" || descriptionMore.visible)
+                                         ? Qt.PointingHandCursor : Qt.ArrowCursor
+                            onClicked: function (mouse) {
+                                var here = descriptionWords.linkAt(mouse.x, mouse.y)
+                                if (here.indexOf("weave-seek:") === 0)
+                                    App.seekVideo(parseInt(here.slice(11)))
+                                else if (here !== "")
+                                    App.openLink(here)
+                                else if (descriptionMore.visible)
+                                    descriptionBox.open = !descriptionBox.open
+                            }
+                        }
+                    }
+
+                    Label {
+                        id: descriptionMore
+                        objectName: "detailDescriptionMore"
+                        visible: descriptionWords.truncated || descriptionBox.open
+                        text: descriptionBox.open ? "Show less" : "…more"
+                        color: moreHover.hovered ? Theme.colors.text : Theme.colors.textMuted
+                        font.pixelSize: panel.sized(12)
+                        font.weight: Font.DemiBold
+
+                        HoverHandler {
+                            id: moreHover
+                            cursorShape: Qt.PointingHandCursor
+                        }
+                        TapHandler { onTapped: descriptionBox.open = !descriptionBox.open }
+                    }
+                }
+            }
+
             Rectangle { width: parent.width; height: 1; color: Theme.colors.border }
 
             Label {
-                text: App.detailLoading ? "Loading comments" : "Comments"
+                objectName: "detailCommentsHeading"
+                // The description arrives in the same call as the comments, so
+                // until it has, both are being waited for. More comments asked
+                // for under a description already shown are the comments alone.
+                text: App.detailLoading
+                      ? (descriptionBox.visible ? "Loading comments"
+                                                : "Loading description and comments")
+                      : "Comments"
                 color: Theme.colors.textMuted
                 font.pixelSize: panel.sized(11)
                 font.letterSpacing: 1.1

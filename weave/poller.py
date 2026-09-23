@@ -2055,6 +2055,7 @@ class DetailFetcher(Worker):
         self.comments.emit(self._key, [self._as_map(thread) for thread in threads], {
             "views": details.views, "likes": details.likes,
             "published_at": details.published_at, "duration_s": details.duration_s,
+            "description": details.description,
         })
 
     @staticmethod

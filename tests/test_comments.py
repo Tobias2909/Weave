@@ -106,3 +106,14 @@ class VideoDetails(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WhatTheVideoSaysAboutItself(unittest.TestCase):
+    def test_the_description_comes_with_the_comments_call(self):
+        """The metadata file the comments call writes carries it whole, so
+        the panel has it for nothing."""
+        from weave.sources.comments import parse_details
+
+        self.assertEqual(parse_details({"description": "  Words about it.\n"}).description,
+                         "Words about it.")
+        self.assertEqual(parse_details({}).description, "")

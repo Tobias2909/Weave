@@ -76,6 +76,8 @@ class Details:
     likes: int | None = None
     published_at: int | None = None
     duration_s: int | None = None
+    # What was written under the video, which the same file carries whole.
+    description: str = ""
 
 
 def _whole(value) -> int | None:
@@ -101,6 +103,7 @@ def parse_details(info: dict) -> Details:
         likes=_whole(info.get("like_count")),
         published_at=published,
         duration_s=_whole(info.get("duration")),
+        description=str(info.get("description") or "").strip(),
     )
 
 

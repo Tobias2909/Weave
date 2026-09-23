@@ -326,7 +326,14 @@ class Bridge(QObject):
         # Likes, the publish date and an exact view count for a video that is
         # not in the feed. They arrive with the comments, from the metadata
         # file that call already writes.
-        self._detail_extra: tuple[str, dict] | None = None
+        # What the comments call said about the videos it was made for, by
+        # key. The panel and the Now playing page each make one, so a single
+        # slot let reading the song's comments wipe the panel's likes, date and
+        # description. A few are kept, the newest last.
+        self._detail_extra: dict[str, dict] = {}
+        # What mpv is playing, so a time written in the panel's description is
+        # something to press only while that is the video it belongs to.
+        self._mpv_key = ""
         self._detail_comments: list = []
         self._detail_threads = 5
         self._detail_loading = False
@@ -1069,7 +1076,16 @@ class Bridge(QObject):
         return next((row for row in self._web_results if row["key"] == key), None)
 
     def _get_detail(self) -> dict:
-        return self._detail_for(self._detail_key)
+        detail = self._detail_for(self._detail_key)
+        row = self._video_for_detail(self._detail_key) if detail else None
+        said = self._extra(row, "description") if row else None
+        if said:
+            # A time in it goes to that point, but only while mpv is playing
+            # this very video, which is the only one a time can be about.
+            detail["descriptionText"] = fmt.linked(
+                said, times=self._mpv_key == detail.get("key"),
+                within_s=self._extra(row, "duration_s"))
+        return detail
 
     def _detail_for(self, key: str) -> dict:
         """What is known about one video, in the shape the window draws.
@@ -1104,6 +1120,12 @@ class Bridge(QObject):
             "startsText": fmt.start_time_text(self._extra(row, "scheduled_at")),
         }
 
+    def _keep_extra(self, key: str, extra: dict) -> None:
+        self._detail_extra.pop(key, None)
+        self._detail_extra[key] = extra
+        while len(self._detail_extra) > 4:
+            self._detail_extra.pop(next(iter(self._detail_extra)))
+
     def _extra(self, row, name: str):
         """What is stored, or what the comments call brought back for a video
         that is not stored. Never the other way round, since a stored row is
@@ -1111,8 +1133,7 @@ class Bridge(QObject):
         stored = row.get(name)
         if stored is not None:
             return stored
-        if self._detail_extra and self._detail_extra[0] == row["key"]:
-            return self._detail_extra[1].get(name)
+        return (self._detail_extra.get(row["key"]) or {}).get(name)
         return None
 
     def _dislikes_for(self, row) -> int | None:
@@ -1205,7 +1226,8 @@ class Bridge(QObject):
         ("album", "albumText", None),
         ("artist", "artistText", None),
         ("category", "categoryText", None),
-        ("description", "descriptionText", fmt.linked),
+        # A time in it goes to that point in the song.
+        ("description", "descriptionText", lambda text: fmt.linked(text, times=True)),
     )
 
     def _with_player_facts(self, detail: dict) -> dict:
@@ -5010,7 +5032,7 @@ class Bridge(QObject):
         # Likes, the exact view count and the date ride along with the comments
         # call, and the panel's own reader already knows how to find them.
         if extra:
-            self._detail_extra = (key, extra)
+            self._keep_extra(key, extra)
         self.nowChanged.emit()
 
     def _on_now_detail_failed(self, what: str, message: str) -> None:
@@ -5087,7 +5109,7 @@ class Bridge(QObject):
 
     def _on_comments(self, key: str, threads: list, details: dict | None = None) -> None:
         if details:
-            self._detail_extra = (key, dict(details))
+            self._keep_extra(key, dict(details))
             self._keep_details(key, details)
         self._detail_loading = False
         if key == self._detail_key:
@@ -5122,6 +5144,7 @@ class Bridge(QObject):
         """Nothing is playing any more, so there is nothing for the panel to
         mirror. The next video brings it back."""
         self._detail_key = ""
+        self._mpv_key = ""
         self._detail_comments = []
         self._detail_closed = False
         if self._detail is not None and self._detail.isRunning():
@@ -5136,7 +5159,17 @@ class Bridge(QObject):
         # seconds, which is what watching it happen settled on.
         if self._starting_key:
             self._set_starting(self._starting_key, clear_after_s=6)
+        self._mpv_key = key
         self.openDetail(key)
+
+    @Slot(int)
+    def seekVideo(self, seconds: int) -> None:
+        """A time pressed in the panel's description, handed to mpv, which is
+        playing the video it belongs to or the time would not be pressable."""
+        if not self._mpv_key or self._mpv_key != self._detail_key:
+            return
+        if not self._player.seek(seconds):
+            self._set_status("mpv did not take the time")
 
     # ---- twitch ----------------------------------------------------------
 

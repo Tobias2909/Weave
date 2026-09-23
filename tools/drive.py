@@ -458,15 +458,47 @@ class Smoke:
                    not read(face, "visible"),
                    f"source {read(face, 'source')}")
 
+        # The description is there whole, in room of its own under the words,
+        # scrolling there. The picture keeps the size it has with two lines of
+        # description, and nothing above moves while it scrolls.
         said = find(window, "nowPlayingDescription")
-        shut = read(said, "height")
-        write(said, "open", True)
-        settle(0.3)
-        opened = read(said, "height")
-        self.check("the description opens and is still bounded",
-                   shut < opened < 200, f"{shut} then {opened}")
-        write(said, "open", False)
+        area = find(window, "nowPlayingDescriptionArea")
+        frame = find(window, "nowPlayingFrame")
+        title = find(window, "nowPlayingTitle")
+        stage_item = find(window, "nowPlayingStage")
+        self.check("the whole description is there, not two lines of it",
+                   read(said, "lineCount") > 8 and not read(said, "truncated"),
+                   f"{read(said, 'lineCount')} lines, truncated {read(said, 'truncated')}")
+        bottom = read(area, "y") + read(area, "height")
+        self.check("in room of its own down to the foot of the page",
+                   read(area, "visible") is True
+                   and abs(bottom - read(stage_item, "height")) < 1,
+                   f"ends at {bottom:.0f} of {read(stage_item, 'height'):.0f}")
+        # A notch of the wheel is three lines here, not the grid's step.
+        glide = [child for child in window.findChildren(QObject)
+                 if read(child, "flickable") == area]
+        self.check("the wheel moves the description three lines a notch",
+                   bool(glide) and 30 <= read(glide[0], "step") <= 60,
+                   f"step {read(glide[0], 'step') if glide else 'none'}")
+        long_frame = read(frame, "height")
+        before = (title.mapToItem(stage_item, 0, 0).y(), read(frame, "y"))
+        write(area, "contentY", 120.0)
         settle(0.2)
+        after = (title.mapToItem(stage_item, 0, 0).y(), read(frame, "y"))
+        self.check("scrolling it moves nothing above it",
+                   read(area, "contentY") > 0 and before == after,
+                   f"contentY {read(area, 'contentY')} {before} then {after}")
+        write(area, "contentY", 0.0)
+        audio._facts[playing] = dict(audio._facts[playing], description="Two short lines.")
+        audio.factsChanged.emit()
+        settle(0.3)
+        self.check("and the picture is the size it is beside two lines",
+                   abs(read(frame, "height") - long_frame) < 1,
+                   f"{long_frame:.0f} with a long one, {read(frame, 'height'):.0f} a short")
+        audio._facts[playing] = dict(audio._facts[playing], description=(
+            "A line about it, see https://example.test/a?b=1&c=2 and a < b. " * 40))
+        audio.factsChanged.emit()
+        settle(0.3)
 
         # What a description is made of once Qt has it. The words arrive as
         # markup so that an address inside them can be pressed, which puts the
@@ -1370,6 +1402,62 @@ class Smoke:
                    drawn_line() is not None,
                    "none" if line is None
                    else f"visible {read(line, 'visible')} height {read(line, 'height')}")
+        # Before the call answers, the description and the comments are both
+        # being waited for, and the heading says so.
+        bridge._detail_loading = True
+        bridge.detailChanged.emit()
+        settle(0.2)
+        heading = find(window, "detailCommentsHeading")
+        self.check("before it answers, the heading waits for both",
+                   str(read(heading, "text")) == "Loading description and comments",
+                   str(read(heading, "text")))
+        bridge._detail_loading = False
+        bridge.detailChanged.emit()
+        settle(0.2)
+        # The description, above the comments. Three lines at rest with a way
+        # to the rest, and a time in it is something to press only while mpv
+        # is playing this very video.
+        long_words = ("First line of it.\n0:00 Opening\n3:25 The middle\n"
+                      + "More about how it was made and who helped. " * 12)
+        bridge._keep_extra(key, {"description": long_words, "duration_s": 600})
+        bridge.detailChanged.emit()
+        settle(0.4)
+        box = find(window, "detailDescriptionBox")
+        told = find(window, "detailDescription")
+        more = find(window, "detailDescriptionMore")
+        heading = find(window, "detailCommentsHeading")
+        bridge._detail_loading = True
+        bridge.detailChanged.emit()
+        settle(0.2)
+        self.check("while more comments load under a description, only they are named",
+                   str(read(heading, "text")) == "Loading comments", str(read(heading, "text")))
+        bridge._detail_loading = False
+        bridge.detailChanged.emit()
+        settle(0.2)
+        self.check("the description is above the comments, three lines at rest",
+                   box is not None and read(box, "visible") is True
+                   and read(told, "lineCount") == 3 and read(told, "truncated") is True
+                   and read(more, "visible") is True,
+                   "missing" if box is None else
+                   f"{read(told, 'lineCount')} lines, more {read(more, 'visible')}")
+        write(box, "open", True)
+        settle(0.3)
+        self.check("and all of it once opened, with a way to close it",
+                   read(told, "truncated") is False and read(told, "lineCount") > 3
+                   and str(read(more, "text")) == "Show less",
+                   f"{read(told, 'lineCount')} lines, {read(more, 'text')}")
+        write(box, "open", False)
+        self.check("a time in it is plain while mpv plays something else",
+                   "weave-seek:" not in str(read(told, "text")))
+        bridge._mpv_key = key
+        bridge.detailChanged.emit()
+        settle(0.2)
+        self.check("and pressable while mpv plays this video",
+                   'href="weave-seek:205"' in str(read(told, "text")),
+                   str(read(told, "text"))[:120])
+        bridge._mpv_key = ""
+        bridge.detailChanged.emit()
+        settle(0.2)
         narrow_title = float(read(title, "font.pixelSize"))
         narrow_words = float(read(words, "font.pixelSize"))
         self.check("at its narrowest it is the size it always was",
