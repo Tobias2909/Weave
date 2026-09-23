@@ -82,6 +82,18 @@ def bridge_for(case, mpv_key=""):
     return made
 
 
+# What the music service answers about the video behind a link.
+ANSWER = {"title": "Theirs", "channel": "Somebody", "channel_id": CHANNEL,
+          "duration_s": 600, "views": 1234, "published_at": 1256453853, "live": False}
+
+
+def stored(made):
+    """The harness with the real lookup of what is stored, rather than none."""
+    del made._video_for_detail
+    made._web_results = []
+    return made
+
+
 class WhereAPressGoes(unittest.TestCase):
     def test_an_address_as_the_description_hands_it_over_keeps_its_time(self):
         """The markup escapes the ampersand and the label hands the address
@@ -113,6 +125,68 @@ class WhereAPressGoes(unittest.TestCase):
         self.assertAlmostEqual(card["startAt"], 0.25)
         self.assertEqual(card["channelKey"], f"yt:{CHANNEL}")
 
+    def test_pressed_again_the_card_is_filled_without_asking(self):
+        """Closed and pressed again, the card asked the music service all
+        over again and showed itself loading every time."""
+        made = stored(bridge_for(self))
+        link = youtube_link(f"https://youtu.be/{VIDEO}?t=150")
+        Bridge._open_youtube_link(made, link)
+        Bridge._on_link_facts(made, VIDEO, ANSWER)
+        Bridge.closePreview(made)
+        made.launched.clear()
+        Bridge._open_youtube_link(made, link)
+        card = Bridge._get_link_preview(made)
+        self.assertEqual((card["title"], card["channel"], card["loading"]),
+                         ("Theirs", "Somebody", False))
+        self.assertAlmostEqual(card["startAt"], 0.25)
+        self.assertEqual(made.launched, [], "the same video was asked about twice")
+
+    def test_an_answer_that_arrives_after_the_card_closed_is_still_kept(self):
+        made = stored(bridge_for(self))
+        Bridge._open_youtube_link(made, youtube_link(f"https://youtu.be/{VIDEO}"))
+        Bridge.closePreview(made)
+        Bridge._on_link_facts(made, VIDEO, ANSWER)
+        self.assertIsNotNone(made._db.conn.execute(
+            "SELECT 1 FROM videos WHERE key=?", (f"yt:{VIDEO}",)).fetchone())
+
+    def test_a_search_of_what_is_stored_finds_it_and_all_does_not(self):
+        made = stored(bridge_for(self))
+        Bridge._on_link_facts(made, VIDEO, ANSWER)
+        found = [row["key"] for row in made._db.feed(query="Theirs", hide_watched=False)]
+        self.assertEqual(found, [f"yt:{VIDEO}"])
+        self.assertEqual(made._db.feed(hide_watched=False), [],
+                         "a video behind a link poured into All")
+        channel = made._db.channel(f"yt:{CHANNEL}")
+        self.assertEqual((channel["tracked"], channel["in_all"]), (0, 0))
+
+    def test_it_is_stored_with_its_date_views_and_picture(self):
+        made = stored(bridge_for(self))
+        Bridge._on_link_facts(made, VIDEO, ANSWER)
+        row = made._db.conn.execute(
+            "SELECT * FROM videos WHERE key=?", (f"yt:{VIDEO}",)).fetchone()
+        self.assertEqual((row["duration_s"], row["views"], row["published_at"]),
+                         (600, 1234, 1256453853))
+        self.assertIn(VIDEO, row["thumbnail_url"])
+
+    def test_a_video_already_stored_only_gains_the_length_it_lacked(self):
+        from weave.db import VideoRow
+
+        made = stored(bridge_for(self))
+        made._db.add_channel(f"yt:{CHANNEL}", "youtube", CHANNEL, "Followed")
+        made._db.upsert_videos([VideoRow("youtube", VIDEO, f"yt:{CHANNEL}", "Ours",
+                                         published_at=1_700_000_000)])
+        Bridge._on_link_facts(made, VIDEO, ANSWER)
+        row = made._db.conn.execute(
+            "SELECT * FROM videos WHERE key=?", (f"yt:{VIDEO}",)).fetchone()
+        self.assertEqual((row["title"], row["published_at"], row["duration_s"]),
+                         ("Ours", 1_700_000_000, 600))
+
+    def test_a_broadcast_is_not_stored(self):
+        made = stored(bridge_for(self))
+        Bridge._on_link_facts(made, VIDEO, dict(ANSWER, live=True))
+        self.assertIsNone(made._db.conn.execute(
+            "SELECT 1 FROM videos WHERE key=?", (f"yt:{VIDEO}",)).fetchone())
+
     def test_a_time_in_a_link_to_the_video_playing_goes_to_that_time(self):
         made = bridge_for(self, mpv_key=f"yt:{VIDEO}")
         Bridge._open_youtube_link(made, youtube_link(f"https://youtu.be/{VIDEO}?t=90"))
@@ -135,6 +209,31 @@ class WhereAPressGoes(unittest.TestCase):
         self.assertEqual(made._player.handed, [f"https://www.youtube.com/watch?v={VIDEO}"])
         self.assertEqual(made._seek_on_start[:2], (f"yt:{VIDEO}", 90))
         self.assertEqual(made._preview, {}, "the card stayed up after it was acted on")
+
+
+class WhatTheMusicServiceSays(unittest.TestCase):
+    def facts(self, shown):
+        from unittest import mock
+
+        from weave.sources import ytmusic
+
+        song = {"videoDetails": {"title": "Theirs", "lengthSeconds": "600"},
+                "microformat": {"microformatDataRenderer": shown}}
+        with mock.patch.object(ytmusic, "client") as made:
+            made.return_value.get_song.return_value = song
+            return ytmusic.video_facts(None, VIDEO)
+
+    def test_when_it_was_published_in_the_shape_it_arrives_in(self):
+        said = self.facts({"publishDate": "2009-10-24T23:57:33-07:00"})
+        self.assertEqual(said["published_at"], 1256453853)
+
+    def test_the_upload_date_stands_in_for_a_missing_one(self):
+        said = self.facts({"uploadDate": "2009-10-24T23:57:33-07:00"})
+        self.assertEqual(said["published_at"], 1256453853)
+
+    def test_none_given_is_none_rather_than_a_fault(self):
+        self.assertIsNone(self.facts({})["published_at"])
+        self.assertIsNone(self.facts({"publishDate": "soon"})["published_at"])
 
 
 if __name__ == "__main__":

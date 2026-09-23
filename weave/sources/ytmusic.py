@@ -12,6 +12,7 @@ of well over a hundred kilobytes, which no server will accept.
 
 from __future__ import annotations
 
+import datetime
 import os
 import re
 from dataclasses import dataclass
@@ -512,6 +513,17 @@ def video_facts(profile_path: str | None, video_id: str) -> dict:
         except (TypeError, ValueError):
             return None
 
+    # When it was published, from the same answer. A full time with its
+    # offset, measured: 2009-10-24T23:57:33-07:00.
+    shown = ((song or {}).get("microformat") or {}).get("microformatDataRenderer") or {}
+    published = None
+    for said in (shown.get("publishDate"), shown.get("uploadDate")):
+        try:
+            published = int(datetime.datetime.fromisoformat(str(said)).timestamp())
+            break
+        except (TypeError, ValueError):
+            continue
+
     return {
         "title": str(details.get("title") or ""),
         "channel": str(details.get("author") or ""),
@@ -519,6 +531,7 @@ def video_facts(profile_path: str | None, video_id: str) -> dict:
         "duration_s": whole(details.get("lengthSeconds")),
         "views": whole(details.get("viewCount")),
         "live": bool(details.get("isLive")),
+        "published_at": published,
     }
 
 

@@ -2979,17 +2979,53 @@ class Bridge(QObject):
             self._preview["loading"] = False
 
     def _on_link_facts(self, video_id: str, facts: dict) -> None:
+        # Kept whether or not the card is still up, since the press it answers
+        # is the one most likely to be made again.
+        self._keep_linked_video(video_id, facts)
         if self._preview.get("ext_id") != video_id:
             return
-        preview = dict(self._preview, loading=False)
+        self._preview = self._filled_preview(self._preview, facts)
+        self.linkPreviewChanged.emit()
+
+    @staticmethod
+    def _filled_preview(preview: dict, facts: dict) -> dict:
+        """The card with what the music service said filled into its gaps."""
+        preview = dict(preview, loading=False)
         for name, into in (("title", "title"), ("channel", "channel"),
                            ("duration_s", "duration_s"), ("views", "views")):
             if not preview.get(into) and facts.get(name):
                 preview[into] = facts[name]
         if not preview.get("channelKey") and ids.CHANNEL_ID.match(facts.get("channel_id") or ""):
             preview["channelKey"] = ids.channel_key(facts["channel_id"])
-        self._preview = preview
-        self.linkPreviewChanged.emit()
+        return preview
+
+    def _keep_linked_video(self, video_id: str, facts: dict) -> None:
+        """Store a video met behind a link, as any other video is stored.
+
+        Pressing the same link again then finds it here and asks nothing, and
+        a search of what is stored finds it too. It comes in the way a video
+        put in a box does: its channel is kept without being followed, so it
+        never reaches All or the feed. A video already here keeps what it has
+        and only gains a length it lacked, which is what made the card ask.
+        A broadcast has no length to keep and is left out.
+        """
+        if facts.get("live"):
+            return
+        key = ids.video_key(video_id)
+        self._db.remember_video(key, {
+            "ext_id": video_id,
+            "title": facts.get("title") or "",
+            "channel_ext_id": facts.get("channel_id") if ids.CHANNEL_ID.match(
+                facts.get("channel_id") or "") else "",
+            "channel_name": facts.get("channel") or "",
+            "duration_s": facts.get("duration_s"),
+            "views": facts.get("views"),
+            "published_at": facts.get("published_at"),
+            "thumbnail_url": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+        })
+        # Nothing for a row that has its length, and a stored row keeps the
+        # rest of what it had whatever this says.
+        self._db.fill_lengths([(key, facts.get("duration_s"), None)])
 
     def _on_link_facts_failed(self, video_id: str, why: str) -> None:
         if self._preview.get("ext_id") != video_id:
