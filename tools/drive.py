@@ -332,6 +332,28 @@ def go_offline() -> None:
     process.run = no_process
     ytmusic.client = no_music
 
+    # Pressing a card hands the address to the configured player, and on a
+    # machine that has one that is a real player. Its socket lives in the
+    # scratch runtime dir, so it never reaches one already running: it starts
+    # a fresh one with the machine's own mpv configuration, which asks yt-dlp
+    # about an invented address with the browser's cookies, fails, and quits,
+    # and quitting closes the panel under whatever step the walk has reached.
+    # The command is still resolved, so whether a press would reach a player
+    # is decided exactly as before; only the starting is left out.
+    import subprocess
+    import types
+
+    from weave.player import mpv as player
+
+    class NeverStarted:
+        """A player that was handed an address and is still going."""
+
+        def poll(self):
+            return None
+
+    player.subprocess = types.SimpleNamespace(
+        Popen=lambda *_a, **_k: NeverStarted(), DEVNULL=subprocess.DEVNULL)
+
 
 def seed() -> None:
     """A channel with a few videos, so the grid and the menus have something
@@ -1321,7 +1343,10 @@ class Smoke:
         # A reply starts where the words it answers start, past that
         # comment's picture, so the two cannot be read as one list. At the old
         # eighteen pixels its picture sat half under its parent's.
-        said = items_named_like(window.contentItem(), "commentText")
+        # Looked for inside the panel only. The Now playing page draws its own
+        # comments with the same component, and one of those, hidden behind a
+        # closed page, is what a search of the whole window can find first.
+        said = items_named_like(panel, "commentText")
         if len(said) >= 2:
             parent_x = said[0].mapToItem(panel, 0, 0).x()
             reply_picture_x = find_reply_left(said[1], panel)
@@ -1331,11 +1356,20 @@ class Smoke:
         else:
             self.check("a reply begins where the words it answers begin", False,
                        f"{len(said)} comments drawn")
-        line = item_named(window.contentItem(), "commentThreadLine")
+        # Found afresh on every look. The panel's own reading of the comments
+        # can answer late on a busy machine and build the threads again, and
+        # a line held from before that belongs to a delegate on its way out.
+        def drawn_line():
+            found = item_named(panel, "commentThreadLine")
+            return found if found is not None and read(found, "visible") is True \
+                and read(found, "height") > 0 else None
+
+        wait_until(lambda: drawn_line() is not None, 3.0)
+        line = item_named(panel, "commentThreadLine")
         self.check("and a line runs down beside the replies",
-                   line is not None and read(line, "visible") is True
-                   and read(line, "height") > 0,
-                   "none" if line is None else f"height {read(line, 'height')}")
+                   drawn_line() is not None,
+                   "none" if line is None
+                   else f"visible {read(line, 'visible')} height {read(line, 'height')}")
         narrow_title = float(read(title, "font.pixelSize"))
         narrow_words = float(read(words, "font.pixelSize"))
         self.check("at its narrowest it is the size it always was",
