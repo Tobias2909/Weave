@@ -355,9 +355,37 @@ def go_offline() -> None:
         Popen=lambda *_a, **_k: NeverStarted(), DEVNULL=subprocess.DEVNULL)
 
 
+def scratch_missing() -> list[str]:
+    """The homes that would put a walk or a probe in the real collection.
+
+    Unset counts, and so does one set to the real place. The database lives
+    under the state home, so a probe that boots or seeds without its own puts
+    sample rows into the real one, and on 2026-10-01 one replaced every real
+    playlist with sixty made up ones. The guard used to be in main() alone,
+    and a probe that imports this file and calls boot() never goes there.
+    """
+    real = {"XDG_STATE_HOME": Path.home() / ".local" / "state",
+            "XDG_CONFIG_HOME": Path.home() / ".config",
+            "XDG_CACHE_HOME": Path.home() / ".cache"}
+    missing = []
+    for name, home in real.items():
+        value = os.environ.get(name)
+        if not value or Path(value).expanduser().resolve() == home.resolve():
+            missing.append(name)
+    return missing
+
+
+def refuse_the_real_collection() -> None:
+    missing = scratch_missing()
+    if missing:
+        raise SystemExit("refusing to touch the real collection: set "
+                         + ", ".join(missing) + " to a scratch directory")
+
+
 def seed() -> None:
     """A channel with a few videos, so the grid and the menus have something
     to act on, and a music section wider than the two rows it is shown in."""
+    refuse_the_real_collection()
     import json
     import time
 
@@ -3587,6 +3615,7 @@ def boot(walk, quiet_s: float = QUIET_LIMIT_S, whole_s: float = WHOLE_LIMIT_S) -
     it takes, and only one that has gone quiet is cut off. There is still an
     outermost bound, for a walk stuck in a loop that waits for ever.
     """
+    refuse_the_real_collection()
     from weave.app import run
 
     outcome = {"error": ""}
@@ -3636,8 +3665,7 @@ def main() -> int:
     parser.add_argument("--no-seed", action="store_true", help="do not add sample videos")
     args = parser.parse_args()
 
-    missing = [name for name in ("XDG_STATE_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME")
-               if not os.environ.get(name)]
+    missing = scratch_missing()
     # A session always sets this one, and it is the session's own. Unset is
     # not the danger here; the danger is the real one, so it counts as missing
     # until it points somewhere else.
