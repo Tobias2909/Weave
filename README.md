@@ -11,8 +11,9 @@ window, from a bar at the foot of it, and a page of its own shows the song.
 Your channels, your groups, your window. Nothing recommends anything in the
 feed, nothing autoplays, and there is no endless scroll of things you never
 asked for. Everything Weave knows sits in one SQLite file in your own home
-directory, and it writes nothing to your account unless you switch on the one
-thing that does, telling YouTube Music which songs you heard.
+directory, and it writes nothing to your account unless you ask it to, by
+switching on the note that tells YouTube Music which songs you heard or by
+turning a box of songs into a playlist.
 
 https://github.com/user-attachments/assets/cc89faf0-0ee0-4dc1-bbb0-d89526c3ddd2
 
@@ -314,11 +315,14 @@ anybody's account.
 Weave is one person's own program, not made by, endorsed by or connected to
 YouTube, Google or Twitch in any way.
 
-It reads your account and writes nothing to it, no likes, no subscriptions, no
-comments, no playlist edits. The one exception stays off until you switch it on
-in Settings. It adds each song you listen to for at least 30 seconds to your
-YouTube Music history, with the same note its own player sends, so the history
-and the suggestions on your phone follow what you heard in Weave. Reading a
+It reads your account and writes nothing to it on its own, no likes, no
+subscriptions, no comments, no playlist edits. Two things write, and only when
+you ask. The first stays off until you switch it on in Settings. It adds each
+song you listen to for at least 30 seconds to your YouTube Music history, with
+the same note its own player sends, so the history and the suggestions on your
+phone follow what you heard in Weave. The second is a button in the music
+settings that makes a new playlist on your account out of a box of songs, and
+it never changes a playlist that is already there. Reading a
 public feed and playing a video outside their player is the line every external
 client sits on, and the same line your `mpv` and `yt-dlp` setup already sits on.
 

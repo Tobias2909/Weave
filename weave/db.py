@@ -2774,6 +2774,28 @@ class Database:
                  song.get("duration_s"), place, int(time.time())))
             return cursor.rowcount > 0
 
+    def put_many_in_music_box(self, box_id: int, songs: list[dict]) -> int:
+        """Songs on the end of a box in one go, each once, and how many went
+        in. A whole playlist copied in at once is hundreds of them."""
+        if self.music_box(box_id) is None:
+            return 0
+        now = int(time.time())
+        with self.conn as conn:
+            place = conn.execute(
+                "SELECT COALESCE(MAX(position), -1) + 1 FROM music_box_items WHERE box_id=?",
+                (box_id,)).fetchone()[0]
+            before = conn.total_changes
+            conn.executemany(
+                "INSERT INTO music_box_items(box_id, ext_id, title, artist, artist_id, "
+                "                            thumbnail_url, duration_s, position, added_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                [(box_id, str(song["ext_id"]), str(song.get("title") or ""),
+                  song.get("artist") or None, song.get("artist_id") or None,
+                  song.get("thumbnail_url") or None, song.get("duration_s"),
+                  place + index, now)
+                 for index, song in enumerate(songs) if song.get("ext_id")])
+            return conn.total_changes - before
+
     def set_music_box_order(self, box_id: int, ext_ids: list[str]) -> None:
         """A box's songs in the order given, the way its tab was dragged into."""
         with self.conn as conn:
@@ -3403,6 +3425,21 @@ class Database:
                 "SELECT ext_id FROM playlists WHERE origin='temp' AND seen_at <= ?", (cut,))]
             conn.executemany("DELETE FROM playlists WHERE ext_id=?", [(one,) for one in gone])
             return len(gone)
+
+    def add_made_playlist(self, ext_id: str, title: str, rows: list[dict]) -> None:
+        """A playlist just made on the account from a box of songs. First among
+        your own, where it is seen, marked as music, and its songs already
+        known, since they are the box's and nothing needs reading."""
+        with self.conn as conn:
+            first = conn.execute(
+                "SELECT COALESCE(MIN(position), 0) - 1 FROM playlists "
+                "WHERE origin='mine'").fetchone()[0]
+            conn.execute(
+                "INSERT INTO playlists(ext_id, title, position, seen_at, origin, is_music) "
+                "VALUES(?,?,?,?,'mine',1) "
+                "ON CONFLICT(ext_id) DO UPDATE SET title=excluded.title, is_music=1",
+                (ext_id, title, first, int(time.time())))
+        self.replace_playlist_items(ext_id, rows)
 
     def set_playlist_music(self, playlist_id: str, music: bool) -> None:
         """Mark a playlist as music, or stop marking it.

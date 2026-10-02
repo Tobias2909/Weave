@@ -566,6 +566,46 @@ def report_heard(profile_path: str | None, video_id: str) -> None:
                          "when told what was heard")
 
 
+# How a playlist may be seen, as the music service spells it.
+PRIVACIES = ("PRIVATE", "UNLISTED", "PUBLIC")
+# Songs per request when a playlist is made. The service takes a whole list
+# with the request that makes it, and a long one is handed over in pieces.
+PLAYLIST_CHUNK = 100
+
+
+def make_playlist(profile_path: str | None, title: str, privacy: str,
+                  video_ids: list[str]) -> str:
+    """A new playlist on the account, holding these songs in this order, and
+    its id.
+
+    The only other write anything here makes besides the listening note, and
+    only ever for a press that asked for exactly this, from a box of songs. A
+    song in the list twice goes in once, since the service refuses the whole
+    request over a repeat.
+    """
+    if privacy not in PRIVACIES:
+        raise MusicError(f"a playlist cannot be {privacy.lower() or 'nothing'}")
+    songs = [one for one in dict.fromkeys(video_ids) if one]
+    if not songs:
+        raise MusicError("there are no songs to make a playlist of")
+    try:
+        signed_in = client(profile_path)
+        made = signed_in.create_playlist(title, "", privacy_status=privacy,
+                                         video_ids=songs[:PLAYLIST_CHUNK])
+        if not isinstance(made, str) or not made:
+            raise MusicError("the music service did not make the playlist")
+        for start in range(PLAYLIST_CHUNK, len(songs), PLAYLIST_CHUNK):
+            answer = signed_in.add_playlist_items(made, songs[start:start + PLAYLIST_CHUNK])
+            if "SUCCEEDED" not in str((answer or {}).get("status", "")):
+                raise MusicError(f"the playlist was made, but only the first {start} of "
+                                 f"{len(songs)} songs went in")
+    except MusicError:
+        raise
+    except Exception as exc:
+        raise _blame("making the playlist", exc) from exc
+    return made
+
+
 def artist_of(profile_path: str | None, video_id: str) -> list[dict]:
     """Who the music service says made this video.
 

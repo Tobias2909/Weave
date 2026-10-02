@@ -2369,6 +2369,34 @@ class Smoke:
                    and item_named(page, "reportListens") is not None
                    and item_named(find(window, "settingsView"), "videoCeiling") is None)
 
+        # A box into a playlist is asked about first, and nothing here presses
+        # the button that writes. A playlist into a box picks from a list.
+        makers = [b for b in items_named_like(root, "musicBoxMakePlaylist") if read(b, "visible")]
+        self.check("every box offers to become a playlist", len(makers) == len(boxes),
+                   f"{len(makers)} of {len(boxes)}")
+        from PySide6.QtCore import Q_ARG, QMetaObject
+        asking = find(window, "makePlaylist")
+        QMetaObject.invokeMethod(asking, "ask", Q_ARG("QVariant", made),
+                                 Q_ARG("QVariant", "Smoke box"), Q_ARG("QVariant", 1))
+        settle(0.4)
+        self.check("and asks before it writes, with the box's name offered",
+                   bool(read(asking, "visible"))
+                   and read(item_named(root, "makePlaylistName"), "text") == "Smoke box"
+                   and read(asking, "privacy") == "PRIVATE")
+        call(asking, "close")
+        settle(0.3)
+        picking = find(window, "playlistToBox")
+        call(picking, "pick")
+        settle(0.4)
+        # The walk has no playlists of its own this early, so the list is
+        # checked against what the bridge offers rather than for a number.
+        self.check("a playlist can be picked to copy into a box",
+                   bool(read(picking, "visible"))
+                   and len(read(picking, "shown")) == len(bridge.playlistsForBoxes()),
+                   f"{len(read(picking, 'shown'))} shown of {len(bridge.playlistsForBoxes())}")
+        call(picking, "close")
+        settle(0.3)
+
         before = len(read(bridge, "musicShelves"))
         bridge.setShelfHidden(shelves[0]["title"], True)
         self.check("a shelf put out of sight leaves the page",

@@ -63,6 +63,7 @@ from ..poller import (
     LengthFiller,
     OwnerFetcher,
     PlaylistItemsFetcher,
+    PlaylistMaker,
     PlaylistsFetcher,
     RecommendationsFetcher,
     SearchFetcher,
@@ -479,6 +480,15 @@ class Bridge(QObject):
         # Songs heard long enough to count, waiting to be told to the music
         # service, one at a time. Only filled while that is switched on.
         self._listen_reporter: ListenReporter | None = None
+        # A box of songs being made into a playlist on the account, the box's
+        # name while it is, and the songs it is being made of, which become
+        # the new playlist's contents here without reading it back.
+        self._playlist_maker: PlaylistMaker | None = None
+        self._making_playlist = ""
+        self._making_rows: list[dict] = []
+        # A playlist to be copied into a box once it has been read, since
+        # one never opened has nothing stored to copy.
+        self._box_after_read = ""
         # A video behind a pressed link, shown on a card beside the press
         # rather than opened, and the lookups behind the card and the other
         # links. A time the video is to start at once mpv reports it, since
@@ -2511,14 +2521,20 @@ class Bridge(QObject):
         self._playlist_items.failed.connect(self._on_playlist_items_failed)
         self._launch(self._playlist_items)
 
-    def _on_playlist_items_failed(self, _playlist_id: str, message: str) -> None:
+    def _on_playlist_items_failed(self, playlist_id: str, message: str) -> None:
         self._stop_page_reading(PLAYLIST)
         self._set_status(f"playlist, {message}")
+        if self._box_after_read and self._box_after_read == playlist_id:
+            self._box_after_read = ""
+            self._set_notice(f"The playlist could not be read, {message}", clear_after_s=8)
 
     def _on_playlist_items(self, playlist_id: str, count: int) -> None:
         self._stop_page_reading(PLAYLIST)
         self._set_status(f"{count} videos in this playlist")
         self.playlistsChanged.emit()
+        if self._box_after_read and self._box_after_read == playlist_id:
+            self._box_after_read = ""
+            self._copy_playlist_into_box(playlist_id)
         if self._view_kind == PLAYLIST and self._view_playlist == playlist_id:
             self.reload()
 
@@ -5533,6 +5549,132 @@ class Bridge(QObject):
         if self._music_tab >= 0:
             self.putSongInBox("tab", index, -1, self._music_tab)
 
+    # ---- boxes and playlists ---------------------------------------------
+    #
+    # A box can become a playlist on the account and a playlist can become a
+    # box. Either way the one it came from stays as it was. Making a playlist
+    # is a write to the account, done only on a press that asked for it.
+
+    def _get_making_playlist(self) -> str:
+        return self._making_playlist
+
+    makingPlaylist = Property(str, _get_making_playlist, notify=musicBoxesChanged)
+
+    @Slot(int, str, str)
+    def makePlaylistFromBox(self, box_id: int, title: str, privacy: str) -> None:
+        """Make a playlist on the account out of a box, in the box's order."""
+        if self._playlist_maker is not None and self._playlist_maker.isRunning():
+            self._set_notice("A playlist is already being made", clear_after_s=4)
+            return
+        title = (title or "").strip()
+        rows = self._box_rows(box_id)
+        if not title or not rows:
+            self._set_notice("There are no songs to make a playlist of" if title
+                             else "A playlist needs a name", clear_after_s=4)
+            return
+        self._making_rows = [{
+            "ext_id": row["videoId"], "title": row["title"], "channel_name": row["artist"] or None,
+            "channel_ext_id": row["artistId"] if ids.CHANNEL_ID.match(row["artistId"]) else None,
+            "duration_s": self._seconds(row["duration"]),
+            "thumbnail_url": plain_source(row["thumbnail"]) or None,
+        } for row in rows]
+        self._making_playlist = self._box_name(box_id)
+        self._playlist_maker = PlaylistMaker(self._cfg, title, privacy,
+                                             [row["videoId"] for row in rows], self)
+        self._playlist_maker.made.connect(self._on_playlist_made)
+        self._playlist_maker.failed.connect(self._on_playlist_make_failed)
+        if not self._launch(self._playlist_maker):
+            self._making_playlist = ""
+            return
+        # Cleared by the answer, or by the timer should none come.
+        self._set_notice(f"Making the playlist {title}", clear_after_s=120)
+        self.musicBoxesChanged.emit()
+
+    def _on_playlist_made(self, ext_id: str, title: str, count: int) -> None:
+        self._db.add_made_playlist(ext_id, title, self._making_rows)
+        self._making_playlist = ""
+        self._making_rows = []
+        self._set_notice(f"Made the playlist {title}, {count} "
+                         + ("song" if count == 1 else "songs"), clear_after_s=6)
+        self._set_status(f"made the playlist {title}")
+        self.musicBoxesChanged.emit()
+        self.playlistsChanged.emit()
+
+    def _on_playlist_make_failed(self, why: str) -> None:
+        self._making_playlist = ""
+        self._making_rows = []
+        self._set_notice(f"The playlist was not made, {why}", clear_after_s=8)
+        self._set_status(f"the playlist was not made, {why}")
+        self.musicBoxesChanged.emit()
+
+    @Slot(result="QVariantList")
+    def playlistsForBoxes(self) -> list:
+        """Your playlists and the kept ones, for picking one to copy into a
+        box. Asked when the chooser opens, so it holds still while it is open."""
+        out = []
+        for origin, linked in (("mine", False), ("channel", True)):
+            for row in self._db.playlists(include_hidden=True, origin=origin):
+                out.append({"id": row["ext_id"], "title": row["title"],
+                            "count": int(row["items"] or 0), "read": bool(row["items_at"]),
+                            "linked": linked, "music": bool(row["is_music"])})
+        return out
+
+    @Slot(str)
+    def boxFromPlaylist(self, playlist_id: str) -> None:
+        """Copy a playlist into a new box of the same name. One never read
+        is read first, which is a single request."""
+        found = self._db.playlist(playlist_id)
+        if found is None:
+            return
+        if found["items_at"]:
+            self._copy_playlist_into_box(playlist_id)
+            return
+        if self._playlist_items is not None and self._playlist_items.isRunning():
+            self._set_notice("A playlist is being read already, try again in a moment",
+                             clear_after_s=4)
+            return
+        self._box_after_read = playlist_id
+        self._playlist_items = PlaylistItemsFetcher(self._db, self._cfg, playlist_id, self)
+        self._playlist_items.ready.connect(self._on_playlist_items)
+        self._playlist_items.failed.connect(self._on_playlist_items_failed)
+        if not self._launch(self._playlist_items):
+            self._box_after_read = ""
+            return
+        self._set_notice(f"Reading {found['title']} first", clear_after_s=120)
+
+    def _copy_playlist_into_box(self, playlist_id: str) -> None:
+        found = self._db.playlist(playlist_id)
+        if found is None:
+            return
+        songs = []
+        for row in self._db.playlist_items(playlist_id, limit=100000):
+            if (row["members_only"] and not row["member_of"]) \
+                    or row["title"] in flatlist.UNAVAILABLE_TITLES:
+                continue
+            channel = str(row["channel_key"] or "")
+            maker = channel.split(":", 1)[1] if channel.startswith("yt:") else ""
+            songs.append({"ext_id": row["ext_id"], "title": row["title"],
+                          "artist": row["channel_title"] or None,
+                          "artist_id": maker if ids.CHANNEL_ID.match(maker) else None,
+                          "thumbnail_url": row["thumbnail_url"], "duration_s": row["duration_s"]})
+        if not songs:
+            self._set_notice(f"There is nothing in {found['title']} to copy", clear_after_s=6)
+            return
+        base = str(found["title"] or "Playlist").strip() or "Playlist"
+        made, name, number = None, base, 1
+        while made is None and number < 1000:
+            made = self._db.create_music_box(name)
+            if made is None:
+                number += 1
+                name = f"{base} {number}"
+        if made is None:
+            return
+        count = self._db.put_many_in_music_box(made, songs)
+        self._set_notice(f"Copied into the box {name}, {count} "
+                         + ("song" if count == 1 else "songs"), clear_after_s=6)
+        self._set_status(f"copied {base} into a box")
+        self.musicBoxesChanged.emit()
+
     @Slot(str, result=int)
     def saveQueueAsBox(self, name: str) -> int:
         """Everything in the queue into a new box, in the order it plays."""
@@ -6521,6 +6663,11 @@ class Bridge(QObject):
             # Holds no flag. The next song waiting is told on its own finish,
             # which a crash still emits.
             pass
+        elif worker is self._playlist_maker:
+            self._making_playlist = ""
+            self._making_rows = []
+            self._set_notice("")
+            self.musicBoxesChanged.emit()
         elif worker is self._members_check:
             self._pending_members = None
             self._set_card_note("", "")
@@ -6538,6 +6685,7 @@ class Bridge(QObject):
             self._set_notice("")
             if worker is self._playlist_items:
                 self._stop_page_reading(PLAYLIST)
+                self._box_after_read = ""
         elif worker is self._channel_members:
             # The button was pressed and nothing came of it, so it goes back
             # to off rather than sitting on with an empty half behind it.

@@ -2516,6 +2516,36 @@ class ListenReporter(Worker):
         self.reported.emit(self._ext_id)
 
 
+class PlaylistMaker(Worker):
+    """A box of songs made into a playlist on the account.
+
+    A write, and only ever started by a press that asked for it by name. A
+    music call, not counted against a feed budget, like the listening note.
+    """
+
+    made = Signal(str, str, int)    # playlist id, title, how many songs
+    failed = Signal(str)            # why
+
+    def __init__(self, cfg: Config, title: str, privacy: str, video_ids: list[str],
+                 parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._cfg = cfg
+        self._title = title
+        self._privacy = privacy
+        self._video_ids = list(video_ids)
+
+    def work(self) -> None:
+        from .sources import ytmusic
+
+        try:
+            made = ytmusic.make_playlist(cookie_profile(self._cfg), self._title,
+                                         self._privacy, self._video_ids)
+        except (ytmusic.MusicError, ImportError) as exc:
+            self.failed.emit(str(exc))
+            return
+        self.made.emit(made, self._title, len(self._video_ids))
+
+
 class TrackList(Worker):
     """Tracks for one thing that was chosen. A playlist from YouTube Music, or
     the liked videos from YouTube, which are a different list entirely."""

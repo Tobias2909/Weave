@@ -1316,6 +1316,8 @@ ApplicationWindow {
         onNewBoxRequested: root.askForMusicBox(null)
         onRenameRequested: (boxId, name) => root.askForName("musicbox", boxId, "", name)
         onDeleteRequested: (boxId, name) => confirmDelete.ask("musicbox", boxId, name)
+        onPlaylistRequested: (boxId, name, count) => makePlaylist.ask(boxId, name, count)
+        onFromPlaylistRequested: playlistToBox.pick()
     }
 
     SmoothScroll {
@@ -2842,6 +2844,14 @@ ApplicationWindow {
 
     ConfirmDelete {
         id: confirmDelete
+    }
+
+    MakePlaylist {
+        id: makePlaylist
+    }
+
+    PlaylistToBox {
+        id: playlistToBox
     }
 
     FollowChannel {

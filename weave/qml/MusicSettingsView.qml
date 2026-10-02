@@ -14,6 +14,10 @@ Item {
     signal newBoxRequested()
     signal renameRequested(int boxId, string name)
     signal deleteRequested(int boxId, string name)
+    // A box made into a playlist on the account, or a playlist copied into a
+    // new box. Both are asked about in the window's popups first.
+    signal playlistRequested(int boxId, string name, int count)
+    signal fromPlaylistRequested()
 
     readonly property Flickable scrolls: sheet
     // One width for the left hand word of every stated fact, the same as the
@@ -88,7 +92,9 @@ Item {
                                   + "whole queue from beside its Clear. Favorites is the first "
                                   + "box and always stays. A box ticked Keep on disk has its "
                                   + "songs written to disk as they play, so they start at once "
-                                  + "the next time."
+                                  + "the next time. Make a playlist copies a box into a new "
+                                  + "playlist on your YouTube account, and a playlist can be "
+                                  + "copied into a new box. The one copied from stays as it is."
                             color: Theme.colors.textMuted
                             font.pixelSize: 11
                             wrapMode: Text.Wrap
@@ -183,7 +189,7 @@ Item {
                                 CheckBox {
                                     id: keepBox
                                     objectName: "musicBoxKeep"
-                                    anchors.right: renameButton.left
+                                    anchors.right: makeButton.left
                                     anchors.rightMargin: 10
                                     anchors.verticalCenter: parent.verticalCenter
                                     checked: boxRow.modelData.keep
@@ -195,6 +201,22 @@ Item {
                                         words: "Write its songs to disk as they play, so the "
                                                + "next play starts at once"
                                     }
+                                }
+
+                                FlatButton {
+                                    id: makeButton
+                                    objectName: "musicBoxMakePlaylist"
+                                    anchors.right: renameButton.left
+                                    anchors.rightMargin: 6
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    readonly property bool making:
+                                        App.makingPlaylist === boxRow.modelData.name
+                                    enabled: boxRow.modelData.count > 0
+                                             && App.makingPlaylist === ""
+                                    text: making ? "Making the playlist" : "Make a playlist"
+                                    onClicked: view.playlistRequested(boxRow.modelData.id,
+                                                                      boxRow.modelData.name,
+                                                                      boxRow.modelData.count)
                                 }
 
                                 FlatButton {
@@ -226,10 +248,20 @@ Item {
                             }
                         }
 
-                        FlatButton {
-                            objectName: "musicBoxNew"
-                            text: "+  New box"
-                            onClicked: view.newBoxRequested()
+                        Row {
+                            spacing: 8
+
+                            FlatButton {
+                                objectName: "musicBoxNew"
+                                text: "+  New box"
+                                onClicked: view.newBoxRequested()
+                            }
+
+                            FlatButton {
+                                objectName: "musicBoxFromPlaylist"
+                                text: "New box from a playlist…"
+                                onClicked: view.fromPlaylistRequested()
+                            }
                         }
                     }
                 }
@@ -563,8 +595,9 @@ Item {
                             }
                         }
 
-                        // What switching it on writes, said in full, since it
-                        // is the one thing Weave can write to an account.
+                        // What switching it on writes, said in full. The only
+                        // other write is making a playlist out of a box, which
+                        // is a press of its own above.
                         Label {
                             objectName: "reportListensWords"
                             width: parent.width
@@ -572,8 +605,9 @@ Item {
                                   + "listen to for 30 seconds is added to your YouTube Music "
                                   + "history with the same note its own player sends, so the "
                                   + "history and the suggestions on your other devices follow "
-                                  + "what you heard here. A song skipped sooner is never sent, "
-                                  + "and nothing else is written."
+                                  + "what you heard here. A song skipped sooner is never sent. "
+                                  + "The only other write is Make a playlist on a box above, "
+                                  + "and only when it is pressed."
                             color: Theme.colors.textMuted
                             font.pixelSize: 11
                             wrapMode: Text.Wrap

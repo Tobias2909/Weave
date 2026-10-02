@@ -115,6 +115,20 @@ class WorkerRuns(unittest.TestCase):
                 self.assertNotIn(mistake, line, f"{type(worker).__name__} reported {line}")
         return said
 
+    def test_playlist_maker(self):
+        from weave.sources import ytmusic
+
+        asked = []
+        self.patch(ytmusic, "make_playlist",
+                   lambda profile, title, privacy, ids: asked.append((title, privacy, ids))
+                   or "PLmade")
+        worker = poller.PlaylistMaker(self.cfg, "Road trip", "PRIVATE", ["aaaaaaaaaaa"])
+        made = []
+        worker.made.connect(lambda *args: made.append(args))
+        self.assertEqual(self.run_worker(worker), [])
+        self.assertEqual(made, [("PLmade", "Road trip", 1)])
+        self.assertEqual(asked, [("Road trip", "PRIVATE", ["aaaaaaaaaaa"])])
+
     def test_feed_poller(self):
         self.patch(poller.rss, "fetch",
                    lambda fetcher, ext_id, kind=poller.rss.VIDEOS:
@@ -1138,7 +1152,8 @@ class WorkerRuns(unittest.TestCase):
                    "_twitch", "_checkup", "_playlists", "_playlist_items", "_lengths",
                    "_channel_members", "_channel_lists", "_now_side", "_now_detail",
                    "_artist_music", "_artist_open", "_stream_check", "_music_history",
-                   "_members_check", "_listen_reporter", "_link_facts", "_link_target")
+                   "_members_check", "_listen_reporter", "_link_facts", "_link_target",
+                   "_playlist_maker")
 
         def make(held: str):
             bridge = Bridge.__new__(Bridge)
@@ -1180,6 +1195,9 @@ class WorkerRuns(unittest.TestCase):
             bridge._channel_playlists_busy = True
             bridge._cache_working = True
             bridge._twitch_status = "asking Twitch for a code"
+            bridge._making_playlist = "Road trip"
+            bridge._making_rows = [{"ext_id": "aaaaaaaaaaa"}]
+            bridge._box_after_read = "PL1"
             # The members button crashing has to put itself back to off, which
             # means reaching the database and the view it is drawn on.
             bridge._view_channel = "yt:UC1"
@@ -1188,7 +1206,7 @@ class WorkerRuns(unittest.TestCase):
                            "importChanged", "addChanged", "musicChanged", "detailChanged",
                            "cacheChanged", "twitchChanged", "viewChanged",
                            "nowChanged", "channelTabChanged", "pageReadingChanged",
-                           "channelLookingChanged", "cardNoteChanged"):
+                           "channelLookingChanged", "cardNoteChanged", "musicBoxesChanged"):
                 setattr(bridge, signal, Recorder())
             return bridge, worker
 
@@ -1231,6 +1249,15 @@ class WorkerRuns(unittest.TestCase):
             bridge, worker = make(held)
             Bridge._on_worker_crashed(bridge, worker, "x")
             self.assertEqual(bridge._page_reading, ("", "", ""), held)
+
+        # A playlist that was being made says so no longer, and a playlist
+        # that was being read for a box is not copied when nothing came.
+        bridge, worker = make("_playlist_maker")
+        Bridge._on_worker_crashed(bridge, worker, "x")
+        self.assertEqual((bridge._making_playlist, bridge._making_rows), ("", []))
+        bridge, worker = make("_playlist_items")
+        Bridge._on_worker_crashed(bridge, worker, "x")
+        self.assertEqual(bridge._box_after_read, "")
 
         bridge, worker = make("_channel_members")
         Bridge._on_worker_crashed(bridge, worker, "x")
