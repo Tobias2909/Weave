@@ -5507,6 +5507,26 @@ class Bridge(QObject):
         if self._music_tab == box_id:
             self.musicTabChanged.emit()
 
+    @Slot(int, int)
+    def moveMusicTabSong(self, index: int, before: int) -> None:
+        """A tile dragged to another place on the tab of a box, favourites
+        included. `before` is the tile it was put down in front of, the
+        number of tiles when it went on the end."""
+        if self._music_tab < 0:
+            return
+        order = [row["videoId"] for row in self._box_rows(self._music_tab)]
+        if not (0 <= index < len(order)) or not (0 <= before <= len(order)):
+            return
+        if before in (index, index + 1):
+            return
+        moved = order.pop(index)
+        order.insert(before - 1 if before > index else before, moved)
+        if self._music_tab == FAVORITES_BOX:
+            self._db.set_favourite_order(order)
+        else:
+            self._db.set_music_box_order(self._music_tab, order)
+        self.musicTabChanged.emit()
+
     @Slot(int)
     def takeOutOfMusicTab(self, index: int) -> None:
         """A tile out of the box the page is on, favourites included."""

@@ -8,8 +8,12 @@ alone.
 """
 
 import json
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
+from weave.db import Database
 from weave.ui.bridge import FAVORITES, FAVORITES_BOX, Bridge
 
 from .support import scratch_db
@@ -305,6 +309,76 @@ class WatchedInMpv(unittest.TestCase):
         Bridge.watchSong(bridge, "shelf", 0, 0)
         self.assertEqual(handed, ["yt:aaaaaaaaaaa"])
         self.assertIsNone(bridge._queue_on_start)
+
+
+class TheOrder(unittest.TestCase):
+    """A tile dragged on a box's tab, favourites included."""
+
+    def fill(self, bridge, box):
+        for ext_id in ("aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc", "ddddddddddd"):
+            if box == FAVORITES_BOX:
+                bridge._db.set_music_favorite(ext_id, True, ext_id[:1].upper())
+            else:
+                bridge._db.put_in_music_box(box, {"ext_id": ext_id,
+                                                  "title": ext_id[:1].upper()})
+        bridge._music_tab = box
+
+    def titles(self, bridge):
+        return "".join(song["title"] for song in Bridge._get_music_tab_songs(bridge))
+
+    def test_a_tile_goes_in_front_of_the_one_it_is_put_down_before(self):
+        bridge = make_bridge(self)
+        self.fill(bridge, Bridge.createMusicBox(bridge, "Mix"))
+        Bridge.moveMusicTabSong(bridge, 0, 3)
+        self.assertEqual(self.titles(bridge), "BCAD")
+        Bridge.moveMusicTabSong(bridge, 3, 0)
+        self.assertEqual(self.titles(bridge), "DBCA")
+        Bridge.moveMusicTabSong(bridge, 1, 4)
+        self.assertEqual(self.titles(bridge), "DCAB")
+
+    def test_where_it_already_is_changes_nothing(self):
+        bridge = make_bridge(self)
+        self.fill(bridge, Bridge.createMusicBox(bridge, "Mix"))
+        for before in (1, 2, 9, -1):
+            Bridge.moveMusicTabSong(bridge, 1, before)
+        Bridge.moveMusicTabSong(bridge, 7, 0)
+        self.assertEqual(self.titles(bridge), "ABCD")
+
+    def test_the_favourites_keep_an_order_of_their_own(self):
+        """Newest first until dragged, and a new one still goes in front."""
+        bridge = make_bridge(self)
+        with mock.patch("weave.db.time.time", side_effect=[100, 200, 300, 400]):
+            self.fill(bridge, FAVORITES_BOX)
+        self.assertEqual(self.titles(bridge), "DCBA")
+        Bridge.moveMusicTabSong(bridge, 0, 4)
+        self.assertEqual(self.titles(bridge), "CBAD")
+        bridge._db.set_music_favorite("eeeeeeeeeee", True, "E")
+        self.assertEqual(self.titles(bridge), "ECBAD")
+        # Kept again while kept, it stays where it was put.
+        bridge._db.set_music_favorite("ddddddddddd", True, "D")
+        self.assertEqual(self.titles(bridge), "ECBAD")
+        # Given back and kept again, it is a new favourite.
+        bridge._db.set_music_favorite("ddddddddddd", False)
+        bridge._db.set_music_favorite("ddddddddddd", True, "D")
+        self.assertEqual(self.titles(bridge), "DECBA")
+
+    def test_an_older_database_keeps_its_favourites_newest_first(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "old.db"
+            db = Database(path)
+            with mock.patch("weave.db.time.time", side_effect=[100, 300, 200]):
+                for ext_id in ("aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"):
+                    db.set_music_favorite(ext_id, True, ext_id[:1].upper())
+            with db.conn as conn:
+                conn.execute("UPDATE music_history SET favorite_place=NULL")
+                conn.execute("UPDATE meta SET value='50' WHERE key='schema_version'")
+            db.close()
+            again = Database(path)
+            self.assertEqual([row["title"] for row in again.music_favorites()],
+                             ["B", "C", "A"])
+            self.assertEqual(sorted(row[0] for row in again.conn.execute(
+                "SELECT favorite_place FROM music_history")), [0, 1, 2])
+            again.close()
 
 
 class TheShelves(unittest.TestCase):

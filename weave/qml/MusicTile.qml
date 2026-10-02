@@ -20,6 +20,13 @@ Item {
     // Right pressing a song offers to keep it. What that means is the caller's
     // business, since a tile does not know a favourite from a playlist.
     signal askedFor(int x, int y)
+    // Whether the tile can be picked up and carried to another place, where
+    // the order is somebody's own. Positions are in the window, and a carry
+    // begins a little way from the press, so where the press was comes too.
+    property bool carriable: false
+    signal carryBegan(real sceneX, real sceneY, real pressSceneY)
+    signal carried(real sceneX, real sceneY)
+    signal carryEnded()
 
     // The size a shelf gives it. Kept as a default so the tile stands on its
     // own, and overridden by whatever lays a row of them out.
@@ -125,11 +132,56 @@ Item {
         }
     }
 
+    // The press, the carry and the menu in one place. A pointer handler on
+    // the tile for the carry heard the press before this did, since this sits
+    // under the tile, and no press ever became a click again.
     MouseArea {
+        id: press
         anchors.fill: parent
         z: -1
         acceptedButtons: Qt.LeftButton | Qt.RightButton
+        // Once carrying, the page underneath may not take the pointer away.
+        preventStealing: press.carrying
+        cursorShape: press.carrying ? Qt.ClosedHandCursor : Qt.ArrowCursor
+        property point pressedAt: Qt.point(0, 0)
+        property bool carrying: false
+        // Let go after a carry is not a press on the tile it ended over.
+        property bool carriedOff: false
+
+        onPressed: function (mouse) {
+            press.pressedAt = Qt.point(mouse.x, mouse.y)
+            press.carriedOff = false
+        }
+        onPositionChanged: function (mouse) {
+            if (!tile.carriable || !(mouse.buttons & Qt.LeftButton))
+                return
+            var scene = press.mapToItem(null, mouse.x, mouse.y)
+            if (press.carrying) {
+                tile.carried(scene.x, scene.y)
+                return
+            }
+            var moved = Math.max(Math.abs(mouse.x - press.pressedAt.x),
+                                 Math.abs(mouse.y - press.pressedAt.y))
+            if (moved < Application.styleHints.startDragDistance)
+                return
+            press.carrying = true
+            var from = press.mapToItem(null, press.pressedAt.x, press.pressedAt.y)
+            tile.carryBegan(scene.x, scene.y, from.y)
+        }
+        onReleased: press.letGo()
+        onCanceled: press.letGo()
+        function letGo() {
+            if (!press.carrying)
+                return
+            press.carrying = false
+            press.carriedOff = true
+            tile.carryEnded()
+        }
         onClicked: function (mouse) {
+            if (press.carriedOff) {
+                press.carriedOff = false
+                return
+            }
             if (mouse.button === Qt.RightButton)
                 tile.askedFor(mouse.x, mouse.y)
             else

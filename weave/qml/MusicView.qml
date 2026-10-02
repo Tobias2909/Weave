@@ -433,7 +433,8 @@ Item {
         }
 
         // One box, as the tiles the shelves are drawn in. Pressing one plays
-        // the box from there, in its own order.
+        // the box from there, in its own order, and dragging one puts it
+        // somewhere else in that order.
         Flickable {
             id: boxArea
             objectName: "boxArea"
@@ -444,7 +445,24 @@ Item {
             Layout.fillHeight: true
             contentHeight: boxColumn.height
             clip: true
+            // The wheel scrolls it and a held mouse does not, so a tile
+            // dragged up or down is the tile moving rather than the page.
+            acceptedButtons: Qt.NoButton
             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+            // Over the page rather than in what scrolls, so the carried tile
+            // and the bar stay where the pointer is while the page moves.
+            TileOrder {
+                id: tileOrder
+                objectName: "boxTileOrder"
+                parent: boxArea
+                list: boxArea
+                grid: boxFlow
+                tileSize: view.tileSize
+                spacing: view.tileSpacing
+                count: App.musicTabSongs.length
+                onDropped: (from, before) => App.moveMusicTabSong(from, before)
+            }
 
             ColumnLayout {
                 id: boxColumn
@@ -496,6 +514,7 @@ Item {
                 }
 
                 Flow {
+                    id: boxFlow
                     objectName: "boxTiles"
                     Layout.fillWidth: true
                     spacing: view.tileSpacing
@@ -504,10 +523,14 @@ Item {
                         model: App.musicTabSongs
 
                         MusicTile {
+                            id: boxTile
                             required property var modelData
                             required property int index
                             width: view.tileSize
                             height: view.tileSize
+                            // Where it was taken from stays marked while it
+                            // is carried.
+                            opacity: tileOrder.from === index ? 0.35 : 1.0
                             title: modelData.title
                             subtitle: modelData.subtitle
                             picture: modelData.thumbnail
@@ -515,6 +538,15 @@ Item {
                             onSubtitleChosen: App.openArtistChannel(modelData.artistId)
                             onChosen: App.playMusicTabSong(index)
                             onAskedFor: view.askAboutTab(index)
+
+                            // The whole tile is taken hold of. A press that
+                            // does not move still plays it.
+                            carriable: App.musicTabSongs.length > 1
+                            onCarryBegan: (x, y, pressY) => tileOrder.begin(
+                                boxTile.index, boxTile.title, boxTile.subtitle,
+                                boxTile.picture, x, y, pressY)
+                            onCarried: (x, y) => tileOrder.carry(x, y)
+                            onCarryEnded: tileOrder.finish()
                         }
                     }
                 }

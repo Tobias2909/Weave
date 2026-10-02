@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 50
+SCHEMA_VERSION = 51
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -617,6 +617,10 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # is what gives it its songs on the bar while there is nobody to ask.
     # NULL means never looked up, an empty list means looked up and none.
     ("music_history", "chapters", "TEXT"),
+    # Where a favourite stands among the others, smallest first. A new one
+    # goes in front of them all, which is where the newest has always been,
+    # and dragging a tile on the favourites tab rewrites the lot.
+    ("music_history", "favorite_place", "INTEGER"),
 )
 
 
@@ -660,6 +664,16 @@ class Database:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
             row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             was = int(row["value"]) if row else 0
+            if was and was < 51:
+                # The favourites stood newest first before they had places of
+                # their own, so that is the order they are given.
+                conn.execute(
+                    "UPDATE music_history SET favorite_place = ("
+                    "  SELECT n FROM (SELECT ext_id, ROW_NUMBER() OVER ("
+                    "      ORDER BY favorite_at DESC, title) - 1 AS n "
+                    "    FROM music_history WHERE favorite = 1) ranked "
+                    "  WHERE ranked.ext_id = music_history.ext_id) "
+                    "WHERE favorite = 1")
             if was and was < 47:
                 # Playlists read before the mark existed carry none. Their next
                 # opening reads them again rather than trusting a reading made
@@ -2530,8 +2544,9 @@ class Database:
         with self.conn as conn:
             conn.execute(
                 "INSERT INTO music_history(ext_id, title, artist, artist_id, thumbnail_url, "
-                "                          duration_s, favorite, favorite_at, source) "
-                "VALUES(?,?,?,?,?,?,?,?,'weave') "
+                "                          duration_s, favorite, favorite_at, "
+                "                          favorite_place, source) "
+                "VALUES(?,?,?,?,?,?,?,?,?,'weave') "
                 "ON CONFLICT(ext_id) DO UPDATE SET "
                 "  title=CASE WHEN excluded.title = '' THEN music_history.title "
                 "             ELSE excluded.title END, "
@@ -2543,11 +2558,30 @@ class Database:
                 "  thumbnail_url=COALESCE(excluded.thumbnail_url, "
                 "                         music_history.thumbnail_url), "
                 "  duration_s=COALESCE(excluded.duration_s, music_history.duration_s), "
+                "  favorite_place=CASE WHEN music_history.favorite = 1 "
+                "                       AND excluded.favorite = 1 "
+                "                      THEN music_history.favorite_place "
+                "                      ELSE excluded.favorite_place END, "
                 "  favorite=excluded.favorite, "
                 "  favorite_at=excluded.favorite_at",
                 (ext_id, title, artist, artist_id or None, thumbnail_url, duration_s,
-                 1 if favorite else 0, now if favorite else None),
+                 1 if favorite else 0, now if favorite else None,
+                 self._first_favourite_place(conn) if favorite else None),
             )
+
+    @staticmethod
+    def _first_favourite_place(conn: sqlite3.Connection) -> int:
+        """In front of every favourite there is."""
+        found = conn.execute(
+            "SELECT MIN(favorite_place) FROM music_history WHERE favorite = 1").fetchone()[0]
+        return (found if found is not None else 0) - 1
+
+    def set_favourite_order(self, ext_ids: list[str]) -> None:
+        """The favourites in the order given, the way a tab was dragged into."""
+        with self.conn as conn:
+            conn.executemany(
+                "UPDATE music_history SET favorite_place=? WHERE ext_id=? AND favorite = 1",
+                [(place, ext_id) for place, ext_id in enumerate(ext_ids)])
 
     # Where a favourite's maker can be read off what is already stored, best
     # first: a video Weave follows, then a playlist, a listing, and the owner
@@ -2628,7 +2662,8 @@ class Database:
         return bool(row and row["favorite"])
 
     def music_favorites(self, limit: int = 500) -> list[sqlite3.Row]:
-        """Every song kept, newest first, shaped like a feed row."""
+        """Every song kept, in the favourites' own order, shaped like a feed
+        row. That order is newest first until a tile is dragged."""
         return list(self.conn.execute(
             """
             SELECT 'yt:' || h.ext_id     AS key,
@@ -2649,7 +2684,7 @@ class Database:
             FROM music_history h
             LEFT JOIN watched w ON w.video_key = 'yt:' || h.ext_id
             WHERE h.favorite = 1
-            ORDER BY h.favorite_at DESC, h.title
+            ORDER BY h.favorite_place IS NOT NULL, h.favorite_place, h.favorite_at DESC, h.title
             LIMIT ?
             """, (limit,)))
 
@@ -2738,6 +2773,13 @@ class Database:
                  song.get("artist_id") or None, song.get("thumbnail_url") or None,
                  song.get("duration_s"), place, int(time.time())))
             return cursor.rowcount > 0
+
+    def set_music_box_order(self, box_id: int, ext_ids: list[str]) -> None:
+        """A box's songs in the order given, the way its tab was dragged into."""
+        with self.conn as conn:
+            conn.executemany(
+                "UPDATE music_box_items SET position=? WHERE box_id=? AND ext_id=?",
+                [(place, box_id, ext_id) for place, ext_id in enumerate(ext_ids)])
 
     def remove_from_music_box(self, box_id: int, ext_id: str) -> bool:
         with self.conn as conn:
