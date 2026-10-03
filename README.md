@@ -116,9 +116,15 @@ fetched ahead of it. There is a ceiling on the settings page, and a song that st
 being a favourite drops what was kept for it.
 
 The page behind the chevron on the bar shows the song itself, the video where
-there is one and the artwork where there is not, with the words, the comments
-and what is next beside it. Nothing is fetched and nothing decoded for that
-page while it is closed.
+there is one and the artwork where there is not, with the queue beside it. Its
+tabs show the words, the comments, and what YouTube recommends beside the
+video, and a recommended video pressed goes on the end of the queue. Where the
+music service has the words timed, the lyrics tab leaves the picture where it
+is and follows the song under it, the line being sung with the next one smaller
+below. A music video borrows the words of its song and follows them only when
+the two are the same length, since a video with an intro of its own would run
+ahead of them. On the other tabs the picture waits small in a corner. Nothing
+is fetched and nothing decoded for that page while it is closed.
 
 Starting a video pauses the music, fading out over about a second rather than
 cutting off mid note. There is a switch in the bar if you disagree. Repeat has

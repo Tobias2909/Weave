@@ -15,11 +15,12 @@ import html
 import json
 import random
 import time
+from bisect import bisect_right
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import (Property, QObject, QRunnable, Qt, QThreadPool, QTimer, QUrl,
+from PySide6.QtCore import (Property, QObject, QRunnable, Qt, QThread, QThreadPool, QTimer, QUrl,
                             Signal, Slot)
 from PySide6.QtGui import QDesktopServices, QGuiApplication
 
@@ -258,6 +259,26 @@ class _ChallengeProbe(QObject, QRunnable):
         self.answered.emit(trouble)
 
 
+# What stands for the music where nobody sings: the music service's own mark
+# for it, so a gap it marks and one it does not read the same.
+REST = "\u266a"
+
+
+def sung_at(lines: list, starts: list, seconds: float) -> dict:
+    """The line being sung at this point of the song, and the one after it.
+
+    `at` says which line that is, -1 before the first and one past the last
+    once the last has ended, so a step to the next line can be told from a
+    jump. A line with no words is music, said with the music service's mark.
+    """
+    at = bisect_right(starts, seconds) - 1
+    if at >= 0 and at == len(lines) - 1 and seconds >= lines[at]["end"]:
+        at = len(lines)
+    now = lines[at]["text"] if 0 <= at < len(lines) else ""
+    after = lines[at + 1]["text"] if at + 1 < len(lines) else ""
+    return {"at": at, "now": now or REST, "next": after}
+
+
 class Bridge(QObject):
     statusChanged = Signal()
     busyChanged = Signal()
@@ -305,6 +326,10 @@ class Bridge(QObject):
     twitchChanged = Signal()
     detailChanged = Signal()
     nowChanged = Signal()
+    # The line being sung, apart from everything else about the song, because
+    # it changes every few seconds and nothing else on the page should be
+    # read again when it does.
+    nowLyricChanged = Signal()
     musicChanged = Signal()
     navChanged = Signal()
     favoritesChanged = Signal()
@@ -389,8 +414,13 @@ class Bridge(QObject):
         self._now_side: SongSide | None = None
         self._now_detail: DetailFetcher | None = None
         self._now_words: dict = {}
-        self._now_related: list = []
         self._now_comments: list = []
+        # Whether the page is on its Recommended tab, which is what makes the
+        # song playing the one whose recommendations are followed.
+        self._now_rec_open = False
+        # Which tab the page is on, so a new song, or the page opened again,
+        # asks for what that tab shows.
+        self._now_tab = "video"
         self._now_threads = 5
         self._now_busy = ""
         # Which tabs have been answered for the song playing. Kept here rather
@@ -401,9 +431,15 @@ class Bridge(QObject):
         self._now_read: set = set()
         # Which song everything beside it is about.
         self._now_song = ""
-        # The two addresses the station answer carries, kept per song so that
-        # opening the second tab spends nothing looking them up again.
+        # Where the words are, from the station answer, kept per song so that
+        # opening the tab again spends nothing looking it up. With it, whether
+        # their timing fits what plays.
         self._now_ids: dict = {}
+        # The words line by line with when each is sung, and the line the
+        # song is at. Empty when the words have no timing.
+        self._now_lines: list = []
+        self._now_starts: list = []
+        self._now_lyric: dict = {}
         self._audio = None
         self._search: MusicSearch | None = None
         self._results: list = []
@@ -1398,12 +1434,17 @@ class Bridge(QObject):
     def _get_now_words(self) -> dict:
         return dict(self._now_words)
 
-    def _get_now_related(self) -> list:
-        return list(self._now_related)
+    def _get_now_lyric(self) -> dict:
+        return dict(self._now_lyric)
 
     def _get_now_comments(self) -> list:
         # A time in one goes to that point in the song.
         return self._marked(self._now_comments, times=True)
+
+    def _get_now_comments_more(self) -> bool:
+        """Whether asking for more could bring more. An answer with fewer
+        threads than were asked for is the whole of them."""
+        return bool(self._now_comments) and len(self._now_comments) >= self._now_threads
 
     def _get_now_busy(self) -> str:
         return self._now_busy
@@ -1413,8 +1454,11 @@ class Bridge(QObject):
 
     nowDetail = Property("QVariantMap", _get_now_detail, notify=nowChanged)
     nowWords = Property("QVariantMap", _get_now_words, notify=nowChanged)
-    nowRelated = Property("QVariantList", _get_now_related, notify=nowChanged)
+    # The line being sung and the one after it, and which line that is, so
+    # the page can tell the next line coming up from a jump elsewhere.
+    nowLyric = Property("QVariantMap", _get_now_lyric, notify=nowLyricChanged)
     nowComments = Property("QVariantList", _get_now_comments, notify=nowChanged)
+    nowCommentsMore = Property(bool, _get_now_comments_more, notify=nowChanged)
     # Which tab is waiting on something, so only that one says so.
     nowBusy = Property(str, _get_now_busy, notify=nowChanged)
     # Which tabs have an answer, so an empty one can say so rather than looking
@@ -2002,6 +2046,8 @@ class Bridge(QObject):
             self._fetch_playlist_items(playlist_id)
         if kind == COMPANION:
             self._companion_arrive()
+        if kind == NOWPLAYING:
+            self._read_now_tab()
 
     def _name_of_view(self, view) -> str:
         """What to call a view in a sentence, from the record of it.
@@ -2624,6 +2670,20 @@ class Bridge(QObject):
     # watch page does, and mpv's own playlist beside it. A press puts a video
     # on the end of that playlist. Asked only while the page is open, once when
     # a song starts and once for each chip pressed.
+    #
+    # The Recommended tab of the Now playing page asks the same way about the
+    # song Weave is playing. The two are never on screen together, so one set
+    # of answers, one worker and one chip remembered serve both, and whichever
+    # is showing is the one followed.
+
+    def _rec_video(self) -> str:
+        """The video whose recommendations are on screen, or nothing when
+        neither page that shows them is."""
+        if self._view_kind == COMPANION:
+            return self._companion_video
+        if self._view_kind == NOWPLAYING and self._now_rec_open:
+            return self._now_video_id()
+        return ""
 
     @Slot()
     def showCompanion(self) -> None:
@@ -2671,9 +2731,10 @@ class Bridge(QObject):
 
     def _companion_follow(self) -> None:
         """Show what is known about the video, and ask for what is not."""
-        if self._view_kind != COMPANION:
+        if not (self._view_kind == COMPANION
+                or (self._view_kind == NOWPLAYING and self._now_rec_open)):
             return
-        video_id = self._companion_video
+        video_id = self._rec_video()
         if not video_id:
             self.companionChanged.emit()
             return
@@ -2757,7 +2818,7 @@ class Bridge(QObject):
     def refreshCompanion(self) -> None:
         """Ask again about the video and the chip shown, dropping what was
         kept for them."""
-        video_id = self._companion_video
+        video_id = self._rec_video()
         known = self._companion_cache.get(video_id)
         if known is None:
             self._companion_follow()
@@ -2769,30 +2830,44 @@ class Bridge(QObject):
             known["cards"].pop(chip, None)
         self._companion_follow()
 
-    def _companion_shown(self) -> list:
-        known = self._companion_cache.get(self._companion_video)
+    def _companion_shown(self, video_id: str) -> list:
+        known = self._companion_cache.get(video_id)
         if known is None:
             return []
-        return list(known["cards"].get(self._companion_chip(self._companion_video)) or [])
+        return list(known["cards"].get(self._companion_chip(video_id)) or [])
 
-    def _get_companion_cards(self) -> list:
-        queued = {entry.get("video_id") for entry in self._queue_entries()}
+    def _tiles(self, video_id: str, queued: set) -> list:
         return [{"key": f"yt:{card['video_id']}", "title": card["title"],
                  "channel": card["channel"], "channelId": card["channel_id"],
                  "duration": card["duration"],
                  "picture": qml_source(card["picture"]),
                  "queued": card["video_id"] in queued}
-                for card in self._companion_shown()]
+                for card in self._companion_shown(video_id)]
 
-    companionCards = Property("QVariantList", _get_companion_cards, notify=companionChanged)
-
-    def _get_companion_chips(self) -> list:
-        video_id = self._companion_video
+    def _chips(self, video_id: str) -> list:
         known = self._companion_cache.get(video_id)
         chosen = self._companion_chip(video_id)
         labels = ([chip["label"] for chip in known["chips"]] if known is not None
                   else [watchnext.MIX])
         return [{"label": label, "chosen": label == chosen} for label in labels]
+
+    def _refusal_note(self) -> str:
+        """Why there are no tiles, when the asking itself went wrong."""
+        if self._companion_state == "refused":
+            return ("This page has asked YouTube as often as its ceiling allows for now. "
+                    "It frees up within a quarter of an hour.")
+        if self._companion_state == "failed":
+            return f"YouTube did not answer, {self._companion_why}"
+        return ""
+
+    def _get_companion_cards(self) -> list:
+        queued = {entry.get("video_id") for entry in self._queue_entries()}
+        return self._tiles(self._companion_video, queued)
+
+    companionCards = Property("QVariantList", _get_companion_cards, notify=companionChanged)
+
+    def _get_companion_chips(self) -> list:
+        return self._chips(self._companion_video)
 
     companionChips = Property("QVariantList", _get_companion_chips, notify=companionChanged)
 
@@ -2813,11 +2888,9 @@ class Bridge(QObject):
         if not self._companion_video:
             return ("Nothing is playing in mpv yet. Start a video there, and what YouTube "
                     "puts beside it shows up here.")
-        if self._companion_state == "refused":
-            return ("This page has asked YouTube as often as its ceiling allows for now. "
-                    "It frees up within a quarter of an hour.")
-        if self._companion_state == "failed":
-            return f"YouTube did not answer, {self._companion_why}"
+        refused = self._refusal_note()
+        if refused:
+            return refused
         if not self._mpv_running:
             return "mpv is not running. A press starts it with that video."
         return ""
@@ -2924,7 +2997,7 @@ class Bridge(QObject):
     # Presses.
 
     def _companion_card_at(self, index: int) -> dict | None:
-        shown = self._companion_shown()
+        shown = self._companion_shown(self._companion_video)
         return shown[index] if 0 <= index < len(shown) else None
 
     def _companion_card(self, key: str) -> dict | None:
@@ -2940,11 +3013,29 @@ class Bridge(QObject):
                         return card
         facts = self._companion_known.get(video_id) or {}
         if not facts.get("title"):
-            return None
+            return self._queued_song_card(video_id)
         return {"video_id": video_id, "title": facts["title"],
                 "channel": facts.get("channel") or "", "channel_id": facts.get("channel_id") or "",
                 "duration": facts.get("duration") or "", "views": "", "age": "",
                 "picture": f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg"}
+
+    def _queued_song_card(self, video_id: str) -> dict | None:
+        """A song in Weave's own queue, in a tile's shape, so its menu can put
+        it in a box and share it the way a tile's does."""
+        if self._audio is None:
+            return None
+        for entry in self._audio.queue_entries():
+            if str(entry.get("key") or "") != f"yt:{video_id}":
+                continue
+            return {"video_id": video_id, "title": str(entry.get("title") or ""),
+                    "channel": str(entry.get("artist") or ""),
+                    "channel_id": str(entry.get("artistId") or entry.get("channelId") or ""),
+                    "duration": (str(entry.get("duration") or "")
+                                 or fmt.duration_text(entry.get("duration_s"))),
+                    "views": "", "age": "",
+                    "picture": (plain_source(entry.get("thumbnail"))
+                                or f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg")}
+        return None
 
     def _companion_song(self, key: str) -> dict | None:
         """A tile as a box of songs keeps it."""
@@ -5098,6 +5189,10 @@ class Bridge(QObject):
         # there describing a track that had stopped, with no way back to it.
         audio.trackChanged.connect(self._close_now_playing_if_silent)
         audio.trackChanged.connect(self._forget_now)
+        # A tile on the Recommended tab says whether it is in the queue.
+        audio.queueChanged.connect(self._on_music_queue_changed)
+        # The line being sung follows the song, a seek included.
+        audio.progressChanged.connect(self._follow_words)
         # The facts arrive a few seconds after the press, with the address, so
         # the page has to be told that what it drew under the picture has
         # grown. Its own signal and not trackChanged, which would read as a
@@ -6403,6 +6498,8 @@ class Bridge(QObject):
                  # Absent from the lists that never had one, which is why it is
                  # read rather than indexed.
                  "artistId": row.get("artistId", ""),
+                 # As the list wrote it, for the queue to show.
+                 "duration": str(row.get("duration") or ""),
                  "url": ids.watch_url("youtube", row["videoId"])}
                 for row in rows]
 
@@ -6550,16 +6647,14 @@ class Bridge(QObject):
 
         Only when the song really did change. The player raises the same signal
         when a song is added to the queue, and reading that as a new song threw
-        away the list the song had just been added from, which left the Related
-        tab saying there was nothing there while the thing it had just queued
-        sat in the queue.
+        away whatever the song had just been added from.
         """
         song = self._now_key() or self._now_video_id()
         if song == self._now_song:
             return
         self._now_song = song
         self._now_words = {}
-        self._now_related = []
+        self._set_now_lines([])
         self._now_comments = []
         self._now_threads = 5
         self._now_busy = ""
@@ -6568,6 +6663,31 @@ class Bridge(QObject):
             if worker is not None and worker.isRunning():
                 worker.cancel()
         self.nowChanged.emit()
+        self._read_now_tab()
+
+    def _read_now_tab(self) -> None:
+        """Ask for what the open tab shows, for the song playing now.
+
+        Asked from here, after everything about the last song is gone, rather
+        than by the page when it hears of the new song. The page heard first:
+        it asked while the last song's words still counted as read, so nothing
+        was asked, and then they were cleared, which left the tab empty on
+        every other song until it was pressed again.
+
+        Only while the page is open. Nothing is fetched for it while it is
+        closed, and opening it asks then.
+        """
+        if self._view_kind != NOWPLAYING:
+            return
+        if self._now_tab == SongSide.WORDS:
+            self.readNowSide(SongSide.WORDS)
+        elif self._now_tab == "comments":
+            # Pressing the tab asks again every time, but opening the page or
+            # a new song only asks for what is not there yet.
+            if not self._now_comments:
+                self.readNowComments()
+        elif self._now_tab == "recommended":
+            self._companion_follow()
 
     def _now_video_id(self) -> str:
         """The id of the song playing, whichever list it was queued from.
@@ -6586,9 +6706,19 @@ class Bridge(QObject):
         return ids.youtube_video_id(str(track.get("url") or "")) or ""
 
     @Slot(str)
+    def setNowTab(self, name: str) -> None:
+        """Which tab the Now playing page is on. Only the Recommended tab is
+        anything to this side: while it is open the song playing is followed
+        the way the companion follows mpv."""
+        self._now_tab = name
+        self._now_rec_open = name == "recommended"
+        if self._now_rec_open:
+            self._companion_follow()
+
+    @Slot(str)
     def readNowSide(self, what: str) -> None:
-        """The words, or what is like this song. Asked for when the tab is
-        pressed and never before, since each is a request of its own."""
+        """The words. Asked for when the tab is pressed and never before,
+        since it is a request of its own."""
         video_id = self._now_video_id()
         if not video_id or what in self._now_read:
             return
@@ -6596,30 +6726,69 @@ class Bridge(QObject):
             # One at a time, and nothing is remembered about a press that was
             # turned away, so pressing again once the other has landed works.
             return
-        words_id, like_id = self._now_ids.get(video_id, ("", ""))
+        kept = self._now_ids.get(video_id) or {}
         self._now_busy = what
         self.nowChanged.emit()
-        self._now_side = SongSide(self._cfg, what, video_id, words_id, like_id,
-                                  parent=self)
+        self._now_side = SongSide(self._cfg, what, video_id, kept.get("words", ""),
+                                  kept.get("synced", True), parent=self)
         self._now_side.answered.connect(self._on_now_side)
         self._now_side.failed.connect(self._on_now_side_failed)
         if not self._launch(self._now_side):
             self._now_busy = ""
 
     def _on_now_side(self, answer: dict) -> None:
+        if answer["videoId"] != self._now_video_id():
+            # The words of a song skipped while they were on their way. Where
+            # they are is still worth keeping, but they are not the words of
+            # what plays, and taking them showed one song's words under the
+            # next.
+            self._now_ids[answer["videoId"]] = {"words": answer["wordsId"],
+                                                "synced": answer["synced"]}
+            return
         self._now_busy = ""
         # Answered, whatever the answer was. An empty one is a fact about the
         # song rather than a reason to ask again.
         self._now_read.add(answer["what"])
-        self._now_ids[answer["videoId"]] = (answer["wordsId"], answer["likeId"])
-        if answer["what"] == SongSide.WORDS:
-            self._now_words = {"text": answer["text"], "source": answer["source"],
-                               "read": True}
-        else:
-            self._now_related = answer["tracks"]
+        self._now_ids[answer["videoId"]] = {"words": answer["wordsId"],
+                                            "synced": answer["synced"]}
+        lines = list(answer.get("lines") or [])
+        # Timed words are followed under the picture. Words without timing
+        # are read as one block, the way they always were.
+        self._now_words = {"text": answer["text"], "source": answer["source"],
+                           "read": True, "synced": bool(lines)}
         self.nowChanged.emit()
+        self._set_now_lines(lines)
+
+    def _stale(self, current) -> bool:
+        """Whether the worker reporting is one that was replaced, a request
+        for a song no longer playing, whose news is not about this one."""
+        reporting = self.sender()
+        return isinstance(reporting, QThread) and reporting is not current
+
+    def _set_now_lines(self, lines: list) -> None:
+        self._now_lines = lines
+        self._now_starts = [line["at"] for line in lines]
+        self._now_lyric = (sung_at(lines, self._now_starts, self._audio.seconds)
+                           if lines and self._audio is not None else {})
+        self.nowLyricChanged.emit()
+
+    def _follow_words(self) -> None:
+        """Move to the line the song is at, said only when that changes.
+
+        Asked on every tenth of a second the player reports, so it does nothing
+        at all for a song without timed words, and a lookup in a sorted list
+        for one with them.
+        """
+        if not self._now_lines or self._audio is None:
+            return
+        sung = sung_at(self._now_lines, self._now_starts, self._audio.seconds)
+        if sung != self._now_lyric:
+            self._now_lyric = sung
+            self.nowLyricChanged.emit()
 
     def _on_now_side_failed(self, message: str) -> None:
+        if self._stale(self._now_side):
+            return
         self._now_busy = ""
         self.nowChanged.emit()
         self._set_status(message)
@@ -6649,36 +6818,86 @@ class Bridge(QObject):
             self._now_busy = ""
 
     def _on_now_comments(self, key: str, threads: list, extra: dict) -> None:
-        self._now_busy = ""
-        self._now_comments = threads
         # Likes, the exact view count and the date ride along with the comments
         # call, and the panel's own reader already knows how to find them.
         if extra:
             self._keep_extra(key, extra)
+        if key != self._now_key():
+            # A song skipped while its comments were on their way.
+            return
+        self._now_busy = ""
+        self._now_comments = threads
         self.nowChanged.emit()
 
     def _on_now_detail_failed(self, what: str, message: str) -> None:
+        if self._stale(self._now_detail):
+            return
         self._now_busy = ""
         self.nowChanged.emit()
         self._set_status(f"{what}, {message}")
 
-    @Slot(int)
-    def playNowRelated(self, index: int) -> None:
-        """Play one of the songs beside this one, and the rest after it, the
-        same way pressing a search result does."""
-        if not self._audio or not self._now_related:
-            return
-        items = self._track_items(self._now_related)
-        self._audio.play_items(items, max(0, min(index, len(items) - 1)))
+    # The Recommended tab: the companion's tiles for the song playing here,
+    # pressed into Weave's own queue rather than mpv's.
+
+    def _on_music_queue_changed(self) -> None:
+        if self._view_kind == NOWPLAYING and self._now_rec_open:
+            self.companionChanged.emit()
+
+    def _music_queued(self) -> set:
+        entries = self._audio.queue_entries() if self._audio is not None else []
+        return {str(entry.get("key") or "").split(":", 1)[-1] for entry in entries}
+
+    def _get_now_recommended(self) -> list:
+        return self._tiles(self._now_video_id(), self._music_queued())
+
+    def _get_now_recommended_chips(self) -> list:
+        return self._chips(self._now_video_id())
+
+    def _get_now_recommended_note(self) -> str:
+        if not self._now_video_id():
+            return "Recommendations come from YouTube, and this is not a YouTube song."
+        return self._refusal_note()
+
+    # Notified with the companion's own signal: the answers, the asking and
+    # the chip remembered are the same ones.
+    nowRecommended = Property("QVariantList", _get_now_recommended, notify=companionChanged)
+    nowRecommendedChips = Property("QVariantList", _get_now_recommended_chips,
+                                   notify=companionChanged)
+    nowRecommendedNote = Property(str, _get_now_recommended_note, notify=companionChanged)
+
+    def _recommended_song(self, index: int) -> dict | None:
+        """A tile of the Recommended tab, as the player takes a song."""
+        shown = self._companion_shown(self._now_video_id())
+        if not 0 <= index < len(shown):
+            return None
+        card = shown[index]
+        return {"key": f"yt:{card['video_id']}", "title": card["title"],
+                "artist": card["channel"], "thumbnail": qml_source(card["picture"]),
+                # A YouTube channel rather than an artist of the music service,
+                # so the name on the row goes to the channel's page instead.
+                "artistId": "", "channelId": card["channel_id"],
+                "duration": card["duration"],
+                "duration_s": self._seconds(card["duration"]), "live": False,
+                "url": ids.watch_url("youtube", card["video_id"])}
 
     @Slot(int, bool)
-    def queueNowRelated(self, index: int, play_next: bool) -> None:
-        """Put one of them in the queue without leaving what is playing."""
-        if not self._audio or not (0 <= index < len(self._now_related)):
+    def queueNowRecommended(self, index: int, play_next: bool) -> None:
+        """On the end of the queue, or straight after the song playing. Twice
+        pressed is twice queued, like the companion."""
+        song = self._recommended_song(index)
+        if song is None or self._audio is None:
             return
-        item = self._track_items([self._now_related[index]])[0]
-        if self._audio.add_item(item, play_next=play_next):
-            self._set_status("Playing next" if play_next else "Added to the queue")
+        if self._audio.add_item(song, play_next=play_next):
+            self._set_notice("Playing it next" if play_next else "Put on the end of the queue",
+                             clear_after_s=3)
+
+    @Slot(int)
+    def playNowRecommended(self, index: int) -> None:
+        """Straight after the song playing, and then at once."""
+        song = self._recommended_song(index)
+        if song is None or self._audio is None:
+            return
+        self._audio.play_item_now(song)
 
     @Slot()
     def loadMoreNowComments(self) -> None:

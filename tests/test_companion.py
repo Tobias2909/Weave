@@ -68,6 +68,9 @@ def make(test, alive=True):
     bridge._companion_known = {}
     bridge._companion_namer = None
     bridge._companion_asked = set()
+    # Weave's own player, and its page's tab, neither of which is in play here.
+    bridge._audio = None
+    bridge._now_rec_open = False
     bridge._web_results = []
     bridge.asked = []
     bridge._companion_ask = lambda *args: bridge.asked.append(args)

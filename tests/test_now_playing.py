@@ -36,6 +36,13 @@ class FakeAudio:
         self.added.append((item, play_next))
         return True
 
+    def play_item_now(self, item) -> bool:
+        self.added.append((item, "now"))
+        return True
+
+    def queue_entries(self) -> list:
+        return [item for item, _how in self.added if isinstance(item, dict)]
+
     def play_items(self, items, start=0) -> None:
         self.added.append((items, start))
 
@@ -57,8 +64,9 @@ def bridge_with(audio=None, view=ALL, has_previous=True) -> Bridge:
     bridge._now_side = None
     bridge._now_detail = None
     bridge._now_words = {}
-    bridge._now_related = []
     bridge._now_comments = []
+    bridge._now_rec_open = False
+    bridge._now_tab = "video"
     bridge._now_threads = 5
     bridge._now_busy = ""
     bridge._now_read = set()
@@ -66,7 +74,11 @@ def bridge_with(audio=None, view=ALL, has_previous=True) -> Bridge:
     bridge._cfg = None
     bridge._now_song = ""
     bridge._now_ids = {}
+    bridge._now_lines = []
+    bridge._now_starts = []
+    bridge._now_lyric = {}
     bridge.nowChanged = Recorder()
+    bridge.nowLyricChanged = Recorder()
     bridge._status = ""
     bridge.statusChanged = Recorder()
     return bridge
@@ -146,13 +158,11 @@ class WhatSitsBesideTheSong(unittest.TestCase):
         # lands, which reads as the page simply being wrong.
         bridge = bridge_with(audio=FakeAudio())
         bridge._now_words = {"text": "something", "read": True}
-        bridge._now_related = [{"title": "a"}]
         bridge._now_comments = [{"text": "a"}]
         bridge._now_threads = 15
         bridge._now_busy = "words"
         Bridge._forget_now(bridge)
         self.assertEqual(bridge._now_words, {})
-        self.assertEqual(bridge._now_related, [])
         self.assertEqual(bridge._now_comments, [])
         self.assertEqual(bridge._now_threads, 5)
         self.assertEqual(bridge._now_busy, "")
@@ -160,37 +170,96 @@ class WhatSitsBesideTheSong(unittest.TestCase):
 
     def test_adding_to_the_queue_keeps_what_is_beside_the_song(self) -> None:
         # The player raises the same signal for a song added to the queue as
-        # for a song starting, and reading that as a new song threw away the
-        # very list the song had just been queued from. The Related tab then
-        # said there was nothing there while the thing it had queued sat in
-        # the queue.
+        # for a song starting, and reading that as a new song threw away what
+        # was beside the song it had just been queued from.
         audio = FakeAudio(track={"key": "yt:a", "url": ""})
         bridge = bridge_with(audio=audio)
         bridge._now_song = "yt:a"
-        bridge._now_related = [{"title": "One"}]
+        bridge._now_words = {"text": "One", "read": True}
         Bridge._forget_now(bridge)
-        self.assertEqual(bridge._now_related, [{"title": "One"}],
-                         "queueing a song emptied the list it came from")
+        self.assertEqual(bridge._now_words, {"text": "One", "read": True},
+                         "queueing a song emptied what was beside the song")
 
     def test_the_next_song_still_empties_it(self) -> None:
         audio = FakeAudio(track={"key": "yt:b", "url": ""})
         bridge = bridge_with(audio=audio)
         bridge._now_song = "yt:a"
-        bridge._now_related = [{"title": "One"}]
+        bridge._now_words = {"text": "One", "read": True}
         Bridge._forget_now(bridge)
-        self.assertEqual(bridge._now_related, [])
+        self.assertEqual(bridge._now_words, {})
         self.assertEqual(bridge._now_song, "yt:b")
 
-    def test_the_two_addresses_are_kept_so_the_other_tab_costs_nothing(self) -> None:
-        # One answer carries the tracks, the address of the words and the
-        # address of what is like the song. Asking again for either would be a
-        # second request for something already in hand.
+    def test_a_new_song_asks_for_the_words_of_the_tab_left_open(self) -> None:
+        # The page used to ask on hearing of the new song, before the last
+        # song's words were put away. They still counted as read, so nothing
+        # was asked, and then they were cleared: an empty tab on every other
+        # song until it was pressed again.
+        audio = FakeAudio(track={"key": "yt:b", "videoId": "b"})
+        bridge = bridge_with(audio=audio, view=NOWPLAYING)
+        bridge._now_tab = SongSide.WORDS
+        bridge._now_song = "yt:a"
+        bridge._now_read = {SongSide.WORDS}
+        bridge._now_words = {"text": "the words of a", "read": True}
+        started = []
+        bridge._launch = lambda worker: started.append(worker) or True
+        Bridge._forget_now(bridge)
+        self.assertEqual(len(started), 1, "the new song's words were never asked for")
+        self.assertEqual(started[0]._video_id, "b")
+        self.assertEqual(bridge._now_busy, SongSide.WORDS)
+
+    def test_nothing_is_asked_for_while_the_page_is_closed(self) -> None:
+        audio = FakeAudio(track={"key": "yt:b", "videoId": "b"})
+        bridge = bridge_with(audio=audio, view=ALL)
+        bridge._now_tab = SongSide.WORDS
+        bridge._now_song = "yt:a"
+        started = []
+        bridge._launch = lambda worker: started.append(worker) or True
+        Bridge._forget_now(bridge)
+        self.assertEqual(started, [], "words were fetched for a closed page")
+        # And opening it asks then.
+        bridge._view_kind = NOWPLAYING
+        Bridge._read_now_tab(bridge)
+        self.assertEqual(len(started), 1, "opening the page asked for nothing")
+
+    def test_the_video_tab_asks_for_nothing(self) -> None:
+        bridge = bridge_with(audio=FakeAudio(), view=NOWPLAYING)
+        started = []
+        bridge._launch = lambda worker: started.append(worker) or True
+        Bridge._read_now_tab(bridge)
+        self.assertEqual(started, [])
+
+    def test_the_words_of_a_song_skipped_are_not_shown_under_the_next(self) -> None:
+        # Skipped while its words were on their way: they arrive while the
+        # next song plays and its own words are being read.
+        bridge = bridge_with(audio=FakeAudio(track={"key": "yt:b", "videoId": "b"}))
+        bridge._now_busy = SongSide.WORDS
+        Bridge._on_now_side(bridge, {
+            "what": SongSide.WORDS, "videoId": "a", "wordsId": "W", "synced": True,
+            "text": "the words of a", "source": "", "lines": [],
+        })
+        self.assertEqual(bridge._now_words, {}, "one song's words were shown for another")
+        self.assertEqual(bridge._now_busy, SongSide.WORDS,
+                         "the next song's words stopped being waited for")
+        self.assertEqual(bridge._now_ids["a"], {"words": "W", "synced": True},
+                         "where the skipped song's words are was not kept")
+
+    def test_the_comments_of_a_song_skipped_are_not_shown_under_the_next(self) -> None:
+        bridge = bridge_with(audio=FakeAudio(track={"key": "yt:b", "videoId": "b"}))
+        bridge._now_busy = "comments"
+        bridge._keep_extra = lambda *_a: None
+        Bridge._on_now_comments(bridge, "yt:a", [{"text": "about a"}], {})
+        self.assertEqual(bridge._now_comments, [])
+        self.assertEqual(bridge._now_busy, "comments")
+
+    def test_the_address_of_the_words_is_kept_so_asking_again_costs_less(self) -> None:
+        # The station answer carries the address of the words. Asking for it
+        # again would be a second request for something already in hand.
         bridge = bridge_with(audio=FakeAudio())
         Bridge._on_now_side(bridge, {
-            "what": SongSide.WORDS, "videoId": "a", "wordsId": "W", "likeId": "L",
-            "text": "the words", "source": "somewhere", "tracks": [],
+            "what": SongSide.WORDS, "videoId": "a", "wordsId": "W", "synced": True,
+            "text": "the words", "source": "somewhere",
         })
-        self.assertEqual(bridge._now_ids["a"], ("W", "L"))
+        self.assertEqual(bridge._now_ids["a"], {"words": "W", "synced": True})
         self.assertEqual(bridge._now_words["source"], "somewhere")
         self.assertTrue(bridge._now_words["read"])
         self.assertEqual(bridge._now_busy, "")
@@ -198,8 +267,8 @@ class WhatSitsBesideTheSong(unittest.TestCase):
     def test_a_song_with_no_words_is_an_answer_and_not_a_failure(self) -> None:
         bridge = bridge_with(audio=FakeAudio())
         Bridge._on_now_side(bridge, {
-            "what": SongSide.WORDS, "videoId": "a", "wordsId": "", "likeId": "",
-            "text": "", "source": "", "tracks": [],
+            "what": SongSide.WORDS, "videoId": "a", "wordsId": "", "synced": True,
+            "text": "", "source": "",
         })
         # Read, and empty. The page needs both facts to tell "none of them"
         # from "not asked yet".
@@ -219,27 +288,39 @@ class WhatSitsBesideTheSong(unittest.TestCase):
         # as asked by the window and refused by this side, which left that tab
         # empty until the song changed.
         bridge = bridge_with(audio=FakeAudio())
-        bridge._now_busy = SongSide.WORDS
+        bridge._now_busy = "comments"
         started = []
         bridge._launch = lambda worker: started.append(worker) or True
-        Bridge.readNowSide(bridge, SongSide.LIKE_IT)
+        Bridge.readNowSide(bridge, SongSide.WORDS)
         self.assertEqual(started, [], "two were fetched at once")
-        self.assertNotIn(SongSide.LIKE_IT, bridge._now_read,
+        self.assertNotIn(SongSide.WORDS, bridge._now_read,
                          "a press that fetched nothing counted as answered")
 
         # And it works on the next press, once the other has landed.
         bridge._now_busy = ""
-        Bridge.readNowSide(bridge, SongSide.LIKE_IT)
+        Bridge.readNowSide(bridge, SongSide.WORDS)
         self.assertEqual(len(started), 1, "the second press was refused too")
 
     def test_an_empty_answer_still_counts_as_answered(self) -> None:
         bridge = bridge_with(audio=FakeAudio())
         Bridge._on_now_side(bridge, {
-            "what": SongSide.LIKE_IT, "videoId": "a", "wordsId": "", "likeId": "L",
-            "text": "", "source": "", "tracks": [],
+            "what": SongSide.WORDS, "videoId": "a", "wordsId": "", "synced": True,
+            "text": "", "source": "",
         })
-        self.assertIn(SongSide.LIKE_IT, bridge._now_read)
-        self.assertEqual(bridge._now_related, [])
+        self.assertIn(SongSide.WORDS, bridge._now_read)
+
+    def test_more_comments_are_offered_until_an_answer_falls_short(self) -> None:
+        bridge = bridge_with(audio=FakeAudio())
+        self.assertFalse(Bridge._get_now_comments_more(bridge), "nothing read yet")
+        bridge._now_comments = [{"text": str(i)} for i in range(5)]
+        self.assertTrue(Bridge._get_now_comments_more(bridge))
+        asked = []
+        bridge.readNowComments = lambda: asked.append(bridge._now_threads)
+        Bridge.loadMoreNowComments(bridge)
+        self.assertEqual(asked, [15], "a press asks for ten more threads")
+        bridge._now_comments = [{"text": str(i)} for i in range(12)]
+        self.assertFalse(Bridge._get_now_comments_more(bridge),
+                         "twelve of fifteen is every thread there is")
 
     def test_the_id_is_read_out_of_the_address(self) -> None:
         # The entries the player is handed are built in several places and most
@@ -271,28 +352,91 @@ class WhatSitsBesideTheSong(unittest.TestCase):
         self.assertEqual(started, [])
 
 
-class TheRelatedRows(unittest.TestCase):
-    def test_play_next_and_the_end_of_the_queue_are_different_places(self) -> None:
-        audio = FakeAudio()
-        bridge = bridge_with(audio=audio)
-        bridge._now_related = [
-            {"key": "yt:b", "videoId": "b", "title": "One", "artist": "Somebody",
-             "thumbnail": ""},
-        ]
-        bridge._set_status = lambda *_a, **_k: None
-        Bridge.queueNowRelated(bridge, 0, True)
-        Bridge.queueNowRelated(bridge, 0, False)
-        self.assertEqual([next_ for _item, next_ in audio.added], [True, False])
-        # The player is handed an address, not a row, whichever list the row
-        # came from.
-        self.assertTrue(audio.added[0][0]["url"].endswith("b"))
+def with_tiles(bridge: Bridge, video_id: str = "dQw4w9WgXcQ") -> Bridge:
+    """What YouTube put beside the song playing, kept the way an answer is."""
+    bridge._companion_cache = {video_id: {
+        "chips": [{"label": "Mix", "token": ""}],
+        "cards": {"Mix": [{
+            "video_id": "bbbbbbbbbbb", "title": "One", "channel": "Somebody",
+            "channel_id": "UCaaaaaaaaaaaaaaaaaaaaaa", "duration": "3:21",
+            "views": "", "age": "", "picture": "https://i.ytimg.com/vi/bbbbbbbbbbb/hq720.jpg"}]},
+    }}
+    bridge._db = type("Db", (), {"get_state": lambda self, *_a: "Mix"})()
+    bridge._set_notice = lambda *_a, **_k: None
+    return bridge
 
-    def test_a_row_that_is_not_there_does_nothing(self) -> None:
-        audio = FakeAudio()
-        bridge = bridge_with(audio=audio)
-        bridge._now_related = []
-        Bridge.queueNowRelated(bridge, 3, True)
+
+class TheRecommendedTiles(unittest.TestCase):
+    TRACK = {"key": "yt:dQw4w9WgXcQ", "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}
+
+    def test_play_next_and_the_end_of_the_queue_are_different_places(self) -> None:
+        audio = FakeAudio(track=dict(self.TRACK))
+        bridge = with_tiles(bridge_with(audio=audio))
+        Bridge.queueNowRecommended(bridge, 0, True)
+        Bridge.queueNowRecommended(bridge, 0, False)
+        Bridge.playNowRecommended(bridge, 0)
+        self.assertEqual([how for _item, how in audio.added], [True, False, "now"])
+        song = audio.added[0][0]
+        # The player is handed an address, and the channel stands for whoever
+        # made it, as a channel rather than an artist of the music service.
+        self.assertTrue(song["url"].endswith("bbbbbbbbbbb"))
+        self.assertEqual(song["key"], "yt:bbbbbbbbbbb")
+        self.assertEqual(song["artistId"], "")
+        self.assertEqual(song["channelId"], "UCaaaaaaaaaaaaaaaaaaaaaa")
+        self.assertEqual(song["duration_s"], 201)
+
+    def test_a_tile_that_is_not_there_does_nothing(self) -> None:
+        audio = FakeAudio(track=dict(self.TRACK))
+        bridge = with_tiles(bridge_with(audio=audio))
+        Bridge.queueNowRecommended(bridge, 3, True)
+        Bridge.playNowRecommended(bridge, -1)
         self.assertEqual(audio.added, [])
+
+    def test_a_tile_in_the_queue_says_so(self) -> None:
+        audio = FakeAudio(track=dict(self.TRACK))
+        bridge = with_tiles(bridge_with(audio=audio))
+        self.assertFalse(Bridge._get_now_recommended(bridge)[0]["queued"])
+        Bridge.queueNowRecommended(bridge, 0, False)
+        self.assertTrue(Bridge._get_now_recommended(bridge)[0]["queued"])
+
+    def test_a_song_that_is_no_youtube_video_says_why_there_is_nothing(self) -> None:
+        bridge = with_tiles(bridge_with(audio=FakeAudio(track={"key": "source:1",
+                                                               "url": "http://radio.test"})))
+        bridge._companion_state = ""
+        self.assertIn("not a YouTube song", Bridge._get_now_recommended_note(bridge))
+        self.assertEqual(Bridge._get_now_recommended(bridge), [])
+
+    def test_a_song_in_the_queue_can_go_in_a_box_like_a_tile(self) -> None:
+        # Its right press offers the boxes and the address, which look a
+        # video up by its key the way they look up a tile.
+        audio = FakeAudio(track=dict(self.TRACK))
+        audio.added = [({"key": "yt:ccccccccccc", "title": "Queued", "artist": "Somebody",
+                         "artistId": "UC" + "s" * 22, "duration": "2:10",
+                         "thumbnail": "", "url": "u"}, False)]
+        bridge = with_tiles(bridge_with(audio=audio))
+        card = Bridge._queued_song_card(bridge, "ccccccccccc")
+        self.assertEqual((card["title"], card["channel"], card["channel_id"], card["duration"]),
+                         ("Queued", "Somebody", "UC" + "s" * 22, "2:10"))
+        self.assertIn("ccccccccccc", card["picture"])
+        self.assertIsNone(Bridge._queued_song_card(bridge, "notqueued00"))
+
+    def test_only_the_open_tab_follows_the_song(self) -> None:
+        # The answers are asked for while the tab is on screen and never
+        # otherwise, since each one is a request against the companion's
+        # ceiling.
+        bridge = with_tiles(bridge_with(audio=FakeAudio(track=dict(self.TRACK)),
+                                        view=NOWPLAYING), video_id="other")
+        asked = []
+        bridge._companion_ask = lambda video_id, *_a: asked.append(video_id)
+        bridge.companionChanged = Recorder()
+        Bridge.setNowTab(bridge, "words")
+        self.assertEqual(asked, [])
+        Bridge.setNowTab(bridge, "recommended")
+        self.assertEqual(asked, ["dQw4w9WgXcQ"])
+        # Off the page, nothing follows it, whatever tab it was left on.
+        bridge._view_kind = MUSIC
+        Bridge._companion_follow(bridge)
+        self.assertEqual(asked, ["dQw4w9WgXcQ"])
 
 
 class OneQueueDrawnOneWay(unittest.TestCase):
@@ -441,6 +585,23 @@ class WhatTheWindowActuallyReceives(unittest.TestCase):
             "artistId": "UC" + "b" * 22, "live": False,
             "url": "https://www.youtube.com/watch?v=aaaaaaaaaaa"}])
         self.assertEqual(player.track.get("artistId"), "UC" + "b" * 22)
+
+    def test_the_queue_hands_over_what_its_rows_show(self) -> None:
+        # The big rows show a length, and a right press on one needs the key;
+        # a video queued from the recommendations names its channel instead of
+        # an artist.
+        player = self.player()
+        player.play_items([
+            {"key": "yt:a", "title": "One", "artist": "A channel", "thumbnail": "",
+             "artistId": "", "channelId": "UC" + "c" * 22, "duration_s": 201,
+             "live": False, "url": "https://www.youtube.com/watch?v=aaaaaaaaaaa"},
+            {"key": "yt:b", "title": "Two", "artist": "Somebody", "thumbnail": "",
+             "artistId": "UC" + "a" * 22, "duration": "4:00",
+             "live": False, "url": "https://www.youtube.com/watch?v=bbbbbbbbbbb"}])
+        rows = player.queue
+        self.assertEqual([row["key"] for row in rows], ["yt:a", "yt:b"])
+        self.assertEqual([row["duration"] for row in rows], ["3:21", "4:00"])
+        self.assertEqual([row["channelId"] for row in rows], ["UC" + "c" * 22, ""])
 
     def test_an_entry_without_one_is_not_invented(self) -> None:
         player = self.player()

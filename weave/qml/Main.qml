@@ -1278,19 +1278,8 @@ ApplicationWindow {
         anchors.top: liveBar.visible ? liveBar.bottom : parent.top
         anchors.topMargin: liveBar.visible ? 0 : banner.height
         anchors.bottom: miniPlayer.top
-        onCardMenuRequested: (index, key) => {
-            companionMenu.index = index
-            companionMenu.key = key
-            companionMusicBoxes.holding = App.cardSongBoxes(key)
-            companionBoxes.holding = App.boxesHolding(key)
-            companionMenu.popup()
-        }
-        onQueueMenuRequested: (key) => {
-            queueEntryMenu.key = key
-            queueEntryMusicBoxes.holding = App.cardSongBoxes(key)
-            queueEntryBoxes.holding = App.boxesHolding(key)
-            queueEntryMenu.popup()
-        }
+        onCardMenuRequested: (index, key) => root.askAboutTile("mpv", index, key)
+        onQueueMenuRequested: (key) => root.askAboutQueueEntry(key)
         onSaveQueueRequested: root.askForName("mpvbox", -1, "", "")
     }
 
@@ -1450,6 +1439,8 @@ ApplicationWindow {
             groundHeight: windowGround.height
             onFullscreenToggled: root.toggleCinema()
             onSaveQueueRequested: root.askForName("queuebox", -1, "", "")
+            onCardMenuRequested: (index, key) => root.askAboutTile("music", index, key)
+            onQueueMenuRequested: (key) => root.askAboutQueueEntry(key)
         }
     }
 
@@ -2648,21 +2639,53 @@ ApplicationWindow {
         }
     }
 
-    // A tile on the companion page. Where it goes in mpv's playlist first, then
-    // the boxes, the way the menu of any other video has them.
+    // A tile of recommendations, on the companion page or on the Recommended
+    // tab of Now playing: which queue it is for, mpv's or the music's.
+    function askAboutTile(where, index, key) {
+        companionMenu.where = where
+        companionMenu.index = index
+        companionMenu.key = key
+        companionMusicBoxes.holding = App.cardSongBoxes(key)
+        companionBoxes.holding = App.boxesHolding(key)
+        companionMenu.popup()
+    }
+
+    function askAboutQueueEntry(key) {
+        queueEntryMenu.key = key
+        queueEntryMusicBoxes.holding = App.cardSongBoxes(key)
+        queueEntryBoxes.holding = App.boxesHolding(key)
+        queueEntryMenu.popup()
+    }
+
+    // A tile of recommendations. Where it goes in the queue first, then the
+    // boxes, the way the menu of any other video has them.
     ThemedMenu {
         id: companionMenu
         objectName: "companionMenu"
+        // "mpv" on the companion page, "music" on the Now playing page.
+        property string where: "mpv"
         property int index: -1
         property string key: ""
 
         ThemedMenuItem {
             text: "Play next"
-            onTriggered: { App.companionPlayNext(companionMenu.index); companionMenu.dismiss() }
+            onTriggered: {
+                if (companionMenu.where === "music")
+                    App.queueNowRecommended(companionMenu.index, true)
+                else
+                    App.companionPlayNext(companionMenu.index)
+                companionMenu.dismiss()
+            }
         }
         ThemedMenuItem {
             text: "Play now"
-            onTriggered: { App.companionPlayNow(companionMenu.index); companionMenu.dismiss() }
+            onTriggered: {
+                if (companionMenu.where === "music")
+                    App.playNowRecommended(companionMenu.index)
+                else
+                    App.companionPlayNow(companionMenu.index)
+                companionMenu.dismiss()
+            }
         }
 
         ThemedMenuSeparator {}
@@ -2690,8 +2713,8 @@ ApplicationWindow {
         }
     }
 
-    // An entry of mpv's playlist on the companion page: its boxes and its
-    // address, the same menus every other video has.
+    // An entry of a queue, mpv's on the companion page or the music's: its
+    // boxes and its address, the same menus every other video has.
     ThemedMenu {
         id: queueEntryMenu
         objectName: "queueEntryMenu"

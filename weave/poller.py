@@ -2802,60 +2802,78 @@ class ChannelAvatarsFetcher(Worker):
 
 
 class SongSide(Worker):
-    """What sits beside the song on the Now playing page.
+    """The words of the song on the Now playing page.
 
-    One worker for both tabs rather than two, the way TrackList covers three
-    lists, because each needs the same two step walk and a second worker would
-    mean a second flag, a second crash route and a second inventory entry for
-    no difference a person could see.
+    Two steps: the station answer carries the address of the words, and the
+    words are read from there. The address is handed back for keeping, so the
+    tab opened again spends nothing looking it up, and so is whether the
+    timing in them can be trusted for what is playing.
 
-    The station answer carries the address of the words and the address of what
-    is like this song, so whichever tab was pressed first hands its addresses
-    back and the other tab spends nothing looking them up again.
+    A music video has no words of its own (four of four, signed in or not).
+    The song it is the video of does, and the station answer names that song
+    when signed in, so the words are read from there. Their timing belongs to
+    the song, though, and a video often runs longer with an intro of its own
+    (Blinding Lights is 4:23 as a video and 3:22 as a song), which would light
+    every line up early by the length of it. So the timing is only used when
+    the two are as long as each other, and otherwise the words come as one
+    block with no timing.
     """
 
     answered = Signal("QVariantMap")
     failed = Signal(str)
 
     WORDS = "words"
-    LIKE_IT = "related"
+    # A song, as the music service marks one. Its words are timed against
+    # exactly what plays.
+    SONG = "MUSIC_VIDEO_TYPE_ATV"
+    # How far apart a video and its song may be in length and still be taken
+    # for the same recording.
+    SAME_LENGTH_S = 2
 
-    def __init__(self, cfg: Config, what: str, video_id: str,
-                 words_id: str = "", like_id: str = "",
-                 parent: QObject | None = None) -> None:
+    def __init__(self, cfg: Config, what: str, video_id: str, words_id: str = "",
+                 synced: bool = True, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._cfg = cfg
         self._what = what
         self._video_id = video_id
         self._words_id = words_id
-        self._like_id = like_id
+        self._synced = synced
+
+    @classmethod
+    def in_step(cls, found: dict) -> bool:
+        """Whether timing read for the song can be followed on this entry.
+
+        A song is its own timing. Anything else only when it has a song beside
+        it that is as long as it is. A station answer that names no type at
+        all is read as a song, which is what every song answer has been, so a
+        change in how the type is written does not quietly untime every song.
+        """
+        if found["video_type"] in ("", cls.SONG):
+            return True
+        mine, theirs = found["length_s"], found["counterpart_length_s"]
+        return bool(mine and theirs and abs(mine - theirs) <= cls.SAME_LENGTH_S)
 
     def work(self) -> None:
         from .sources import ytmusic
 
         profile = cookie_profile(self._cfg)
         answer = {"what": self._what, "videoId": self._video_id,
-                  "wordsId": self._words_id, "likeId": self._like_id,
-                  "text": "", "source": "", "tracks": []}
+                  "wordsId": self._words_id, "synced": self._synced,
+                  "text": "", "source": "", "lines": []}
         try:
-            if not self._words_id and not self._like_id:
+            if not self._words_id:
                 found = ytmusic.watch(profile, self._video_id, limit=1)
                 self._words_id = found["lyrics_id"] or ""
-                self._like_id = found["related_id"] or ""
+                self._synced = self.in_step(found)
+                if not self._words_id and found["counterpart_id"]:
+                    song = ytmusic.watch(profile, found["counterpart_id"], limit=1)
+                    self._words_id = song["lyrics_id"] or ""
                 answer["wordsId"] = self._words_id
-                answer["likeId"] = self._like_id
-            if self._what == self.WORDS:
-                words = ytmusic.lyrics(profile, self._words_id)
-                answer["text"] = words["text"]
-                answer["source"] = words["source"]
-            else:
-                found = ytmusic.related(profile, self._like_id)
-                answer["tracks"] = [{
-                    "key": t.key, "videoId": t.video_id, "title": t.title,
-                    "artist": t.artist, "album": t.album, "duration": t.duration,
-                    "thumbnail": qml_source(t.thumbnail_url),
-                    "artistId": t.artist_id,
-                } for t in found]
+                answer["synced"] = self._synced
+            words = ytmusic.lyrics(profile, self._words_id, timed=self._synced)
+            answer["text"] = words["text"]
+            answer["source"] = words["source"]
+            answer["lines"] = words["lines"]
         except ytmusic.MusicError as exc:
             self.failed.emit(str(exc))
             return

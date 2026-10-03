@@ -500,11 +500,16 @@ class Smoke:
                    f"{read(said, 'lineCount')} lines, truncated {read(said, 'truncated')}")
         box = find(window, "nowPlayingDescriptionBox")
         bottom = read(box, "y") + read(box, "height")
+        # The foot of the Video tab, which is the foot of the page under the
+        # row of tabs.
+        video_part = find(window, "nowPlayingVideoPart")
         self.check("in a box of its own down to the foot of the page",
                    read(area, "visible") is True and read(box, "visible") is True
-                   and abs(bottom - read(stage_item, "height")) < 1
+                   and abs(bottom - read(video_part, "height")) < 1
+                   and abs(video_part.mapToItem(stage_item, 0, read(video_part, "height")).y()
+                           - read(stage_item, "height")) < 1
                    and read(area, "y") > read(box, "y"),
-                   f"ends at {bottom:.0f} of {read(stage_item, 'height'):.0f}")
+                   f"ends at {bottom:.0f} of {read(video_part, 'height'):.0f}")
         # A notch of the wheel is three lines here, not the grid's step.
         glide = [child for child in window.findChildren(QObject)
                  if read(child, "flickable") == area]
@@ -772,6 +777,8 @@ class Smoke:
         call(window, "leaveCinema")
         settle(0.6)
 
+        self.recommended_tab(bridge, window)
+
         # ---- the ground the page carries ---------------------------------
         #
         # The page paints the window's own ground under itself and holds it
@@ -832,6 +839,244 @@ class Smoke:
         audio.trackChanged.emit()
         audio.stateChanged.emit()
         settle(0.8)
+
+    def recommended_tab(self, bridge, window) -> None:
+        """The tabs over the middle of the Now playing page, the picture that
+        waits small in a corner of every tab but the video's, and the
+        companion's tiles for the song Weave is playing.
+
+        Nothing is asked of anybody: the answer is put where an answer would
+        have been kept."""
+        step("the Recommended tab")
+        audio = bridge._audio
+        names = ("video", "recommended", "words", "comments")
+        page = find(window, "nowPlayingPage")
+        tabs = [item_named(page, f"nowPlayingTab_{name}") for name in names]
+        self.check("the middle has its four tabs, the video's first",
+                   None not in tabs
+                   and [read(tab, "text") for tab in tabs]
+                   == ["Video", "Recommended", "Lyrics", "Comments"]
+                   and sorted(tabs, key=lambda tab: read(tab, "x")) == tabs,
+                   ", ".join(str(read(tab, "text")) for tab in tabs if tab is not None))
+        # The song the walk left playing has no address, and a song with no
+        # YouTube id has nothing recommended for it, so it is given one.
+        playing = audio._queue[audio._at]
+        playing["videoId"] = "walknowsong"
+        video_id = bridge._now_video_id()
+        cards = [{"video_id": f"walkrec{i:04d}", "title": f"Walk video {i}",
+                  "channel": "Walk channel", "channel_id": "UC" + "w" * 22,
+                  "duration": "4:00", "views": "", "age": "", "picture": ""}
+                 for i in range(6)]
+        bridge._companion_cache[video_id] = {
+            "chips": [{"label": "Mix", "token": ""}, {"label": "All", "token": ""}],
+            "cards": {"Mix": cards, "All": cards[:1]}}
+        bridge.chooseCompanionChip("Mix")
+        call(tabs[1], "clicked")
+        settle(0.9)
+        shown = find(window, "nowPlayingFrame")
+        tiles = find(window, "nowPlayingRecommended")
+        call(tiles, "forceLayout")
+        # Drawn, not only counted. A grid with no height counts its tiles
+        # and shows none of them.
+        drawn = items_named_like(tiles, "nowPlayingTile")
+        self.check("the Recommended tab shows the tiles for the song playing",
+                   bool(video_id) and read(tiles, "visible") is True
+                   and read(tiles, "count") == 6 and read(tiles, "height") > 300
+                   and len([tile for tile in drawn if tile.objectName() == "nowPlayingTile"]) == 6,
+                   f"{video_id!r}, {read(tiles, 'count')} tiles in {read(tiles, 'height')} px")
+        self.check("and the picture waits small in its corner, its real size",
+                   abs(read(shown, "width") - 320) < 1 and read(shown, "scale") == 1
+                   and not read(find(window, "nowPlayingVideoPart"), "visible")
+                   and read(find(window, "nowPlayingBackToVideo"), "visible") is True,
+                   f"{read(shown, 'width')} wide at scale {read(shown, 'scale')}")
+        slot = find(window, "nowPlayingTabPart")
+        corner = shown.mapToItem(slot, 0, 0)
+        self.check("at the top left of the tab",
+                   abs(corner.x()) < 1 and abs(corner.y()) < 1,
+                   f"at {corner.x():.0f},{corner.y():.0f}")
+        held = len(audio._queue)
+        bridge.queueNowRecommended(1, False)
+        settle(0.3)
+        self.check("a tile pressed goes on the end of the queue",
+                   len(audio._queue) == held + 1
+                   and audio._queue[-1]["key"] == "yt:walkrec0001",
+                   f"{held} then {len(audio._queue)}")
+        self.check("and says it is in the queue",
+                   [tile["queued"] for tile in read(bridge, "nowRecommended")]
+                   == [False, True, False, False, False, False])
+        menu = find(window, "companionMenu")
+        write(menu, "where", "music")
+        write(menu, "key", "yt:walkrec0002")
+        menu.open()
+        settle(0.3)
+        inner = {text for name in ("companionMusicBoxMenu", "companionVideoBoxMenu")
+                 for text, _ in menu_entries(find(window, name))}
+        labels = [text.strip() for text, _ in menu_entries(menu) if text not in inner]
+        self.check("a tile's menu here is the companion's",
+                   labels == ["Play next", "Play now", "Put in a box", "Put in a music box",
+                              "Share"], ", ".join(labels))
+        menu.close()
+        write(menu, "where", "mpv")
+        settle(0.2)
+        # The queue beside it: the companion's rows on the page, small ones in
+        # the bar's popup, one list either way.
+        page_rows = [row for row in items_named_like(find(window, "nowPlayingQueue"),
+                                                     "queueSongRow")
+                     if row.objectName() == "queueSongRow"]
+        self.check("the queue beside the page has the companion's big rows",
+                   bool(page_rows) and all(abs(row.height() - 88) < 1 for row in page_rows),
+                   f"{len(page_rows)} rows, {sorted({row.height() for row in page_rows})}")
+        popup_rows = [row for row in items_named_like(find(window, "queuedList"),
+                                                      "queueSongRow")
+                      if row.objectName() == "queueSongRow"]
+        self.check("and the popup over the bar keeps small ones",
+                   bool(popup_rows) and all(abs(row.height() - 44) < 1 for row in popup_rows),
+                   f"{len(popup_rows)} rows, {sorted({row.height() for row in popup_rows})}")
+        menu = find(window, "queueEntryMenu")
+        write(menu, "key", "yt:walkrec0001")
+        menu.open()
+        settle(0.3)
+        self.check("a song in the queue can go in a box",
+                   bridge._card_song("yt:walkrec0001") is not None
+                   and bridge._loose_row("yt:walkrec0001") is not None)
+        menu.close()
+        settle(0.2)
+        # The comments tab: ten more threads a press, read where they were.
+        def threads(count):
+            return [{"author": f"@walker{i}", "avatar": "", "text": f"Comment {i}. " * 30,
+                     "likes": i, "when": "1 day ago", "pinned": False, "byUploader": False,
+                     "verified": False, "replies": []} for i in range(count)]
+        held_threads = (list(bridge._now_comments), bridge._now_threads, bridge._now_busy)
+        bridge._now_busy = ""
+        bridge._now_comments = threads(5)
+        bridge._now_threads = 5
+        call(tabs[3], "clicked")
+        bridge._now_busy = ""
+        bridge._now_comments = threads(5)
+        bridge.nowChanged.emit()
+        settle(0.9)
+        more = item_named(page, "nowPlayingMoreComments")
+        area = find(window, "nowPlayingComments")
+        self.check("the comments tab offers more of them",
+                   more is not None and read(more, "visible") is True
+                   and read(area, "contentHeight") > read(area, "height"),
+                   f"{read(area, 'contentHeight')} in {read(area, 'height')}")
+        bottom = read(area, "contentHeight") - read(area, "height")
+        write(area, "contentY", bottom)
+        bridge._now_comments = threads(15)
+        bridge._now_threads = 15
+        bridge.nowChanged.emit()
+        settle(0.4)
+        self.check("and more arriving leaves them read where they were",
+                   abs(read(area, "contentY") - bottom) < 1
+                   and read(area, "contentHeight") > bottom + read(area, "height") + 100,
+                   f"at {read(area, 'contentY')}, was {bottom}")
+        bridge._now_comments = threads(12)
+        bridge._now_threads = 25
+        bridge.nowChanged.emit()
+        settle(0.3)
+        self.check("and an answer short of what was asked is all of them",
+                   not read(more, "visible"))
+        bridge._now_comments, bridge._now_threads, bridge._now_busy = held_threads
+        bridge.nowChanged.emit()
+        self.followed_words(bridge, window, tabs[2], shown)
+        call(tabs[0], "clicked")
+        settle(0.9)
+        rest = find(window, "nowPlayingFrameSlot")
+        self.check("back on the video's tab the picture is its full size again",
+                   abs(read(shown, "width") - read(rest, "width")) < 1
+                   and read(shown, "scale") == 1
+                   and read(find(window, "nowPlayingVideoPart"), "visible") is True
+                   and not read(slot, "visible"),
+                   f"{read(shown, 'width')} of {read(rest, 'width')}")
+        audio.removeFromQueue(len(audio._queue) - 1)
+        bridge._companion_cache.pop(video_id, None)
+        playing.pop("videoId", None)
+        settle(0.3)
+
+    def followed_words(self, bridge, window, tab, shown) -> None:
+        """The Lyrics tab following the song: the picture where the Video tab
+        has it, the line being sung under it with the next one smaller, a step
+        to the next line slid up into place, and the words with no timing read
+        as one block beside the picture in its corner instead.
+
+        The words are handed over as an answer would hand them, and marked as
+        asked, so pressing the tab asks nobody for anything."""
+        step("the Lyrics tab")
+        audio = bridge._audio
+        held = (dict(bridge._now_words), set(bridge._now_read), bridge._now_busy,
+                audio._pos)
+        lines = [{"at": 0.0, "end": 5.0, "text": "\u266a"},
+                 {"at": 5.0, "end": 9.0, "text": "First line of the walk"},
+                 {"at": 9.0, "end": 14.0, "text": "Second line of the walk"},
+                 {"at": 14.0, "end": 18.0, "text": "Third line of the walk"},
+                 {"at": 18.0, "end": 22.0, "text": "Fourth line of the walk"}]
+        answer = {"what": "words", "videoId": bridge._now_video_id(), "wordsId": "",
+                  "synced": True, "text": "the walk's words", "source": "Source: the walk",
+                  "lines": lines}
+        bridge._now_busy = ""
+        bridge._now_read.add("words")
+        audio._pos = 6.0
+        bridge._on_now_side(answer)
+        call(tab, "clicked")
+        rest = find(window, "nowPlayingFrameSlot")
+        ground = window.contentItem()
+        line = find(window, "nowPlayingSungLine")
+        after = find(window, "nowPlayingSungNext")
+
+        def at_rest():
+            place, home = shown.mapToItem(ground, 0, 0), rest.mapToItem(ground, 0, 0)
+            return (abs(read(shown, "width") - read(rest, "width")) < 1
+                    and read(shown, "scale") == 1
+                    and abs(place.x() - home.x()) < 1 and abs(place.y() - home.y()) < 1)
+        wait_until(at_rest, 2.0)
+        self.check("the Lyrics tab keeps the picture where the Video tab has it",
+                   at_rest(), f"{read(shown, 'width')} of {read(rest, 'width')} at scale "
+                              f"{read(shown, 'scale')}")
+        self.check("with the line being sung under it and the next one smaller",
+                   read(find(window, "nowPlayingSung"), "visible") is True
+                   and read(line, "text") == "First line of the walk"
+                   and read(after, "text") == "Second line of the walk"
+                   and read(after, "font").pixelSize() < read(line, "font").pixelSize()
+                   and line.mapToItem(ground, 0, 0).y()
+                   > rest.mapToItem(ground, 0, read(rest, "height")).y(),
+                   f"{read(line, 'text')!r} then {read(after, 'text')!r}")
+        self.check("and the title and description out of the way",
+                   read(find(window, "nowPlayingWords"), "opacity") == 0
+                   and not read(find(window, "nowPlayingWords"), "enabled"))
+        grew = []
+        line.scaleChanged.connect(lambda: grew.append(line.scale()))
+        audio._pos = 10.0
+        bridge._follow_words()
+        wait_until(lambda: read(line, "scale") == 1 and read(line, "y") == 0
+                   and read(after, "opacity") == 1, 2.0)
+        self.check("the next line slides up into place",
+                   read(line, "text") == "Second line of the walk"
+                   and read(after, "text") == "Third line of the walk"
+                   and bool(grew) and min(grew) < 0.9 and read(line, "scale") == 1,
+                   f"{read(line, 'text')!r}, grew from {min(grew) if grew else 'nothing'}")
+        grew.clear()
+        audio._pos = 19.0
+        bridge._follow_words()
+        settle(0.4)
+        self.check("and a seek further on puts the line there at once",
+                   read(line, "text") == "Fourth line of the walk"
+                   and read(after, "text") == "" and not grew,
+                   f"{read(line, 'text')!r}, {len(grew)} steps of growing")
+        bridge._on_now_side(dict(answer, synced=False, lines=[], text="one\ntwo"))
+        wait_until(lambda: abs(read(shown, "width") - 320) < 1, 2.0)
+        self.check("words with no timing are a block beside the picture in its corner",
+                   abs(read(shown, "width") - 320) < 1
+                   and read(find(window, "nowPlayingLyrics"), "visible") is True,
+                   f"{read(shown, 'width')} wide")
+        bridge._on_now_side(dict(answer, synced=True, lines=[], text=""))
+        wait_until(at_rest, 2.0)
+        self.check("and a song with none keeps the picture big and says so",
+                   at_rest() and read(item_named(window.contentItem(), "nowPlayingSungNone"),
+                                      "visible") is True)
+        bridge._now_words, bridge._now_read, bridge._now_busy, audio._pos = held
+        bridge._set_now_lines([])
+        bridge.nowChanged.emit()
 
     def layers(self, bridge, window) -> None:
         step("the layers")

@@ -245,6 +245,44 @@ class AddingOneMoreSong(unittest.TestCase):
         self.assertEqual(shown(made), list("abcdef"))
 
 
+class PlayingOneNow(unittest.TestCase):
+    """A recommended video played now: straight after this one, and then at
+    once, with the rest of the queue left where it was."""
+
+    def song(self, title="z"):
+        return {"key": f"yt:{title}", "title": title, "artist": "A channel",
+                "thumbnail": "", "live": False, "url": "https://example/watch"}
+
+    def test_it_goes_after_this_one_and_starts(self) -> None:
+        from weave.audio import AudioPlayer
+
+        made = player(at=2)
+        made._prepare_next = lambda: None
+        made._forget_recovery = lambda: None
+        made.started = []
+        made._start_current = lambda: made.started.append(made._queue[made._at]["title"])
+        self.assertTrue(AudioPlayer.play_item_now(made, self.song()))
+        self.assertEqual(shown(made), ["a", "b", "c", "z", "d", "e", "f"])
+        self.assertEqual(made.started, ["z"])
+
+    def test_an_empty_queue_simply_starts_it(self) -> None:
+        from weave.audio import AudioPlayer
+
+        made = player(titles="", at=-1)
+        made.given = []
+        made.play_items = lambda items, start=0: made.given.append(
+            [i["title"] for i in items])
+        AudioPlayer.play_item_now(made, self.song())
+        self.assertEqual(made.given, [["z"]])
+
+    def test_a_song_with_no_address_is_refused(self) -> None:
+        from weave.audio import AudioPlayer
+
+        made = player(at=0)
+        self.assertFalse(AudioPlayer.play_item_now(made, {"title": "no address"}))
+        self.assertEqual(shown(made), list("abcdef"))
+
+
 class TheBridgeQueuesOne(unittest.TestCase):
     def bridge(self):
         from weave.ui.bridge import Bridge

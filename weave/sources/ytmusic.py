@@ -15,6 +15,7 @@ from __future__ import annotations
 import datetime
 import os
 import re
+import threading
 from dataclasses import dataclass
 
 ORIGIN = "https://music.youtube.com"
@@ -387,11 +388,33 @@ def watch(profile_path: str | None, video_id: str, limit: int = 40) -> dict:
     except Exception as exc:
         raise _blame("the station", exc) from exc
     found = found or {}
+    # What the track asked for is, and the other half of it. A song and its
+    # music video are two entries that point at each other, and the pointer
+    # is only there when signed in.
+    first = next((item for item in found.get("tracks") or []
+                  if isinstance(item, dict) and item.get("videoId") == video_id), {})
+    other = first.get("counterpart")
+    other = other if isinstance(other, dict) else {}
     return {
         "tracks": to_tracks(found.get("tracks") or []),
         "lyrics_id": str(found.get("lyrics") or "") or None,
         "related_id": str(found.get("related") or "") or None,
+        "video_type": str(first.get("videoType") or ""),
+        "length_s": length_s(first.get("length")),
+        "counterpart_id": str(other.get("videoId") or "") or None,
+        "counterpart_length_s": length_s(other.get("length")),
     }
+
+
+def length_s(text) -> int | None:
+    """A length as the music service writes it, 3:22 or 1:02:03, in seconds."""
+    try:
+        total = 0
+        for part in str(text or "").split(":"):
+            total = total * 60 + int(part)
+    except ValueError:
+        return None
+    return total or None
 
 
 def radio(profile_path: str | None, video_id: str, limit: int = 40) -> list[Track]:
@@ -400,54 +423,102 @@ def radio(profile_path: str | None, video_id: str, limit: int = 40) -> list[Trac
     return watch(profile_path, video_id, limit)["tracks"]
 
 
-def lyrics(profile_path: str | None, browse_id: str) -> dict:
+def lyrics(profile_path: str | None, browse_id: str, timed: bool = False) -> dict:
     """The words for a song, at the address the station answer gave.
 
     Not every song has any, and a song with none is a normal answer rather than
     a failure, so an empty result is returned as such and nothing is said to
     the person about it beyond the page being empty.
+
+    Timed, the words come line by line with when each line is sung, for the
+    page to follow the song with. Those are only handed to a client that is
+    not signed in. Asked with the login the same request is refused outright
+    with a 400, while asked without it every one of six songs answered in a
+    tenth of a second (measured 2026-10-03). The address of the words is the
+    same for everybody, so nothing about the person goes with the request.
+    When that fails, or the song has no timing, the words are read the way
+    they always were, signed in and as one block.
     """
     if not browse_id:
-        return {"text": "", "source": ""}
+        return {"text": "", "source": "", "lines": []}
+    if timed:
+        try:
+            found = _anonymous().get_lyrics(browse_id, timestamps=True)
+        except Exception:
+            found = None
+        text, source = _lyrics_parts(found)
+        lines = _timed_lines(text)
+        if lines:
+            return {"text": "\n".join(line["text"] for line in lines
+                                      if line["text"] not in ("", REST)),
+                    "source": source, "lines": lines}
+        if isinstance(text, str) and text:
+            return {"text": text, "source": source, "lines": []}
     try:
         found = client(profile_path).get_lyrics(browse_id)
     except MusicError:
         raise
     except Exception as exc:
         raise _blame("the words", exc) from exc
+    text, source = _lyrics_parts(found)
+    if not isinstance(text, str):
+        return {"text": "", "source": source, "lines": []}
+    return {"text": text, "source": source, "lines": []}
+
+
+# What the music service puts where nobody sings.
+REST = "\u266a"
+
+_anonymous_client = None
+_anonymous_lock = threading.Lock()
+
+
+def _anonymous():
+    """A client with no login, kept, since it carries no stamped time and
+    building one costs a request of its own for a visitor id."""
+    global _anonymous_client
+    with _anonymous_lock:
+        if _anonymous_client is None:
+            from ytmusicapi import YTMusic
+
+            _anonymous_client = YTMusic()
+        return _anonymous_client
+
+
+def _lyrics_parts(found) -> tuple:
+    """The words and where they are from, out of either shape of answer.
+
+    A newer library answers with an object rather than a plain mapping, and
+    both shapes are in the wild depending on which one a distribution ships.
+    """
     if not found:
-        return {"text": "", "source": ""}
-    # A newer library answers with an object rather than a plain mapping, and
-    # both shapes are in the wild depending on which one a distribution ships.
+        return None, ""
     text = getattr(found, "lyrics", None)
     source = getattr(found, "source", None)
     if text is None and isinstance(found, dict):
         text = found.get("lyrics")
         source = found.get("source")
-    if not isinstance(text, str):
-        # Timed words arrive as a list of lines, which is a shape this page
-        # does not draw yet. Nothing is invented from it here.
-        return {"text": "", "source": str(source or "")}
-    return {"text": text, "source": str(source or "")}
+    return text, str(source or "")
 
 
-def related(profile_path: str | None, browse_id: str) -> list[Track]:
-    """What YouTube Music puts next to this song, at the address the station
-    answer gave. The shelves it returns are flattened, since the page shows one
-    list and the headings say nothing a person here would act on."""
-    if not browse_id:
+def _timed_lines(text) -> list[dict]:
+    """Timed words as lines with the second each one starts and ends at, in
+    the order they are sung. Anything that is not a list of lines is none."""
+    if not isinstance(text, list):
         return []
-    try:
-        found = client(profile_path).get_song_related(browse_id)
-    except MusicError:
-        raise
-    except Exception as exc:
-        raise _blame("what is like it", exc) from exc
-    items: list = []
-    for shelf in found or []:
-        if isinstance(shelf, dict):
-            items.extend(shelf.get("contents") or [])
-    return to_tracks(items)
+    out = []
+    for line in text:
+        start = getattr(line, "start_time", None)
+        end = getattr(line, "end_time", None)
+        if isinstance(line, dict):
+            start, end = line.get("start_time"), line.get("end_time")
+        if not isinstance(start, int) or not isinstance(end, int):
+            return []
+        words = line.get("text") if isinstance(line, dict) else getattr(line, "text", "")
+        out.append({"at": start / 1000, "end": max(start, end) / 1000,
+                    "text": str(words or "").strip()})
+    out.sort(key=lambda line: line["at"])
+    return out
 
 
 def home(profile_path: str | None, limit: int = 6) -> list[dict]:

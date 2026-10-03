@@ -428,6 +428,10 @@ class TheHeartFollowsTheSong(unittest.TestCase):
                 self.heard = Wire()
                 # Nor one that cannot say what its resolve learned.
                 self.factsChanged = Wire()
+                # Nor one whose queue changing goes unsaid, which is what a
+                # recommended tile reads to say it is in the queue.
+                self.queueChanged = Wire()
+                self.progressChanged = Wire()
                 # Whether anything is open to show a picture, which is what
                 # decides whether a song's video is worth keeping on disk,
                 # and the report that says it has changed. Opening the page
@@ -456,12 +460,14 @@ class TheHeartFollowsTheSong(unittest.TestCase):
         bridge._now_side = None
         bridge._now_detail = None
         bridge._now_words = {}
-        bridge._now_related = []
         bridge._now_comments = []
         bridge._now_threads = 5
         bridge._now_busy = ""
         bridge._now_song = ""
+        bridge._now_tab = "video"
         bridge.nowChanged = type("S", (), {"emit": lambda self, *a: None})()
+        # And the line being sung, which a new song empties too.
+        bridge.nowLyricChanged = type("S", (), {"emit": lambda self, *a: None})()
         told = []
         bridge.favoritesChanged = type("S", (), {"emit": lambda self, *a: told.append(True)})()
         bridge.musicBoxesChanged = type("S", (), {"emit": lambda self, *a: None})()

@@ -20,6 +20,10 @@ Item {
     property bool circle: false
     property int fillMode: Image.PreserveAspectCrop
     property bool masked: (typeof EffectsAvailable === "undefined") ? true : EffectsAvailable
+    // The picture's own shape, width over height, once it has loaded, so a
+    // square cover can be given a square box among wide ones. 0 before then.
+    readonly property real ratio: picture.implicitHeight > 0
+                                  ? picture.implicitWidth / picture.implicitHeight : 0
 
     Image {
         id: picture

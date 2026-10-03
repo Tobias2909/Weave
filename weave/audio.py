@@ -42,6 +42,7 @@ from .config import Config
 from .cookies import args as cookie_args
 from .sources.ytdlp import challenge_trouble, explain, prepare
 from .engine_libmpv import CURRENT, NEXT, LibmpvEngine
+from . import format as fmt
 from . import trace
 from .imagecache import plain_source
 from .process import Cancelled, Timeout
@@ -742,6 +743,9 @@ class AudioPlayer(QObject):
     def _get_elapsed(self) -> int:
         return int(self._pos)
 
+    def _get_seconds(self) -> float:
+        return self._pos
+
     def _get_is_live(self) -> bool:
         """Whether what is playing is a broadcast rather than a recording.
 
@@ -844,15 +848,21 @@ class AudioPlayer(QObject):
         if not self._queue or self._at not in self._order:
             return []
         return [{
+            "key": self._queue[i].get("key", ""),
             "title": self._queue[i].get("title", ""),
             "artist": self._queue[i].get("artist", ""),
             "thumbnail": self._queue[i].get("thumbnail", ""),
+            "duration": (self._queue[i].get("duration")
+                         or fmt.duration_text(self._queue[i].get("duration_s"))),
             # The address of whoever made it, so the name on a row can be
             # pressed. Built here from a fixed set of fields, and a field left
             # out of that set can never reach the window however faithfully
             # everything upstream carries it, which is exactly what kept every
             # name in the queue dead.
             "artistId": self._queue[i].get("artistId", ""),
+            # A plain YouTube channel, for a video queued from the
+            # recommendations, whose maker is no artist of the music service.
+            "channelId": self._queue[i].get("channelId", ""),
             # Where it sits in the queue, so it can be jumped to directly.
             "at": i,
         } for i in self._order]
@@ -879,6 +889,8 @@ class AudioPlayer(QObject):
     hasQueue = Property(bool, _get_has_queue, notify=trackChanged)
     position = Property(float, _get_position, notify=progressChanged)
     elapsed = Property(int, _get_elapsed, notify=progressChanged)
+    # Where in the song, to the tenth of a second it is reported in.
+    seconds = Property(float, _get_seconds, notify=progressChanged)
     length = Property(int, _get_length, notify=progressChanged)
     isLive = Property(bool, _get_is_live, notify=trackChanged)
     # Bound to progress rather than to the track, because the length arrives
@@ -1543,6 +1555,16 @@ class AudioPlayer(QObject):
             self._prepare_next()
         self.queueChanged.emit()
         self.trackChanged.emit()
+        return True
+
+    def play_item_now(self, item: dict) -> bool:
+        """Straight after the song playing, and then at once, leaving the rest
+        of the queue where it was."""
+        if not self._queue:
+            return self.add_item(item)
+        if not self.add_item(item, play_next=True):
+            return False
+        self.jumpTo(len(self._queue) - 1)
         return True
 
     def extend(self, items: list[dict]) -> bool:
