@@ -3579,6 +3579,20 @@ class Smoke:
         self.check("and the new video is in the grid",
                    read(grid, "count") == 48, f"count {read(grid, 'count')}")
 
+        # Every video arriving at the top used to carry the grid's current
+        # card down with it. Nothing here uses a current card, yet a reset
+        # scrolled to wherever it had been carried, so a view changed after a
+        # few polls opened part way down the page. Bringing a hidden video
+        # back is an arrival at the top that leaves the feed as it was.
+        top = bridge._model.key_at(0)
+        for _ in range(7):
+            bridge.hideVideo(top)
+            settle(0.2)
+            bridge.unhideVideo(top)
+            settle(0.2)
+        self.check("arrivals at the top leave no current card behind",
+                   read(grid, "currentIndex") == -1, str(read(grid, "currentIndex")))
+
         # A view change is the case that should go back to the top.
         bridge.showHistory()
         settle(0.3)

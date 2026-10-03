@@ -2028,6 +2028,13 @@ ApplicationWindow {
         cellHeight: cellWidth * 9 / 16 + 108
         model: feedModel
         cacheBuffer: 800
+        // No card is ever the current one. Nothing here moves between cards
+        // with the keys, but a current card Qt keeps on its own was carried
+        // down by every video arriving at the top and outlived a reset, which
+        // then scrolled to it, so a view changed after a few polls opened
+        // part way down the page instead of at its first row.
+        currentIndex: -1
+        keyNavigationEnabled: false
 
         // A private or a deleted entry never reaches the grid as a card, so
         // this is the only place either is mentioned at all. It sits after
