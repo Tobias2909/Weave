@@ -157,6 +157,46 @@ class TheBridge(unittest.TestCase):
         self.assertEqual(bridge._db.music_box_songs(box), [])
         self.assertIn("Only a song", bridge.notices[-1])
 
+    def test_a_video_card_goes_in_as_a_song_and_out_again(self):
+        """From a card's menu: its channel stands for who made it, and the
+        ticks say where it is."""
+        bridge = make_bridge(self)
+        maker = "UC" + "m" * 22
+
+        class Model:
+            def row_for_key(self, key):
+                return {"key": key, "title": "A video", "channelTitle": "Someone",
+                        "channelKey": "yt:" + maker, "thumbnail": "https://x/t.jpg",
+                        "durationText": "3:25"}
+
+        bridge._model = Model()
+        box = Bridge.createMusicBox(bridge, "Mix")
+        Bridge.putCardInMusicBox(bridge, "yt:aaaaaaaaaaa", box)
+        self.assertEqual(Bridge.cardSongBoxes(bridge, "yt:aaaaaaaaaaa"), [box])
+        song = bridge._db.music_box_songs(box)[0]
+        self.assertEqual((song["title"], song["artist"], song["artist_id"],
+                          song["thumbnail_url"], song["duration_s"]),
+                         ("A video", "Someone", maker, "https://x/t.jpg", 205))
+        Bridge.putCardInMusicBox(bridge, "yt:aaaaaaaaaaa", FAVORITES_BOX)
+        self.assertEqual(Bridge.cardSongBoxes(bridge, "yt:aaaaaaaaaaa"), [FAVORITES_BOX, box])
+        Bridge.putCardInMusicBox(bridge, "yt:aaaaaaaaaaa", box)
+        self.assertEqual(Bridge.cardSongBoxes(bridge, "yt:aaaaaaaaaaa"), [FAVORITES_BOX])
+        self.assertEqual(bridge.notices[-1], "Taken out of Mix")
+
+    def test_a_twitch_card_and_a_card_not_shown_are_no_song(self):
+        bridge = make_bridge(self)
+
+        class Model:
+            def row_for_key(self, key):
+                return None if key == "yt:bbbbbbbbbbb" else {"key": key, "title": "A stream"}
+
+        bridge._model = Model()
+        box = Bridge.createMusicBox(bridge, "Mix")
+        for key in ("twitch:someone", "yt:bbbbbbbbbbb"):
+            Bridge.putCardInMusicBox(bridge, key, box)
+            self.assertEqual(Bridge.cardSongBoxes(bridge, key), [])
+        self.assertEqual(bridge._db.music_box_songs(box), [])
+
     def test_the_queue_is_kept_in_the_order_it_plays(self):
         queue = [{"key": "yt:bbbbbbbbbbb", "title": "Two", "artist": "B", "thumbnail": ""},
                  {"key": "source:3", "title": "A stream", "artist": "", "thumbnail": ""},

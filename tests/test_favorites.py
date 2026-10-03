@@ -270,7 +270,7 @@ class TheBridgeMarksThem(unittest.TestCase):
                         "thumbnail": "https://x/t.jpg"}
 
         bridge._model = Model()
-        Bridge.favoriteVideo(bridge, "yt:aaaaaaaaaaa")
+        Bridge.putCardInMusicBox(bridge, "yt:aaaaaaaaaaa", 0)
         row = bridge._db.music_favorites()[0]
         self.assertEqual(row["title"], "A video")
         self.assertEqual(row["channel_title"], "Someone")
@@ -288,7 +288,7 @@ class TheBridgeMarksThem(unittest.TestCase):
                         "channelKey": "yt:" + MAKER, "thumbnail": ""}
 
         bridge._model = Model()
-        Bridge.favoriteVideo(bridge, "yt:aaaaaaaaaaa")
+        Bridge.putCardInMusicBox(bridge, "yt:aaaaaaaaaaa", 0)
         self.assertEqual(bridge._db.music_favorites()[0]["artist_id"], MAKER)
         self.assertEqual(bridge.asked_makers, [], "a card that says asked anyway")
 
@@ -303,7 +303,7 @@ class TheBridgeMarksThem(unittest.TestCase):
                         "channelKey": "", "thumbnail": ""}
 
         bridge._model = Model()
-        Bridge.favoriteVideo(bridge, "yt:aaaaaaaaaaa")
+        Bridge.putCardInMusicBox(bridge, "yt:aaaaaaaaaaa", 0)
         self.assertEqual(bridge.asked_makers, [True])
 
     def test_a_twitch_row_is_not_a_song(self) -> None:
@@ -317,7 +317,7 @@ class TheBridgeMarksThem(unittest.TestCase):
                         "thumbnail": ""}
 
         bridge._model = Model()
-        Bridge.favoriteVideo(bridge, "twitch:someone")
+        Bridge.putCardInMusicBox(bridge, "twitch:someone", 0)
         self.assertEqual(bridge._db.music_favorite_count(), 0)
 
 
@@ -563,7 +563,7 @@ class WithNothingKept(unittest.TestCase):
                         "thumbnail": None}
 
         bridge._model = Model()
-        Bridge.favoriteVideo(bridge, "yt:aaaaaaaaaaa")
+        Bridge.putCardInMusicBox(bridge, "yt:aaaaaaaaaaa", 0)
         self.assertEqual(bridge._db.music_favorite_count(), 0)
         self.assertEqual(bridge.left, [("music", -1, "", "", None)])
 
@@ -582,7 +582,7 @@ class WithNothingKept(unittest.TestCase):
                         "thumbnail": None}
 
         bridge._model = Model()
-        Bridge.favoriteVideo(bridge, "yt:aaaaaaaaaaa")
+        Bridge.putCardInMusicBox(bridge, "yt:aaaaaaaaaaa", 0)
         self.assertEqual(bridge.left, [])
 
 

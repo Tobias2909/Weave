@@ -2096,6 +2096,8 @@ ApplicationWindow {
                     root.menuKey = model.key
                     root.menuChannelKey = model.channelKey
                     root.menuWatched = model.watched
+                    cardMusicBoxMenu.holding = App.cardSongBoxes(model.key)
+                    cardVideoBoxMenu.holding = App.boxesHolding(model.key)
                     videoMenu.popup()
                 }
             }
@@ -2539,15 +2541,6 @@ ApplicationWindow {
         id: videoMenu
         objectName: "videoMenu"
 
-        // Where the box entries go. Looked up rather than counted, so adding
-        // an entry above the separator cannot quietly misplace every box.
-        function slotAfter(item) {
-            for (var i = 0; i < count; i++)
-                if (itemAt(i) === item)
-                    return i + 1
-            return count
-        }
-
         // Every entry dismisses the menu itself. A Menu is supposed to close
         // on its own when an item fires, and it did not here, so it is done
         // explicitly rather than left to chance.
@@ -2581,62 +2574,31 @@ ApplicationWindow {
                 root.askForGroups(key)
             }
         }
-        ThemedMenuItem {
-            objectName: "musicFavoriteEntry"
-            // On any card that is a video. Keeping one is how a song reaches
-            // the music favourites without being in a playlist marked as
-            // music first, which is what it was gated on before.
-            //
-            // Not on a Twitch entry, which is a channel rather than a video
-            // and is not a song by any reading.
-            visible: !root.menuKey.startsWith("twitch:")
-            height: visible ? implicitHeight : 0
-            text: App.isFavorite(root.menuKey) ? "Remove from music favorites"
-                                               : "Add to music favorites"
-            onTriggered: { App.favoriteVideo(root.menuKey); videoMenu.dismiss() }
+        // On any card that is a video, which goes in as a song: the
+        // favourites first, then every box of songs. This is how a song
+        // reaches them without being in a playlist marked as music first.
+        BoxMenu {
+            id: cardMusicBoxMenu
+            objectName: "cardMusicBoxMenu"
+            title: "Put in a music box"
+            owner: videoMenu
+            key: root.menuKey
+            offered: root.menuKey !== "" && !root.menuKey.startsWith("twitch:")
+            onNewBoxWanted: (song) => root.askForMusicBox(song)
         }
+        // The boxes of videos, drawn the way the boxes of songs above are.
+        VideoBoxMenu {
+            id: cardVideoBoxMenu
+            objectName: "cardVideoBoxMenu"
+            owner: videoMenu
+            key: root.menuKey
+            onNewBoxWanted: (key) => root.askForName("box", -1, key, "")
+        }
+
         ThemedMenuItem {
             objectName: "copyLinkEntry"
             text: "Share"
             onTriggered: { App.copyLink(root.menuKey); videoMenu.dismiss() }
-        }
-
-        ThemedMenuSeparator { id: boxSeparator }
-
-        // Built from the box list at the moment the menu opens, with a tick
-        // beside the boxes this video is already in, so one menu both adds and
-        // removes.
-        Instantiator {
-            id: boxEntries
-            model: App.boxes
-            // A delegate created here does not inherit this file's id scope, so
-            // it cannot see videoMenu, and reaching for it raises a reference
-            // error that also leaves the menu open. The menu is handed to each
-            // entry from out here, where the id does resolve.
-            onObjectAdded: (index, object) => {
-                object.owner = videoMenu
-                videoMenu.insertItem(videoMenu.slotAfter(boxSeparator) + index, object)
-            }
-            onObjectRemoved: (index, object) => videoMenu.removeItem(object)
-            delegate: ThemedMenuItem {
-                required property var modelData
-                property var owner: null
-                text: (App.boxesHolding(root.menuKey).indexOf(modelData.id) >= 0
-                       ? "✓  " : "   ") + modelData.name
-                onTriggered: {
-                    if (App.boxesHolding(root.menuKey).indexOf(modelData.id) >= 0)
-                        App.removeFromBox(modelData.id, root.menuKey)
-                    else
-                        App.addToBox(modelData.id, root.menuKey)
-                    if (owner)
-                        owner.dismiss()
-                }
-            }
-        }
-
-        ThemedMenuItem {
-            text: "Put in a new box"
-            onTriggered: { videoMenu.dismiss(); root.askForName("box", -1, root.menuKey, "") }
         }
     }
 
@@ -3479,7 +3441,9 @@ ApplicationWindow {
                 } else {
                     var made = App.createMusicBox(name)
                     var song = root.namingSong
-                    if (made >= 0 && song)
+                    if (made >= 0 && song && song.key)
+                        App.putCardInMusicBox(song.key, made)
+                    else if (made >= 0 && song)
                         App.putSongInBox(song.where, song.first, song.second, made)
                 }
                 namePopup.close()

@@ -14,6 +14,12 @@ ThemedMenu {
     property string where: ""
     property int first: -1
     property int second: -1
+    // Or a video card, named by its key, whose video goes in as a song.
+    // Set, it is used instead of the three above.
+    property string key: ""
+    // Whether the entry that opens this menu is shown at all. A Twitch card
+    // is a channel rather than a video and is no song by any reading.
+    property bool offered: true
     // Which boxes hold the song, asked when the song's menu opens.
     property var holding: []
     // The menu this one opens from, closed with it once a box is picked.
@@ -47,7 +53,10 @@ ThemedMenu {
             onTriggered: {
                 if (!picker)
                     return
-                App.putSongInBox(picker.where, picker.first, picker.second, modelData.id)
+                if (picker.key !== "")
+                    App.putCardInMusicBox(picker.key, modelData.id)
+                else
+                    App.putSongInBox(picker.where, picker.first, picker.second, modelData.id)
                 picker.dismissAll()
             }
         }
@@ -60,7 +69,7 @@ ThemedMenu {
         text: "     New box…"
         onTriggered: {
             boxes.newBoxWanted({"where": boxes.where, "first": boxes.first,
-                                "second": boxes.second})
+                                "second": boxes.second, "key": boxes.key})
             boxes.dismissAll()
         }
     }

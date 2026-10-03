@@ -4885,19 +4885,6 @@ class Bridge(QObject):
                 and not self._db.music_favorite_count()):
             self._set_view(MUSIC, -1, "", "", None)
 
-    @Slot(str)
-    def favoriteVideo(self, key: str) -> None:
-        """From a card, in a playlist that holds music or in the listening
-        history, where a video is a song and the card is how it is reached."""
-        row = self._model.row_for_key(key) or {}
-        # The channel the video is on, which is who made it as far as a card
-        # knows. Without it the name under the favourite led nowhere.
-        channel = str(row.get("channelKey") or "")
-        maker = channel.split(":", 1)[1] if channel.startswith("yt:") else ""
-        self._mark_favorite(key, row.get("title", ""), row.get("channelTitle"),
-                            row.get("thumbnail"),
-                            artist_id=maker if ids.CHANNEL_ID.match(maker) else None)
-
     @Slot()
     def toggleFavorite(self) -> None:
         """The heart beside what is playing."""
@@ -5454,7 +5441,14 @@ class Bridge(QObject):
     @Slot(str, int, int, result="QVariantList")
     def songBoxes(self, where: str, first: int, second: int) -> list:
         """Which boxes hold a song, for the ticks in the menu that files it."""
-        song = self._song_from(where, first, second)
+        return self._boxes_holding(self._song_from(where, first, second))
+
+    @Slot(str, result="QVariantList")
+    def cardSongBoxes(self, key: str) -> list:
+        """The same ticks for a video card, whose video is taken as a song."""
+        return self._boxes_holding(self._card_song(key))
+
+    def _boxes_holding(self, song: dict | None) -> list:
         if song is None:
             return []
         held = self._db.music_boxes_holding(song["ext_id"])
@@ -5462,11 +5456,33 @@ class Bridge(QObject):
             held.insert(0, FAVORITES_BOX)
         return held
 
+    def _card_song(self, key: str) -> dict | None:
+        """A video card as a box keeps a song. The channel it is on stands for
+        whoever made it, which is all a card knows about that."""
+        row = self._model.row_for_key(key) if key.startswith("yt:") else None
+        if not row:
+            return None
+        channel = str(row.get("channelKey") or "")
+        maker = channel.split(":", 1)[1] if channel.startswith("yt:") else ""
+        return {"key": key, "ext_id": key.split(":", 1)[1],
+                "title": str(row.get("title") or ""),
+                "artist": str(row.get("channelTitle") or "") or None,
+                "artist_id": maker if ids.CHANNEL_ID.match(maker) else None,
+                "thumbnail_url": plain_source(row.get("thumbnail")) or None,
+                "duration_s": self._seconds(row.get("durationText"))}
+
     @Slot(str, int, int, int)
     def putSongInBox(self, where: str, first: int, second: int, box_id: int) -> None:
         """Into a box, or out of it again when it is in there already, the way
         the ticks in the menu say."""
-        song = self._song_from(where, first, second)
+        self._put_song_in_box(self._song_from(where, first, second), box_id)
+
+    @Slot(str, int)
+    def putCardInMusicBox(self, key: str, box_id: int) -> None:
+        """A video card's own way into a box of songs."""
+        self._put_song_in_box(self._card_song(key), box_id)
+
+    def _put_song_in_box(self, song: dict | None, box_id: int) -> None:
         if song is None:
             self._set_notice("Only a song can go in a box, not a whole list", clear_after_s=4)
             return

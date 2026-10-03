@@ -14,6 +14,10 @@ MenuItem {
     readonly property color accent: Qt.color(Theme.colors.accent)
 
     implicitHeight: 32
+    // An entry that opens a menu of its own is made by the menu rather than
+    // declared, so the menu it opens says whether it is offered at all.
+    visible: !item.subMenu || item.subMenu.offered !== false
+    height: visible ? implicitHeight : 0
     leftPadding: 12
     rightPadding: 12
     focusPolicy: Qt.NoFocus

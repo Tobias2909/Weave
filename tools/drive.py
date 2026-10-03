@@ -1292,13 +1292,17 @@ class Smoke:
         menu = find(window, "videoMenu")
         menu.open()
         settle(0.3)
-        labels = [text.strip() for text, _ in menu_entries(menu)]
+        # The music boxes are a menu inside this one, and their entries are
+        # found under it as well. Only the entry that opens them counts here.
+        inner = {text for name in ("cardMusicBoxMenu", "cardVideoBoxMenu")
+                 for text, _ in menu_entries(find(window, name))}
+        labels = [text.strip() for text, _ in menu_entries(menu) if text not in inner]
         self.check("the video menu offers to hide it",
                    "Hide this video" in labels, ", ".join(labels))
         # The order of that menu is a decision, not an accident: what a press
         # does most often is at the top and the boxes stay at the foot.
         wanted = ["Play in mpv", "Hide this video", "Mark as", "Groups for this channel",
-                  "music favorites", "Share"]
+                  "Put in a music box", "Put in a box", "Share"]
         first = labels[:len(wanted)]
         self.check("and its entries are in the order they were asked for",
                    all(want in got for want, got in zip(wanted, first)),
@@ -2377,20 +2381,20 @@ class Smoke:
                    f"{len(chips())} chips")
 
     def music_favourites_anywhere(self, bridge, window) -> None:
-        """A song reaches the music favourites from any card.
+        """A song reaches the music boxes, favourites first, from any card.
 
         It used to be offered only where a press already listened, which is a
         playlist marked as music and the listening history. A Twitch entry is
         a channel rather than a video and is still left out.
         """
-        step("music favourites from any card")
+        step("music boxes from any card")
         menu = find(window, "videoMenu")
         write(window, "menuKey", "twitch:somebody")
         menu.open()
         settle(0.4)
         entries = dict((text.strip(), item) for text, item in menu_entries(menu))
-        kept = entries.get("Add to music favorites")
-        self.check("a Twitch card is offered no music favourites",
+        kept = entries.get("Put in a music box")
+        self.check("a Twitch card is offered no music boxes",
                    kept is not None and read(kept, "visible") is False,
                    str(read(kept, "visible")) if kept is not None else "no entry")
         write(window, "menuKey", "yt:smokevid005")
@@ -2417,7 +2421,7 @@ class Smoke:
         # all before, so pressing the name did nothing.
         row = bridge._model.row_for_key("yt:smokevid005") or {}
         channel = str(row.get("channelKey") or "")
-        bridge.favoriteVideo("yt:smokevid005")
+        bridge.putCardInMusicBox("yt:smokevid005", 0)
         settle(0.2)
         kept_row = next((found for found in bridge._db.music_favorites()
                          if found["key"] == "yt:smokevid005"), None)
@@ -2434,7 +2438,7 @@ class Smoke:
                        and read(bridge, "channelTab") == "videos",
                        f"{read(bridge, 'viewKind')} {bridge._view_channel} "
                        f"{read(bridge, 'channelTab')}")
-        bridge.favoriteVideo("yt:smokevid005")
+        bridge.putCardInMusicBox("yt:smokevid005", 0)
         settle(0.2)
         bridge.selectGroup(-1)
         settle(0.4)
@@ -3274,19 +3278,26 @@ class Smoke:
         self.now_playing(bridge, window)
         self.layers(bridge, window)
 
-        # A box, then the video menu, whose box entries sit between the
-        # separator and the last entry however many entries come above.
+        # A box, then the video menu, whose boxes are a menu of their own
+        # just above Share, the way the boxes of songs are just above that.
         step("the boxes and the video menu")
         box_id = bridge.createBox("Later")
         settle(0.2)
         menu = find(window, "videoMenu")
         menu.open()
         settle(0.3)
-        labels = [text.strip() for text, _ in menu_entries(menu)]
-        self.check("video menu opens with its entries", len(labels) >= 6, ", ".join(labels))
-        box_at = next((i for i, text in enumerate(labels) if text.endswith("Later")), -1)
-        self.check("box entry sits before the last entry",
-                   0 < box_at == len(labels) - 2, f"at {box_at} of {len(labels)}")
+        boxes = find(window, "cardVideoBoxMenu")
+        inside = [text.strip() for text, _ in menu_entries(boxes)]
+        self.check("the boxes menu lists the new box and offers another",
+                   any(text.endswith("Later") for text in inside)
+                   and inside[-1].endswith("New box…"), ", ".join(inside))
+        inner = set(inside) | {text.strip() for text, _ in
+                               menu_entries(find(window, "cardMusicBoxMenu"))}
+        labels = [text.strip() for text, _ in menu_entries(menu) if text.strip() not in inner]
+        self.check("video menu opens with its entries", len(labels) >= 7, ", ".join(labels))
+        self.check("its boxes come between the music boxes and Share",
+                   labels[-3:] == ["Put in a music box", "Put in a box", "Share"],
+                   ", ".join(labels[-3:]))
         menu.close()
         settle(0.2)
 
