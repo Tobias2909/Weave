@@ -115,6 +115,54 @@ class WorkerRuns(unittest.TestCase):
                 self.assertNotIn(mistake, line, f"{type(worker).__name__} reported {line}")
         return said
 
+    def test_companion_fetcher(self):
+        from weave.sources import watchnext
+
+        card = watchnext.Card("bbbbbbbbbbb", "A song", "Someone")
+        self.patch(watchnext, "headers", lambda _profile: {"Cookie": "x"})
+        self.patch(watchnext, "beside", lambda fetcher, video_id, sent: watchnext.Answer(
+            chips=[watchnext.Chip("Mix"), watchnext.Chip("All", "t")],
+            cards={"Mix": [card], "All": []}))
+        self.patch(watchnext, "chip", lambda fetcher, token, sent: [card])
+        worker = poller.CompanionFetcher(self.db, self.cfg, "aaaaaaaaaaa")
+        beside = []
+        worker.beside.connect(lambda *args: beside.append(args))
+        self.assertEqual(self.run_worker(worker), [])
+        self.assertEqual(beside[0][0], "aaaaaaaaaaa")
+        self.assertEqual([chip["label"] for chip in beside[0][1]], ["Mix", "All"])
+        self.assertEqual(beside[0][2]["Mix"][0]["title"], "A song")
+        worker = poller.CompanionFetcher(self.db, self.cfg, "aaaaaaaaaaa", "Related", "tok")
+        chipped = []
+        worker.chipped.connect(lambda *args: chipped.append(args))
+        self.assertEqual(self.run_worker(worker), [])
+        self.assertEqual((chipped[0][1], chipped[0][2][0]["video_id"]), ("Related", "bbbbbbbbbbb"))
+
+    def test_companion_fetcher_stops_at_its_ceiling(self):
+        from weave.sources import watchnext
+
+        asked = []
+        self.patch(watchnext, "headers", lambda _profile: None)
+        self.patch(watchnext, "beside", lambda *a: asked.append(a)
+                   or watchnext.Answer(chips=[], cards={}))
+        cfg = Config(raw={"budget": {"companion": 1}})
+        refused = []
+        for _ in range(2):
+            worker = poller.CompanionFetcher(self.db, cfg, "aaaaaaaaaaa")
+            worker.refused.connect(refused.append)
+            worker.failed.connect(lambda *a: None)
+            self.run_worker(worker)
+        self.assertEqual((len(asked), refused), (1, ["aaaaaaaaaaa"]))
+
+    def test_queue_namer(self):
+        self.patch(poller.oembed, "fetch", lambda fetcher, ext_id: poller.oembed.Owner(
+            "Someone", title=f"Title of {ext_id}"))
+        worker = poller.QueueNamer(self.db, self.cfg, ["aaaaaaaaaaa"])
+        named = []
+        worker.named.connect(named.append)
+        self.assertEqual(self.run_worker(worker), [])
+        self.assertEqual(named, [{"aaaaaaaaaaa": {"title": "Title of aaaaaaaaaaa",
+                                                  "channel": "Someone"}}])
+
     def test_playlist_maker(self):
         from weave.sources import ytmusic
 
@@ -758,7 +806,8 @@ class WorkerRuns(unittest.TestCase):
                     "ChannelFeedFetcher", "ChannelPlaylistsFetcher",
                     "ChannelMembersFetcher",
                     "DetailFetcher", "ChannelAvatarsFetcher", "OwnerFetcher",
-                    "LengthFiller", "StreamCheck", "MembersCheck", "Suggester"}
+                    "LengthFiller", "StreamCheck", "MembersCheck", "Suggester",
+                    "CompanionFetcher", "QueueNamer"}
         # The checkup runs the doctor, which counts its own requests.
         run_here.add("Checkup")
         source = Path("weave/poller.py").read_text()
@@ -1153,7 +1202,7 @@ class WorkerRuns(unittest.TestCase):
                    "_channel_members", "_channel_lists", "_now_side", "_now_detail",
                    "_artist_music", "_artist_open", "_stream_check", "_music_history",
                    "_members_check", "_listen_reporter", "_link_facts", "_link_target",
-                   "_playlist_maker")
+                   "_playlist_maker", "_companion_fetch")
 
         def make(held: str):
             bridge = Bridge.__new__(Bridge)
@@ -1198,6 +1247,8 @@ class WorkerRuns(unittest.TestCase):
             bridge._making_playlist = "Road trip"
             bridge._making_rows = [{"ext_id": "aaaaaaaaaaa"}]
             bridge._box_after_read = "PL1"
+            bridge._companion_state = "asking"
+            bridge._companion_why = ""
             # The members button crashing has to put itself back to off, which
             # means reaching the database and the view it is drawn on.
             bridge._view_channel = "yt:UC1"
@@ -1206,7 +1257,8 @@ class WorkerRuns(unittest.TestCase):
                            "importChanged", "addChanged", "musicChanged", "detailChanged",
                            "cacheChanged", "twitchChanged", "viewChanged",
                            "nowChanged", "channelTabChanged", "pageReadingChanged",
-                           "channelLookingChanged", "cardNoteChanged", "musicBoxesChanged"):
+                           "channelLookingChanged", "cardNoteChanged", "musicBoxesChanged",
+                           "companionChanged"):
                 setattr(bridge, signal, Recorder())
             return bridge, worker
 
@@ -1258,6 +1310,10 @@ class WorkerRuns(unittest.TestCase):
         bridge, worker = make("_playlist_items")
         Bridge._on_worker_crashed(bridge, worker, "x")
         self.assertEqual(bridge._box_after_read, "")
+        # The companion page stops saying it is asking.
+        bridge, worker = make("_companion_fetch")
+        Bridge._on_worker_crashed(bridge, worker, "x")
+        self.assertEqual(bridge._companion_state, "failed")
 
         bridge, worker = make("_channel_members")
         Bridge._on_worker_crashed(bridge, worker, "x")

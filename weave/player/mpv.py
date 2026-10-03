@@ -41,6 +41,8 @@ _OBS_PATH = 1
 _OBS_DURATION = 2
 _OBS_TIME_POS = 3
 _OBS_SEEKABLE = 4
+_OBS_PLAYLIST = 5
+_OBS_LOOP = 6
 
 
 class PlayerNotFound(RuntimeError):
@@ -141,6 +143,12 @@ class _IpcWatcher(QThread):
     watched = Signal(str, float)      # key, progress
     connectionChanged = Signal(bool)
     stopped = Signal()                # mpv went away
+    # mpv's own playlist, whole, every time it changes: each entry its
+    # address, whether it is the one playing, and a title when mpv has one.
+    playlistChanged = Signal("QVariantList")
+    # Whether that playlist goes round again at its end, which is how the
+    # queue mode bound to F9 shows itself.
+    loopChanged = Signal(bool)
 
     def __init__(self, socket_path: Path, threshold: float, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -241,6 +249,7 @@ class _IpcWatcher(QThread):
             return
         self._had_session = False
         self._key = None
+        self.playlistChanged.emit([])
         self.stopped.emit()
 
     def _session(self) -> None:
@@ -255,6 +264,8 @@ class _IpcWatcher(QThread):
             self._send(sock, {"command": ["observe_property", _OBS_DURATION, "duration"]})
             self._send(sock, {"command": ["observe_property", _OBS_TIME_POS, "time-pos"]})
             self._send(sock, {"command": ["observe_property", _OBS_SEEKABLE, "seekable"]})
+            self._send(sock, {"command": ["observe_property", _OBS_PLAYLIST, "playlist"]})
+            self._send(sock, {"command": ["observe_property", _OBS_LOOP, "loop-playlist"]})
             self._read_forever(sock)
         finally:
             self.connectionChanged.emit(False)
@@ -312,6 +323,10 @@ class _IpcWatcher(QThread):
     def _on_property(self, name: str | None, data) -> None:
         if name == "path":
             self._on_new_path(data)
+        elif name == "playlist":
+            self.playlistChanged.emit(playlist_entries(data))
+        elif name == "loop-playlist":
+            self.loopChanged.emit(looping(data))
         elif name == "duration":
             self._duration = float(data) if isinstance(data, (int, float)) and data > 0 else None
             if self._duration is None:
@@ -436,6 +451,23 @@ class _IpcWatcher(QThread):
         self.watched.emit(self._key, progress)
 
 
+def playlist_entries(data) -> list[dict]:
+    """mpv's playlist as the window wants it, whatever shape it arrived in."""
+    entries = []
+    for entry in data if isinstance(data, list) else []:
+        if isinstance(entry, dict) and isinstance(entry.get("filename"), str):
+            entries.append({"url": entry["filename"],
+                            "current": bool(entry.get("current") or entry.get("playing")),
+                            "title": str(entry.get("title") or "")})
+    return entries
+
+
+def looping(value) -> bool:
+    """Whether a value of loop-playlist goes round again: inf, force or a
+    count do, no and nothing do not."""
+    return value not in (False, None, "no", 0, "0")
+
+
 def _ask(sock: socket.socket, name: str):
     """One property of a player, over a socket that also carries its events.
     None when it did not answer in time."""
@@ -470,6 +502,8 @@ class Player(QObject):
     connectionChanged = Signal(bool)
     stopped = Signal()
     failed = Signal(str)
+    playlistChanged = Signal("QVariantList")
+    loopChanged = Signal(bool)
 
     def __init__(self, cfg: Config, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -492,6 +526,8 @@ class Player(QObject):
         self._watcher.watched.connect(self.watched)
         self._watcher.connectionChanged.connect(self.connectionChanged)
         self._watcher.stopped.connect(self.stopped)
+        self._watcher.playlistChanged.connect(self.playlistChanged)
+        self._watcher.loopChanged.connect(self.loopChanged)
 
     @property
     def command(self) -> list[str] | None:
@@ -558,9 +594,8 @@ class Player(QObject):
                 if before and not isinstance(count, int):
                     return False
                 for place, url in enumerate(before):
-                    for command in (["loadfile", url, "append"],
-                                    ["playlist-move", count + place, place]):
-                        sock.sendall(json.dumps({"command": command}).encode() + b"\n")
+                    self._say(sock, "loadfile", url, "append")
+                    self._say(sock, "playlist-move", count + place, place)
                 for url in urls:
                     sock.sendall(json.dumps(
                         {"command": ["loadfile", url, "append"]}).encode() + b"\n")
@@ -570,6 +605,68 @@ class Player(QObject):
             return True
         except OSError:
             return False
+
+    # ---- the playlist, for the companion page -----------------------------
+    #
+    # Each of these is one short second client, like a seek, and says whether
+    # mpv took it. False is a player that is not there.
+
+    def _tell(self, steps) -> bool:
+        """Run `steps(sock)` against the playing mpv, then wait until mpv
+        has taken everything sent, since closing at once can lose the last."""
+        path = resolve_socket(self._cfg)
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.settimeout(1.0)
+                sock.connect(str(path))
+                if steps(sock) is False:
+                    return False
+                _ask(sock, "playlist-count")
+            return True
+        except OSError:
+            return False
+
+    @staticmethod
+    def _say(sock: socket.socket, *words) -> None:
+        sock.sendall(json.dumps({"command": list(words)}).encode() + b"\n")
+
+    def append(self, url: str) -> bool:
+        """On the end of mpv's playlist, played straight away only when mpv
+        has nothing playing."""
+        return self._tell(lambda sock: self._say(sock, "loadfile", url, "append-play"))
+
+    def insert_next(self, url: str, play: bool = False) -> bool:
+        """Right after the one playing, and played at once when asked.
+
+        Put on the end and then moved, rather than inserted where it goes,
+        since inserting at a place is newer than many a distribution's mpv.
+        """
+        def steps(sock):
+            count = _ask(sock, "playlist-count")
+            playing = _ask(sock, "playlist-pos")
+            if not isinstance(count, int):
+                return False
+            self._say(sock, "loadfile", url, "append-play")
+            if isinstance(playing, int) and playing >= 0:
+                # Already right after it when the one playing is the last.
+                if playing + 1 < count:
+                    self._say(sock, "playlist-move", count, playing + 1)
+                if play:
+                    self._say(sock, "playlist-play-index", playing + 1)
+            return True
+        return self._tell(steps)
+
+    def jump(self, index: int) -> bool:
+        return self._tell(lambda sock: self._say(sock, "playlist-play-index", int(index)))
+
+    def remove(self, index: int) -> bool:
+        return self._tell(lambda sock: self._say(sock, "playlist-remove", int(index)))
+
+    def move(self, index: int, before: int) -> bool:
+        """mpv's own sense of a move: the entry goes in front of the one now
+        at `before`, the end when that is the length of the list."""
+        return self._tell(lambda sock: self._say(sock, "playlist-move", int(index),
+                                                     int(before)))
 
     def play(self, url: str, twitch_login: str | None = None, live: bool = False) -> bool:
         if not self._command:

@@ -37,7 +37,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QThread, Signal
 
 from . import backoff, ids, imagecache, tokens, songcache
-from .budget import (BROWSE, DISLIKES, FEEDS, OEMBED, PLAYER, SHORTS, SUGGEST, TWITCH,
+from .budget import (BROWSE, COMPANION, DISLIKES, FEEDS, OEMBED, PLAYER, SHORTS, SUGGEST, TWITCH,
                      Budget)
 from .config import Config
 from .cookies import profile_path as cookie_profile
@@ -2125,6 +2125,106 @@ class Suggester(Worker):
             budget.spend(SUGGEST, count=0, refused=1)
             return
         self.answered.emit(self._where, self._words, found)
+
+
+class CompanionFetcher(Worker):
+    """What YouTube puts beside the video mpv is playing, for the companion
+    page: the mix, the chips and All in one call, or one chip pressed.
+
+    Asked as the account, which is what makes the side of a watch page what
+    it is, and anonymously when no login can be read, which still answers.
+    Counted against a ceiling of its own and refused past it, since a song
+    changing is not somebody pressing anything.
+    """
+
+    beside = Signal(str, "QVariantList", "QVariantMap")   # video id, chips, cards per chip
+    chipped = Signal(str, str, "QVariantList")            # video id, chip, cards
+    refused = Signal(str)                                 # video id
+    failed = Signal(str, str)                             # video id, why
+
+    def __init__(self, db: Database, cfg: Config, video_id: str, chip: str = "",
+                 token: str = "", parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._db = db
+        self._cfg = cfg
+        self._video_id = video_id
+        self._chip = chip
+        self._token = token
+        self._throttle = self._throttle_for(cfg)
+
+    def work(self) -> None:
+        from dataclasses import asdict
+
+        from .sources import watchnext
+
+        budget = Budget(self._db, self._cfg.budget_limits, self._cfg.budget_window_s)
+        if budget.allowance(COMPANION).empty:
+            self.refused.emit(self._video_id)
+            return
+        budget.spend(COMPANION)
+        try:
+            sent = watchnext.headers(cookie_profile(self._cfg))
+        except (watchnext.WatchNextError, ImportError):
+            sent = None
+        fetcher = Fetcher(self._throttle, timeout=20.0, attempts=1, cancel=self._cancel)
+        try:
+            if self._token:
+                cards = watchnext.chip(fetcher, self._token, sent)
+                self.chipped.emit(self._video_id, self._chip, [asdict(card) for card in cards])
+                return
+            answer = watchnext.beside(fetcher, self._video_id, sent)
+            self.beside.emit(self._video_id, [asdict(chip) for chip in answer.chips],
+                             {label: [asdict(card) for card in cards]
+                              for label, cards in answer.cards.items()})
+        except FetchCancelled:
+            return
+        except (watchnext.WatchNextError, HttpError, OSError, ValueError) as exc:
+            budget.spend(COMPANION, count=0, refused=1)
+            self.failed.emit(self._video_id, str(exc))
+        finally:
+            fetcher.close()
+
+
+class QueueNamer(Worker):
+    """Titles for the entries of mpv's playlist that nothing here knows,
+    which is a video put there from the browser. oembed, one small answer
+    each, a few at a time."""
+
+    named = Signal("QVariantMap")      # video id: {title, channel}
+
+    def __init__(self, db: Database, cfg: Config, video_ids: list[str],
+                 parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._db = db
+        self._cfg = cfg
+        self._video_ids = list(video_ids)
+        self._throttle = self._throttle_for(cfg)
+
+    def work(self) -> None:
+        budget = Budget(self._db, self._cfg.budget_limits, self._cfg.budget_window_s)
+        allowance = budget.allowance(OEMBED, len(self._video_ids))
+        if allowance.empty:
+            return
+        fetcher = Fetcher(self._throttle, attempts=1, cancel=self._cancel)
+        found: dict[str, dict] = {}
+        try:
+            for ext_id in self._video_ids[:allowance.granted]:
+                if self._cancel.is_set():
+                    break
+                try:
+                    budget.spend(OEMBED)
+                    owner = oembed.fetch(fetcher, ext_id)
+                except FetchCancelled:
+                    break
+                except Exception:
+                    budget.spend(OEMBED, count=0, refused=1)
+                    continue
+                if owner is not None and owner.title:
+                    found[ext_id] = {"title": owner.title, "channel": owner.channel_name}
+        finally:
+            fetcher.close()
+        if found:
+            self.named.emit(found)
 
 
 class MusicSearch(Worker):

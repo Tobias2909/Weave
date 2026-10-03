@@ -124,6 +124,27 @@ class Fetcher:
                     time.sleep(min(delay, 30.0))
         raise last if last else HttpError(0, url)
 
+    def post_json(self, url: str, payload: dict, headers: dict[str, str] | None = None) -> dict:
+        """Send a JSON body and read a JSON answer. Asked once: what posts
+        here is a question somebody is waiting on, and a second try a few
+        seconds later answers a page that has moved on."""
+        if self._cancelled():
+            raise Cancelled("cancelled")
+        with self.throttle.slot():
+            with self._count:
+                self.sent += 1
+            response = self._session.post(url, json=payload, timeout=self.timeout,
+                                          headers=headers)
+        if response.status_code != 200:
+            raise HttpError(response.status_code, url)
+        try:
+            answer = response.json()
+        except ValueError as exc:
+            raise HttpError(response.status_code, url) from exc
+        if not isinstance(answer, dict):
+            raise HttpError(response.status_code, url)
+        return answer
+
     def head_status(self, url: str, cookies: dict[str, str] | None = None) -> tuple[int, str]:
         """Ask for the headers alone, without following redirects, returning
         the status and the Location.

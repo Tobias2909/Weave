@@ -90,6 +90,7 @@ player = 60
 dislikes = 60
 twitch = 120
 suggest = 600
+companion = 20
 
 [watched]
 # Fraction of the duration that counts as watched. Reaching the end always

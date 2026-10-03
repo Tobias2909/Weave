@@ -109,6 +109,8 @@ def make_bridge(test, shelves=None, audio=None):
     bridge._prune_kept = lambda: None
     bridge._keep_this_song = lambda: None
     bridge._music_tab = -1
+    bridge._companion_cache = {}
+    bridge._companion_known = {}
     bridge.queued = []
     bridge._queue_track = lambda track, play_next: bridge.queued.append((track, play_next))
     for name in ("favoritesChanged", "musicBoxesChanged", "musicChanged", "videosKeptChanged",

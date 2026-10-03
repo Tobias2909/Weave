@@ -37,6 +37,7 @@ from ..sources import flatlist
 from ..sources import playlists as playlist_source
 from ..sources import release as release_source
 from ..sources import search as search_source
+from ..sources import watchnext
 from ..sources import progress as mpv_progress
 from ..player.mpv import Player
 from ..poller import (
@@ -50,6 +51,7 @@ from ..poller import (
     ChannelFeedFetcher,
     ChannelMembersFetcher,
     ChannelPlaylistsFetcher,
+    CompanionFetcher,
     FavouriteMakers,
     LinkFacts,
     LinkTarget,
@@ -60,6 +62,7 @@ from ..poller import (
     MusicHistoryReader,
     MusicHome,
     MusicSearch,
+    QueueNamer,
     LengthFiller,
     OwnerFetcher,
     PlaylistItemsFetcher,
@@ -95,6 +98,8 @@ SETTINGS = "settings"
 # The page that arranges the music page: its shelves, its boxes, what is kept.
 MUSIC_SETTINGS = "musicSettings"
 NOWPLAYING = "nowplaying"
+# What YouTube puts beside the video mpv plays, with mpv's own playlist.
+COMPANION = "companion"
 
 # How long a set of recommendations is worth showing before asking for another,
 # and how long a playlist's contents are trusted before reading them again.
@@ -159,6 +164,8 @@ REPORT_LISTENS_STATE = "music_report_listens"
 # Whether the suggestions under a search box come from the account or from
 # nobody. Anything but "account" is anonymous, which is what a fresh copy does.
 SUGGEST_STATE = "search_suggestions"
+# The chip last picked on the companion page.
+COMPANION_CHIP_STATE = "companion_chip"
 
 # Said beside the pointer while the channel behind a pressed name is looked up,
 # and for how long at most.
@@ -302,6 +309,10 @@ class Bridge(QObject):
     navChanged = Signal()
     favoritesChanged = Signal()
     musicBoxesChanged = Signal()
+    # The companion page: what is beside the song, and mpv's playlist, apart
+    # so a skip in mpv does not draw every tile again.
+    companionChanged = Signal()
+    companionQueueChanged = Signal()
     musicTabChanged = Signal()
     themesChanged = Signal()
 
@@ -489,6 +500,21 @@ class Bridge(QObject):
         # A playlist to be copied into a box once it has been read, since
         # one never opened has nothing stored to copy.
         self._box_after_read = ""
+        # The companion page. Every answer is kept for as long as Weave runs,
+        # by video and then by chip, so a playlist that goes round asks once.
+        self._companion_cache: dict[str, dict] = {}
+        self._companion_video = ""
+        self._companion_fetch: CompanionFetcher | None = None
+        self._companion_state = ""
+        self._companion_why = ""
+        # mpv's playlist as it last said, whether it goes round, whether
+        # there is an mpv at all, and what is known about what is in it.
+        self._mpv_playlist: list[dict] = []
+        self._mpv_looping = False
+        self._mpv_running = False
+        self._companion_known: dict[str, dict] = {}
+        self._companion_namer: QueueNamer | None = None
+        self._companion_asked: set[str] = set()
         # A video behind a pressed link, shown on a card beside the press
         # rather than opened, and the lookups behind the card and the other
         # links. A time the video is to start at once mpv reports it, since
@@ -648,6 +674,9 @@ class Bridge(QObject):
         self._player.nowPlaying.connect(self._on_now_playing)
         self._player.stopped.connect(self._on_player_stopped)
         self._player.failed.connect(self._on_player_failed)
+        self._player.playlistChanged.connect(self._on_mpv_playlist)
+        self._player.loopChanged.connect(self._on_mpv_loop)
+        self._player.connectionChanged.connect(self._on_mpv_connection)
         if self._player.error:
             self._problems.append(self._player.error)
         # A music library that is too old fails inside itself, one press at a
@@ -1771,7 +1800,7 @@ class Bridge(QObject):
         # A channel page and a box both ignore the hide watched toggle. The
         # channel page is meant to show everything that channel has, and a box
         # was hand picked, so hiding half of it would be surprising.
-        if self._view_kind in (MUSIC, DEBUG, SETTINGS, MUSIC_SETTINGS, NOWPLAYING):
+        if self._view_kind in (MUSIC, DEBUG, SETTINGS, MUSIC_SETTINGS, NOWPLAYING, COMPANION):
             # These draw their own page and the grid is hidden behind them, so
             # the rows in it are nobody's business. Emptying it cost a query
             # that could only answer nothing, and a walk along the sidebar
@@ -1971,6 +2000,8 @@ class Bridge(QObject):
                 self._fetch_history()
         if kind == PLAYLIST:
             self._fetch_playlist_items(playlist_id)
+        if kind == COMPANION:
+            self._companion_arrive()
 
     def _name_of_view(self, view) -> str:
         """What to call a view in a sentence, from the record of it.
@@ -1996,7 +2027,7 @@ class Bridge(QObject):
             ALL: "the feed", MUSIC: "music", HISTORY: "history",
             RECOMMENDED: "suggestions", SEARCH: "the search",
             SETTINGS: "settings", DEBUG: "how things are",
-            MUSIC_SETTINGS: "music settings",
+            MUSIC_SETTINGS: "music settings", COMPANION: "the companion",
         }.get(kind, "the feed")
 
     def _get_back_label(self) -> str:
@@ -2100,6 +2131,7 @@ class Bridge(QObject):
         entries: list[tuple[str, int]] = [(ALL, -1)]
         entries.extend((GROUP, int(row["id"])) for row in self._db.groups())
         entries.extend((BOX, int(row["id"])) for row in self._db.boxes())
+        entries.append((COMPANION, -1))
         entries.append((RECOMMENDED, -1))
         entries.append((HISTORY, -1))
         entries.append((MUSIC, -1))
@@ -2585,6 +2617,413 @@ class Bridge(QObject):
     @Slot()
     def showSettings(self) -> None:
         self._set_view(SETTINGS, -1)
+
+    # ---- the companion page ----------------------------------------------
+    #
+    # What YouTube puts beside the video mpv is playing, the way the side of a
+    # watch page does, and mpv's own playlist beside it. A press puts a video
+    # on the end of that playlist. Asked only while the page is open, once when
+    # a song starts and once for each chip pressed.
+
+    @Slot()
+    def showCompanion(self) -> None:
+        self._set_view(COMPANION, -1)
+
+    def _companion_arrive(self) -> None:
+        """On the page, about whatever mpv is playing now."""
+        if self._mpv_key.startswith("yt:"):
+            self._companion_video = self._mpv_key.split(":", 1)[1]
+        self._companion_follow()
+        self._name_queue()
+        # Naming may have found the title of the one playing, which the page
+        # is headed with.
+        self.companionChanged.emit()
+        self.companionQueueChanged.emit()
+
+    def _companion_heard(self, key: str, title: str) -> None:
+        """mpv moved to another video. Its title is kept for the queue, and
+        the page follows when it is open."""
+        if not key.startswith("yt:"):
+            return
+        video_id = key.split(":", 1)[1]
+        if title and not title.startswith(("http://", "https://")):
+            self._companion_known.setdefault(video_id, {})["title"] = title
+        self._companion_video = video_id
+        if self._view_kind == COMPANION:
+            self._companion_follow()
+            self.companionQueueChanged.emit()
+
+    def _companion_chip(self, video_id: str) -> str:
+        """The chip last picked, or the nearest this video has: another
+        artist's From chip for a From chip, and the mix for anything else."""
+        wanted = self._db.get_state(COMPANION_CHIP_STATE, watchnext.MIX) or watchnext.MIX
+        known = self._companion_cache.get(video_id)
+        if known is None:
+            return wanted
+        labels = [chip["label"] for chip in known["chips"]]
+        if wanted in labels:
+            return wanted
+        if wanted.startswith("From "):
+            nearest = next((label for label in labels if label.startswith("From ")), "")
+            if nearest:
+                return nearest
+        return watchnext.MIX
+
+    def _companion_follow(self) -> None:
+        """Show what is known about the video, and ask for what is not."""
+        if self._view_kind != COMPANION:
+            return
+        video_id = self._companion_video
+        if not video_id:
+            self.companionChanged.emit()
+            return
+        chip = self._companion_chip(video_id)
+        known = self._companion_cache.get(video_id)
+        if known is None:
+            self._companion_ask(video_id)
+        elif chip not in known["cards"]:
+            token = next((one["token"] for one in known["chips"] if one["label"] == chip), "")
+            if token:
+                self._companion_ask(video_id, chip, token)
+        self.companionChanged.emit()
+
+    def _companion_ask(self, video_id: str, chip: str = "", token: str = "") -> None:
+        running = self._companion_fetch
+        if running is not None and running.isRunning():
+            # One at a time. Whatever is wanted by then is looked at again
+            # when this one lands, which is all that matters after a skip.
+            return
+        worker = CompanionFetcher(self._db, self._cfg, video_id, chip, token, self)
+        worker.beside.connect(self._on_companion_beside)
+        worker.chipped.connect(self._on_companion_chipped)
+        worker.refused.connect(self._on_companion_refused)
+        worker.failed.connect(self._on_companion_failed)
+        worker.finished.connect(self._on_companion_done)
+        self._companion_fetch = worker
+        self._companion_state = "asking"
+        if not self._launch(worker):
+            self._companion_fetch = None
+            self._companion_state = ""
+
+    def _remember_companion_cards(self, cards: list) -> None:
+        for card in cards:
+            facts = self._companion_known.setdefault(card["video_id"], {})
+            facts.setdefault("title", card["title"])
+            facts.setdefault("channel", card["channel"])
+            facts.setdefault("channel_id", card["channel_id"])
+            facts.setdefault("duration", card["duration"])
+
+    def _on_companion_beside(self, video_id: str, chips: list, cards: dict) -> None:
+        self._companion_cache[video_id] = {"chips": list(chips), "cards": dict(cards)}
+        for found in cards.values():
+            self._remember_companion_cards(found)
+        self._companion_state = ""
+
+    def _on_companion_chipped(self, video_id: str, chip: str, cards: list) -> None:
+        known = self._companion_cache.get(video_id)
+        if known is not None:
+            known["cards"][chip] = list(cards)
+        self._remember_companion_cards(cards)
+        self._companion_state = ""
+
+    def _on_companion_refused(self, _video_id: str) -> None:
+        self._companion_state = "refused"
+
+    def _on_companion_failed(self, _video_id: str, why: str) -> None:
+        self._companion_state = "failed"
+        self._companion_why = why
+
+    def _on_companion_done(self) -> None:
+        """Followed again whatever came back, since a chip picked before
+        needs a second call once the first has said which chips there are,
+        and mpv may have moved on meanwhile. Not after a refusal or a failure,
+        which would only ask again at once."""
+        self._companion_fetch = None
+        if self._companion_state == "asking":
+            self._companion_state = ""
+        if self._companion_state in ("refused", "failed"):
+            self.companionChanged.emit()
+        else:
+            self._companion_follow()
+        # The tiles carry titles that the queue may have been waiting for.
+        self.companionQueueChanged.emit()
+
+    @Slot(str)
+    def chooseCompanionChip(self, label: str) -> None:
+        self._db.set_state(COMPANION_CHIP_STATE, label)
+        self._companion_follow()
+
+    @Slot()
+    def refreshCompanion(self) -> None:
+        """Ask again about the video and the chip shown, dropping what was
+        kept for them."""
+        video_id = self._companion_video
+        known = self._companion_cache.get(video_id)
+        if known is None:
+            self._companion_follow()
+            return
+        chip = self._companion_chip(video_id)
+        if chip in (watchnext.MIX, watchnext.ALL):
+            self._companion_cache.pop(video_id, None)
+        else:
+            known["cards"].pop(chip, None)
+        self._companion_follow()
+
+    def _companion_shown(self) -> list:
+        known = self._companion_cache.get(self._companion_video)
+        if known is None:
+            return []
+        return list(known["cards"].get(self._companion_chip(self._companion_video)) or [])
+
+    def _get_companion_cards(self) -> list:
+        queued = {entry.get("video_id") for entry in self._queue_entries()}
+        return [{"key": f"yt:{card['video_id']}", "title": card["title"],
+                 "channel": card["channel"], "channelId": card["channel_id"],
+                 "duration": card["duration"],
+                 "picture": qml_source(card["picture"]),
+                 "queued": card["video_id"] in queued}
+                for card in self._companion_shown()]
+
+    companionCards = Property("QVariantList", _get_companion_cards, notify=companionChanged)
+
+    def _get_companion_chips(self) -> list:
+        video_id = self._companion_video
+        known = self._companion_cache.get(video_id)
+        chosen = self._companion_chip(video_id)
+        labels = ([chip["label"] for chip in known["chips"]] if known is not None
+                  else [watchnext.MIX])
+        return [{"label": label, "chosen": label == chosen} for label in labels]
+
+    companionChips = Property("QVariantList", _get_companion_chips, notify=companionChanged)
+
+    def _get_companion_now(self) -> str:
+        video_id = self._companion_video
+        return str((self._companion_known.get(video_id) or {}).get("title") or "")
+
+    companionNow = Property(str, _get_companion_now, notify=companionChanged)
+
+    def _get_companion_busy(self) -> bool:
+        return self._companion_state == "asking"
+
+    companionBusy = Property(bool, _get_companion_busy, notify=companionChanged)
+
+    def _get_companion_note(self) -> str:
+        """A line for the page when there is something to say instead of
+        tiles, or beside them."""
+        if not self._companion_video:
+            return ("Nothing is playing in mpv yet. Start a video there, and what YouTube "
+                    "puts beside it shows up here.")
+        if self._companion_state == "refused":
+            return ("This page has asked YouTube as often as its ceiling allows for now. "
+                    "It frees up within a quarter of an hour.")
+        if self._companion_state == "failed":
+            return f"YouTube did not answer, {self._companion_why}"
+        if not self._mpv_running:
+            return "mpv is not running. A press starts it with that video."
+        return ""
+
+    companionNote = Property(str, _get_companion_note, notify=companionChanged)
+
+    # mpv's playlist.
+
+    def _on_mpv_playlist(self, entries: list) -> None:
+        self._mpv_playlist = list(entries)
+        if self._view_kind == COMPANION:
+            self._name_queue()
+            # Whether a tile says it is in the queue follows the playlist.
+            self.companionChanged.emit()
+        self.companionQueueChanged.emit()
+
+    def _on_mpv_loop(self, looping: bool) -> None:
+        self._mpv_looping = bool(looping)
+        self.companionQueueChanged.emit()
+
+    def _on_mpv_connection(self, connected: bool) -> None:
+        self._mpv_running = bool(connected)
+        if not connected:
+            # Gone, or between two looks at it. Either way nothing goes round.
+            self._mpv_looping = False
+        self.companionChanged.emit()
+        self.companionQueueChanged.emit()
+
+    def _queue_entries(self) -> list[dict]:
+        out = []
+        for entry in self._mpv_playlist:
+            out.append(dict(entry, video_id=ids.youtube_video_id(entry["url"]) or ""))
+        return out
+
+    def _name_queue(self) -> None:
+        """Titles for what is in mpv's playlist: from what was shown here,
+        from what is stored, and from oembed for the rest, a few at a time."""
+        wanted = [entry["video_id"] for entry in self._queue_entries()
+                  if entry["video_id"] and not (self._companion_known.get(entry["video_id"])
+                                                or {}).get("title")]
+        if not wanted:
+            return
+        for video_id, facts in self._db.known_videos(wanted).items():
+            known = self._companion_known.setdefault(video_id, {})
+            if not known.get("title"):
+                known["title"] = facts["title"]
+            known.setdefault("channel", facts["channel"])
+            known.setdefault("duration", fmt.duration_text(facts["duration_s"]))
+        unknown = [video_id for video_id in wanted
+                   if not (self._companion_known.get(video_id) or {}).get("title")
+                   and video_id not in self._companion_asked]
+        if not unknown or (self._companion_namer is not None
+                           and self._companion_namer.isRunning()):
+            return
+        unknown = unknown[:8]
+        self._companion_asked.update(unknown)
+        self._companion_namer = QueueNamer(self._db, self._cfg, unknown, self)
+        self._companion_namer.named.connect(self._on_queue_named)
+        self._launch(self._companion_namer)
+
+    def _on_queue_named(self, found: dict) -> None:
+        for video_id, facts in found.items():
+            known = self._companion_known.setdefault(video_id, {})
+            if not known.get("title"):
+                known["title"] = facts.get("title") or ""
+            known.setdefault("channel", facts.get("channel") or "")
+        self.companionQueueChanged.emit()
+        # The one playing is among them, and the page is headed with it.
+        self.companionChanged.emit()
+
+    def _get_companion_queue(self) -> list:
+        entries = self._queue_entries()
+        playing = next((place for place, entry in enumerate(entries) if entry["current"]), -1)
+        rows = []
+        for place, entry in enumerate(entries):
+            video_id = entry["video_id"]
+            facts = self._companion_known.get(video_id) or {}
+            rows.append({
+                "key": f"yt:{video_id}" if video_id else "",
+                "title": facts.get("title") or entry["title"] or entry["url"],
+                "channel": facts.get("channel") or "",
+                "channelId": facts.get("channel_id") or "",
+                "duration": facts.get("duration") or "",
+                "picture": (qml_source(f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg")
+                            if video_id else ""),
+                "playing": place == playing,
+                "played": 0 <= place < playing,
+            })
+        return rows
+
+    companionQueue = Property("QVariantList", _get_companion_queue,
+                              notify=companionQueueChanged)
+
+    def _get_companion_looping(self) -> bool:
+        return self._mpv_looping
+
+    companionLooping = Property(bool, _get_companion_looping, notify=companionQueueChanged)
+
+    def _get_mpv_running(self) -> bool:
+        return self._mpv_running
+
+    mpvRunning = Property(bool, _get_mpv_running, notify=companionQueueChanged)
+
+    # Presses.
+
+    def _companion_card_at(self, index: int) -> dict | None:
+        shown = self._companion_shown()
+        return shown[index] if 0 <= index < len(shown) else None
+
+    def _companion_card(self, key: str) -> dict | None:
+        """A video of the companion page by its key: a tile from any answer
+        kept, or else an entry of mpv's playlist, as much as is known of it."""
+        video_id = key.split(":", 1)[1] if key.startswith("yt:") else ""
+        if not video_id:
+            return None
+        for known in self._companion_cache.values():
+            for cards in known["cards"].values():
+                for card in cards:
+                    if card["video_id"] == video_id:
+                        return card
+        facts = self._companion_known.get(video_id) or {}
+        if not facts.get("title"):
+            return None
+        return {"video_id": video_id, "title": facts["title"],
+                "channel": facts.get("channel") or "", "channel_id": facts.get("channel_id") or "",
+                "duration": facts.get("duration") or "", "views": "", "age": "",
+                "picture": f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg"}
+
+    def _companion_song(self, key: str) -> dict | None:
+        """A tile as a box of songs keeps it."""
+        card = self._companion_card(key)
+        if card is None:
+            return None
+        return {"key": key, "ext_id": card["video_id"], "title": card["title"],
+                "artist": card["channel"] or None, "artist_id": card["channel_id"] or None,
+                "thumbnail_url": card["picture"] or None,
+                "duration_s": self._seconds(card["duration"])}
+
+    def _companion_hand(self, index: int, how: str) -> None:
+        card = self._companion_card_at(index)
+        if card is None:
+            return
+        url = ids.watch_url("youtube", card["video_id"])
+        if how == "end":
+            went = self._player.append(url)
+            said = "Put on the end of mpv's queue"
+        else:
+            went = self._player.insert_next(url, play=how == "now")
+            said = "Playing it now" if how == "now" else "Playing it next in mpv"
+        if went:
+            self._set_notice(said, clear_after_s=3)
+            return
+        # No mpv to tell, so one is started with it, the way any card does.
+        self._hand_over(f"yt:{card['video_id']}", url, card["title"], None, False)
+
+    @Slot(int)
+    def companionAdd(self, index: int) -> None:
+        self._companion_hand(index, "end")
+
+    @Slot(int)
+    def companionPlayNext(self, index: int) -> None:
+        self._companion_hand(index, "next")
+
+    @Slot(int)
+    def companionPlayNow(self, index: int) -> None:
+        self._companion_hand(index, "now")
+
+    @Slot(int)
+    def companionJump(self, index: int) -> None:
+        self._player.jump(index)
+
+    @Slot(int)
+    def companionRemove(self, index: int) -> None:
+        self._player.remove(index)
+
+    @Slot(int, int)
+    def companionMove(self, index: int, target: int) -> None:
+        """A row of the queue put where another one is, the others moving
+        aside, the way a playlist is dragged."""
+        if index == target or index < 0 or target < 0:
+            return
+        self._player.move(index, target + 1 if target > index else target)
+
+    @Slot(str, result=int)
+    def companionSaveQueue(self, name: str) -> int:
+        """mpv's playlist as a box of songs, in its order."""
+        songs = []
+        for entry in self._queue_entries():
+            video_id = entry["video_id"]
+            if not video_id:
+                continue
+            facts = self._companion_known.get(video_id) or {}
+            songs.append({"ext_id": video_id, "title": facts.get("title") or video_id,
+                          "artist": facts.get("channel") or None,
+                          "thumbnail_url": f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg",
+                          "duration_s": self._seconds(facts.get("duration"))})
+        if not songs:
+            self._set_notice("Nothing in mpv's queue to keep", clear_after_s=4)
+            return -1
+        made = self.createMusicBox(name)
+        if made < 0:
+            return -1
+        self._db.put_many_in_music_box(made, songs)
+        self._set_notice(f"mpv's queue is kept as {name.strip()}", clear_after_s=4)
+        self.musicBoxesChanged.emit()
+        return made
 
     @Slot()
     def showMusicSettings(self) -> None:
@@ -3847,7 +4286,18 @@ class Bridge(QObject):
         from, so the row goes to the database with the request to store it.
         Everything else is already in a table and is found there.
         """
-        return next((row for row in self._web_results if row["key"] == video_key), None)
+        found = next((row for row in self._web_results if row["key"] == video_key), None)
+        if found is not None:
+            return found
+        # A tile of the companion page is the other list held only in memory.
+        card = self._companion_card(video_key)
+        if card is None:
+            return None
+        return {"ext_id": card["video_id"], "title": card["title"],
+                "channel_name": card["channel"] or None,
+                "channel_ext_id": card["channel_id"] or None,
+                "duration_s": self._seconds(card["duration"]),
+                "thumbnail_url": card["picture"] or None}
 
     @Slot(int, str)
     def removeFromBox(self, box_id: int, video_key: str) -> None:
@@ -4284,6 +4734,8 @@ class Bridge(QObject):
         a browser's own bar would have been.
         """
         row = self._model.row_for_key(key)
+        if not row and self._companion_card(key) is not None:
+            row = {"url": ids.watch_url("youtube", key.split(":", 1)[1])}
         if not row:
             return
         url = row["url"]
@@ -5477,7 +5929,7 @@ class Bridge(QObject):
         whoever made it, which is all a card knows about that."""
         row = self._model.row_for_key(key) if key.startswith("yt:") else None
         if not row:
-            return None
+            return self._companion_song(key)
         channel = str(row.get("channelKey") or "")
         maker = channel.split(":", 1)[1] if channel.startswith("yt:") else ""
         return {"key": key, "ext_id": key.split(":", 1)[1],
@@ -6331,6 +6783,7 @@ class Bridge(QObject):
             self._set_starting(self._starting_key, clear_after_s=6)
         self._mpv_key = key
         self.openDetail(key)
+        self._companion_heard(key, _title)
         pending = self._seek_on_start
         if pending and pending[0] == key:
             self._seek_on_start = None
@@ -6663,6 +7116,10 @@ class Bridge(QObject):
             # Holds no flag. The next song waiting is told on its own finish,
             # which a crash still emits.
             pass
+        elif worker is self._companion_fetch:
+            self._companion_state = "failed"
+            self._companion_why = "something went wrong while asking"
+            self.companionChanged.emit()
         elif worker is self._playlist_maker:
             self._making_playlist = ""
             self._making_rows = []

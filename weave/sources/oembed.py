@@ -37,6 +37,8 @@ class Owner:
     channel_name: str
     handle: str = ""
     channel_ext_id: str = ""
+    # The video's own title, which the same answer carries.
+    title: str = ""
 
 
 def parse(payload: bytes) -> Owner | None:
@@ -48,11 +50,12 @@ def parse(payload: bytes) -> Owner | None:
     if not name:
         return None
     address = answer.get("author_url") or ""
+    title = str(answer.get("title") or "").strip()
     found = CHANNEL_ID.search(address)
     if found:
-        return Owner(name, "", found.group(1))
+        return Owner(name, "", found.group(1), title)
     handle = HANDLE.search(address)
-    return Owner(name, handle.group(1) if handle else "")
+    return Owner(name, handle.group(1) if handle else "", title=title)
 
 
 def fetch(fetcher: Fetcher, video_id: str) -> Owner | None:

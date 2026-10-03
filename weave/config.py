@@ -112,6 +112,11 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         # the typing. A long search typed slowly is ten or so; this is room
         # for a busy evening of them and a stop for anything running away.
         "suggest": 600,
+        # What YouTube puts beside the video mpv is playing, for the companion
+        # page: one answer when a song starts, one more for each chip pressed,
+        # and only while the page is open. Songs change every few minutes, so
+        # this is a song every minute with room to flick through the chips.
+        "companion": 20,
     },
     "watched": {"threshold": 0.85},
     "twitch": {
@@ -285,7 +290,7 @@ class Config:
     @property
     def budget_limits(self) -> dict[str, int]:
         keys = ("feeds", "browse", "player", "shorts", "oembed", "dislikes", "twitch",
-                "suggest")
+                "suggest", "companion")
         return {key: max(0, int(self.get("budget", key))) for key in keys}
 
     @property

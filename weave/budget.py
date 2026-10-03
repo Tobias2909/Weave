@@ -38,6 +38,7 @@ OEMBED = "oembed"      # youtube.com/oembed, a name for a video nothing else kno
 DISLIKES = "dislikes"  # returnyoutubedislikeapi.com
 TWITCH = "twitch"      # api.twitch.tv
 SUGGEST = "suggest"    # suggestions for words being typed, YouTube and its music
+COMPANION = "companion"  # youtubei next: what YouTube puts beside the video mpv plays
 
 
 # What a ceiling leaves to the work nobody is waiting for. The rest is kept

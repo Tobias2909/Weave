@@ -494,6 +494,7 @@ def stub_network() -> None:
     browsers.best = lambda *_: invented_browsers()[0]
 
     net.Fetcher.get_bytes = no_request
+    net.Fetcher.post_json = no_request
     process.run = no_process
     ytmusic.client = no_music
     comment_source.fetch = invented_comments

@@ -329,6 +329,7 @@ def go_offline() -> None:
         raise ytmusic.MusicError("offline")
 
     net.Fetcher.get_bytes = no_request
+    net.Fetcher.post_json = no_request
     process.run = no_process
     ytmusic.client = no_music
 
@@ -1294,15 +1295,15 @@ class Smoke:
         settle(0.3)
         # The music boxes are a menu inside this one, and their entries are
         # found under it as well. Only the entry that opens them counts here.
-        inner = {text for name in ("cardMusicBoxMenu", "cardVideoBoxMenu")
+        inner = {text for name in ("cardMusicBoxMenu", "cardVideoBoxMenu", "cardGroupMenu")
                  for text, _ in menu_entries(find(window, name))}
         labels = [text.strip() for text, _ in menu_entries(menu) if text not in inner]
         self.check("the video menu offers to hide it",
                    "Hide this video" in labels, ", ".join(labels))
         # The order of that menu is a decision, not an accident: what a press
         # does most often is at the top and the boxes stay at the foot.
-        wanted = ["Play in mpv", "Hide this video", "Mark as", "Groups for this channel",
-                  "Put in a music box", "Put in a box", "Share"]
+        wanted = ["Play in mpv", "Hide this video", "Mark as", "Put channel in a group",
+                  "Put in a box", "Put in a music box", "Share"]
         first = labels[:len(wanted)]
         self.check("and its entries are in the order they were asked for",
                    all(want in got for want, got in zip(wanted, first)),
@@ -2408,6 +2409,80 @@ class Smoke:
         self.check("and a box thrown away leaves the row", len(chips()) == 3,
                    f"{len(chips())} chips")
 
+    def the_companion(self, bridge, window) -> None:
+        """What YouTube puts beside the song mpv plays, and mpv's playlist.
+
+        Nothing is asked of anybody here: the answer is put where an answer
+        would have been kept, and mpv's playlist is said the way the watcher
+        says it.
+        """
+        step("the companion page")
+        bridge.showCompanion()
+        settle(0.5)
+        page = find(window, "companionView")
+        self.check("the companion page opens from its row",
+                   page is not None and bool(read(page, "visible"))
+                   and read(bridge, "viewKind") == "companion"
+                   and not read(find(window, "grid"), "visible")
+                   and not read(find(window, "detailPanel"), "visible"))
+        self.check("and says what it is waiting for",
+                   "Nothing is playing" in read(bridge, "companionNote"))
+        cards = [{"video_id": f"walkcomp{i:03d}", "title": f"Walk song {i}",
+                  "channel": "Walk band", "channel_id": "", "duration": "3:00", "views": "",
+                  "age": "", "picture": ""} for i in range(9)]
+        bridge._companion_cache["walknowplay"] = {
+            "chips": [{"label": "Mix", "token": ""}, {"label": "All", "token": ""}],
+            "cards": {"Mix": cards, "All": cards[:2]}}
+        bridge._companion_known["walknowplay"] = {"title": "The walk song"}
+        bridge._companion_video = "walknowplay"
+        bridge._on_mpv_playlist([
+            {"url": "https://www.youtube.com/watch?v=walknowplay", "current": True, "title": ""},
+            {"url": "https://www.youtube.com/watch?v=walkcomp003", "current": False,
+             "title": ""}])
+        bridge.companionChanged.emit()
+        settle(0.5)
+        tiles = find(window, "companionTiles")
+        call(tiles, "forceLayout")
+        self.check("its tiles are the mix", read(tiles, "count") == 9,
+                   f"{read(tiles, 'count')} tiles")
+        self.check("and the one in mpv's queue says so",
+                   [card["queued"] for card in read(bridge, "companionCards")].count(True) == 1)
+        self.check("mpv's playlist is beside them", read(find(window, "companionQueue"),
+                                                        "count") == 2)
+        bridge.chooseCompanionChip("All")
+        settle(0.3)
+        self.check("a chip shows what it holds", read(tiles, "count") == 2)
+        bridge.chooseCompanionChip("Mix")
+        menu = find(window, "companionMenu")
+        write(menu, "key", "yt:walkcomp001")
+        menu.open()
+        settle(0.3)
+        inner = {text for name in ("companionMusicBoxMenu", "companionVideoBoxMenu")
+                 for text, _ in menu_entries(find(window, name))}
+        labels = [text.strip() for text, _ in menu_entries(menu) if text not in inner]
+        self.check("a tile's menu puts it in mpv first, then in a box",
+                   labels == ["Play next", "Play now", "Put in a box", "Put in a music box",
+                              "Share"], ", ".join(labels))
+        menu.close()
+        settle(0.2)
+        # An entry of mpv's playlist has its boxes and its address too.
+        menu = find(window, "queueEntryMenu")
+        write(menu, "key", "yt:walkcomp003")
+        menu.open()
+        settle(0.3)
+        inner = {text for name in ("queueEntryMusicBoxMenu", "queueEntryVideoBoxMenu")
+                 for text, _ in menu_entries(find(window, name))}
+        labels = [text.strip() for text, _ in menu_entries(menu) if text not in inner]
+        self.check("an entry of mpv's queue offers its boxes and its address",
+                   labels == ["Put in a box", "Put in a music box", "Share"], ", ".join(labels))
+        menu.close()
+        settle(0.2)
+        bridge._on_mpv_playlist([])
+        bridge._companion_cache.clear()
+        bridge._companion_video = ""
+        bridge.selectGroup(-1)
+        settle(0.4)
+
     def music_favourites_anywhere(self, bridge, window) -> None:
         """A song reaches the music boxes, favourites first, from any card.
 
@@ -3319,13 +3394,13 @@ class Smoke:
         self.check("the boxes menu lists the new box and offers another",
                    any(text.endswith("Later") for text in inside)
                    and inside[-1].endswith("New box…"), ", ".join(inside))
-        inner = set(inside) | {text.strip() for text, _ in
-                               menu_entries(find(window, "cardMusicBoxMenu"))}
+        inner = set(inside) | {text.strip() for name in ("cardMusicBoxMenu", "cardGroupMenu")
+                               for text, _ in menu_entries(find(window, name))}
         labels = [text.strip() for text, _ in menu_entries(menu) if text.strip() not in inner]
         self.check("video menu opens with its entries", len(labels) >= 7, ", ".join(labels))
-        self.check("its boxes come between the music boxes and Share",
-                   labels[-3:] == ["Put in a music box", "Put in a box", "Share"],
-                   ", ".join(labels[-3:]))
+        self.check("the channel's groups, then its boxes, then the music boxes, then Share",
+                   labels[-4:] == ["Put channel in a group", "Put in a box",
+                                   "Put in a music box", "Share"], ", ".join(labels[-4:]))
         menu.close()
         settle(0.2)
 
@@ -3688,6 +3763,7 @@ class Smoke:
         self.members_in_a_playlist(bridge, window)
         self.telling_youtube_music(bridge, window)
         self.a_link_in_a_description(bridge, window)
+        self.the_companion(bridge, window)
 
         if self.shot:
             self.check("screenshot written", screenshot(window, self.shot), self.shot)

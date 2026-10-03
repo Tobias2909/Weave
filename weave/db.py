@@ -2374,6 +2374,37 @@ class Database:
         )])
         return True
 
+    def known_videos(self, ext_ids: list[str]) -> dict[str, dict]:
+        """A title, a channel and a length for each of these videos that any
+        table here has met, without asking anybody. A video followed comes
+        first, then the lists read from YouTube, then the songs played."""
+        wanted = [one for one in dict.fromkeys(ext_ids) if one]
+        found: dict[str, dict] = {}
+        for start in range(0, len(wanted), 400):
+            part = wanted[start:start + 400]
+            marks = ",".join("?" * len(part))
+            for row in self.conn.execute(
+                    f"""
+                    SELECT v.ext_id, v.title, c.title AS channel, v.duration_s, 1 AS rank
+                    FROM videos v LEFT JOIN channels c ON c.key = v.channel_key
+                    WHERE v.platform = 'youtube' AND v.ext_id IN ({marks})
+                    UNION ALL
+                    SELECT ext_id, title, channel_name, duration_s, 2 FROM cached_videos
+                    WHERE ext_id IN ({marks})
+                    UNION ALL
+                    SELECT ext_id, title, channel_name, duration_s, 3 FROM playlist_items
+                    WHERE ext_id IN ({marks})
+                    UNION ALL
+                    SELECT ext_id, title, artist, duration_s, 4 FROM music_history
+                    WHERE ext_id IN ({marks})
+                    ORDER BY rank
+                    """, part * 4):
+                if row["ext_id"] not in found and row["title"]:
+                    found[row["ext_id"]] = {"title": row["title"],
+                                            "channel": row["channel"] or "",
+                                            "duration_s": row["duration_s"]}
+        return found
+
     def _loose_source(self, video_key: str) -> dict | None:
         """The row behind a video key in the lists that come from YouTube.
 

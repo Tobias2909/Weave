@@ -222,7 +222,8 @@ ApplicationWindow {
     function askForGroups(channelKey) {
         if (!channelKey)
             return
-        channelGroupMenu.channelKey = channelKey
+        channelGroupMenu.key = channelKey
+        channelGroupMenu.holding = App.groupsHolding(channelKey)
         channelGroupMenu.popup()
     }
 
@@ -1080,6 +1081,16 @@ ApplicationWindow {
                 SidebarHeading { objectName: "yoursHeading"; text: "Yours" }
 
                 SidebarRow {
+                    objectName: "companionRow"
+                    width: sidebarColumn.width
+                    label: "Companion"
+                    count: 0
+                    selected: App.viewKind === "companion"
+                    onActivated: App.showCompanion()
+                    onRevealRequested: root.revealRow(this)
+                }
+
+                SidebarRow {
                     width: sidebarColumn.width
                     label: "Recommended"
                     count: 0
@@ -1231,7 +1242,7 @@ ApplicationWindow {
         anchors.bottom: miniPlayer.top
         width: App.panelWidth
         visible: App.detailOpen && App.viewKind !== "music"
-                 && App.viewKind !== "nowplaying"
+                 && App.viewKind !== "nowplaying" && App.viewKind !== "companion"
     }
 
     MusicView {
@@ -1252,6 +1263,35 @@ ApplicationWindow {
         slide: root.tabSlide
         fade: root.tabFade
         onTabRequested: (boxId) => root.chooseMusicTab(boxId)
+    }
+
+    CompanionView {
+        id: companionView
+        objectName: "companionView"
+        Translate { id: companionShift; y: root.pageRise }
+        Component.onCompleted: companionView.body.transform = [companionShift]
+        opacity: root.pageFade
+        visible: App.viewKind === "companion"
+        clip: true
+        anchors.left: sidebar.right
+        anchors.right: parent.right
+        anchors.top: liveBar.visible ? liveBar.bottom : parent.top
+        anchors.topMargin: liveBar.visible ? 0 : banner.height
+        anchors.bottom: miniPlayer.top
+        onCardMenuRequested: (index, key) => {
+            companionMenu.index = index
+            companionMenu.key = key
+            companionMusicBoxes.holding = App.cardSongBoxes(key)
+            companionBoxes.holding = App.boxesHolding(key)
+            companionMenu.popup()
+        }
+        onQueueMenuRequested: (key) => {
+            queueEntryMenu.key = key
+            queueEntryMusicBoxes.holding = App.cardSongBoxes(key)
+            queueEntryBoxes.holding = App.boxesHolding(key)
+            queueEntryMenu.popup()
+        }
+        onSaveQueueRequested: root.askForName("mpvbox", -1, "", "")
     }
 
     DebugView {
@@ -1969,6 +2009,7 @@ ApplicationWindow {
                  && !(App.viewKind === "channel" && App.channelTab === "music")
                  && App.viewKind !== "settings"
                  && App.viewKind !== "musicSettings"
+                 && App.viewKind !== "companion"
                  && !(App.viewKind === "channel" && App.channelTab === "playlists")
         anchors.left: sidebar.right
         anchors.right: detailPanel.visible ? detailPanel.left : parent.right
@@ -2100,6 +2141,7 @@ ApplicationWindow {
                     root.menuWatched = model.watched
                     cardMusicBoxMenu.holding = App.cardSongBoxes(model.key)
                     cardVideoBoxMenu.holding = App.boxesHolding(model.key)
+                    cardGroupMenu.holding = App.groupsHolding(model.channelKey)
                     videoMenu.popup()
                 }
             }
@@ -2568,13 +2610,23 @@ ApplicationWindow {
                 videoMenu.dismiss()
             }
         }
-        ThemedMenuItem {
-            text: "Groups for this channel"
-            onTriggered: {
-                var key = root.menuChannelKey
-                videoMenu.dismiss()
-                root.askForGroups(key)
-            }
+        // The channel's groups, then the boxes of videos, then the boxes of
+        // songs, each a menu of its own drawn the same way, ticked where it
+        // is already.
+        GroupMenu {
+            id: cardGroupMenu
+            objectName: "cardGroupMenu"
+            owner: videoMenu
+            key: root.menuChannelKey
+            offered: root.menuChannelKey !== ""
+            onNewGroupWanted: (key) => root.askForName("group", -1, key, "")
+        }
+        VideoBoxMenu {
+            id: cardVideoBoxMenu
+            objectName: "cardVideoBoxMenu"
+            owner: videoMenu
+            key: root.menuKey
+            onNewBoxWanted: (key) => root.askForName("box", -1, key, "")
         }
         // On any card that is a video, which goes in as a song: the
         // favourites first, then every box of songs. This is how a song
@@ -2588,14 +2640,6 @@ ApplicationWindow {
             offered: root.menuKey !== "" && !root.menuKey.startsWith("twitch:")
             onNewBoxWanted: (song) => root.askForMusicBox(song)
         }
-        // The boxes of videos, drawn the way the boxes of songs above are.
-        VideoBoxMenu {
-            id: cardVideoBoxMenu
-            objectName: "cardVideoBoxMenu"
-            owner: videoMenu
-            key: root.menuKey
-            onNewBoxWanted: (key) => root.askForName("box", -1, key, "")
-        }
 
         ThemedMenuItem {
             objectName: "copyLinkEntry"
@@ -2604,51 +2648,85 @@ ApplicationWindow {
         }
     }
 
-    // The groups one channel is in, ticked, so one menu both adds and removes.
-    // Opened from a video's menu and from the channel page.
+    // A tile on the companion page. Where it goes in mpv's playlist first, then
+    // the boxes, the way the menu of any other video has them.
     ThemedMenu {
-        id: channelGroupMenu
-        objectName: "channelGroupMenu"
-        property string channelKey: ""
+        id: companionMenu
+        objectName: "companionMenu"
+        property int index: -1
+        property string key: ""
 
-        Instantiator {
-            id: channelGroupEntries
-            // All is offered like any other list. It is not a row in the
-            // groups table, but it holds channels in the sense this menu is
-            // asking about, and a channel followed here has every reason to
-            // sit beside a subscribed one.
-            model: App.groups
-            // A delegate created here does not inherit this file's id scope,
-            // so the menu is handed to each entry from out here.
-            onObjectAdded: (index, object) => {
-                object.owner = channelGroupMenu
-                channelGroupMenu.insertItem(index, object)
-            }
-            onObjectRemoved: (index, object) => channelGroupMenu.removeItem(object)
-            delegate: ThemedMenuItem {
-                required property var modelData
-                property var owner: null
-                text: (App.groupsHolding(channelGroupMenu.channelKey).indexOf(modelData.id) >= 0
-                       ? "✓  " : "   ") + modelData.name
-                onTriggered: {
-                    if (App.groupsHolding(channelGroupMenu.channelKey).indexOf(modelData.id) >= 0)
-                        App.removeChannelFromGroup(modelData.id, channelGroupMenu.channelKey)
-                    else
-                        App.addChannelToGroup(modelData.id, channelGroupMenu.channelKey)
-                    if (owner)
-                        owner.dismiss()
-                }
-            }
+        ThemedMenuItem {
+            text: "Play next"
+            onTriggered: { App.companionPlayNext(companionMenu.index); companionMenu.dismiss() }
+        }
+        ThemedMenuItem {
+            text: "Play now"
+            onTriggered: { App.companionPlayNow(companionMenu.index); companionMenu.dismiss() }
+        }
+
+        ThemedMenuSeparator {}
+
+        VideoBoxMenu {
+            id: companionBoxes
+            objectName: "companionVideoBoxMenu"
+            owner: companionMenu
+            key: companionMenu.key
+            onNewBoxWanted: (key) => root.askForName("box", -1, key, "")
+        }
+
+        BoxMenu {
+            id: companionMusicBoxes
+            objectName: "companionMusicBoxMenu"
+            title: "Put in a music box"
+            owner: companionMenu
+            key: companionMenu.key
+            onNewBoxWanted: (song) => root.askForMusicBox(song)
         }
 
         ThemedMenuItem {
-            text: "Put in a new group"
-            onTriggered: {
-                var key = channelGroupMenu.channelKey
-                channelGroupMenu.dismiss()
-                root.askForName("group", -1, key, "")
-            }
+            text: "Share"
+            onTriggered: { App.copyLink(companionMenu.key); companionMenu.dismiss() }
         }
+    }
+
+    // An entry of mpv's playlist on the companion page: its boxes and its
+    // address, the same menus every other video has.
+    ThemedMenu {
+        id: queueEntryMenu
+        objectName: "queueEntryMenu"
+        property string key: ""
+
+        VideoBoxMenu {
+            id: queueEntryBoxes
+            objectName: "queueEntryVideoBoxMenu"
+            owner: queueEntryMenu
+            key: queueEntryMenu.key
+            onNewBoxWanted: (key) => root.askForName("box", -1, key, "")
+        }
+
+        BoxMenu {
+            id: queueEntryMusicBoxes
+            objectName: "queueEntryMusicBoxMenu"
+            title: "Put in a music box"
+            owner: queueEntryMenu
+            key: queueEntryMenu.key
+            onNewBoxWanted: (song) => root.askForMusicBox(song)
+        }
+
+        ThemedMenuItem {
+            text: "Share"
+            onTriggered: { App.copyLink(queueEntryMenu.key); queueEntryMenu.dismiss() }
+        }
+    }
+
+    // The groups one channel is in, ticked, so one menu both adds and removes.
+    // The same menu a video's own menu holds, opened here on its own from the
+    // channel page.
+    GroupMenu {
+        id: channelGroupMenu
+        objectName: "channelGroupMenu"
+        onNewGroupWanted: (key) => root.askForName("group", -1, key, "")
     }
 
     ThemedMenu {
@@ -3431,7 +3509,9 @@ ApplicationWindow {
 
         readonly property bool aGroup: root.namingKind === "group"
         readonly property bool songs: root.namingKind === "musicbox"
+        // Weave's own queue, or the playlist mpv holds.
         readonly property bool aQueue: root.namingKind === "queuebox"
+                                       || root.namingKind === "mpvbox"
         readonly property bool renaming: root.namingId >= 0
 
         function commit() {
@@ -3441,7 +3521,10 @@ ApplicationWindow {
                 return
             }
             if (namePopup.aQueue) {
-                App.saveQueueAsBox(name)
+                if (root.namingKind === "mpvbox")
+                    App.companionSaveQueue(name)
+                else
+                    App.saveQueueAsBox(name)
                 namePopup.close()
                 return
             }
