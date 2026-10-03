@@ -138,7 +138,45 @@ Item {
                     border.width: 1
                     border.color: query.activeFocus ? Theme.colors.accent : Theme.colors.border
                 }
-                onAccepted: App.musicSearch(text)
+                onAccepted: {
+                    if (!musicSuggestions.takePicked()) {
+                        App.clearSuggestions()
+                        App.musicSearch(text)
+                    }
+                }
+                Keys.onEscapePressed: (event) => {
+                    event.accepted = musicSuggestions.opened
+                    if (musicSuggestions.opened) App.clearSuggestions()
+                }
+                Keys.onDownPressed: (event) => { event.accepted = musicSuggestions.move(1) }
+                Keys.onUpPressed: (event) => { event.accepted = musicSuggestions.move(-1) }
+                // The same as the search box at the top, from the music side.
+                onTextEdited: musicSuggestTimer.restart()
+                onActiveFocusChanged: if (!activeFocus) musicSuggestLeave.restart()
+
+                Timer {
+                    id: musicSuggestTimer
+                    interval: 150
+                    onTriggered: App.suggest("music", query.text)
+                }
+                Timer {
+                    id: musicSuggestLeave
+                    interval: 200
+                    onTriggered: if (!query.activeFocus) App.clearSuggestions()
+                }
+
+                SuggestionList {
+                    id: musicSuggestions
+                    objectName: "musicSuggestions"
+                    field: query
+                    where: "music"
+                    onChosen: (words) => {
+                        musicSuggestTimer.stop()
+                        App.clearSuggestions()
+                        query.text = words
+                        App.musicSearch(words)
+                    }
+                }
 
                 // Walking back to the shelves with the mouse buttons leaves
                 // no list behind, so the words that opened it should go too.

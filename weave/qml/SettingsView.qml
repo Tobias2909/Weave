@@ -764,6 +764,50 @@ Item {
                             font.pixelSize: 11
                             wrapMode: Text.Wrap
                         }
+
+                        Row {
+                            spacing: 8
+
+                            Label {
+                                width: view.wordWidth
+                                height: 28
+                                text: "Search suggestions"
+                                color: Theme.colors.textMuted
+                                font.pixelSize: 12
+                                verticalAlignment: Text.AlignVCenter
+                            }
+
+                            FlatButton {
+                                objectName: "suggestAnonymous"
+                                text: "Anonymous"
+                                accent: !App.suggestFromAccount
+                                onClicked: App.setSuggestFromAccount(false)
+                            }
+
+                            FlatButton {
+                                objectName: "suggestFromAccount"
+                                text: "From your account"
+                                accent: App.suggestFromAccount
+                                onClicked: App.setSuggestFromAccount(true)
+                            }
+                        }
+
+                        // What each one sends, since the account one sends every
+                        // pause in the typing along with who is typing.
+                        Label {
+                            objectName: "suggestWords"
+                            width: parent.width
+                            text: "While you type in a search box, what you have typed so far is "
+                                  + "sent to YouTube after each pause, the way its own search box "
+                                  + "does, and the list under the box shows what it suggests. "
+                                  + "Anonymous sends the words alone, so the suggestions are the "
+                                  + "ones anybody would get. From your account sends them with "
+                                  + "your login, so the suggestions follow what you watch, and "
+                                  + "YouTube knows who is typing them."
+                            color: Theme.colors.textMuted
+                            font.pixelSize: 11
+                            wrapMode: Text.Wrap
+                        }
                     }
                 }
 

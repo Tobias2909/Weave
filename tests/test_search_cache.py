@@ -16,6 +16,7 @@ import unittest
 
 from PySide6.QtCore import QCoreApplication
 
+from weave.sources.search import Filters
 from weave.ui.bridge import SEARCH_KEEP_S, SEARCH_TRUST_S, Bridge
 
 from . import support
@@ -123,6 +124,9 @@ class WhatTheWindowDoes(unittest.TestCase):
         bridge._view_kind = "search"
         bridge._view_id = -1
         bridge._web_results = []
+        # Unnarrowed, and the next page counted from what YouTube sent.
+        bridge._search_filters = Filters()
+        bridge._search_next = 1
         bridge._exhausted = False
         bridge._set_status = lambda *_a, **_k: None
         bridge.reload = lambda: None
@@ -192,6 +196,9 @@ class WhatComesBackIsKept(unittest.TestCase):
         bridge._web_results = []
         bridge._exhausted = False
         bridge._loading_more = False
+        # Unnarrowed, and the next page counted from what YouTube sent.
+        bridge._search_filters = Filters()
+        bridge._search_next = 1
         bridge._set_status = lambda *_a, **_k: None
         bridge._set_notice = lambda *_a, **_k: None
         bridge.reload = lambda: None
@@ -234,6 +241,9 @@ class WalkingBackOntoASearch(unittest.TestCase):
         bridge._search_scope = "stored"
         bridge._view_kind = "all"
         bridge._web_results = []
+        # Unnarrowed, and the next page counted from what YouTube sent.
+        bridge._search_filters = Filters()
+        bridge._search_next = 1
         bridge._exhausted = True
         self.statuses = []
         bridge._set_status = lambda text, *_a, **_k: self.statuses.append(text)

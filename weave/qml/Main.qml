@@ -554,9 +554,52 @@ ApplicationWindow {
                         function onSearchRestored(words) { searchField.text = words }
                     }
                     // Typing searches what is stored, which costs nothing.
-                    // Pressing return asks YouTube itself, which costs a request.
-                    onAccepted: App.searchYouTube()
-                    Keys.onEscapePressed: text = ""
+                    // Pressing return asks YouTube itself, which costs a request,
+                    // for the suggestion the arrows are on if they are on one.
+                    onAccepted: {
+                        if (!webSuggestions.takePicked()) {
+                            App.clearSuggestions()
+                            App.searchYouTube()
+                        }
+                    }
+                    // The list goes first, the words only after it.
+                    Keys.onEscapePressed: {
+                        if (webSuggestions.opened) App.clearSuggestions()
+                        else text = ""
+                    }
+                    Keys.onDownPressed: (event) => { event.accepted = webSuggestions.move(1) }
+                    Keys.onUpPressed: (event) => { event.accepted = webSuggestions.move(-1) }
+                    // Asked after a pause in the typing rather than at every
+                    // key, and only for what was typed, never for words the
+                    // box was given.
+                    onTextEdited: webSuggestTimer.restart()
+                    onActiveFocusChanged: if (!activeFocus) webSuggestLeave.restart()
+
+                    Timer {
+                        id: webSuggestTimer
+                        interval: 150
+                        onTriggered: App.suggest("youtube", searchField.text)
+                    }
+                    // Leaving the box puts the list away, a moment later, so a
+                    // press on one of its rows lands first.
+                    Timer {
+                        id: webSuggestLeave
+                        interval: 200
+                        onTriggered: if (!searchField.activeFocus) App.clearSuggestions()
+                    }
+
+                    SuggestionList {
+                        id: webSuggestions
+                        objectName: "webSuggestions"
+                        field: searchField
+                        where: "youtube"
+                        onChosen: (words) => {
+                            webSuggestTimer.stop()
+                            App.clearSuggestions()
+                            searchField.text = words
+                            App.searchYouTube()
+                        }
+                    }
                 }
 
                 Item { Layout.fillWidth: true }
@@ -1379,8 +1422,11 @@ ApplicationWindow {
         // from anywhere and have nowhere to go back to.
         readonly property bool onPlaylist: App.viewKind === "playlist"
                                            && App.playlistView.channel_key !== undefined
+        // What YouTube answered for a search, which can be narrowed.
+        readonly property bool onWebSearch: App.viewKind === "search"
+                                            && App.searchScope === "youtube"
 
-        visible: onHistory || onSuggestions || onChannel || onPlaylist
+        visible: onHistory || onSuggestions || onChannel || onPlaylist || onWebSearch
         height: visible ? 42 : 0
         anchors.left: grid.left
         anchors.right: grid.right
@@ -1388,6 +1434,56 @@ ApplicationWindow {
                                            : (liveBar.visible ? liveBar.bottom : parent.top)
         anchors.topMargin: channelHeader.visible ? 8
                                                  : (liveBar.visible ? 10 : banner.height + 10)
+
+        // YouTube's own filters, on the page they narrow rather than in the
+        // bar at the top. Each names what is in force and opens the rest.
+        Row {
+            objectName: "searchFilters"
+            visible: viewBar.onWebSearch
+            anchors.left: parent.left
+            anchors.leftMargin: 6
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 8
+
+            ChoiceButton {
+                objectName: "searchSort"
+                choices: [{ value: "relevance", label: "Relevance" },
+                          { value: "views", label: "Most viewed" },
+                          { value: "newest", label: "Newest first" }]
+                current: App.searchFilters.sort || "relevance"
+                usual: "relevance"
+                // YouTube stopped sorting by date, so newest first is done over
+                // what has arrived, and saying so keeps it honest.
+                hint: current === "newest"
+                      ? "YouTube no longer sorts by date, so this sorts the results loaded so far"
+                      : ""
+                onChosen: (value) => App.setSearchFilter("sort", value)
+            }
+
+            ChoiceButton {
+                objectName: "searchWhen"
+                choices: [{ value: "any", label: "Any time" },
+                          { value: "hour", label: "Last hour" },
+                          { value: "today", label: "Today" },
+                          { value: "week", label: "This week" },
+                          { value: "month", label: "This month" },
+                          { value: "year", label: "This year" }]
+                current: App.searchFilters.when || "any"
+                usual: "any"
+                onChosen: (value) => App.setSearchFilter("when", value)
+            }
+
+            ChoiceButton {
+                objectName: "searchLength"
+                choices: [{ value: "any", label: "Any length" },
+                          { value: "short", label: "Under 4 minutes" },
+                          { value: "medium", label: "4 to 20 minutes" },
+                          { value: "long", label: "Over 20 minutes" }]
+                current: App.searchFilters.length || "any"
+                usual: "any"
+                onChosen: (value) => App.setSearchFilter("length", value)
+            }
+        }
 
         Row {
             objectName: "historyHeader"

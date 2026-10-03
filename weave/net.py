@@ -93,7 +93,7 @@ class Fetcher:
     def _cancelled(self) -> bool:
         return self.cancel is not None and self.cancel.is_set()
 
-    def get_bytes(self, url: str) -> bytes:
+    def get_bytes(self, url: str, headers: dict[str, str] | None = None) -> bytes:
         last: Exception | None = None
         for attempt in range(self.attempts):
             if self._cancelled():
@@ -102,7 +102,7 @@ class Fetcher:
                 with self._count:
                     self.sent += 1
                 try:
-                    response = self._session.get(url, timeout=self.timeout)
+                    response = self._session.get(url, timeout=self.timeout, headers=headers)
                 except requests.RequestException as exc:
                     last = exc
                     response = None

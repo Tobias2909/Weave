@@ -2738,6 +2738,8 @@ class Smoke:
                 break
         self.check("and walk through the rest", len(titles) >= 3 and all(titles),
                    ", ".join(titles))
+        self.check("one of them asks where search suggestions come from",
+                   "Search suggestions" in titles, ", ".join(titles))
 
         self.check("the last one finishes rather than going on",
                    str(read(item_named(root, "wizardNext"), "text")) == "Done",
@@ -3338,6 +3340,29 @@ class Smoke:
         settle(0.3)
         self.check("local search shows one match",
                    read(bridge, "viewKind") == "search" and read(grid, "count") == 1)
+        # Asking YouTube puts its own filters above the results. Offline the
+        # answer never comes, which is fine: the row is about the question.
+        filters = find(window, "searchFilters")
+        self.check("the local search has no filters", not read(filters, "visible"))
+        bridge.searchYouTube()
+        settle(0.4)
+        self.check("asking YouTube offers its filters", bool(read(filters, "visible")))
+        sort = find(window, "searchSort")
+        bridge.setSearchFilter("sort", "views")
+        settle(0.3)
+        self.check("a chosen filter names itself and is lit",
+                   str(read(sort, "text")).startswith("Most viewed") and bool(read(sort, "accent")),
+                   str(read(sort, "text")))
+        bridge.search("Video 4")
+        settle(0.3)
+        self.check("other words on the same page keep the filters",
+                   read(bridge, "searchFilters")["sort"] == "views")
+        bridge.search("")
+        settle(0.3)
+        bridge.search("Video 3")
+        settle(0.3)
+        self.check("a search begun from another page starts without them",
+                   read(bridge, "searchFilters")["sort"] == "relevance")
         bridge.search("")
         settle(0.3)
         self.check("emptying the search returns to the feed", read(bridge, "viewKind") == "all")

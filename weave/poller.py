@@ -37,7 +37,8 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QThread, Signal
 
 from . import backoff, ids, imagecache, tokens, songcache
-from .budget import BROWSE, DISLIKES, FEEDS, OEMBED, PLAYER, SHORTS, TWITCH, Budget
+from .budget import (BROWSE, DISLIKES, FEEDS, OEMBED, PLAYER, SHORTS, SUGGEST, TWITCH,
+                     Budget)
 from .config import Config
 from .cookies import profile_path as cookie_profile
 from .db import Database
@@ -58,6 +59,7 @@ from .sources import playlists as playlist_source
 from .sources import recommended as recommended_source
 from .sources import release as release_source
 from .sources import search as search_source
+from .sources import suggest as suggest_source
 
 
 def _spend(db: Database, cfg: Config, endpoint: str, count: int = 1, refused: int = 0) -> None:
@@ -1088,20 +1090,23 @@ class SearchFetcher(Worker):
     failed = Signal(str)
 
     def __init__(self, db: Database, cfg: Config, query: str, start: int = 1,
-                 count: int = 24, parent: QObject | None = None) -> None:
+                 count: int = 24, parent: QObject | None = None,
+                 filters: search_source.Filters | None = None) -> None:
         super().__init__(parent)
         self._db = db
         self._cfg = cfg
         self._query = query
         self._start = start
         self._count = count
+        self._filters = filters
         self._throttle = self._throttle_for(cfg)
 
     def work(self) -> None:
         _spend(self._db, self._cfg, BROWSE)
         try:
             found = search_source.fetch(self._cfg, self._query, self._start, self._count,
-                                        self._throttle, cancel=self._cancel)
+                                        self._throttle, cancel=self._cancel,
+                                        filters=self._filters)
         except ProcessCancelled:
             return
         except search_source.SearchError as exc:
@@ -2078,6 +2083,48 @@ class DetailFetcher(Worker):
             "verified": comment.verified,
             "replies": [DetailFetcher._as_map(reply) for reply in comment.replies],
         }
+
+
+class Suggester(Worker):
+    """What YouTube or its music suggests for the words in a search box.
+
+    One per pause in the typing, and the window only ever listens to the
+    newest. Counted against a ceiling of its own and refused past it, since
+    this is the one thing a person can make Weave ask for as fast as they can
+    type. A failure is said to nobody: a suggestion that does not come is the
+    box behaving like a box.
+    """
+
+    answered = Signal(str, str, "QVariantList")     # where, words, suggestions
+
+    def __init__(self, db: Database, cfg: Config, where: str, words: str,
+                 signed_in: bool, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._db = db
+        self._cfg = cfg
+        self._where = where
+        self._words = words
+        self._signed_in = signed_in
+        self._throttle = self._throttle_for(cfg)
+
+    def work(self) -> None:
+        budget = Budget(self._db, self._cfg.budget_limits, self._cfg.budget_window_s)
+        if budget.allowance(SUGGEST).empty:
+            return
+        budget.spend(SUGGEST)
+        profile = cookie_profile(self._cfg)
+        try:
+            if self._where == "music":
+                found = suggest_source.music(profile, self._words, self._signed_in)
+            else:
+                headers = (suggest_source.signed_in_headers(profile) if self._signed_in
+                           else None)
+                fetcher = Fetcher(self._throttle, timeout=4.0, attempts=1, cancel=self._cancel)
+                found = suggest_source.youtube(fetcher, self._words, headers)
+        except (suggest_source.SuggestError, FetchCancelled, HttpError, OSError):
+            budget.spend(SUGGEST, count=0, refused=1)
+            return
+        self.answered.emit(self._where, self._words, found)
 
 
 class MusicSearch(Worker):

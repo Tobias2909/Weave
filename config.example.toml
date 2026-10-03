@@ -89,6 +89,7 @@ browse = 40
 player = 60
 dislikes = 60
 twitch = 120
+suggest = 600
 
 [watched]
 # Fraction of the duration that counts as watched. Reaching the end always

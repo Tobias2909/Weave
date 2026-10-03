@@ -35,6 +35,7 @@ from ..db import GROUP_SHOWS, GROUP_SHOWS_ALL, GROUP_SHOWS_STREAMS, Database
 from ..imagecache import SECONDS_PER_DAY, plain_source, qml_source, square_source
 from ..sources import playlists as playlist_source
 from ..sources import release as release_source
+from ..sources import search as search_source
 from ..sources import progress as mpv_progress
 from ..player.mpv import Player
 from ..poller import (
@@ -70,6 +71,7 @@ from ..poller import (
     SourceDetails,
     StreamCheck,
     SubsImporter,
+    Suggester,
     TrackList,
     TwitchLogin,
     UpdateCheck,
@@ -150,6 +152,9 @@ LISTEN = "listen"
 # Where the switch for telling YouTube Music what was heard is kept. Off by
 # default, since it is the one write Weave can make to an account.
 REPORT_LISTENS_STATE = "music_report_listens"
+# Whether the suggestions under a search box come from the account or from
+# nobody. Anything but "account" is anonymous, which is what a fresh copy does.
+SUGGEST_STATE = "search_suggestions"
 
 # Said beside the pointer while the channel behind a pressed name is looked up,
 # and for how long at most.
@@ -206,7 +211,7 @@ CHANNEL_PLAYLISTS_TRUST_S = 24 * 60 * 60
 
 # The pages of the walk through, counted from the welcome one, so the number
 # reads as how far there is to go rather than as a page number.
-WIZARD_LAST = 4
+WIZARD_LAST = 5
 
 
 class _ChallengeProbe(QObject, QRunnable):
@@ -266,6 +271,8 @@ class Bridge(QObject):
     pageReadingChanged = Signal()
     channelLookingChanged = Signal()
     reportListensChanged = Signal()
+    # The suggestions under a search box, and where they come from.
+    suggestionsChanged = Signal()
     linkPreviewChanged = Signal()
     updateChanged = Signal()
     wizardChanged = Signal()
@@ -416,6 +423,12 @@ class Bridge(QObject):
         self._search_text = ""
         # Stored is the local query, youtube is the one that costs a request.
         self._search_scope = "stored"
+        # What a YouTube search is narrowed to. New words start without any,
+        # the way they do on YouTube.
+        self._search_filters = search_source.Filters()
+        # Where the next page of a YouTube search starts. Counted in the rows
+        # YouTube sent, not the ones shown, since a filtered page loses a few.
+        self._search_next = 1
         # A short line about something happening now, shown over the grid. The
         # status text in the bar is easy to miss, and some of these take
         # several seconds with nothing else on screen to show for them.
@@ -435,6 +448,14 @@ class Bridge(QObject):
         # object under a name that used to be _results as well.
         self._web_results: list[dict] = []
         self._searcher: SearchFetcher | None = None
+        # Suggestions under a search box. Only the newest words typed are ever
+        # asked about: while one answer is on its way the latest words wait,
+        # and whatever was typed in between is never asked at all.
+        self._suggester: Suggester | None = None
+        self._suggest_wanted: tuple[str, str] | None = None
+        self._suggest_asked: tuple[str, str] | None = None
+        self._suggestions: list[str] = []
+        self._suggestions_for = ""
         self._checkup: Checkup | None = None
         self._checks: list = []
         self._cache_job: ImageCacheJob | None = None
@@ -1038,6 +1059,9 @@ class Bridge(QObject):
     viewId = Property(int, _get_view_id, notify=viewChanged)
     viewPlaylist = Property(str, lambda self: self._view_playlist, notify=viewChanged)
     searchScope = Property(str, lambda self: self._search_scope, notify=viewChanged)
+    searchFilters = Property("QVariantMap", lambda self: {
+        "sort": self._search_filters.sort, "when": self._search_filters.when,
+        "length": self._search_filters.length}, notify=viewChanged)
     channelInfo = Property("QVariantMap", _get_channel_info, notify=viewChanged)
     canGoBack = Property(bool, _get_can_go_back, notify=navChanged)
     canGoForward = Property(bool, _get_can_go_forward, notify=navChanged)
@@ -1849,6 +1873,7 @@ class Bridge(QObject):
             # rather than sitting in the box describing a view you left.
             self._search_text = ""
             self._search_scope = "stored"
+            self._search_filters = search_source.Filters()
             # The results themselves are kept. The panel follows what mpv is
             # playing, and that can well be a result you found and then walked
             # away from.
@@ -2094,6 +2119,9 @@ class Bridge(QObject):
         # thing you press for, since it costs a request.
         self._search_scope = "stored"
         self._web_results = []
+        # Filters chosen on the results page stay while the words are changed
+        # there, and go only when the search is left, so a search begun from
+        # any other page starts without them.
         if first:
             self._set_view(SEARCH, -1)
         else:
@@ -2118,13 +2146,14 @@ class Bridge(QObject):
         self._exhausted = False
         if self._view_kind != SEARCH:
             self._set_view(SEARCH, -1)
-        kind = self._db.search_kind(self._search_text)
+        kind = self._search_kind(self._search_text)
         # Shaped exactly as a fresh page is, by the same call, so a set from
         # here and a set from YouTube cannot look different.
         stored = self._db.cached_flat(kind)
         age = self._db.cached_age_s(kind)
         if stored:
-            self._web_results = self._db.decorate(stored)
+            self._web_results = self._in_order(self._db.decorate(stored))
+            self._search_next = len(stored) + 1
             self._set_status(f"{len(self._web_results)} results from YouTube, read "
                              f"{fmt.age_text(int(time.time()) - (age or 0))}")
             self.reload()
@@ -2132,6 +2161,39 @@ class Bridge(QObject):
         if stored and age is not None and age < SEARCH_TRUST_S:
             return
         self._fetch_results(start=1)
+
+    def _search_kind(self, query: str) -> str:
+        """Where a YouTube search is kept, apart for every set of filters, so
+        a filtered set is never drawn for the plain words or the other way."""
+        tag = self._search_filters.tag()
+        return self._db.search_kind(query) + (f" |{tag}" if tag else "")
+
+    def _in_order(self, rows: list) -> list:
+        """Newest first, when that is the sort. YouTube no longer sorts by
+        date itself, so it is done over what has been loaded, and a row that
+        does not say when it was published goes last."""
+        if self._search_filters.sort != "newest":
+            return rows
+        return sorted(rows, key=lambda row: row.get("published_at") or 0, reverse=True)
+
+    @Slot(str, str)
+    def setSearchFilter(self, name: str, value: str) -> None:
+        """Narrow the YouTube search on screen, and ask it again."""
+        allowed = {"sort": search_source.SORTS, "when": search_source.WHENS,
+                   "length": search_source.LENGTHS}.get(name)
+        if allowed is None or value not in allowed:
+            return
+        current = self._search_filters
+        changed = search_source.Filters(
+            sort=value if name == "sort" else current.sort,
+            when=value if name == "when" else current.when,
+            length=value if name == "length" else current.length)
+        if changed == current:
+            return
+        self._search_filters = changed
+        self.viewChanged.emit()
+        if self._view_kind == SEARCH and self._search_scope == "youtube":
+            self.searchYouTube()
 
     @Slot()
     def loadMore(self) -> None:
@@ -2143,7 +2205,7 @@ class Bridge(QObject):
         if self._loading_more or self._exhausted:
             return
         if self._view_kind == SEARCH and self._search_scope == "youtube":
-            self._fetch_results(start=len(self._web_results) + 1)
+            self._fetch_results(start=self._search_next)
         elif self._view_kind == RECOMMENDED:
             self._fetch_recommended(force=True, start=self._recommended_next, append=True)
         elif self._view_kind == HISTORY:
@@ -2158,7 +2220,8 @@ class Bridge(QObject):
         self._set_status(f"searching YouTube for {self._search_text}")
         self._set_notice("Loading more" if start > 1 else "Searching YouTube",
                          clear_after_s=60)
-        self._searcher = SearchFetcher(self._db, self._cfg, self._search_text, start, PAGE, self)
+        self._searcher = SearchFetcher(self._db, self._cfg, self._search_text, start, PAGE, self,
+                                       filters=self._search_filters)
         self._searcher.results.connect(self._on_web_results)
         self._searcher.failed.connect(self._on_web_search_failed)
         self._launch(self._searcher)
@@ -2171,8 +2234,14 @@ class Bridge(QObject):
         self._set_notice("")
         if query != self._search_text:
             return                          # the words moved on while it ran
-        flat = [dict(row) for row in rows]
-        kind = self._db.search_kind(query)
+        # The next page starts after what YouTube sent, whatever is kept of it.
+        self._search_next = start + len(rows)
+        sent = bool(rows)
+        # YouTube's own shelves ride along on a filtered page and ignore the
+        # filters, so what plainly does not belong is left out here.
+        now = time.time()
+        flat = [dict(row) for row in rows if self._search_filters.keeps(row, now)]
+        kind = self._search_kind(query)
         if start <= 1:
             self._db.replace_cached(kind, flat)
             # Swept here rather than at startup: a search is the only thing
@@ -2183,12 +2252,14 @@ class Bridge(QObject):
             self._db.append_cached(kind, flat)
         found = self._db.decorate(flat)
         if start <= 1:
-            self._web_results = found
+            self._web_results = self._in_order(found)
         else:
             known = {row["key"] for row in self._web_results}
-            self._web_results.extend(row for row in found if row["key"] not in known)
-        # A page that brought nothing new is the end of the results.
-        self._exhausted = not found
+            self._web_results = self._in_order(
+                self._web_results + [row for row in found if row["key"] not in known])
+        # A page YouTube sent nothing on is the end of the results. One whose
+        # rows were all left out is not, since the next may hold some.
+        self._exhausted = not sent
         self._set_status(f"{len(self._web_results)} results from YouTube")
         if self._view_kind == SEARCH:
             self.reload()
@@ -4312,6 +4383,76 @@ class Bridge(QObject):
         self.themesChanged.emit()
         self._set_notice(f"Threw away {name}", clear_after_s=4)
         return True
+
+    # ---- suggestions under a search box ------------------------------------
+
+    def _get_suggest_from_account(self) -> bool:
+        """Whether the suggestions are the account's own. Off until chosen,
+        since every key pressed is then sent along with who is typing it."""
+        return self._db.get_state(SUGGEST_STATE, "anonymous") == "account"
+
+    suggestFromAccount = Property(bool, _get_suggest_from_account, notify=suggestionsChanged)
+    suggestions = Property("QVariantList", lambda self: list(self._suggestions),
+                           notify=suggestionsChanged)
+    # Which box they belong to, youtube or music, so each box shows only its own.
+    suggestionsFor = Property(str, lambda self: self._suggestions_for,
+                              notify=suggestionsChanged)
+
+    @Slot(bool)
+    def setSuggestFromAccount(self, wanted: bool) -> None:
+        self._db.set_state(SUGGEST_STATE, "account" if wanted else "anonymous")
+        self.suggestionsChanged.emit()
+        self._set_status("search suggestions come from your account" if wanted
+                         else "search suggestions are asked for anonymously")
+
+    @Slot(str, str)
+    def suggest(self, where: str, words: str) -> None:
+        """Ask what to suggest for the words in a box, youtube or music."""
+        words = " ".join((words or "").split())
+        if where not in ("youtube", "music") or not words:
+            self.clearSuggestions()
+            return
+        self._suggest_wanted = (where, words)
+        if self._suggester is not None and self._suggester.isRunning():
+            return                  # asked for when the one in flight is done
+        self._ask_for_suggestions()
+
+    @Slot()
+    def clearSuggestions(self) -> None:
+        """Nothing to suggest any more, because the words were sent, emptied
+        or left. An answer still on its way is dropped when it lands."""
+        self._suggest_wanted = None
+        if self._suggestions or self._suggestions_for:
+            self._suggestions = []
+            self._suggestions_for = ""
+            self.suggestionsChanged.emit()
+
+    def _ask_for_suggestions(self) -> None:
+        wanted = self._suggest_wanted
+        if wanted is None:
+            return
+        # What the one in flight was asked, held only while it runs.
+        self._suggest_asked = wanted
+        self._suggester = Suggester(self._db, self._cfg, wanted[0], wanted[1],
+                                    self._get_suggest_from_account(), self)
+        self._suggester.answered.connect(self._on_suggested)
+        # Finished whether it answered or not, which is when the newest words,
+        # if they moved on meanwhile, are asked about.
+        self._suggester.finished.connect(self._after_suggesting)
+        if not self._launch(self._suggester):
+            self._suggester = None
+
+    def _after_suggesting(self) -> None:
+        asked, self._suggest_asked = self._suggest_asked, None
+        if self._suggest_wanted not in (None, asked):
+            self._ask_for_suggestions()
+
+    def _on_suggested(self, where: str, words: str, found: list) -> None:
+        if self._suggest_wanted != (where, words):
+            return                  # the words moved on, or were sent
+        self._suggestions = [str(text) for text in found]
+        self._suggestions_for = where
+        self.suggestionsChanged.emit()
 
     # ---- telling the music service what was heard -------------------------
 

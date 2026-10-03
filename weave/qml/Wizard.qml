@@ -14,7 +14,7 @@ Popup {
     id: root
     objectName: "wizard"
 
-    readonly property int last: 4
+    readonly property int last: 5
     readonly property int step: App.wizardStep
 
     anchors.centerIn: parent
@@ -105,6 +105,7 @@ Popup {
                     "Welcome to Weave",
                     "Your subscriptions",
                     "Twitch",
+                    "Search suggestions",
                     "How it looks",
                     "How it is used",
                 ][root.step]
@@ -132,6 +133,11 @@ Popup {
                         + "the YouTube streams. It asks for no password: a page opens in your "
                         + "browser with a code already filled in, and you approve it there. "
                         + "This one is optional, and skipping it costs you only the live bar.",
+                    "While you type a search, what you have typed so far is sent to YouTube "
+                        + "after each pause, and a list under the box shows what it suggests. "
+                        + "Anonymous sends the words alone. From your account sends them with "
+                        + "your login, so the suggestions follow what you watch and YouTube "
+                        + "knows who is typing. The settings page changes this later.",
                     "Press one and the whole window changes at once, so try them until "
                         + "one of them looks right. Whichever is on when you leave this page "
                         + "is the one you keep. The settings page can also make one of your "
@@ -254,7 +260,7 @@ Popup {
             // themes directory and a card of one size cannot grow with it.
             Flickable {
                 objectName: "wizardThemes"
-                visible: root.step === 3
+                visible: root.step === 4
                 width: parent.width
                 height: Math.min(themeFlow.implicitHeight, 140)
                 contentHeight: themeFlow.implicitHeight
@@ -282,6 +288,26 @@ Popup {
                             onClicked: Theme.select(modelData)
                         }
                     }
+                }
+            }
+
+            // ---- page 3, where the suggestions come from
+            Row {
+                visible: root.step === 3
+                spacing: 8
+
+                FlatButton {
+                    objectName: "wizardSuggestAnonymous"
+                    text: "Anonymous"
+                    accent: !App.suggestFromAccount
+                    onClicked: App.setSuggestFromAccount(false)
+                }
+
+                FlatButton {
+                    objectName: "wizardSuggestAccount"
+                    text: "From your account"
+                    accent: App.suggestFromAccount
+                    onClicked: App.setSuggestFromAccount(true)
                 }
             }
 

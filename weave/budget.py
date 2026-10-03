@@ -37,6 +37,7 @@ SHORTS = "shorts"      # youtube.com/shorts/<id>, whether a video is one
 OEMBED = "oembed"      # youtube.com/oembed, a name for a video nothing else knows
 DISLIKES = "dislikes"  # returnyoutubedislikeapi.com
 TWITCH = "twitch"      # api.twitch.tv
+SUGGEST = "suggest"    # suggestions for words being typed, YouTube and its music
 
 
 # What a ceiling leaves to the work nobody is waiting for. The rest is kept

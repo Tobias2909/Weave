@@ -31,7 +31,7 @@ class _Session:
         self._responses = list(responses)
         self.asked = 0
 
-    def get(self, url: str, timeout: float) -> _Response:
+    def get(self, url: str, timeout: float, headers=None) -> _Response:
         self.asked += 1
         return self._responses.pop(0)
 

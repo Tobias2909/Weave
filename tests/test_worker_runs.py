@@ -460,6 +460,45 @@ class WorkerRuns(unittest.TestCase):
         self.assertEqual(got[0][0], "anything")
         self.assertEqual(got[0][2][0]["title"], "A result")
 
+    def test_suggester_for_the_search_box(self):
+        got = []
+        self.patch(poller.suggest_source, "youtube", lambda fetcher, words, headers=None:
+                   [f"{words} one", f"{words} two"])
+        worker = poller.Suggester(self.db, self.cfg, "youtube", "lofi", signed_in=False)
+        worker.answered.connect(lambda *args: got.append(args))
+        self.run_worker(worker)
+        self.assertEqual(got, [("youtube", "lofi", ["lofi one", "lofi two"])])
+
+    def test_suggester_for_the_music_box(self):
+        got = []
+        self.patch(poller.suggest_source, "music", lambda profile, words, signed_in:
+                   [f"{words} song"])
+        worker = poller.Suggester(self.db, self.cfg, "music", "lofi", signed_in=True)
+        worker.answered.connect(lambda *args: got.append(args))
+        self.run_worker(worker)
+        self.assertEqual(got, [("music", "lofi", ["lofi song"])])
+
+    def test_suggester_stops_at_its_ceiling(self):
+        """The one request a person can make as fast as they can type."""
+        got = []
+        self.patch(poller.suggest_source, "youtube", lambda *a, **k: ["x"])
+        cfg = Config(raw={"budget": {"suggest": 2}})
+        for _ in range(3):
+            worker = poller.Suggester(self.db, cfg, "youtube", "lofi", signed_in=False)
+            worker.answered.connect(lambda *args: got.append(args))
+            self.run_worker(worker)
+        self.assertEqual(len(got), 2)
+
+    def test_a_suggestion_that_fails_says_nothing(self):
+        def broken(*_a, **_k):
+            raise poller.suggest_source.SuggestError("no")
+        got = []
+        self.patch(poller.suggest_source, "youtube", broken)
+        worker = poller.Suggester(self.db, self.cfg, "youtube", "lofi", signed_in=False)
+        worker.answered.connect(lambda *args: got.append(args))
+        self.assertEqual(self.run_worker(worker), [])
+        self.assertEqual(got, [])
+
     def test_checkup(self):
         got = []
         worker = poller.Checkup(self.db, self.cfg, network=False)
@@ -705,7 +744,7 @@ class WorkerRuns(unittest.TestCase):
                     "ChannelFeedFetcher", "ChannelPlaylistsFetcher",
                     "ChannelMembersFetcher",
                     "DetailFetcher", "ChannelAvatarsFetcher", "OwnerFetcher",
-                    "LengthFiller", "StreamCheck", "MembersCheck"}
+                    "LengthFiller", "StreamCheck", "MembersCheck", "Suggester"}
         # The checkup runs the doctor, which counts its own requests.
         run_here.add("Checkup")
         source = Path("weave/poller.py").read_text()
