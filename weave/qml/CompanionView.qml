@@ -226,6 +226,14 @@ Item {
                     text: "Save as box"
                     onClicked: view.saveQueueRequested()
                 }
+
+                FlatButton {
+                    objectName: "companionClearQueue"
+                    visible: App.companionQueue.length > 1
+                    text: "Clear"
+                    hint: "Take everything out of mpv's queue except the video playing"
+                    onClicked: App.companionClear()
+                }
             }
 
             ListView {
@@ -429,9 +437,12 @@ Item {
             }
         }
 
+        // Two rows a notch, the same as the queue beside the music. Half a
+        // row, which is what the grid's own measure came to here, took a
+        // dozen notches to get past a handful of videos.
         SmoothScroll {
             flickable: queueList
-            step: 92 * App.scrollRowsPerNotch
+            step: 2 * 92
         }
     }
 }

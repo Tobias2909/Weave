@@ -39,7 +39,7 @@ class FakePlayer:
         self.said = []
 
     def __getattr__(self, name):
-        if name not in ("append", "insert_next", "jump", "remove", "move"):
+        if name not in ("append", "insert_next", "jump", "remove", "move", "clear"):
             raise AttributeError(name)
 
         def call(*args, **kwargs):
@@ -233,6 +233,10 @@ class Presses(unittest.TestCase):
         Bridge.companionMove(self.bridge, 3, 1)
         Bridge.companionMove(self.bridge, 1, 1)
         self.assertEqual([said[1] for said in self.bridge._player.said], [(0, 3), (3, 1)])
+
+    def test_clear_asks_mpv_to_keep_only_the_one_playing(self):
+        Bridge.companionClear(self.bridge)
+        self.assertEqual(self.bridge._player.said, [("clear", (), {})])
 
     def test_the_queue_is_kept_as_a_box_in_its_order(self):
         self.bridge._companion_known["bbbbbbbbbbb"] = {"title": "B", "channel": "Two"}

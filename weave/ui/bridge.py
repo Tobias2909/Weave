@@ -3084,6 +3084,10 @@ class Bridge(QObject):
     def companionRemove(self, index: int) -> None:
         self._player.remove(index)
 
+    @Slot()
+    def companionClear(self) -> None:
+        self._player.clear()
+
     @Slot(int, int)
     def companionMove(self, index: int, target: int) -> None:
         """A row of the queue put where another one is, the others moving

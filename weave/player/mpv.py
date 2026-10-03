@@ -662,6 +662,12 @@ class Player(QObject):
     def remove(self, index: int) -> bool:
         return self._tell(lambda sock: self._say(sock, "playlist-remove", int(index)))
 
+    def clear(self) -> bool:
+        """Everything but the one playing, before it as well as after. mpv's
+        own command does exactly that, and empties a list with nothing
+        playing."""
+        return self._tell(lambda sock: self._say(sock, "playlist-clear"))
+
     def move(self, index: int, before: int) -> bool:
         """mpv's own sense of a move: the entry goes in front of the one now
         at `before`, the end when that is the length of the list."""

@@ -244,6 +244,13 @@ ListView {
         }
     }
 
+    // Two rows a notch. A ListView by itself moves about sixty pixels, under
+    // one big row, so getting through a queue took a notch per song or more.
+    SmoothScroll {
+        flickable: queued
+        step: 2 * (queued.rowHeight + queued.spacing)
+    }
+
     // A place in the list as shown is a place in the play order, which is
     // what the player moves by, shuffled or not.
     DragOrder {

@@ -142,6 +142,14 @@ class ChangingItInARealPlayer(unittest.TestCase):
         self.assertTrue(self.player.move(0, 3))
         self.assertEqual(self.order(), [SONG.format(f) for f in (200, 300, 400)])
 
+    def test_clear_leaves_only_the_one_playing(self):
+        self.start(100, 200, 300, 400)
+        self.assertTrue(self.player.jump(2))
+        time.sleep(0.3)
+        self.assertTrue(self.player.clear())
+        self.assertEqual(self.order(), [SONG.format(300)])
+        self.assertEqual(self.say(["get_property", "playlist-pos"]), 0)
+
     def test_the_watcher_follows_the_playlist_of_a_real_player(self):
         lists, loops = [], []
         watcher = _IpcWatcher(self.sock, threshold=0.85)
