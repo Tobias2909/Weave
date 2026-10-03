@@ -2310,6 +2310,72 @@ class Smoke:
         bridge.selectGroup(-1)
         settle(0.3)
 
+    def music_boxes(self, bridge, window) -> None:
+        """Boxes of songs, the music settings page, and a shelf put out of
+        sight there."""
+        step("boxes of songs and the music settings")
+        bridge.showMusic()
+        settle(0.4)
+        root = window.contentItem()
+        chips = lambda: visible_children(find(window, "boxChips"))  # noqa: E731
+        self.check("the music page opens on its tabs, Shelves, Favorites and a new box",
+                   len(chips()) == 3, f"{len(chips())} chips")
+        made = bridge.createMusicBox("Walk box")
+        settle(0.3)
+        self.check("a new box joins the row", made > 0 and len(chips()) == 4,
+                   f"{len(chips())} chips")
+
+        bridge.putSongInBox("shelf", 0, 0, made)
+        self.check("a song goes in it", made in bridge.songBoxes("shelf", 0, 0))
+        bridge.showMusicTab(made)
+        settle(0.4)
+        tiles = visible_children(find(window, "boxTiles"))
+        self.check("its tab shows its songs as tiles",
+                   read(find(window, "boxArea"), "visible")
+                   and not read(find(window, "shelfArea"), "visible") and len(tiles) == 1,
+                   f"{len(tiles)} tiles")
+        bridge.takeOutOfMusicTab(0)
+        settle(0.3)
+        self.check("and a song taken out of it leaves the tab",
+                   len(visible_children(find(window, "boxTiles"))) == 0
+                   and read(find(window, "boxEmpty"), "visible"))
+        bridge.showMusicTab(-1)
+        settle(0.3)
+        self.check("the Shelves tab brings the shelves back",
+                   read(find(window, "shelfArea"), "visible"))
+
+        # The dots beside Music, and the page they open.
+        row = find(window, "musicRow")
+        dots = item_named(row, "sidebarRowAction") if row is not None else None
+        self.check("Music has its dots in the sidebar",
+                   dots is not None and bool(read(dots, "visible")) and read(dots, "text") == "\u22ef")
+        bridge.showMusicSettings()
+        settle(0.5)
+        page = find(window, "musicSettingsView")
+        self.check("the music settings page opens", page is not None and bool(read(page, "visible"))
+                   and read(bridge, "viewKind") == "musicSettings")
+        boxes = [r for r in items_named_like(root, "musicBoxRow") if read(r, "visible")]
+        self.check("it lists the boxes, Favorites first", len(boxes) == 2
+                   and read(boxes[0], "modelData")["fixed"], f"{len(boxes)} rows")
+        shelves = read(bridge, "shelfSettings")
+        rows = [r for r in items_named_like(root, "shelfSettingsRow") if read(r, "visible")]
+        self.check("and every shelf", len(rows) == len(shelves) > 0, f"{len(rows)} of {len(shelves)}")
+        self.check("what moved out of the main settings is here",
+                   item_named(page, "videoCeiling") is not None
+                   and item_named(page, "reportListens") is not None
+                   and item_named(find(window, "settingsView"), "videoCeiling") is None)
+
+        before = len(read(bridge, "musicShelves"))
+        bridge.setShelfHidden(shelves[0]["title"], True)
+        self.check("a shelf put out of sight leaves the page",
+                   len(read(bridge, "musicShelves")) == before - 1)
+        bridge.setShelfHidden(shelves[0]["title"], False)
+        bridge.deleteMusicBox(made)
+        bridge.showMusic()
+        settle(0.4)
+        self.check("and a box thrown away leaves the row", len(chips()) == 3,
+                   f"{len(chips())} chips")
+
     def music_favourites_anywhere(self, bridge, window) -> None:
         """A song reaches the music favourites from any card.
 
@@ -3203,6 +3269,7 @@ class Smoke:
         settle(0.3)
 
         self.music(bridge, window)
+        self.music_boxes(bridge, window)
         self.space_bar(bridge, window)
         self.now_playing(bridge, window)
         self.layers(bridge, window)

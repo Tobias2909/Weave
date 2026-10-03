@@ -141,6 +141,8 @@ Item {
     // Asked of the window, which owns the shape. The page never calls
     // showFullScreen itself.
     signal fullscreenToggled()
+    // The queue kept as a box of songs, named in the window's own popup.
+    signal saveQueueRequested()
 
     // Whether the pointer is in the right fifth of the screen, which is what
     // brings the column beside the song back while the screen is filled. The
@@ -920,7 +922,7 @@ Item {
             // set apart from the tabs by a bar. Only beside Next, the one tab
             // that shows what it clears.
             Item {
-                visible: page.tab === "next" && Audio.queue.length > 1
+                visible: page.tab === "next" && Audio.queue.length > 0
                 width: queueBar.implicitWidth + 4
                 height: 28
 
@@ -931,6 +933,14 @@ Item {
                     color: Theme.colors.textMuted
                     font.pixelSize: 16
                 }
+            }
+
+            FlatButton {
+                objectName: "nowPlayingQueueSave"
+                visible: page.tab === "next" && Audio.queue.length > 0
+                text: "Save as box"
+                hint: "Keep the whole queue as a box of songs"
+                onClicked: page.saveQueueRequested()
             }
 
             FlatButton {

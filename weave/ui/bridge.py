@@ -91,6 +91,8 @@ RECOMMENDED = "recommended"
 PLAYLIST = "playlist"
 DEBUG = "debug"
 SETTINGS = "settings"
+# The page that arranges the music page: its shelves, its boxes, what is kept.
+MUSIC_SETTINGS = "musicSettings"
 NOWPLAYING = "nowplaying"
 
 # How long a set of recommendations is worth showing before asking for another,
@@ -189,6 +191,9 @@ MUSIC_SHELF = "shelf"
 # What the section of kept songs is called, in one place, because the
 # arrangement of the sections is stored by title.
 FAVORITES = "Favorites"
+# The box the favourites are, which has no row of its own since everything
+# about a favourite is in the history.
+FAVORITES_BOX = 0
 
 # Told apart from an explicit None, which is the shelves. A route into music
 # that names no list means wherever music was left, which is what coming back
@@ -295,6 +300,8 @@ class Bridge(QObject):
     musicChanged = Signal()
     navChanged = Signal()
     favoritesChanged = Signal()
+    musicBoxesChanged = Signal()
+    musicTabChanged = Signal()
     themesChanged = Signal()
 
     def __init__(self, db: Database, cfg: Config, model: FeedModel,
@@ -480,9 +487,10 @@ class Bridge(QObject):
         self._link_facts: LinkFacts | None = None
         self._link_target: LinkTarget | None = None
         self._seek_on_start: tuple[str, int, float] | None = None
-        # The rest of a turned round playlist, put after the pressed video
-        # once mpv reports it, with when it was asked for.
-        self._queue_on_start: tuple[str, list[str], float] | None = None
+        # The rest of a turned round playlist or of a box, put around the
+        # pressed video once mpv reports it: what follows it, when it was
+        # asked for, and what comes ahead of it.
+        self._queue_on_start: tuple[str, list[str], float, list[str]] | None = None
         self._heard_waiting: list[str] = []
         self._pending_members: tuple[str, str] | None = None
         self._members_cleared = ""
@@ -605,6 +613,8 @@ class Bridge(QObject):
         # The order the kept songs are shown in, shuffled once so the tiles
         # stay where they are between reads.
         self._favorites_order: list[str] = []
+        # Which tab the music page shows: the shelves, or one box by its id.
+        self._music_tab = -1
         self._theme = None
         self._music_history: MusicHistoryReader | None = None
         self._favourite_makers: FavouriteMakers | None = None
@@ -1381,7 +1391,22 @@ class Bridge(QObject):
     def _get_sources(self) -> list:
         return self._db.sources()
 
+    def _hidden_shelves(self) -> set[str]:
+        stored = self._db.get_state("music_shelves_hidden")
+        try:
+            names = json.loads(stored) if stored else []
+        except ValueError:
+            return set()
+        return {str(name) for name in names} if isinstance(names, list) else set()
+
     def _get_shelves(self) -> list:
+        """What the music page draws. A shelf put out of sight in the music
+        settings is left out here and nowhere else, so every index the page
+        hands back is an index into this and still finds the tile pressed."""
+        hidden = self._hidden_shelves()
+        return [shelf for shelf in self._arranged_shelves() if shelf["title"] not in hidden]
+
+    def _arranged_shelves(self) -> list:
         """In the order they were arranged, with anything new on the end."""
         shelves = list(self._shelves)
         favorites = self._favorites_shelf()
@@ -1574,7 +1599,7 @@ class Bridge(QObject):
         url = str(track.get("url") or "")
         if not key or not url or not key.startswith("yt:"):
             return
-        if not self._db.is_music_favorite(key.split(":", 1)[1]):
+        if not self._is_kept_song(key.split(":", 1)[1]):
             return
         self._keep_half(key, url, songcache.SOUND)
         if self._audio.videoWanted:
@@ -1631,8 +1656,8 @@ class Bridge(QObject):
             key, url = waiting.pop(0)
             if songcache.held(paths.MOVING_CACHE, key, mark) is not None:
                 continue
-            if not self._db.is_music_favorite(key.split(":", 1)[1]):
-                # It stopped being one while it waited, and the pruning would
+            if not self._is_kept_song(key.split(":", 1)[1]):
+                # It left every box kept on disk while it waited, and the pruning would
                 # take the file away again the moment it landed.
                 continue
             self._keep_half(key, url, mark)
@@ -1648,13 +1673,23 @@ class Bridge(QObject):
         # nobody is waiting on, and the song played perfectly well without it.
         self._set_status(f"could not keep {key}, {why}")
 
+    def _favourites_kept(self) -> bool:
+        """Whether the favourites are written to disk. On unless switched off,
+        which is what they always were."""
+        return self._db.get_state("favourites_keep") != "0"
+
+    def _is_kept_song(self, ext_id: str) -> bool:
+        """Whether a song is in a box whose songs are written to disk."""
+        return ext_id in self._db.kept_music_ids(self._favourites_kept())
+
     def _prune_kept(self) -> None:
-        """Bring what is kept under its ceiling, and drop what is no longer a
-        favourite, which is the only reason any of it was written down."""
+        """Bring what is kept under its ceiling, and drop what is in no box
+        kept on disk any more, which is the only reason any of it was written
+        down."""
         height = self._video_height()
         wanted = set()
-        for row in self._db.music_favorites():
-            key = f"yt:{row['ext_id']}"
+        for ext_id in self._db.kept_music_ids(self._favourites_kept()):
+            key = f"yt:{ext_id}"
             for mark in (height, songcache.SOUND):
                 found = songcache.held(paths.MOVING_CACHE, key, mark)
                 if found is not None:
@@ -1726,7 +1761,7 @@ class Bridge(QObject):
         # A channel page and a box both ignore the hide watched toggle. The
         # channel page is meant to show everything that channel has, and a box
         # was hand picked, so hiding half of it would be surprising.
-        if self._view_kind in (MUSIC, DEBUG, SETTINGS, NOWPLAYING):
+        if self._view_kind in (MUSIC, DEBUG, SETTINGS, MUSIC_SETTINGS, NOWPLAYING):
             # These draw their own page and the grid is hidden behind them, so
             # the rows in it are nobody's business. Emptying it cost a query
             # that could only answer nothing, and a walk along the sidebar
@@ -1951,6 +1986,7 @@ class Bridge(QObject):
             ALL: "the feed", MUSIC: "music", HISTORY: "history",
             RECOMMENDED: "suggestions", SEARCH: "the search",
             SETTINGS: "settings", DEBUG: "how things are",
+            MUSIC_SETTINGS: "music settings",
         }.get(kind, "the feed")
 
     def _get_back_label(self) -> str:
@@ -2533,6 +2569,10 @@ class Bridge(QObject):
     @Slot()
     def showSettings(self) -> None:
         self._set_view(SETTINGS, -1)
+
+    @Slot()
+    def showMusicSettings(self) -> None:
+        self._set_view(MUSIC_SETTINGS, -1)
 
     @Slot()
     def showNowPlaying(self) -> None:
@@ -4031,7 +4071,7 @@ class Bridge(QObject):
                 # pressed goes over alone and the rest follow it, in the order
                 # shown, put after it once mpv reports it.
                 self._queue_on_start = (row["key"], self._following_in_playlist(row["key"]),
-                                        time.monotonic())
+                                        time.monotonic(), [])
             else:
                 # Opened from a playlist, so the playlist is what is handed
                 # over, starting on the video that was clicked. Otherwise the
@@ -4717,7 +4757,7 @@ class Bridge(QObject):
     def moveShelf(self, title: str, direction: int) -> None:
         """Shift one section up or down. Kept by name, so it survives the
         shelves themselves changing."""
-        titles = [shelf["title"] for shelf in self._get_shelves()]
+        titles = [shelf["title"] for shelf in self._arranged_shelves()]
         if title not in titles:
             return
         at = titles.index(title)
@@ -4734,6 +4774,37 @@ class Bridge(QObject):
     def resetShelfOrder(self) -> None:
         self._db.set_state("music_shelf_order", "")
         self.musicChanged.emit()
+
+    @Slot(str, str)
+    def moveShelfTo(self, title: str, target: str) -> None:
+        """Put a shelf where another one is, by the one it was dropped on.
+        Hidden ones keep their place in the order, so showing one again puts
+        it back where it was."""
+        titles = [shelf["title"] for shelf in self._arranged_shelves()]
+        if title not in titles or target not in titles or title == target:
+            return
+        titles.insert(titles.index(target), titles.pop(titles.index(title)))
+        self._db.set_state("music_shelf_order", json.dumps(titles))
+        self.musicChanged.emit()
+
+    @Slot(str, bool)
+    def setShelfHidden(self, title: str, hidden: bool) -> None:
+        names = self._hidden_shelves()
+        if hidden:
+            names.add(title)
+        else:
+            names.discard(title)
+        self._db.set_state("music_shelves_hidden", json.dumps(sorted(names)))
+        self.musicChanged.emit()
+
+    def _get_shelf_settings(self) -> list:
+        """Every shelf, hidden ones too, in their order, for the music settings."""
+        hidden = self._hidden_shelves()
+        return [{"title": shelf["title"], "kind": shelf.get("kind", ""),
+                 "count": len(shelf.get("items") or []), "hidden": shelf["title"] in hidden}
+                for shelf in self._arranged_shelves()]
+
+    shelfSettings = Property("QVariantList", _get_shelf_settings, notify=musicChanged)
 
     @Slot()
     def clearResults(self) -> None:
@@ -4793,6 +4864,8 @@ class Bridge(QObject):
                          clear_after_s=4)
         self._set_status("added to favorites" if wanted else "removed from favorites")
         self.favoritesChanged.emit()
+        self.musicBoxesChanged.emit()
+        self.musicTabChanged.emit()
         self.musicChanged.emit()
         # Making the song playing a favourite is the moment to write it down.
         # Only a track change asked before, so a song hearted half way through
@@ -5148,6 +5221,306 @@ class Bridge(QObject):
             return False
         video = item.get("videoId")
         return bool(video) and self._db.is_music_favorite(video)
+
+    # ---- music boxes ------------------------------------------------------
+    #
+    # Songs thrown together by hand. The favourites are the first box and
+    # cannot be thrown away; their songs live in the listening history where
+    # everything else about a favourite is, so box 0 is answered from there.
+
+    def _get_music_boxes(self) -> list:
+        boxes = [{"id": FAVORITES_BOX, "name": FAVORITES,
+                  "count": self._db.music_favorite_count(),
+                  "keep": self._favourites_kept(), "fixed": True}]
+        boxes.extend({"id": int(row["id"]), "name": row["name"], "count": int(row["count"]),
+                      "keep": bool(row["keep"]), "fixed": False}
+                     for row in self._db.music_boxes())
+        return boxes
+
+    musicBoxes = Property("QVariantList", _get_music_boxes, notify=musicBoxesChanged)
+
+    def _get_music_tab(self) -> int:
+        return self._music_tab
+
+    # The tab the music page is on: -1 for the shelves, otherwise a box.
+    musicTab = Property(int, _get_music_tab, notify=musicTabChanged)
+
+    def _get_music_tab_songs(self) -> list:
+        """The box the music page is on, as tiles."""
+        if self._music_tab < 0:
+            return []
+        return [{"title": row["title"], "subtitle": row["artist"], "thumbnail": row["thumbnail"],
+                 "artistId": row["artistId"], "videoId": row["videoId"]}
+                for row in self._box_rows(self._music_tab)]
+
+    musicTabSongs = Property("QVariantList", _get_music_tab_songs, notify=musicTabChanged)
+
+    @Slot(int)
+    def showMusicTab(self, box_id: int) -> None:
+        """The shelves, or one box. A tab of one page rather than a place,
+        the way a channel's tabs are, so walking back does not step through
+        them."""
+        if box_id >= 0 and not self._box_name(box_id):
+            box_id = -1
+        if box_id != self._music_tab:
+            self._music_tab = box_id
+            self.musicTabChanged.emit()
+
+    def _box_name(self, box_id: int) -> str:
+        if box_id == FAVORITES_BOX:
+            return FAVORITES
+        found = self._db.music_box(box_id)
+        return found["name"] if found else ""
+
+    def _box_rows(self, box_id: int) -> list:
+        """A box as the rows of an opened list, in the box's own order."""
+        if box_id == FAVORITES_BOX:
+            songs = [{"ext_id": row["ext_id"], "title": row["title"],
+                      "artist": row["channel_title"], "artist_id": row["artist_id"],
+                      "thumbnail_url": row["thumbnail_url"], "duration_s": row["duration_s"]}
+                     for row in self._db.music_favorites()]
+        else:
+            songs = self._db.music_box_songs(box_id)
+        return [{"key": f"yt:{song['ext_id']}", "videoId": song["ext_id"],
+                 "title": song["title"], "artist": song["artist"] or "",
+                 "artistId": song["artist_id"] or "", "album": "",
+                 "thumbnail": qml_source(song["thumbnail_url"]),
+                 "duration": fmt.duration_text(song["duration_s"])}
+                for song in songs]
+
+    @staticmethod
+    def _seconds(text) -> int | None:
+        """A duration as a list writes it, 3:25 or 1:02:03, in seconds."""
+        try:
+            total = 0
+            for part in str(text or "").split(":"):
+                total = total * 60 + int(part)
+            return total or None
+        except ValueError:
+            return None
+
+    def _song_from(self, where: str, first: int, second: int = -1) -> dict | None:
+        """One song as a box keeps it, from wherever it was pressed: a tile on
+        a shelf, a row in an opened list, the artist page, a record on it, or
+        the song playing."""
+        try:
+            if where == "shelf":
+                item = self._get_shelves()[first]["items"][second]
+                if not item.get("videoId"):
+                    return None
+                row = {"key": f"yt:{item['videoId']}", "title": item.get("title"),
+                       "artist": item.get("subtitle"), "artistId": item.get("artistId"),
+                       "thumbnail": item.get("thumbnail")}
+            elif where == "result":
+                row = self._results[first]
+            elif where == "channel":
+                row = self._channel_music[first]
+            elif where == "group":
+                found = self._group_song(first, second)
+                row = found[1] if found else None
+            elif where == "playing":
+                row = self._audio.track if self._audio else None
+            elif where == "tab":
+                row = self._box_rows(self._music_tab)[first] if self._music_tab >= 0 else None
+            else:
+                return None
+        except (IndexError, KeyError, TypeError):
+            return None
+        key = str((row or {}).get("key") or "")
+        if not key.startswith("yt:"):
+            return None
+        return {"key": key, "ext_id": key.split(":", 1)[1],
+                "title": str(row.get("title") or ""),
+                "artist": str(row.get("artist") or "") or None,
+                "artist_id": str(row.get("artistId") or "") or None,
+                "thumbnail_url": plain_source(row.get("thumbnail")) or None,
+                "duration_s": self._seconds(row.get("duration"))}
+
+    @Slot(int, result="QVariantList")
+    def musicBoxSongs(self, box_id: int) -> list:
+        """What is in a box, by title, for the question before it goes."""
+        return [{"title": row["title"]} for row in self._box_rows(box_id)]
+
+    @Slot(int, bool)
+    def playMusicBox(self, box_id: int, shuffle: bool = False) -> None:
+        """A whole box, from its first song or in no order at all."""
+        if not self._audio:
+            return
+        items = self._track_items(self._box_rows(box_id))
+        if not items:
+            self._set_notice("There is nothing in that box yet", clear_after_s=4)
+            return
+        start = random.randrange(len(items)) if shuffle else 0
+        self._audio.play_items(items, start, shuffle_rest=shuffle)
+
+    @Slot(int)
+    def playMusicTabSong(self, index: int) -> None:
+        """A tile of the box the page is on: the box from there, in its order."""
+        if not self._audio or self._music_tab < 0:
+            return
+        items = self._track_items(self._box_rows(self._music_tab))
+        if items:
+            self._audio.play_items(items, max(0, min(index, len(items) - 1)))
+
+    def _song_track(self, where: str, first: int, second: int) -> dict | None:
+        """A song as the player wants it, from wherever it was pressed."""
+        song = self._song_from(where, first, second)
+        if song is None:
+            return None
+        return {"key": song["key"], "title": song["title"], "artist": song["artist"] or "",
+                "thumbnail": qml_source(song["thumbnail_url"]), "live": False,
+                "artistId": song["artist_id"] or "",
+                "url": ids.watch_url("youtube", song["ext_id"])}
+
+    @Slot(str, int, int, bool)
+    def queueSong(self, where: str, first: int, second: int, play_next: bool = False) -> None:
+        self._queue_track(self._song_track(where, first, second), play_next)
+
+    @Slot(str, int, int)
+    def watchSong(self, where: str, first: int, second: int) -> None:
+        """A song in mpv as the video it is. From a box's tab, the whole box
+        goes, as a playlist in the box's order starting on the one pressed:
+        that one is handed over alone and the rest are put around it once mpv
+        reports it, the way a turned round playlist is."""
+        song = self._song_from(where, first, second)
+        if song is None:
+            return
+        self._queue_on_start = None
+        if where == "tab" and self._music_tab >= 0:
+            urls = [ids.watch_url("youtube", row["videoId"])
+                    for row in self._box_rows(self._music_tab)]
+            if 0 <= first < len(urls):
+                self._queue_on_start = (song["key"], urls[first + 1:], time.monotonic(),
+                                        urls[:first])
+        self._watch_song(song["key"], song["title"])
+
+    @Slot(str, int, int, result=bool)
+    def songIsFavorite(self, where: str, first: int, second: int) -> bool:
+        song = self._song_from(where, first, second)
+        return song is not None and self._db.is_music_favorite(song["ext_id"])
+
+    @Slot(str, result=int)
+    def createMusicBox(self, name: str) -> int:
+        made = self._db.create_music_box(name)
+        if made is None:
+            if (name or "").strip():
+                self._set_notice("There is a box of that name already", clear_after_s=4)
+            return -1
+        self.musicBoxesChanged.emit()
+        return made
+
+    @Slot(int, str, result=bool)
+    def renameMusicBox(self, box_id: int, name: str) -> bool:
+        if box_id == FAVORITES_BOX:
+            return False
+        if not self._db.rename_music_box(box_id, name):
+            if (name or "").strip():
+                self._set_notice("There is a box of that name already", clear_after_s=4)
+            return False
+        self.musicBoxesChanged.emit()
+        return True
+
+    @Slot(int)
+    def deleteMusicBox(self, box_id: int) -> None:
+        if box_id == FAVORITES_BOX or not self._db.delete_music_box(box_id):
+            return
+        if self._music_tab == box_id:
+            self._music_tab = -1
+            self.musicTabChanged.emit()
+        self._prune_kept()
+        self.musicBoxesChanged.emit()
+
+    @Slot(int, int)
+    def moveMusicBoxTo(self, box_id: int, target_id: int) -> None:
+        if self._db.move_music_box_to(box_id, target_id):
+            self.musicBoxesChanged.emit()
+
+    @Slot(int, bool)
+    def setMusicBoxKeep(self, box_id: int, keep: bool) -> None:
+        """Whether a box's songs are written to disk. Switched on, the song
+        playing is written now if it is in the box, and the rest as they are
+        played. Switched off, what only this box kept is let go."""
+        if box_id == FAVORITES_BOX:
+            self._db.set_state("favourites_keep", "1" if keep else "0")
+        else:
+            self._db.set_music_box_keep(box_id, keep)
+        if keep:
+            self._keep_this_song()
+        else:
+            self._prune_kept()
+            self.videosKeptChanged.emit()
+        self.musicBoxesChanged.emit()
+
+    @Slot(str, int, int, result="QVariantList")
+    def songBoxes(self, where: str, first: int, second: int) -> list:
+        """Which boxes hold a song, for the ticks in the menu that files it."""
+        song = self._song_from(where, first, second)
+        if song is None:
+            return []
+        held = self._db.music_boxes_holding(song["ext_id"])
+        if self._db.is_music_favorite(song["ext_id"]):
+            held.insert(0, FAVORITES_BOX)
+        return held
+
+    @Slot(str, int, int, int)
+    def putSongInBox(self, where: str, first: int, second: int, box_id: int) -> None:
+        """Into a box, or out of it again when it is in there already, the way
+        the ticks in the menu say."""
+        song = self._song_from(where, first, second)
+        if song is None:
+            self._set_notice("Only a song can go in a box, not a whole list", clear_after_s=4)
+            return
+        if box_id == FAVORITES_BOX:
+            self._mark_favorite(song["key"], song["title"], song["artist"],
+                                song["thumbnail_url"], artist_id=song["artist_id"])
+            return
+        name = self._box_name(box_id)
+        if not name:
+            return
+        if box_id in self._db.music_boxes_holding(song["ext_id"]):
+            self._db.remove_from_music_box(box_id, song["ext_id"])
+            self._set_notice(f"Taken out of {name}", clear_after_s=4)
+            self._prune_kept()
+        else:
+            self._db.put_in_music_box(box_id, song)
+            self._set_notice(f"Put in {name}", clear_after_s=4)
+            playing = str(((self._audio.track if self._audio else None) or {}).get("key") or "")
+            if playing == song["key"]:
+                self._keep_this_song()
+        self.musicBoxesChanged.emit()
+        if self._music_tab == box_id:
+            self.musicTabChanged.emit()
+
+    @Slot(int)
+    def takeOutOfMusicTab(self, index: int) -> None:
+        """A tile out of the box the page is on, favourites included."""
+        if self._music_tab >= 0:
+            self.putSongInBox("tab", index, -1, self._music_tab)
+
+    @Slot(str, result=int)
+    def saveQueueAsBox(self, name: str) -> int:
+        """Everything in the queue into a new box, in the order it plays."""
+        if self._audio is None:
+            return -1
+        songs = [entry for entry in self._audio.queue_entries()
+                 if str(entry.get("key") or "").startswith("yt:")]
+        if not songs:
+            self._set_notice("Nothing in the queue to keep", clear_after_s=4)
+            return -1
+        made = self.createMusicBox(name)
+        if made < 0:
+            return -1
+        for entry in songs:
+            key = str(entry["key"])
+            self._db.put_in_music_box(made, {
+                "ext_id": key.split(":", 1)[1], "title": entry.get("title"),
+                "artist": entry.get("artist") or None,
+                "artist_id": entry.get("artistId") or None,
+                "thumbnail_url": plain_source(entry.get("thumbnail")) or None,
+                "duration_s": None})
+        self._set_notice(f"The queue is kept as {name.strip()}", clear_after_s=4)
+        self.musicBoxesChanged.emit()
+        return made
 
     def _play_favorites(self, video_id: str) -> None:
         """Start on the song that was pressed and shuffle the rest behind it.
@@ -5793,7 +6166,7 @@ class Bridge(QObject):
         if following and following[0] == key:
             self._queue_on_start = None
             if time.monotonic() - following[2] < SEEK_ON_START_LIMIT_S:
-                self._player.queue_after(following[1])
+                self._player.queue_after(following[1], following[3])
 
     @Slot(int)
     def seekVideo(self, seconds: int) -> None:

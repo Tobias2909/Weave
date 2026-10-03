@@ -348,150 +348,23 @@ Item {
                             }
                         }
 
-                        SettingsHeading { text: "Music videos on disk" }
+                        SettingsHeading { text: "Music" }
 
                         Label {
                             width: parent.width
-                            text: "The music player fetches a picture only while the Now "
-                                  + "playing page is open, and never for anything over a "
-                                  + "quarter of an hour. This is the tallest it will ask "
-                                  + "for. A song offered only smaller is shown at what it "
-                                  + "has, and a new ceiling takes hold at the next song."
+                            text: "The music page has settings of its own: its shelves, your "
+                                  + "boxes of songs, which of them are kept on disk, and what "
+                                  + "is told to YouTube Music. They open from the \u22ef beside "
+                                  + "Music in the sidebar, or from here."
                             color: Theme.colors.textMuted
                             font.pixelSize: 11
                             wrapMode: Text.Wrap
                         }
 
-                        Row {
-                            spacing: 8
-
-                            Label {
-                                width: view.wordWidth
-                                height: 28
-                                text: "Quality"
-                                color: Theme.colors.textMuted
-                                font.pixelSize: 12
-                                verticalAlignment: Text.AlignVCenter
-                            }
-
-                            FlatButton {
-                                id: videoCeilingButton
-                                objectName: "videoCeiling"
-                                text: App.videoCeilingText + "  \u25be"
-                                onClicked: videoCeilingMenu.popup(videoCeilingButton, 0,
-                                                                  videoCeilingButton.height + 2)
-
-                                ThemedMenu {
-                                    id: videoCeilingMenu
-                                    objectName: "videoCeilingMenu"
-                                    implicitWidth: 160
-
-                                    Repeater {
-                                        model: App.videoChoices
-
-                                        ThemedMenuItem {
-                                            required property var modelData
-
-                                            // The tick marks the one in force, the same as
-                                            // the picture cache's own menu does it.
-                                            text: modelData.height === App.videoCeiling
-                                                  ? modelData.label + "   \u2713"
-                                                  : modelData.label
-                                            onTriggered: {
-                                                App.setVideoCeiling(modelData.height)
-                                                videoCeilingMenu.dismiss()
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        Label {
-                            width: parent.width
-                            text: "A song you keep has its video written to disk the first "
-                                  + "time you watch it, so every play after that starts at "
-                                  + "once and pulls nothing. Only the ones you keep, and "
-                                  + "only while a page is open to show a picture. The one "
-                                  + "played longest ago goes first when the room runs out."
-                            color: Theme.colors.textMuted
-                            font.pixelSize: 11
-                            wrapMode: Text.Wrap
-                        }
-
-                        Row {
-                            spacing: 8
-
-                            Label {
-                                width: view.wordWidth
-                                height: 28
-                                text: "Kept"
-                                color: Theme.colors.textMuted
-                                font.pixelSize: 12
-                                verticalAlignment: Text.AlignVCenter
-                            }
-
-                            Label {
-                                objectName: "videosKept"
-                                height: 28
-                                text: App.videosKeptText
-                                color: Theme.colors.text
-                                font.pixelSize: 12
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                        }
-
-                        Row {
-                            spacing: 8
-
-                            Label {
-                                width: view.wordWidth
-                                height: 28
-                                text: "Ceiling"
-                                color: Theme.colors.textMuted
-                                font.pixelSize: 12
-                                verticalAlignment: Text.AlignVCenter
-                            }
-
-                            FlatButton {
-                                id: keepCeilingButton
-                                objectName: "videoKeepCeiling"
-                                // Written on the Python side, the same way
-                                // every other sentence in this window is, so
-                                // the button and the line above it cannot
-                                // disagree about what a gigabyte is.
-                                text: App.videoKeepCeilingText + "  \u25be"
-                                onClicked: keepCeilingMenu.popup(keepCeilingButton, 0,
-                                                                 keepCeilingButton.height + 2)
-
-                                ThemedMenu {
-                                    id: keepCeilingMenu
-                                    objectName: "videoKeepCeilingMenu"
-                                    implicitWidth: 160
-
-                                    Repeater {
-                                        model: App.videoKeepChoices
-
-                                        ThemedMenuItem {
-                                            required property var modelData
-
-                                            text: modelData.mb === App.videoKeepCeiling
-                                                  ? modelData.label + "   \u2713"
-                                                  : modelData.label
-                                            onTriggered: {
-                                                App.setVideoKeepCeiling(modelData.mb)
-                                                keepCeilingMenu.dismiss()
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            FlatButton {
-                                objectName: "forgetKeptVideos"
-                                text: "Drop the kept videos"
-                                onClicked: App.forgetKeptVideos()
-                            }
+                        FlatButton {
+                            objectName: "settingsMusic"
+                            text: "Music settings"
+                            onClicked: App.showMusicSettings()
                         }
 
                         // Videos taken out of sight from a card's own menu.
@@ -728,42 +601,6 @@ Item {
                             wrapMode: Text.Wrap
                         }
 
-                        Row {
-                            spacing: 8
-
-                            Label {
-                                width: view.wordWidth
-                                height: 28
-                                text: "Your listening"
-                                color: Theme.colors.textMuted
-                                font.pixelSize: 12
-                                verticalAlignment: Text.AlignVCenter
-                            }
-
-                            FlatButton {
-                                objectName: "reportListens"
-                                text: App.reportListens ? "Told to YouTube Music"
-                                                        : "Kept to Weave"
-                                accent: App.reportListens
-                                onClicked: App.setReportListens(!App.reportListens)
-                            }
-                        }
-
-                        // What switching it on writes, said in full, since it
-                        // is the one thing Weave can write to an account.
-                        Label {
-                            objectName: "reportListensWords"
-                            width: parent.width
-                            text: "Off, Weave writes nothing to your account. On, a song you "
-                                  + "listen to for 30 seconds is added to your YouTube Music "
-                                  + "history with the same note its own player sends, so the "
-                                  + "history and the suggestions on your other devices follow "
-                                  + "what you heard here. A song skipped sooner is never sent, "
-                                  + "and nothing else is written."
-                            color: Theme.colors.textMuted
-                            font.pixelSize: 11
-                            wrapMode: Text.Wrap
-                        }
 
                         Row {
                             spacing: 8

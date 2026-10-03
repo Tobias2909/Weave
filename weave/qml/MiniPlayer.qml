@@ -6,6 +6,9 @@ import QtQuick.Layouts
 // music that stops when you look at your feed is not music you can use.
 Rectangle {
     id: bar
+
+    // The queue kept as a box of songs, named in the window's own popup.
+    signal saveQueueRequested()
     visible: Audio.hasQueue
     height: visible ? 64 : 0
 
@@ -243,7 +246,25 @@ Rectangle {
                 // Everything but the song playing, so a list thrown together
                 // for one evening can be started over without taking the song
                 // on now away with it.
+                // The whole queue, the song playing too, kept as a box for
+                // another evening.
                 FlatButton {
+                    objectName: "queueSaveButton"
+                    anchors.right: queueClearButton.visible ? queueClearButton.left
+                                                            : parent.right
+                    anchors.rightMargin: queueClearButton.visible ? 6 : 0
+                    anchors.verticalCenter: parent.verticalCenter
+                    implicitHeight: 24
+                    padding: 8
+                    fontSize: 11
+                    visible: Audio.queue.length > 0
+                    text: "Save as box"
+                    hint: "Keep the whole queue as a box of songs"
+                    onClicked: bar.saveQueueRequested()
+                }
+
+                FlatButton {
+                    id: queueClearButton
                     objectName: "queueClearButton"
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter

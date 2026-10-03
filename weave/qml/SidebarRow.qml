@@ -10,8 +10,12 @@ Rectangle {
     // A quiet mark, for news that belongs to the page this row opens rather
     // than to the window.
     property bool marked: false
+    // A word on the right that does something of its own, the same as the
+    // one on a section heading. Empty for none.
+    property string actionText: ""
 
     signal activated()
+    signal actionRequested()
     signal contextRequested()
     signal revealRequested()
 
@@ -23,7 +27,17 @@ Rectangle {
                                         : "transparent")
 
     HoverHandler { id: rowHover }
-    TapHandler { onTapped: row.activated() }
+    // A press on the word at the right is that word's, not the row's.
+    TapHandler {
+        onTapped: (eventPoint, button) => {
+            if (actionLabel.visible) {
+                var at = actionLabel.mapFromItem(row, eventPoint.position.x, eventPoint.position.y)
+                if (at.x >= -6 && at.x <= actionLabel.width + 6)
+                    return
+            }
+            row.activated()
+        }
+    }
     TapHandler {
         acceptedButtons: Qt.RightButton
         onTapped: row.contextRequested()
@@ -61,9 +75,24 @@ Rectangle {
     }
 
     Label {
+        id: actionLabel
+        objectName: "sidebarRowAction"
+        visible: row.actionText !== ""
+        anchors.right: parent.right
+        anchors.rightMargin: 12
+        anchors.verticalCenter: parent.verticalCenter
+        text: row.actionText
+        color: actionHover.hovered ? Theme.colors.accent : Theme.colors.textMuted
+        font.pixelSize: 16
+        HoverHandler { id: actionHover }
+        TapHandler { onTapped: row.actionRequested() }
+    }
+
+    Label {
         id: countLabel
-        anchors.right: mark.visible ? mark.left : parent.right
-        anchors.rightMargin: mark.visible ? 8 : 12
+        anchors.right: mark.visible ? mark.left : (actionLabel.visible ? actionLabel.left
+                                                                        : parent.right)
+        anchors.rightMargin: mark.visible || actionLabel.visible ? 8 : 12
         anchors.verticalCenter: parent.verticalCenter
         text: row.count > 0 ? row.count : ""
         font.pixelSize: 11

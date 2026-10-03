@@ -57,6 +57,9 @@ Item {
         id: dragger
         objectName: "dragGripHandler"
         parent: grip.row
+        // A row whose grip is not shown cannot be picked up, Favorites
+        // among the boxes being the one that always stays first.
+        enabled: grip.visible && grip.enabled
         target: null
         xAxis.enabled: false
         cursorShape: Qt.ClosedHandCursor

@@ -26,6 +26,10 @@ Flickable {
     property int askedGroup: -1
     property int asked: -1
 
+    // A new box is named in the window's own popup, so it is asked for from
+    // here with the song it is for.
+    signal newBoxRequested(var song)
+
     contentWidth: width
     contentHeight: body.height + 20
     clip: true
@@ -157,6 +161,8 @@ Flickable {
                             onAskedFor: {
                                 root.askedGroup = groupBlock.index
                                 root.asked = index
+                                channelBoxMenu.holding = App.songBoxes("group", groupBlock.index,
+                                                                       index)
                                 songMenu.popup()
                             }
                         }
@@ -206,6 +212,16 @@ Flickable {
                 App.favoriteChannelGroupSong(root.askedGroup, root.asked)
                 songMenu.dismiss()
             }
+        }
+
+        BoxMenu {
+            id: channelBoxMenu
+            objectName: "channelMusicBoxes"
+            owner: songMenu
+            where: "group"
+            first: root.askedGroup
+            second: root.asked
+            onNewBoxWanted: (song) => root.newBoxRequested(song)
         }
 
         ThemedMenuSeparator {}

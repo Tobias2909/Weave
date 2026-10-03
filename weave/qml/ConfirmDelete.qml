@@ -17,6 +17,9 @@ Popup {
     property var members: []
 
     readonly property bool isGroup: kind === "group"
+    // A box of songs rather than of videos. Its songs are not kept anywhere
+    // else unless another box holds them, so it says that instead.
+    readonly property bool isMusic: kind === "musicbox"
 
     anchors.centerIn: parent
     width: Math.min(420, (parent ? parent.width : 500) - 80)
@@ -38,7 +41,8 @@ Popup {
         kind = which
         itemId = id
         itemName = name
-        members = which === "group" ? App.groupChannels(id) : App.boxVideos(id)
+        members = which === "group" ? App.groupChannels(id)
+                : which === "musicbox" ? App.musicBoxSongs(id) : App.boxVideos(id)
         open()
     }
 
@@ -49,7 +53,8 @@ Popup {
         Label {
             objectName: "confirmTitle"
             width: parent.width
-            text: root.isGroup ? "Delete this group?" : "Delete this box?"
+            text: root.isGroup ? "Delete this group?"
+                  : root.isMusic ? "Delete this box of songs?" : "Delete this box?"
             color: Theme.colors.text
             font.pixelSize: 15
             font.weight: Font.DemiBold
@@ -67,7 +72,12 @@ Popup {
 
         Label {
             width: parent.width
-            text: root.members.length === 0
+            text: root.isMusic
+                  ? (root.members.length === 0
+                     ? "There are no songs in it."
+                     : root.members.length + " song" + (root.members.length === 1 ? " is" : "s are")
+                       + " in it. They go with the box, unless another box holds them too.")
+                  : root.members.length === 0
                   ? (root.isGroup ? "There are no channels in it."
                                   : "There are no videos in it.")
                   : (root.isGroup
@@ -121,6 +131,8 @@ Popup {
                 onClicked: {
                     if (root.isGroup)
                         App.deleteGroup(root.itemId)
+                    else if (root.isMusic)
+                        App.deleteMusicBox(root.itemId)
                     else
                         App.deleteBox(root.itemId)
                     root.close()

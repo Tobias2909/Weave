@@ -32,6 +32,16 @@ MenuItem {
         }
     }
 
+    // Drawn only on an entry that opens a menu of its own.
+    arrow: Label {
+        x: item.width - width - item.rightPadding
+        y: (item.height - height) / 2
+        visible: item.subMenu !== null
+        text: "\u25b8"
+        color: Theme.colors.textMuted
+        font.pixelSize: 11
+    }
+
     background: Rectangle {
         anchors.fill: parent
         anchors.leftMargin: 4

@@ -229,6 +229,14 @@ class WhoseTurnItIsToBeWritten(unittest.TestCase):
     def is_music_favorite(self, ext_id):
         return ext_id in self.favorites
 
+    # Standing in for the database, which answers which songs are in a box
+    # kept on disk, the favourites among them.
+    def kept_music_ids(self, favourites_too):
+        return set(self.favorites) if favourites_too else set()
+
+    def get_state(self, _key, default=None):
+        return default
+
     def keep(self, key, mark=songcache.SOUND):
         self.bridge._keep_half(key, f"u{key}", mark)
 

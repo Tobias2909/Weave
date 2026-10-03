@@ -91,6 +91,18 @@ ApplicationWindow {
                        function () { App.showInGroup(key) })
     }
 
+    // The shelves first, then the boxes in their order.
+    function chooseMusicTab(boxId) {
+        if (boxId === App.musicTab)
+            return
+        var order = [-1]
+        var boxes = App.musicBoxes
+        for (var i = 0; i < boxes.length; i++)
+            order.push(boxes[i].id)
+        root.switchTab(order.indexOf(boxId) > order.indexOf(App.musicTab),
+                       function () { App.showMusicTab(boxId) })
+    }
+
     function chooseHistoryHalf(music) {
         if (music === App.historyShowsMusic)
             return
@@ -172,6 +184,9 @@ ApplicationWindow {
     property string namingKind: "box"
     property int namingId: -1
     property string namingKey: ""
+    // A song waiting for the box being named, as where it was pressed and
+    // which one: {where, first, second}. Null for a box made empty.
+    property var namingSong: null
 
     // Keeps a newly selected sidebar row on screen once the list is longer
     // than the sidebar.
@@ -185,6 +200,7 @@ ApplicationWindow {
     }
 
     function askForName(kind, id, key, current) {
+        root.namingSong = null
         root.namingKind = kind
         root.namingId = id
         root.namingKey = key
@@ -192,6 +208,13 @@ ApplicationWindow {
         namePopup.open()
         nameField.forceActiveFocus()
         nameField.selectAll()
+    }
+
+    // A new box of songs, with the song it was asked for from going straight
+    // into it, or empty when it was asked for on its own.
+    function askForMusicBox(song) {
+        root.askForName("musicbox", -1, "", "")
+        root.namingSong = song
     }
 
     // Opens the tick list of groups for one channel, from wherever a channel
@@ -772,6 +795,7 @@ ApplicationWindow {
         // rather than acted on here, so resting on the bar and moving over it
         // come to the same thing.
         HoverHandler { id: barHover }
+        onSaveQueueRequested: root.askForName("queuebox", -1, "", "")
     }
 
     // ---- sidebar ---------------------------------------------------------
@@ -1074,11 +1098,15 @@ ApplicationWindow {
                 }
 
                 SidebarRow {
+                    objectName: "musicRow"
                     width: sidebarColumn.width
                     label: "Music"
                     count: 0
-                    selected: App.viewKind === "music"
+                    selected: App.viewKind === "music" || App.viewKind === "musicSettings"
+                    // Its settings, the same dots the playlists heading has.
+                    actionText: "\u22ef"
                     onActivated: App.showMusic()
+                    onActionRequested: App.showMusicSettings()
                     onRevealRequested: root.revealRow(this)
                 }
 
@@ -1220,6 +1248,10 @@ ApplicationWindow {
         anchors.top: liveBar.visible ? liveBar.bottom : parent.top
         anchors.topMargin: liveBar.visible ? 0 : banner.height
         anchors.bottom: miniPlayer.top
+        onNewBoxRequested: (song) => root.askForMusicBox(song)
+        slide: root.tabSlide
+        fade: root.tabFade
+        onTabRequested: (boxId) => root.chooseMusicTab(boxId)
     }
 
     DebugView {
@@ -1266,6 +1298,28 @@ ApplicationWindow {
 
     SmoothScroll {
         flickable: settingsView.scrolls
+        step: grid.cellHeight * App.scrollRowsPerNotch
+    }
+
+    MusicSettingsView {
+        id: musicSettingsView
+        objectName: "musicSettingsView"
+        Translate { id: musicSettingsShift; y: root.pageRise }
+        Component.onCompleted: musicSettingsView.scrolls.contentItem.transform = [musicSettingsShift]
+        opacity: root.pageFade
+        visible: App.viewKind === "musicSettings"
+        anchors.left: sidebar.right
+        anchors.right: detailPanel.visible ? detailPanel.left : parent.right
+        anchors.top: liveBar.visible ? liveBar.bottom : parent.top
+        anchors.topMargin: liveBar.visible ? 0 : banner.height
+        anchors.bottom: miniPlayer.top
+        onNewBoxRequested: root.askForMusicBox(null)
+        onRenameRequested: (boxId, name) => root.askForName("musicbox", boxId, "", name)
+        onDeleteRequested: (boxId, name) => confirmDelete.ask("musicbox", boxId, name)
+    }
+
+    SmoothScroll {
+        flickable: musicSettingsView.scrolls
         step: grid.cellHeight * App.scrollRowsPerNotch
     }
 
@@ -1353,6 +1407,7 @@ ApplicationWindow {
             groundWidth: windowGround.width
             groundHeight: windowGround.height
             onFullscreenToggled: root.toggleCinema()
+            onSaveQueueRequested: root.askForName("queuebox", -1, "", "")
         }
     }
 
@@ -1887,6 +1942,7 @@ ApplicationWindow {
         anchors.right: grid.right
         anchors.top: grid.top
         anchors.bottom: grid.bottom
+        onNewBoxRequested: (song) => root.askForMusicBox(song)
     }
 
     SmoothScroll {
@@ -1910,6 +1966,7 @@ ApplicationWindow {
                  && App.viewKind !== "nowplaying"
                  && !(App.viewKind === "channel" && App.channelTab === "music")
                  && App.viewKind !== "settings"
+                 && App.viewKind !== "musicSettings"
                  && !(App.viewKind === "channel" && App.channelTab === "playlists")
         anchors.left: sidebar.right
         anchors.right: detailPanel.visible ? detailPanel.left : parent.right
@@ -3401,11 +3458,30 @@ ApplicationWindow {
         }
 
         readonly property bool aGroup: root.namingKind === "group"
+        readonly property bool songs: root.namingKind === "musicbox"
+        readonly property bool aQueue: root.namingKind === "queuebox"
         readonly property bool renaming: root.namingId >= 0
 
         function commit() {
             var name = nameField.text.trim()
             if (name === "") {
+                namePopup.close()
+                return
+            }
+            if (namePopup.aQueue) {
+                App.saveQueueAsBox(name)
+                namePopup.close()
+                return
+            }
+            if (namePopup.songs) {
+                if (namePopup.renaming) {
+                    App.renameMusicBox(root.namingId, name)
+                } else {
+                    var made = App.createMusicBox(name)
+                    var song = root.namingSong
+                    if (made >= 0 && song)
+                        App.putSongInBox(song.where, song.first, song.second, made)
+                }
                 namePopup.close()
                 return
             }
@@ -3431,7 +3507,8 @@ ApplicationWindow {
             spacing: 10
 
             Label {
-                text: namePopup.renaming
+                text: namePopup.aQueue ? "Keep the queue as a box"
+                      : namePopup.renaming
                       ? (namePopup.aGroup ? "Rename the group" : "Rename the box")
                       : (namePopup.aGroup ? "Name the new group" : "Name the new box")
                 color: Theme.colors.text
@@ -3444,7 +3521,9 @@ ApplicationWindow {
                 objectName: "nameField"
                 width: parent.width
                 color: Theme.colors.text
-                placeholderText: namePopup.aGroup ? "Music" : "Watch tonight"
+                placeholderText: namePopup.aGroup ? "Music"
+                                 : namePopup.songs ? "Road trip"
+                                 : namePopup.aQueue ? "Tonight" : "Watch tonight"
                 placeholderTextColor: Theme.colors.textMuted
                 background: Rectangle {
                     radius: 6
@@ -3463,7 +3542,7 @@ ApplicationWindow {
                     onClicked: namePopup.close()
                 }
                 FlatButton {
-                    text: namePopup.renaming ? "Rename" : "Create"
+                    text: namePopup.renaming ? "Rename" : namePopup.aQueue ? "Keep it" : "Create"
                     accent: true
                     onClicked: namePopup.commit()
                 }

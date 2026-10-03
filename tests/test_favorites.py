@@ -216,6 +216,8 @@ class TheBridgeMarksThem(unittest.TestCase):
         bridge._set_status = lambda *a, **k: None
         bridge.notices = []
         bridge.favoritesChanged = Quiet()
+        bridge.musicBoxesChanged = Quiet()
+        bridge.musicTabChanged = Quiet()
         bridge.musicChanged = Quiet()
         bridge.asked_makers = []
         bridge._name_favourite_makers = lambda: bridge.asked_makers.append(True)
@@ -340,6 +342,8 @@ class FromAnOpenedList(unittest.TestCase):
         bridge._set_notice = lambda *a, **k: bridge.notices.append(a[0])
         bridge._set_status = lambda *a, **k: None
         bridge.favoritesChanged = Quiet()
+        bridge.musicBoxesChanged = Quiet()
+        bridge.musicTabChanged = Quiet()
         bridge.musicChanged = Quiet()
         return bridge
 
@@ -460,6 +464,8 @@ class TheHeartFollowsTheSong(unittest.TestCase):
         bridge.nowChanged = type("S", (), {"emit": lambda self, *a: None})()
         told = []
         bridge.favoritesChanged = type("S", (), {"emit": lambda self, *a: told.append(True)})()
+        bridge.musicBoxesChanged = type("S", (), {"emit": lambda self, *a: None})()
+        bridge.musicTabChanged = type("S", (), {"emit": lambda self, *a: None})()
         audio = Player()
         Bridge.attach_audio(bridge, audio)
         self.assertEqual(told, [], "nothing has played yet")
@@ -503,6 +509,8 @@ class WithNothingKept(unittest.TestCase):
         bridge._set_notice = lambda *a, **k: None
         bridge._set_status = lambda *a, **k: None
         bridge.favoritesChanged = Quiet()
+        bridge.musicBoxesChanged = Quiet()
+        bridge.musicTabChanged = Quiet()
         bridge.musicChanged = Quiet()
         return bridge
 
@@ -620,6 +628,8 @@ class ThePicture(unittest.TestCase):
         bridge._set_notice = lambda *a, **k: None
         bridge._set_status = lambda *a, **k: None
         bridge.favoritesChanged = Quiet()
+        bridge.musicBoxesChanged = Quiet()
+        bridge.musicTabChanged = Quiet()
         bridge.musicChanged = Quiet()
         Bridge._mark_favorite(bridge, "yt:aaaaaaaaaaa", "A song", "An artist",
                               qml_source("https://example/a.jpg"), keep=True)

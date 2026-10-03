@@ -857,6 +857,12 @@ class AudioPlayer(QObject):
             "at": i,
         } for i in self._order]
 
+    def queue_entries(self) -> list[dict]:
+        """The queue as it will be played, each entry whole, for keeping it."""
+        if not self._queue:
+            return []
+        return [dict(self._queue[i]) for i in self._order if 0 <= i < len(self._queue)]
+
     def _get_still_to_come(self) -> int:
         """How many have not been played yet, for the button that opens the
         list. Zero means there is nothing after this one."""

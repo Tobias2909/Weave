@@ -14,6 +14,10 @@ Menu {
     margins: 10
     overlap: 2
 
+    // The entry that opens a menu inside this one is made by this menu rather
+    // than declared, so it is told what to look like here.
+    delegate: ThemedMenuItem {}
+
     enter: Transition {
         NumberAnimation { property: "opacity"; from: 0.0; to: 1.0; duration: 90 }
         NumberAnimation {

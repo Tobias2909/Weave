@@ -24,24 +24,81 @@ Item {
     // view shows, and exactly one of them is up at a time.
     readonly property var openShelf: App.musicShelfPage
 
+    // A new box is named in the window's own popup, so it is asked for from
+    // here, with the song it was asked for from when there is one.
+    signal newBoxRequested(var song)
+
+    // Which box the boxes row's own menu was opened on.
+    property int chipBox: -1
+
+    // The window's sideways step between tabs, lent in so the part under the
+    // tabs moves the way every other row of tabs in the window moves it.
+    property real slide: 0
+    property real fade: 1
+    signal tabRequested(int boxId)
+
+    // The tabs are only for the page the music opens on. A search, a list
+    // or a whole section has its own way back to it.
+    readonly property bool onHome: App.musicResults.length === 0 && !view.onShelfPage
+
     // Right pressing a song offers to keep it. One menu for both the two rows
     // and the whole section page, told which tile it was opened on.
     property int askedShelf: -1
     property int askedItem: -1
     property int askedResult: -1
 
+    // A tile of the box a tab shows.
+    property int askedTab: -1
+
+    function askAboutTab(index) {
+        view.askedShelf = -1
+        view.askedItem = -1
+        view.askedResult = -1
+        view.askedTab = index
+        songBoxMenu.holding = App.songBoxes("tab", index, -1)
+        songMenu.popup()
+    }
+
     function askAboutResult(resultIndex) {
+        view.askedTab = -1
         view.askedShelf = -1
         view.askedItem = -1
         view.askedResult = resultIndex
+        songBoxMenu.holding = App.songBoxes("result", resultIndex, -1)
         songMenu.popup()
     }
 
     function askAbout(shelfIndex, itemIndex) {
+        view.askedTab = -1
         view.askedResult = -1
         view.askedShelf = shelfIndex
         view.askedItem = itemIndex
+        songBoxMenu.holding = App.songBoxes("shelf", shelfIndex, itemIndex)
         songMenu.popup()
+    }
+
+    // A box's own menu, from a right press on it in the row at the top.
+    ThemedMenu {
+        id: chipMenu
+        objectName: "boxChipMenu"
+        implicitWidth: 200
+
+        ThemedMenuItem {
+            text: "Play it"
+            onTriggered: { App.playMusicBox(view.chipBox, false); chipMenu.dismiss() }
+        }
+
+        ThemedMenuItem {
+            text: "Shuffle it"
+            onTriggered: { App.playMusicBox(view.chipBox, true); chipMenu.dismiss() }
+        }
+
+        ThemedMenuSeparator {}
+
+        ThemedMenuItem {
+            text: "Music settings"
+            onTriggered: { App.showMusicSettings(); chipMenu.dismiss() }
+        }
     }
 
     ThemedMenu {
@@ -58,7 +115,9 @@ Item {
             height: visible ? implicitHeight : 0
             text: "Play it next"
             onTriggered: {
-                if (view.askedResult >= 0)
+                if (view.askedTab >= 0)
+                    App.queueSong("tab", view.askedTab, -1, true)
+                else if (view.askedResult >= 0)
                     App.queueResult(view.askedResult, true)
                 else
                     App.queueShelfItem(view.askedShelf, view.askedItem, true)
@@ -72,7 +131,9 @@ Item {
             height: visible ? implicitHeight : 0
             text: "Add to the queue"
             onTriggered: {
-                if (view.askedResult >= 0)
+                if (view.askedTab >= 0)
+                    App.queueSong("tab", view.askedTab, -1, false)
+                else if (view.askedResult >= 0)
                     App.queueResult(view.askedResult, false)
                 else
                     App.queueShelfItem(view.askedShelf, view.askedItem, false)
@@ -84,16 +145,45 @@ Item {
         // was drawn as a tile or as a row in a list that was opened.
         ThemedMenuItem {
             objectName: "songFavoriteEntry"
-            readonly property bool kept: view.askedResult >= 0
+            readonly property bool kept: view.askedTab >= 0
+                                         ? App.songIsFavorite("tab", view.askedTab, -1)
+                                         : view.askedResult >= 0
                                          ? App.resultIsFavorite(view.askedResult)
                                          : App.shelfItemIsFavorite(view.askedShelf,
                                                                    view.askedItem)
             text: kept ? "Remove from favorites" : "Add to favorites"
             onTriggered: {
-                if (view.askedResult >= 0)
+                if (view.askedTab >= 0)
+                    App.putSongInBox("tab", view.askedTab, -1, 0)
+                else if (view.askedResult >= 0)
                     App.favoriteResult(view.askedResult)
                 else
                     App.favoriteShelfItem(view.askedShelf, view.askedItem)
+                songMenu.dismiss()
+            }
+        }
+
+        // Into one of the boxes, or a new one, or out of one again.
+        BoxMenu {
+            id: songBoxMenu
+            objectName: "songBoxMenu"
+            owner: songMenu
+            where: view.askedTab >= 0 ? "tab" : view.askedResult >= 0 ? "result" : "shelf"
+            first: view.askedTab >= 0 ? view.askedTab
+                                      : view.askedResult >= 0 ? view.askedResult : view.askedShelf
+            second: view.askedTab >= 0 || view.askedResult >= 0 ? -1 : view.askedItem
+            onNewBoxWanted: (song) => view.newBoxRequested(song)
+        }
+
+        // Only on a box's own tab, where taking a song out is the obvious
+        // thing to want.
+        ThemedMenuItem {
+            objectName: "songOutOfBox"
+            visible: view.askedTab >= 0
+            height: visible ? implicitHeight : 0
+            text: "Take it out of this box"
+            onTriggered: {
+                App.takeOutOfMusicTab(view.askedTab)
                 songMenu.dismiss()
             }
         }
@@ -105,7 +195,9 @@ Item {
             objectName: "songWatchEntry"
             text: "Watch in mpv"
             onTriggered: {
-                if (view.askedResult >= 0)
+                if (view.askedTab >= 0)
+                    App.watchSong("tab", view.askedTab, -1)
+                else if (view.askedResult >= 0)
                     App.watchResult(view.askedResult)
                 else
                     App.watchShelfItem(view.askedShelf, view.askedItem)
@@ -227,10 +319,205 @@ Item {
                 onClicked: App.refreshMusic()
             }
 
-            FlatButton {
-                visible: App.musicResults.length === 0 && !view.onShelfPage
-                text: "Reset order"
-                onClicked: App.resetShelfOrder()
+        }
+
+        // ---- the tabs ---------------------------------------------------
+        //
+        // The shelves YouTube Music offers, then every box. Pressing one
+        // steps sideways to it the way the tabs of a channel do, and only
+        // what is under the row moves.
+        Flow {
+            id: musicTabs
+            objectName: "boxChips"
+            visible: view.onHome
+            Layout.fillWidth: true
+            spacing: 8
+
+            Rectangle {
+                id: shelvesTab
+                objectName: "shelvesTab"
+                readonly property bool chosen: App.musicTab < 0
+                height: 30
+                radius: 15
+                width: shelvesWords.implicitWidth + 28
+                color: chosen ? Theme.wash(Theme.colors.accent, 0.26)
+                              : (shelvesHover.hovered ? Theme.wash(Theme.colors.accent, 0.16)
+                                                      : Theme.colors.surfaceRaised)
+                border.width: 1
+                border.color: chosen || shelvesHover.hovered
+                              ? Theme.wash(Theme.colors.accent, 0.6) : Theme.colors.border
+
+                Label {
+                    id: shelvesWords
+                    anchors.centerIn: parent
+                    text: "Shelves"
+                    color: Theme.colors.text
+                    font.pixelSize: 12
+                    font.weight: shelvesTab.chosen ? Font.DemiBold : Font.Normal
+                }
+
+                HoverHandler { id: shelvesHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: view.tabRequested(-1) }
+            }
+
+            Repeater {
+                model: App.musicBoxes
+
+                Rectangle {
+                    id: chip
+                    objectName: "boxChip"
+                    required property var modelData
+                    readonly property bool chosen: App.musicTab === modelData.id
+                    height: 30
+                    radius: 15
+                    width: chipWords.implicitWidth + 28
+                    color: chosen ? Theme.wash(Theme.colors.accent, 0.26)
+                                  : (chipHover.hovered ? Theme.wash(Theme.colors.accent, 0.16)
+                                                       : Theme.colors.surfaceRaised)
+                    border.width: 1
+                    border.color: chosen || chipHover.hovered
+                                  ? Theme.wash(Theme.colors.accent, 0.6) : Theme.colors.border
+
+                    Row {
+                        id: chipWords
+                        anchors.centerIn: parent
+                        spacing: 8
+
+                        Label {
+                            text: (chip.modelData.fixed ? "♥  " : "") + chip.modelData.name
+                            color: Theme.colors.text
+                            font.pixelSize: 12
+                            font.weight: chip.chosen ? Font.DemiBold : Font.Normal
+                        }
+
+                        Label {
+                            text: chip.modelData.count
+                            color: Theme.colors.textMuted
+                            font.pixelSize: 11
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                    }
+
+                    HoverHandler { id: chipHover; cursorShape: Qt.PointingHandCursor }
+                    TapHandler { onTapped: view.tabRequested(chip.modelData.id) }
+                    TapHandler {
+                        acceptedButtons: Qt.RightButton
+                        onTapped: {
+                            view.chipBox = chip.modelData.id
+                            chipMenu.popup()
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                objectName: "newBoxChip"
+                height: 30
+                radius: 15
+                width: newBoxWords.implicitWidth + 28
+                color: newBoxHover.hovered ? Theme.wash(Theme.colors.accent, 0.16) : "transparent"
+                border.width: 1
+                border.color: Theme.colors.border
+
+                Label {
+                    id: newBoxWords
+                    anchors.centerIn: parent
+                    text: "+  New box"
+                    color: Theme.colors.textMuted
+                    font.pixelSize: 12
+                }
+
+                HoverHandler { id: newBoxHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: view.newBoxRequested(null) }
+            }
+        }
+
+        // One box, as the tiles the shelves are drawn in. Pressing one plays
+        // the box from there, in its own order.
+        Flickable {
+            id: boxArea
+            objectName: "boxArea"
+            visible: view.onHome && App.musicTab >= 0
+            transform: Translate { x: view.slide }
+            opacity: view.fade
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            contentHeight: boxColumn.height
+            clip: true
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+            ColumnLayout {
+                id: boxColumn
+                width: boxArea.width
+                spacing: 10
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    Label {
+                        objectName: "boxSongCount"
+                        visible: App.musicTabSongs.length > 0
+                        text: (App.musicTabSongs.length === 1
+                               ? "1 song" : App.musicTabSongs.length + " songs").toUpperCase()
+                        color: Theme.colors.textMuted
+                        font.pixelSize: 10
+                        font.letterSpacing: 1.2
+                        font.weight: Font.DemiBold
+                    }
+
+                    Item { Layout.fillWidth: true }
+
+                    FlatButton {
+                        objectName: "boxPlay"
+                        visible: App.musicTabSongs.length > 0
+                        text: "Play"
+                        onClicked: App.playMusicBox(App.musicTab, false)
+                    }
+
+                    FlatButton {
+                        objectName: "boxShuffle"
+                        visible: App.musicTabSongs.length > 1
+                        text: "Shuffle"
+                        onClicked: App.playMusicBox(App.musicTab, true)
+                    }
+                }
+
+                Label {
+                    objectName: "boxEmpty"
+                    visible: App.musicTabSongs.length === 0
+                    Layout.fillWidth: true
+                    Layout.topMargin: 20
+                    text: "Nothing in this box yet. Right click a song anywhere and choose "
+                          + "Put in a box, or keep the whole queue from beside its Clear."
+                    color: Theme.colors.textMuted
+                    font.pixelSize: 12
+                    wrapMode: Text.Wrap
+                }
+
+                Flow {
+                    objectName: "boxTiles"
+                    Layout.fillWidth: true
+                    spacing: view.tileSpacing
+
+                    Repeater {
+                        model: App.musicTabSongs
+
+                        MusicTile {
+                            required property var modelData
+                            required property int index
+                            width: view.tileSize
+                            height: view.tileSize
+                            title: modelData.title
+                            subtitle: modelData.subtitle
+                            picture: modelData.thumbnail
+                            subtitleLeads: (modelData.artistId || "") !== ""
+                            onSubtitleChosen: App.openArtistChannel(modelData.artistId)
+                            onChosen: App.playMusicTabSong(index)
+                            onAskedFor: view.askAboutTab(index)
+                        }
+                    }
+                }
             }
         }
 
@@ -239,7 +526,9 @@ Item {
         Flickable {
             id: shelfArea
             objectName: "shelfArea"
-            visible: App.musicResults.length === 0 && !view.onShelfPage
+            visible: view.onHome && App.musicTab < 0
+            transform: Translate { x: view.slide }
+            opacity: view.fade
             Layout.fillWidth: true
             Layout.fillHeight: true
             contentHeight: shelfColumn.height
@@ -289,22 +578,9 @@ Item {
                                 font.weight: Font.DemiBold
                             }
 
-                            // Sections are arranged by hand and the order is
-                            // kept, so the ones that matter can sit at the top.
-                            Label {
-                                text: "▲"
-                                color: upHover.hovered ? Theme.colors.accent : Theme.colors.border
-                                font.pixelSize: 10
-                                HoverHandler { id: upHover }
-                                TapHandler { onTapped: App.moveShelf(shelf.modelData.title, -1) }
-                            }
-                            Label {
-                                text: "▼"
-                                color: downHover.hovered ? Theme.colors.accent : Theme.colors.border
-                                font.pixelSize: 10
-                                HoverHandler { id: downHover }
-                                TapHandler { onTapped: App.moveShelf(shelf.modelData.title, 1) }
-                            }
+                            // The order and which ones show are kept in the
+                            // music settings, opened from beside Music in the
+                            // sidebar, rather than in arrows on every heading.
 
                             Item { Layout.fillWidth: true }
                         }
@@ -548,7 +824,9 @@ Item {
 
         // ---- keeping an address ------------------------------------------
 
+        // For the Saved shelf, so not under a box.
         RowLayout {
+            visible: App.musicTab < 0
             Layout.fillWidth: true
             spacing: 8
 

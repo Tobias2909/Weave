@@ -531,16 +531,17 @@ class Player(QObject):
         except OSError:
             return False
 
-    def queue_after(self, urls: list[str]) -> bool:
-        """Put these after what mpv is playing, in this order. Says whether
-        they went.
+    def queue_after(self, urls: list[str], before: list[str] | tuple = ()) -> bool:
+        """Put these after what mpv is playing, in this order, and `before`
+        ahead of it, so a list handed over from its middle is the whole list
+        with the pressed one in its place. Says whether they went.
 
         Not while its queue mode is on, which it shows by looping the playlist
         for ever: there a press adds the one video it was for and nothing else,
         and a list poured in after it is not what anybody pressed for. Over a
         short second client, like a seek.
         """
-        if not urls:
+        if not urls and not before:
             return False
         path = resolve_socket(self._cfg)
         try:
@@ -550,6 +551,16 @@ class Player(QObject):
                 looping = _ask(sock, "loop-playlist")
                 if looping not in (False, "no", 0):
                     return False
+                # Put on the end and moved to the front, rather than inserted
+                # where they go, since inserting at a place is newer than the
+                # mpv many a distribution ships.
+                count = _ask(sock, "playlist-count") if before else 0
+                if before and not isinstance(count, int):
+                    return False
+                for place, url in enumerate(before):
+                    for command in (["loadfile", url, "append"],
+                                    ["playlist-move", count + place, place]):
+                        sock.sendall(json.dumps({"command": command}).encode() + b"\n")
                 for url in urls:
                     sock.sendall(json.dumps(
                         {"command": ["loadfile", url, "append"]}).encode() + b"\n")

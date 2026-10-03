@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 49
+SCHEMA_VERSION = 50
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -137,6 +137,33 @@ CREATE TABLE IF NOT EXISTS playlists (
 -- can be turned round whether or not it has been kept.
 CREATE TABLE IF NOT EXISTS reversed_playlists (
     ext_id TEXT PRIMARY KEY
+);
+
+-- Songs thrown together by hand, in the order they were put in. Weave's own
+-- and nothing to do with YouTube, so a box costs no request to make, fill or
+-- throw away. Favourites are the first box but live in music_history, where
+-- everything else about a favourite already is; these are the rest. A song
+-- carries what it needs to be drawn and played, since it may be in no other
+-- table at all.
+CREATE TABLE IF NOT EXISTS music_boxes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL UNIQUE,
+    position   INTEGER NOT NULL DEFAULT 0,
+    keep       INTEGER NOT NULL DEFAULT 0,   -- its songs are written to disk
+    created_at INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS music_box_items (
+    box_id        INTEGER NOT NULL REFERENCES music_boxes(id) ON DELETE CASCADE,
+    ext_id        TEXT NOT NULL,
+    title         TEXT NOT NULL,
+    artist        TEXT,
+    artist_id     TEXT,
+    thumbnail_url TEXT,
+    duration_s    INTEGER,
+    position      INTEGER NOT NULL DEFAULT 0,
+    added_at      INTEGER NOT NULL,
+    PRIMARY KEY (box_id, ext_id)
 );
 
 -- What a channel's playlists tab lists. Names only: the listing carries no
@@ -2629,6 +2656,113 @@ class Database:
     def music_favorite_count(self) -> int:
         return int(self.conn.execute(
             "SELECT COUNT(*) FROM music_history WHERE favorite=1").fetchone()[0])
+
+    # ---- music boxes ------------------------------------------------------
+
+    def music_boxes(self) -> list[dict]:
+        """Every box but the favourites, in their order, with how many songs."""
+        return [dict(row) for row in self.conn.execute(
+            "SELECT b.id, b.name, b.position, b.keep, "
+            "       (SELECT COUNT(*) FROM music_box_items i WHERE i.box_id = b.id) AS count "
+            "FROM music_boxes b ORDER BY b.position, b.id")]
+
+    def music_box(self, box_id: int) -> dict | None:
+        found = self.conn.execute(
+            "SELECT id, name, position, keep FROM music_boxes WHERE id=?", (box_id,)).fetchone()
+        return dict(found) if found else None
+
+    def create_music_box(self, name: str) -> int | None:
+        """A new box at the end. None when the name is empty or taken, since
+        two boxes of one name cannot be told apart anywhere they are listed."""
+        name = (name or "").strip()
+        if not name:
+            return None
+        with self.conn as conn:
+            if conn.execute("SELECT 1 FROM music_boxes WHERE name=?", (name,)).fetchone():
+                return None
+            place = conn.execute(
+                "SELECT COALESCE(MAX(position), -1) + 1 FROM music_boxes").fetchone()[0]
+            cursor = conn.execute(
+                "INSERT INTO music_boxes(name, position, created_at) VALUES(?,?,?)",
+                (name, place, int(time.time())))
+            return int(cursor.lastrowid)
+
+    def rename_music_box(self, box_id: int, name: str) -> bool:
+        name = (name or "").strip()
+        if not name:
+            return False
+        with self.conn as conn:
+            taken = conn.execute(
+                "SELECT 1 FROM music_boxes WHERE name=? AND id!=?", (name, box_id)).fetchone()
+            if taken:
+                return False
+            return conn.execute("UPDATE music_boxes SET name=? WHERE id=?",
+                                (name, box_id)).rowcount > 0
+
+    def delete_music_box(self, box_id: int) -> bool:
+        with self.conn as conn:
+            conn.execute("DELETE FROM music_box_items WHERE box_id=?", (box_id,))
+            return conn.execute("DELETE FROM music_boxes WHERE id=?", (box_id,)).rowcount > 0
+
+    def move_music_box_to(self, box_id: int, target_id: int) -> bool:
+        """Put a box where another one is, the others moving aside, the way a
+        playlist is moved: named by the one it was dropped on."""
+        order = [row["id"] for row in self.music_boxes()]
+        if box_id not in order or target_id not in order or box_id == target_id:
+            return False
+        order.insert(order.index(target_id), order.pop(order.index(box_id)))
+        with self.conn as conn:
+            conn.executemany("UPDATE music_boxes SET position=? WHERE id=?",
+                             [(place, one) for place, one in enumerate(order)])
+        return True
+
+    def set_music_box_keep(self, box_id: int, keep: bool) -> None:
+        with self.conn as conn:
+            conn.execute("UPDATE music_boxes SET keep=? WHERE id=?", (1 if keep else 0, box_id))
+
+    def put_in_music_box(self, box_id: int, song: dict) -> bool:
+        """A song on the end of a box. False when it is in there already, or
+        the box is gone, so the caller can say which happened."""
+        ext_id = str(song.get("ext_id") or "")
+        if not ext_id or self.music_box(box_id) is None:
+            return False
+        with self.conn as conn:
+            place = conn.execute(
+                "SELECT COALESCE(MAX(position), -1) + 1 FROM music_box_items WHERE box_id=?",
+                (box_id,)).fetchone()[0]
+            cursor = conn.execute(
+                "INSERT INTO music_box_items(box_id, ext_id, title, artist, artist_id, "
+                "                            thumbnail_url, duration_s, position, added_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                (box_id, ext_id, str(song.get("title") or ""), song.get("artist") or None,
+                 song.get("artist_id") or None, song.get("thumbnail_url") or None,
+                 song.get("duration_s"), place, int(time.time())))
+            return cursor.rowcount > 0
+
+    def remove_from_music_box(self, box_id: int, ext_id: str) -> bool:
+        with self.conn as conn:
+            return conn.execute("DELETE FROM music_box_items WHERE box_id=? AND ext_id=?",
+                                (box_id, ext_id)).rowcount > 0
+
+    def music_box_songs(self, box_id: int) -> list[dict]:
+        return [dict(row) for row in self.conn.execute(
+            "SELECT ext_id, title, artist, artist_id, thumbnail_url, duration_s "
+            "FROM music_box_items WHERE box_id=? ORDER BY position, added_at", (box_id,))]
+
+    def music_boxes_holding(self, ext_id: str) -> list[int]:
+        return [int(row[0]) for row in self.conn.execute(
+            "SELECT box_id FROM music_box_items WHERE ext_id=?", (ext_id,))]
+
+    def kept_music_ids(self, favourites_too: bool) -> set[str]:
+        """Every song in a box that is kept on disk, the favourites among them
+        when they are."""
+        kept = {row[0] for row in self.conn.execute(
+            "SELECT DISTINCT i.ext_id FROM music_box_items i "
+            "JOIN music_boxes b ON b.id = i.box_id WHERE b.keep = 1")}
+        if favourites_too:
+            kept |= {row[0] for row in self.conn.execute(
+                "SELECT ext_id FROM music_history WHERE favorite = 1")}
+        return kept
 
     def music_history(self, limit: int = 400) -> list[sqlite3.Row]:
         """Shaped like a feed row, so the same grid draws it.

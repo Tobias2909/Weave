@@ -126,6 +126,17 @@ class PutAfterItInARealPlayer(unittest.TestCase):
         names = [entry["filename"] for entry in self.say(["get_property", "playlist"])]
         self.assertEqual(names[1:], urls)
 
+    def test_a_box_goes_around_the_pressed_one_in_its_own_order(self):
+        """A box handed over from its third song: the two before it go ahead
+        of it and the rest after, and the one playing stays playing."""
+        before = [f"av://lavfi:sine=frequency={f}:duration=5" for f in (100, 200)]
+        after = [f"av://lavfi:sine=frequency={f}:duration=5" for f in (600, 700)]
+        self.assertTrue(self.player.queue_after(after, before))
+        time.sleep(0.3)
+        names = [entry["filename"] for entry in self.say(["get_property", "playlist"])]
+        self.assertEqual(names, [*before, "av://lavfi:sine=duration=30", *after])
+        self.assertEqual(self.say(["get_property", "playlist-pos"]), 2)
+
     def test_not_while_queue_mode_loops_the_playlist(self):
         self.say(["set_property", "loop-playlist", "inf"])
         self.assertFalse(self.player.queue_after(["av://lavfi:sine=duration=5"]))
