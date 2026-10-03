@@ -29,7 +29,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-from .. import ids, paths
+from .. import ids, paths, trace
 from ..config import Config
 
 WRAPPER_NAME = "mpv-ff2mpv-single.sh"
@@ -137,7 +137,7 @@ class _IpcWatcher(QThread):
     MOVING_S = 0.25
 
     nowPlaying = Signal(str, str)     # key, media title
-    moving = Signal(str)              # key, or "" for a file with none: it plays
+    moving = Signal(str)              # key, or "" for a file with none: it is starting
     watched = Signal(str, float)      # key, progress
     connectionChanged = Signal(bool)
     stopped = Signal()                # mpv went away
@@ -293,6 +293,12 @@ class _IpcWatcher(QThread):
         event = message.get("event")
         if event == "property-change":
             self._on_property(message.get("name"), message.get("data"))
+        elif event == "file-loaded":
+            # Opened, and about to sound. The earliest word that a video is
+            # starting, a tenth of a second or less before it is heard, so the
+            # music given way here is fading as the video comes in rather
+            # than after the video has already covered it.
+            self._starting("file-loaded")
         elif event == "end-file":
             self._flush(reached_end=message.get("reason") == "eof")
         elif event == "shutdown":
@@ -325,14 +331,23 @@ class _IpcWatcher(QThread):
             if self._first_pos is None:
                 self._first_pos = float(data)
             elif not self._moving_said and float(data) - self._first_pos >= self.MOVING_S:
-                self._moving_said = True
-                self.moving.emit(self._key or "")
+                # Moving without having been seen opening, which is a player
+                # that was already playing when the watcher reached it.
+                self._starting(f"moving at={float(data):.2f}")
             self._max_pos = max(self._max_pos, float(data))
             whole = int(data)
             if whole == self._last_whole_second:
                 return
             self._last_whole_second = whole
             self._check_threshold()
+
+    def _starting(self, why: str) -> None:
+        """Say once per file that what mpv opened is starting to play."""
+        if self._moving_said:
+            return
+        self._moving_said = True
+        trace.mark("mpv_starting", key=self._key or "-", why=why)
+        self.moving.emit(self._key or "")
 
     def _on_new_path(self, path) -> None:
         self._flush(reached_end=False)
@@ -352,6 +367,7 @@ class _IpcWatcher(QThread):
             self._live_current = self._pending_live
             self._pending_live = False
         self._key = ids.key_for_media_path(path, twitch_hint=hint)
+        trace.mark("mpv_path", key=self._key or "-")
         if self._key:
             self.nowPlaying.emit(self._key, self._title or "")
 

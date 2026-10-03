@@ -387,6 +387,42 @@ class TheVideoReallyPlaying(unittest.TestCase):
         self.assertEqual(self.moving, [""])
 
 
+class TheVideoAboutToPlay(unittest.TestCase):
+    """mpv says it has opened what it was given a moment before the sound
+    starts, which is the earliest the music can be told to give way. Waiting
+    for the picture to move as well started the fade after the video's own
+    sound had already covered it."""
+
+    def setUp(self):
+        self.watcher = _IpcWatcher(Path("/nonexistent.sock"), threshold=0.85)
+        self.moving: list[str] = []
+        self.watcher.moving.connect(self.moving.append)
+        self.watcher._had_session = True
+
+    def feed(self, name, data):
+        self.watcher._handle({"event": "property-change", "name": name, "data": data})
+
+    def test_the_file_opened_is_enough(self):
+        self.feed("path", YT)
+        self.watcher._handle({"event": "file-loaded"})
+        self.assertEqual(self.moving, ["yt:aaaaaaaaaaa"])
+
+    def test_and_said_once_however_it_goes_on(self):
+        self.feed("path", YT)
+        self.watcher._handle({"event": "file-loaded"})
+        for pos in (0.0, 0.5, 1.0):
+            self.feed("time-pos", pos)
+        self.assertEqual(self.moving, ["yt:aaaaaaaaaaa"])
+
+    def test_one_already_playing_when_the_watcher_arrives_is_still_seen(self):
+        """Connecting to a player that is well into a file sees no opening,
+        only the position moving."""
+        self.feed("path", YT)
+        self.feed("time-pos", 300.0)
+        self.feed("time-pos", 300.4)
+        self.assertEqual(self.moving, ["yt:aaaaaaaaaaa"])
+
+
 class AHandOverWakesTheWatcher(unittest.TestCase):
     """With no mpv running the watcher looks for one every few seconds, which
     is up to five seconds of both playing at once once one has started."""

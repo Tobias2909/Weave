@@ -28,6 +28,7 @@ from urllib.parse import parse_qs, urlparse
 
 from PySide6.QtCore import (
     Property,
+    QAbstractAnimation,
     QEasingCurve,
     QObject,
     QThread,
@@ -96,11 +97,12 @@ HEARD_S = 30.0
 # seek forwards is not the song being heard.
 HEARD_STEP_S = 2.0
 
-# Giving way to a video in mpv. The music now plays on until the video has
-# really started, so this fade happens under the video's own sound, and at the
-# 500 ms above it was drowned and heard as a cut. Long enough to be heard
-# receding behind the video.
-VIDEO_FADE_MS = 2000
+# Giving way to a video in mpv. The music plays on until mpv has opened the
+# video and is about to sound, and fades from there. Started later, when the
+# picture was already moving, the video's own sound covered the fade and it was
+# heard as a cut; at two seconds it was heard going on under a video that had
+# started quietly. Traced on the machine it was heard on.
+VIDEO_FADE_MS = 1000
 
 # Pausing and carrying on, pressed by hand. Half the fade above, because here
 # the press itself is the thing waited on, and at 500 ms the music was heard
@@ -1339,6 +1341,7 @@ class AudioPlayer(QObject):
             return 0.0
 
     def _on_paused(self, paused: bool) -> None:
+        trace.mark("music_paused", paused=paused, output=f"{self._output:.2f}")
         self._paused = paused
         self.stateChanged.emit()
 
@@ -1482,6 +1485,7 @@ class AudioPlayer(QObject):
 
     @Slot()
     def toggle(self) -> None:
+        trace.mark("music_toggle", playing=self._get_playing())
         if self._get_playing():
             self._fade_to(0.0, pause_after=True, duration_ms=TOGGLE_FADE_MS)
             return
@@ -1765,17 +1769,28 @@ class AudioPlayer(QObject):
 
     def _fade_to(self, level: float, pause_after: bool,
                  duration_ms: int = FADE_MS) -> None:
+        # Read before the animation is touched. A stopped animation that is
+        # given a new length or new ends reports a value for wherever its last
+        # run left off, and read after that, a long fade following the short
+        # one back up began a quarter of the way down. Measured on a real
+        # sink as the second video in a row cutting the music off.
+        start = float(self._output)
         self._fade.stop()
         self._pause_after_fade = pause_after
         self._fade.setDuration(duration_ms)
-        self._fade.setStartValue(float(self._output))
+        self._fade.setStartValue(start)
         self._fade.setEndValue(float(max(0.0, min(1.0, level))))
         self._fade.start()
 
     def _on_fade_step(self, value) -> None:
+        # Only a running fade moves the volume. The values reported while one
+        # is being set up belong to the last run, not to this one.
+        if self._fade.state() != QAbstractAnimation.State.Running:
+            return
         self._set_output(float(value))
 
     def _on_fade_done(self) -> None:
+        trace.mark("music_fade_done", pause_after=self._pause_after_fade)
         if self._pause_after_fade:
             self._pause_after_fade = False
             self._engine.set_pause(True)
@@ -2109,6 +2124,7 @@ class AudioPlayer(QObject):
 
     @Slot()
     def stop(self) -> None:
+        trace.mark("music_stop")
         self._engine.stop()
         self._queue = []
         self._order = []
@@ -2121,6 +2137,8 @@ class AudioPlayer(QObject):
     def pause_for_video(self) -> None:
         """Called when mpv starts something. Two things playing at once is
         never what anyone wanted, but neither is being cut off mid note."""
+        trace.mark("music_gives_way", auto=self._auto_pause, playing=self._get_playing(),
+                   output=f"{self._output:.2f}", ms=VIDEO_FADE_MS)
         if self._auto_pause and self._get_playing():
             self._fade_to(0.0, pause_after=True, duration_ms=VIDEO_FADE_MS)
 

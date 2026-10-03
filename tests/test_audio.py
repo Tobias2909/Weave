@@ -8,7 +8,7 @@ test say what mpv reported back. What mpv really does is pinned down in
 import unittest
 from unittest import mock
 
-from PySide6.QtCore import QCoreApplication, QObject, Signal
+from PySide6.QtCore import QCoreApplication, QEventLoop, QObject, QTimer, Signal
 
 from weave.audio import (
     ADDRESS_MARGIN_S,
@@ -788,6 +788,45 @@ class Fading(_Base):
         # Longer again, since it now plays out under the video's own sound.
         self.assertEqual(self.player._fade.duration(), VIDEO_FADE_MS)
         self.assertGreater(VIDEO_FADE_MS, FADE_MS)
+
+    def finish_fade(self):
+        loop = QEventLoop()
+        self.player._fade.finished.connect(loop.quit)
+        QTimer.singleShot(3000, loop.quit)
+        loop.exec()
+        self.player._fade.finished.disconnect(loop.quit)
+
+    def volumes(self):
+        return [volume for _kind, volume in self.engine.only("volume")]
+
+    def test_the_second_video_fades_from_where_the_music_is(self):
+        """Measured on a real sink: the first video faded the music, and the
+        second, after carrying on by hand, cut it to nothing at once.
+        Changing the length of a stopped animation makes it report a value
+        for wherever its last run left off, a quarter of the way into the
+        long fade after the short one, and the fade then began from there."""
+        self.player._auto_pause = True
+        self.player.pause_for_video()
+        self.finish_fade()
+        self.player.toggle()
+        self.finish_fade()
+        self.engine.calls.clear()
+        self.player.pause_for_video()
+        self.finish_fade()
+        heard = self.volumes()
+        self.assertGreaterEqual(heard[0], 59.9, f"began at {heard[0]}, not at the level")
+        self.assertEqual(heard, sorted(heard, reverse=True), "it went back up on the way down")
+
+    def test_carrying_on_starts_from_silence_and_only_rises(self):
+        self.player._auto_pause = True
+        self.player.pause_for_video()
+        self.finish_fade()
+        self.engine.calls.clear()
+        self.player.toggle()
+        self.finish_fade()
+        heard = self.volumes()
+        self.assertEqual(heard[0], 0.0)
+        self.assertEqual(heard, sorted(heard), "it jumped up before it rose")
 
     def test_toggling_when_idle_starts_the_track(self):
         self.engine.idleChanged.emit(True)
