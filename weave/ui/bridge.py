@@ -26,13 +26,14 @@ from PySide6.QtGui import QDesktopServices, QGuiApplication
 from .. import __version__
 from .. import format as fmt
 from .. import imagecache
-from .. import palette, themes
+from .. import palette, themes, trace
 from .. import audio
 from .. import browsers, cookies, ids
 from .. import paths, tokens, songcache
 from ..config import Config
 from ..db import GROUP_SHOWS, GROUP_SHOWS_ALL, GROUP_SHOWS_STREAMS, Database
 from ..imagecache import SECONDS_PER_DAY, plain_source, qml_source, square_source
+from ..sources import flatlist
 from ..sources import playlists as playlist_source
 from ..sources import release as release_source
 from ..sources import search as search_source
@@ -479,6 +480,9 @@ class Bridge(QObject):
         self._link_facts: LinkFacts | None = None
         self._link_target: LinkTarget | None = None
         self._seek_on_start: tuple[str, int, float] | None = None
+        # The rest of a turned round playlist, put after the pressed video
+        # once mpv reports it, with when it was asked for.
+        self._queue_on_start: tuple[str, list[str], float] | None = None
         self._heard_waiting: list[str] = []
         self._pending_members: tuple[str, str] | None = None
         self._members_cleared = ""
@@ -716,6 +720,7 @@ class Bridge(QObject):
             "ext_id": found["ext_id"],
             "title": found["title"],
             "kept": found["origin"] == "channel",
+            "reversed": self._db.playlist_reversed(found["ext_id"]),
             "channel_key": found["channel_key"],
             "channel_title": found["channel_title"],
         }
@@ -2329,6 +2334,21 @@ class Bridge(QObject):
     def movePlaylist(self, playlist_id: str, delta: int) -> None:
         if self._db.move_playlist(playlist_id, delta):
             self.playlistsChanged.emit()
+
+    @Slot(str, str)
+    def movePlaylistTo(self, playlist_id: str, target_id: str) -> None:
+        """Put a playlist where the one it was dropped on is."""
+        if self._db.move_playlist_to(playlist_id, target_id):
+            self.playlistsChanged.emit()
+
+    @Slot(str, bool)
+    def setPlaylistReversed(self, playlist_id: str, reversed_: bool) -> None:
+        """Draw and play a playlist from its end, or from its start again."""
+        self._db.set_playlist_reversed(playlist_id, reversed_)
+        self.playlistsChanged.emit()
+        self.playlistViewChanged.emit()
+        if self._view_kind == PLAYLIST and self._view_playlist == playlist_id:
+            self.reload()
 
     @Slot(str, bool)
     def setPlaylistMusic(self, playlist_id: str, music: bool) -> None:
@@ -4003,15 +4023,36 @@ class Bridge(QObject):
         # says so in the row. Either way mpv must not mark it watched.
         live = bool(row["isLive"]) or login is not None
         url = row["url"]
+        self._queue_on_start = None
         if self._view_kind == PLAYLIST and self._view_playlist and not login:
-            # Opened from a playlist, so the playlist is what is handed over,
-            # starting on the video that was clicked. Otherwise the window
-            # closes after one and the list is not a list.
-            url = ids.playlist_watch_url(row["key"].split(":", 1)[1], self._view_playlist)
+            if self._db.playlist_reversed(self._view_playlist):
+                # mpv plays a playlist address from its start onwards and has
+                # no way to be told otherwise through the wrapper. So the video
+                # pressed goes over alone and the rest follow it, in the order
+                # shown, put after it once mpv reports it.
+                self._queue_on_start = (row["key"], self._following_in_playlist(row["key"]),
+                                        time.monotonic())
+            else:
+                # Opened from a playlist, so the playlist is what is handed
+                # over, starting on the video that was clicked. Otherwise the
+                # window closes after one and the list is not a list.
+                url = ids.playlist_watch_url(row["key"].split(":", 1)[1], self._view_playlist)
         if live and login is None and self._ask_whether_it_is_still_live(
                 row["key"], url, str(row.get("title") or "")):
             return
         self._hand_over(row["key"], url, str(row.get("title") or ""), login, live)
+
+    def _following_in_playlist(self, key: str) -> list[str]:
+        """The addresses after one video of the open playlist, in the order it
+        is drawn. What would only be refused is left out: a video behind a
+        membership not held, and one YouTube no longer has."""
+        rows = self._db.playlist_items(self._view_playlist)
+        keys = [row["key"] for row in rows]
+        if key not in keys:
+            return []
+        return [ids.watch_url("youtube", row["ext_id"]) for row in rows[keys.index(key) + 1:]
+                if not (row["members_only"] and not row["member_of"])
+                and row["title"] not in flatlist.UNAVAILABLE_TITLES]
 
     def _hand_over(self, key: str, url: str, title: str,
                    login: str | None, live: bool) -> None:
@@ -4416,6 +4457,13 @@ class Bridge(QObject):
         if self._suggester is not None and self._suggester.isRunning():
             return                  # asked for when the one in flight is done
         self._ask_for_suggestions()
+
+    @Slot(str, "QVariantMap")
+    def traceMark(self, event: str, fields: dict) -> None:
+        """A step in the window worth a line in the trace, for what only the
+        window sees, like where a carried row was taken and when its list
+        began to scroll."""
+        trace.mark(event, **{str(name): value for name, value in (fields or {}).items()})
 
     @Slot()
     def clearSuggestions(self) -> None:
@@ -5741,6 +5789,11 @@ class Bridge(QObject):
             if time.monotonic() - pending[2] < SEEK_ON_START_LIMIT_S:
                 for delay in (800, 2500):
                     QTimer.singleShot(delay, lambda at=pending[1]: self._player.seek(at))
+        following = self._queue_on_start
+        if following and following[0] == key:
+            self._queue_on_start = None
+            if time.monotonic() - following[2] < SEEK_ON_START_LIMIT_S:
+                self._player.queue_after(following[1])
 
     @Slot(int)
     def seekVideo(self, seconds: int) -> None:

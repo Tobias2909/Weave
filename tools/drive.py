@@ -2492,6 +2492,16 @@ class Smoke:
         keep = item_named(root, "playlistKeep")
         self.check("the bar offers keeping it", read(keep, "text") == "Keep",
                    str(read(keep, "text")))
+        # And turning it round, kept or not, which the button says.
+        turn = item_named(root, "playlistReverse")
+        self.check("the bar offers turning it round", read(turn, "text") == "Reverse",
+                   str(read(turn, "text")))
+        call(turn, "clicked")
+        settle(0.4)
+        self.check("and says so once it is", read(turn, "text") == "Reversed"
+                   and bridge._db.playlist_reversed(tiles[0]["key"]), str(read(turn, "text")))
+        call(turn, "clicked")
+        settle(0.3)
         call(keep, "clicked")
         settle(0.4)
         self.check("and says so once it is kept", read(keep, "text") == "Kept",
@@ -2535,6 +2545,9 @@ class Smoke:
                    read(chooser, "opened") is True)
         rows = items_named_like(root, "keptDrop")
         self.check("with a way to let one go", len(rows) == 1, f"{len(rows)} rows")
+        self.check("its order is changed by a handle, not by arrows",
+                   len(items_named_like(root, "keptGrip")) == 1
+                   and not items_named_like(root, "keptUp"))
         call(rows[0], "clicked")
         settle(0.4)
         self.check("which takes it out of the section",

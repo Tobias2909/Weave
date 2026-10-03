@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 48
+SCHEMA_VERSION = 49
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -130,6 +130,13 @@ CREATE TABLE IF NOT EXISTS playlists (
     items_at   INTEGER,                    -- when its contents were last read
     hidden     INTEGER NOT NULL DEFAULT 0, -- kept, but out of the sidebar
     seen_at    INTEGER NOT NULL
+);
+
+-- Playlists drawn and played from their end to their start. By the playlist's
+-- own id rather than a column on playlists, so one opened off a channel page
+-- can be turned round whether or not it has been kept.
+CREATE TABLE IF NOT EXISTS reversed_playlists (
+    ext_id TEXT PRIMARY KEY
 );
 
 -- What a channel's playlists tab lists. Names only: the listing carries no
@@ -3037,6 +3044,21 @@ class Database:
                              list(enumerate(order)))
         return True
 
+    def move_playlist_to(self, playlist_id: str, target_id: str) -> bool:
+        """Put a playlist where another one is, the others moving up or down a
+        place to make room. Named by the one it is dropped on rather than by a
+        count of places, since a count taken from a filtered or shortened list
+        is a count of something else here."""
+        found = self.conn.execute(
+            "SELECT origin FROM playlists WHERE ext_id=?", (playlist_id,)).fetchone()
+        if found is None:
+            return False
+        order = [row["ext_id"] for row
+                 in self.playlists(include_hidden=True, origin=found["origin"])]
+        if playlist_id not in order or target_id not in order or playlist_id == target_id:
+            return False
+        return self.move_playlist(playlist_id, order.index(target_id) - order.index(playlist_id))
+
     def playlists(self, include_hidden: bool = False, origin: str = "mine") -> list[dict]:
         """The playlists, hidden ones left out unless asked for.
 
@@ -3054,8 +3076,23 @@ class Database:
         return [dict(row) for row in self.conn.execute(
             "SELECT p.ext_id, p.title, p.position, p.items_at, p.hidden, p.is_music, p.origin, "
             "       (SELECT COUNT(*) FROM playlist_items i WHERE i.playlist_id = p.ext_id) "
-            "         AS items "
+            "         AS items, "
+            "       EXISTS(SELECT 1 FROM reversed_playlists r WHERE r.ext_id = p.ext_id) "
+            "         AS reversed "
             f"FROM playlists p {clause} ORDER BY p.position, p.title")]
+
+    def playlist_reversed(self, playlist_id: str) -> bool:
+        """Whether a playlist is drawn and played from its end to its start."""
+        return self.conn.execute(
+            "SELECT 1 FROM reversed_playlists WHERE ext_id=?", (playlist_id,)).fetchone() is not None
+
+    def set_playlist_reversed(self, playlist_id: str, reversed_: bool) -> None:
+        with self.conn as conn:
+            if reversed_:
+                conn.execute("INSERT INTO reversed_playlists(ext_id) VALUES(?) "
+                             "ON CONFLICT DO NOTHING", (playlist_id,))
+            else:
+                conn.execute("DELETE FROM reversed_playlists WHERE ext_id=?", (playlist_id,))
 
     # ---- playlists a channel has made -----------------------------------
 
@@ -3286,7 +3323,9 @@ class Database:
     def playlist_items(self, playlist_id: str, limit: int = 500) -> list[sqlite3.Row]:
         """Shaped like a feed row, so the same grid draws it. A playlist keeps
         its own order rather than being sorted by date, which is the whole
-        point of somebody having made it."""
+        point of somebody having made it, or that order from its end when it
+        has been turned round."""
+        direction = "DESC" if self.playlist_reversed(playlist_id) else "ASC"
         return list(self.conn.execute(
             """
             SELECT 'yt:' || i.ext_id           AS key,
@@ -3309,7 +3348,7 @@ class Database:
             LEFT JOIN channels c ON c.ext_id = i.channel_ext_id AND c.platform = 'youtube'
             LEFT JOIN watched w ON w.video_key = 'yt:' || i.ext_id
             WHERE i.playlist_id = ?
-            ORDER BY i.position
+            ORDER BY i.position """ + direction + """
             LIMIT ?
             """,
             (playlist_id, limit),

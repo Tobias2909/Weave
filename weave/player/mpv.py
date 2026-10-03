@@ -436,6 +436,30 @@ class _IpcWatcher(QThread):
         self.watched.emit(self._key, progress)
 
 
+def _ask(sock: socket.socket, name: str):
+    """One property of a player, over a socket that also carries its events.
+    None when it did not answer in time."""
+    sock.sendall(json.dumps({"command": ["get_property", name],
+                             "request_id": 4107}).encode() + b"\n")
+    buffer = b""
+    while True:
+        try:
+            chunk = sock.recv(65536)
+        except TimeoutError:
+            return None
+        if not chunk:
+            return None
+        buffer += chunk
+        while b"\n" in buffer:
+            line, buffer = buffer.split(b"\n", 1)
+            try:
+                message = json.loads(line)
+            except ValueError:
+                continue
+            if message.get("request_id") == 4107:
+                return message.get("data") if message.get("error") == "success" else None
+
+
 class Player(QObject):
     """Public playback surface. Owns the handoff and the watcher."""
 
@@ -503,6 +527,35 @@ class Player(QObject):
                 sock.connect(str(path))
                 sock.sendall(json.dumps(
                     {"command": ["seek", max(0.0, float(seconds)), "absolute"]}).encode() + b"\n")
+            return True
+        except OSError:
+            return False
+
+    def queue_after(self, urls: list[str]) -> bool:
+        """Put these after what mpv is playing, in this order. Says whether
+        they went.
+
+        Not while its queue mode is on, which it shows by looping the playlist
+        for ever: there a press adds the one video it was for and nothing else,
+        and a list poured in after it is not what anybody pressed for. Over a
+        short second client, like a seek.
+        """
+        if not urls:
+            return False
+        path = resolve_socket(self._cfg)
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.settimeout(1.0)
+                sock.connect(str(path))
+                looping = _ask(sock, "loop-playlist")
+                if looping not in (False, "no", 0):
+                    return False
+                for url in urls:
+                    sock.sendall(json.dumps(
+                        {"command": ["loadfile", url, "append"]}).encode() + b"\n")
+                # Answered only after everything sent before it has been taken.
+                # Closing straight away lost the last of them, measured.
+                _ask(sock, "playlist-count")
             return True
         except OSError:
             return False

@@ -1616,13 +1616,27 @@ ApplicationWindow {
                 objectName: "playlistHeaderTitle"
                 anchors.left: backToChannel.right
                 anchors.leftMargin: 12
-                anchors.right: keepThis.left
+                anchors.right: reverseThis.left
                 anchors.rightMargin: 10
                 anchors.verticalCenter: parent.verticalCenter
                 text: App.playlistView.title || ""
                 color: Theme.colors.text
                 font.pixelSize: 13
                 elide: Text.ElideRight
+            }
+
+            // Drawn and played from its end, whether or not it is kept.
+            FlatButton {
+                id: reverseThis
+                objectName: "playlistReverse"
+                anchors.right: keepThis.left
+                anchors.rightMargin: 8
+                anchors.verticalCenter: parent.verticalCenter
+                text: App.playlistView.reversed ? "Reversed" : "Reverse"
+                accent: App.playlistView.reversed === true
+                hint: "Show and play this playlist from its last video to its first"
+                onClicked: App.setPlaylistReversed(App.playlistView.ext_id,
+                                                   !App.playlistView.reversed)
             }
 
             FlatButton {
@@ -2929,6 +2943,19 @@ ApplicationWindow {
             })
         }
 
+        // A row carried from one place in the rows shown to another. The move
+        // is made in the whole list, next to the playlist it was dropped on,
+        // so it lands in the right place even while the list is filtered down
+        // to a few. Where the list was scrolled to is kept, since reading it
+        // again would otherwise jump it back to the top.
+        function moveShown(from, to) {
+            var shown = chooserList.model
+            var scrolled = chooserList.contentY
+            App.movePlaylistTo(shown[from].ext_id, shown[to].ext_id)
+            reload()
+            Qt.callLater(function () { chooserList.contentY = scrolled })
+        }
+
         Column {
             anchors.fill: parent
             spacing: 10
@@ -2963,7 +2990,25 @@ ApplicationWindow {
                 height: parent.height - y - closeRow.height - 20
                 clip: true
                 model: playlistChooser.matching()
+                // Every row built and kept, so the one being carried is never
+                // thrown away when it scrolls out of sight while held.
+                cacheBuffer: 100000
+                // Scrolled by the wheel, the bar, or by carrying a row to an
+                // edge, never by dragging. A drag that started a little off
+                // the row it was meant for scrolled the list instead, which
+                // looked like the page moving rather than the playlist.
+                acceptedButtons: Qt.NoButton
                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                DragOrder {
+                    id: chooserOrder
+                    objectName: "chooserOrder"
+                    parent: chooserList
+                    list: chooserList
+                    rowHeight: 30
+                    rowCount: chooserList.count
+                    onDropped: (from, to) => playlistChooser.moveShown(from, to)
+                }
                 // Laid out here rather than left to the control. A CheckBox
                 // with its own contentItem draws the box after the text, so a
                 // long name ran straight into it.
@@ -2971,15 +3016,36 @@ ApplicationWindow {
                     id: entry
                     objectName: "chooserRow"
                     required property var modelData
+                    required property int index
                     width: chooserList.width - 12
                     height: 30
+                    // Left where it is while it is carried, faded, so the eye
+                    // knows which one is on the move.
+                    opacity: chooserOrder.from === entry.index ? 0.35 : 1.0
+
+                    DragGrip {
+                        id: grip
+                        objectName: "chooserGrip"
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        onBegan: (y, pressY) => chooserOrder.begin(entry.index, entry.modelData.title, y, pressY)
+                        onCarried: (y) => chooserOrder.carry(y)
+                        onEnded: chooserOrder.finish()
+                    }
 
                     CheckBox {
                         id: box
-                        anchors.left: parent.left
+                        objectName: "chooserShowBox"
+                        anchors.left: grip.right
                         anchors.verticalCenter: parent.verticalCenter
                         checked: !playlistChooser.away[entry.modelData.ext_id]
                         onToggled: playlistChooser.toggle(entry.modelData.ext_id, !checked)
+
+                        HintBubble {
+                            parent: box
+                            shown: box.hovered
+                            words: "Show it in the sidebar. Unticked, it is kept but out of sight"
+                        }
                     }
 
                     Label {
@@ -2994,33 +3060,6 @@ ApplicationWindow {
                         elide: Text.ElideRight
                     }
 
-                    // A tick here sends a press on one of this playlist's
-                    // videos to the music player instead of mpv. The word is
-                    // a label of its own rather than the box's own text,
-                    // which this style draws in a colour of its choosing.
-                    CheckBox {
-                        id: musicBox
-                        objectName: "chooserMusicBox"
-                        anchors.right: order.left
-                        anchors.rightMargin: 8
-                        anchors.verticalCenter: parent.verticalCenter
-                        checked: entry.modelData.is_music === 1
-                        onToggled: {
-                            App.setPlaylistMusic(entry.modelData.ext_id, checked)
-                            playlistChooser.reload()
-                        }
-                    }
-
-                    Label {
-                        id: musicLabel
-                        anchors.right: musicBox.left
-                        anchors.rightMargin: 2
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: "Music"
-                        color: musicBox.checked ? Theme.colors.accent : Theme.colors.textMuted
-                        font.pixelSize: 11
-                    }
-
                     Label {
                         id: countLabel
                         anchors.right: musicLabel.left
@@ -3031,34 +3070,71 @@ ApplicationWindow {
                         font.pixelSize: 11
                     }
 
-                    // The order here is the order in the sidebar. Reading the
-                    // list again keeps whatever was chosen here, so this is
-                    // not undone by a refresh.
-                    Row {
-                        id: order
-                        anchors.right: parent.right
+                    // A tick here sends a press on one of this playlist's
+                    // videos to the music player instead of mpv. The word is
+                    // a label of its own rather than the box's own text,
+                    // which this style draws in a colour of its choosing.
+                    Label {
+                        id: musicLabel
+                        anchors.right: musicBox.left
                         anchors.rightMargin: 2
                         anchors.verticalCenter: parent.verticalCenter
-                        spacing: 2
+                        text: "Music"
+                        color: musicBox.checked ? Theme.colors.accent : Theme.colors.textMuted
+                        font.pixelSize: 11
+                    }
 
-                        FlatButton {
-                            text: "\u25b2"
-                            onClicked: {
-                                App.movePlaylist(entry.modelData.ext_id, -1)
-                                playlistChooser.reload()
-                            }
+                    CheckBox {
+                        id: musicBox
+                        objectName: "chooserMusicBox"
+                        anchors.right: reverseLabel.left
+                        anchors.rightMargin: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                        checked: entry.modelData.is_music === 1
+                        onToggled: {
+                            App.setPlaylistMusic(entry.modelData.ext_id, checked)
+                            playlistChooser.reload()
                         }
-                        FlatButton {
-                            text: "\u25bc"
-                            onClicked: {
-                                App.movePlaylist(entry.modelData.ext_id, 1)
-                                playlistChooser.reload()
-                            }
+
+                        HintBubble {
+                            parent: musicBox
+                            shown: musicBox.hovered
+                            words: "Play its videos in the music player rather than in mpv"
+                        }
+                    }
+
+                    // Drawn and played from its end, for a list that grows at
+                    // the bottom and is wanted newest first, or the other way.
+                    Label {
+                        id: reverseLabel
+                        anchors.right: reverseBox.left
+                        anchors.rightMargin: 2
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Reversed"
+                        color: reverseBox.checked ? Theme.colors.accent : Theme.colors.textMuted
+                        font.pixelSize: 11
+                    }
+
+                    CheckBox {
+                        id: reverseBox
+                        objectName: "chooserReverseBox"
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        checked: !!entry.modelData.reversed
+                        onToggled: {
+                            App.setPlaylistReversed(entry.modelData.ext_id, checked)
+                            playlistChooser.reload()
+                        }
+
+                        HintBubble {
+                            parent: reverseBox
+                            shown: reverseBox.hovered
+                            words: "Show and play it from its last video to its first"
                         }
                     }
 
                     // The whole row is the target, not just the box, but not
-                    // the arrows, which do their own thing.
+                    // the boxes at the end, which do their own thing.
                     MouseArea {
                         anchors.left: box.right
                         anchors.right: countLabel.right
@@ -3069,6 +3145,7 @@ ApplicationWindow {
                                        !playlistChooser.away[entry.modelData.ext_id])
                     }
                 }
+
             }
 
             Row {
@@ -3114,10 +3191,18 @@ ApplicationWindow {
         }
 
         // A snapshot, like the other one. A live model rebuilds itself under
-        // the hand that just pressed an arrow and sends the list to the top.
+        // the hand that just moved a row and sends the list to the top.
         property var all: []
 
         function reload() { all = App.keptPlaylists }
+
+        // Carried by the handle, the same way as in the other window.
+        function moveShown(from, to) {
+            var scrolled = keptList.contentY
+            App.movePlaylistTo(all[from].ext_id, all[to].ext_id)
+            reload()
+            Qt.callLater(function () { keptList.contentY = scrolled })
+        }
 
         Column {
             anchors.fill: parent
@@ -3145,17 +3230,44 @@ ApplicationWindow {
                 height: parent.height - y - keptCloseRow.height - 20
                 clip: true
                 model: keptChooser.all
+                cacheBuffer: 100000
+                // Never dragged by the mouse, for the same reason as the
+                // other window's list.
+                acceptedButtons: Qt.NoButton
                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                DragOrder {
+                    id: keptOrder
+                    objectName: "keptOrder"
+                    parent: keptList
+                    list: keptList
+                    rowHeight: 34
+                    rowCount: keptList.count
+                    inset: 0
+                    onDropped: (from, to) => keptChooser.moveShown(from, to)
+                }
 
                 delegate: Item {
                     id: keptEntry
                     required property var modelData
+                    required property int index
                     width: keptList.width
                     height: 34
+                    opacity: keptOrder.from === keptEntry.index ? 0.35 : 1.0
+
+                    DragGrip {
+                        id: keptGrip
+                        objectName: "keptGrip"
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        onBegan: (y, pressY) => keptOrder.begin(keptEntry.index, keptEntry.modelData.title, y, pressY)
+                        onCarried: (y) => keptOrder.carry(y)
+                        onEnded: keptOrder.finish()
+                    }
 
                     Label {
                         id: keptName
-                        anchors.left: parent.left
+                        anchors.left: keptGrip.right
                         anchors.leftMargin: 4
                         anchors.right: keptCount.left
                         anchors.rightMargin: 10
@@ -3189,38 +3301,49 @@ ApplicationWindow {
                     CheckBox {
                         id: keptMusicBox
                         objectName: "keptMusicBox"
-                        anchors.right: keptOrder.left
-                        anchors.rightMargin: 8
+                        anchors.right: keptReverseLabel.left
+                        anchors.rightMargin: 10
                         anchors.verticalCenter: parent.verticalCenter
                         checked: keptEntry.modelData.is_music === 1
                         onToggled: {
                             App.setPlaylistMusic(keptEntry.modelData.ext_id, checked)
                             keptChooser.reload()
                         }
+
+                        HintBubble {
+                            parent: keptMusicBox
+                            shown: keptMusicBox.hovered
+                            words: "Play its videos in the music player rather than in mpv"
+                        }
                     }
 
-                    Row {
-                        id: keptOrder
+                    // The same as the Reverse button above the playlist itself.
+                    Label {
+                        id: keptReverseLabel
+                        anchors.right: keptReverseBox.left
+                        anchors.rightMargin: 2
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Reversed"
+                        color: keptReverseBox.checked ? Theme.colors.accent : Theme.colors.textMuted
+                        font.pixelSize: 11
+                    }
+
+                    CheckBox {
+                        id: keptReverseBox
+                        objectName: "keptReverseBox"
                         anchors.right: keptDrop.left
                         anchors.rightMargin: 8
                         anchors.verticalCenter: parent.verticalCenter
-                        spacing: 2
-
-                        FlatButton {
-                            objectName: "keptUp"
-                            text: "\u25b2"
-                            onClicked: {
-                                App.movePlaylist(keptEntry.modelData.ext_id, -1)
-                                keptChooser.reload()
-                            }
+                        checked: !!keptEntry.modelData.reversed
+                        onToggled: {
+                            App.setPlaylistReversed(keptEntry.modelData.ext_id, checked)
+                            keptChooser.reload()
                         }
-                        FlatButton {
-                            objectName: "keptDown"
-                            text: "\u25bc"
-                            onClicked: {
-                                App.movePlaylist(keptEntry.modelData.ext_id, 1)
-                                keptChooser.reload()
-                            }
+
+                        HintBubble {
+                            parent: keptReverseBox
+                            shown: keptReverseBox.hovered
+                            words: "Show and play it from its last video to its first"
                         }
                     }
 
