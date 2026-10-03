@@ -22,6 +22,7 @@ from weave.audio import (
     AudioPlayer,
 )
 from weave.config import Config
+from weave.engine_libmpv import CURRENT
 
 
 class FakeVideoResolver:
@@ -130,9 +131,27 @@ class OnceTheAddressIsKnown(unittest.TestCase):
     def test_it_is_attached_to_what_is_playing(self) -> None:
         one = player()
         one.play_items([song()])
-        one._video_wanted = True
+        one.setVideoWanted(True)
         one._on_video_resolved("yt:a", "https://example.invalid/v")
         self.assertIn(("add_video", "https://example.invalid/v"), one._engine.calls)
+
+    def test_an_answer_before_the_song_pressed_has_started_waits_for_it(self) -> None:
+        """The look ahead answers in its own time. Landing between a press
+        and mpv opening the song pressed, it was attached to the song being
+        left, and the page sat on "Opening the video" for the one pressed.
+        Caught by the recorder, then reproduced against a real player."""
+        one = player()
+        one.play_items([song(), song("yt:b")])
+        one.setVideoWanted(True)
+        one.jumpTo(1)
+        one._engine.calls.clear()
+        one._on_video_resolved("yt:b", "https://example.invalid/b")
+        self.assertEqual(one._engine.only("add_video"), [],
+                         "a picture went to the song being left")
+        self.assertEqual(one._video_addresses.get("yt:b"), "https://example.invalid/b")
+        one._on_started(CURRENT)
+        self.assertEqual(one._engine.only("add_video"),
+                         [("add_video", "https://example.invalid/b")])
 
     def test_an_answer_for_a_song_already_left_is_kept_not_shown(self) -> None:
         one = player()

@@ -1981,8 +1981,14 @@ class AudioPlayer(QObject):
     def _on_video_resolved(self, key: str, url: str) -> None:
         self._video_addresses.put(key, url)
         trace.mark("picture_found", key=key, playing=self._current().get("key") == key)
+        # Only to a song whose picture is being looked for, which is asked
+        # only once mpv has started its file. The look ahead answers in its
+        # own time, and an answer landing between a press and mpv opening the
+        # song pressed attached the new picture to the song being left, over
+        # its own, for the seconds the new sound took to open. Kept, it is
+        # handed over the moment the song starts, as any address known is.
         if (self._current().get("key") != key or not self._video_wanted
-                or self._audio_only):
+                or self._audio_only or self._video_stage != STAGE_LOOKING):
             return
         self._video_stage = STAGE_OPENING
         self._engine.add_video(url)

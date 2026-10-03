@@ -141,6 +141,10 @@ class LibmpvEngine(QObject):
         # the page twice in one song switches the track back on rather than
         # attaching the same file again.
         self._attached = ""
+        # A picture asked for and not yet answered. Choosing a track before
+        # the answer found none, read that as a picture gone missing and
+        # attached it a second time, so every picture was opened twice.
+        self._attaching = ""
 
     # ---- the player itself ------------------------------------------------
 
@@ -201,9 +205,8 @@ class LibmpvEngine(QObject):
 
         @player.event_callback("start-file")
         def _started(event):
+            self._new_file()
             entry = _entry_id(event)
-            # An external track belongs to the file it was added to.
-            self._attached = ""
             role = self._roles.get(entry)
             if role:
                 if role == NEXT:
@@ -228,6 +231,25 @@ class LibmpvEngine(QObject):
             reason = str(getattr(data, "reason", "") or "eof")
             self._roles.pop(_entry_id(event), None)
             self.ended.emit(reason)
+
+    def _new_file(self) -> None:
+        """What belonged to the file before goes with it.
+
+        An external track belongs to the file it was added to, and so does a
+        frame. mpv keeps its output, and the last frame in it, from one file
+        to the next whenever the next one has a picture by the time its sound
+        has opened, which a picture already found and a stream slow to open
+        make likely. The report then goes from the old frame straight to the
+        new ones without ever saying there was none, and a frame already
+        counted was never counted again. MEASURED: the page said "Opening the
+        video" over a picture that was playing underneath it, at frame 254.
+        Forgotten here, the first frame of this file is news again.
+        """
+        self._attached = ""
+        self._attaching = ""
+        if self._had_frame:
+            self._had_frame = False
+            self.videoChanged.emit(False)
 
     def complaint(self, lines: int = 2) -> str:
         """What the player said about the last thing that would not play.
@@ -499,6 +521,7 @@ class LibmpvEngine(QObject):
         # it to go, and `render_ready` turns it on.
         flag = "select" if self._can_render else "auto"
         ask = getattr(self._mpv, "command_async", None)
+        self._attaching = url if ask is not None else ""
         if ask is None:
             # A binding too old to ask this way. Rare enough to be worth the
             # wait rather than a second way of doing the same thing.
@@ -533,6 +556,8 @@ class LibmpvEngine(QObject):
             self._videoTaken.emit(url)
 
     def _on_video_taken(self, url: str) -> None:
+        if url == self._attaching:
+            self._attaching = ""
         if url == self._attached:
             self._choose_video()
 
@@ -551,6 +576,9 @@ class LibmpvEngine(QObject):
         player lose the frame it is showing.
         """
         if self._mpv is None or not (self._can_render and self._want_video):
+            return
+        if self._attaching:
+            # On its way. Its answer chooses it, or `select` already has.
             return
         if self._video_on():
             return
@@ -582,6 +610,8 @@ class LibmpvEngine(QObject):
         having it, and whoever found the address is told, because the likeliest
         reason by far is that it has aged out and a fresh one would work.
         """
+        if self._attaching == url:
+            self._attaching = ""
         if self._attached == url:
             self._attached = ""
         said = "the picture could not be opened"
@@ -646,13 +676,18 @@ class LibmpvEngine(QObject):
 
         state = {"can_render": self._can_render, "want_video": self._want_video,
                  "had_frame": self._had_frame, "attached": short(self._attached),
+                 "attaching": short(self._attaching),
                  "roles": dict(self._roles)}
         if self._mpv is None:
             state["player"] = "none"
             return state
-        for name in ("vid", "video-frame-info", "playlist-pos", "idle-active"):
+        # Read as properties. `player[name]` reads the OPTION of that name,
+        # which said `vid=auto` over a chosen track and could not answer the
+        # rest at all, so the first report caught said nothing about them.
+        for name in ("vid", "video-frame-info", "estimated-frame-number",
+                     "playlist-pos", "idle-active"):
             try:
-                value = self._mpv[name]
+                value = getattr(self._mpv, name.replace("-", "_"))
                 state[name] = "set" if name == "video-frame-info" and value else value
             except Exception as exc:
                 state[name] = f"unanswered {type(exc).__name__}"

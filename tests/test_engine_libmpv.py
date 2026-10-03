@@ -221,6 +221,35 @@ class OnePictureAttachedPerSong(unittest.TestCase):
         one.add_video("https://example.invalid/v")       # the page, opened again
         self.assertIn(("vid", 1), one._mpv.said)
 
+    def test_one_on_its_way_is_not_asked_for_a_second_time(self) -> None:
+        """Choosing straight after asking found no track yet, read that as a
+        picture gone missing and attached it again, so every picture was
+        opened twice. Its answer is what chooses it."""
+        one = engine()
+        one._mpv = Talker()
+        asked: list = []
+        one._mpv.command_async = lambda *args, callback: asked.append((args, callback))
+        one.render_ready(True)
+        one.add_video("https://example.invalid/v")
+        self.assertEqual([args for args, _ in asked],
+                         [("video-add", "https://example.invalid/v", "select")])
+        self.assertEqual(one._attaching, "https://example.invalid/v")
+        one._mpv.tracks.append(1)
+        asked[0][1](None, None)
+        one._on_video_taken("https://example.invalid/v")
+        self.assertEqual(len(asked), 1, "the picture was opened twice")
+        self.assertEqual(one._attaching, "")
+        self.assertIn(("vid", 1), one._mpv.said)
+
+    def test_one_refused_is_not_waited_on(self) -> None:
+        one = engine()
+        one._mpv = Talker()
+        one._mpv.command_async = lambda *args, callback: None
+        one.render_ready(True)
+        one.add_video("https://example.invalid/v")
+        one._refused("https://example.invalid/v")
+        self.assertEqual(one._attaching, "")
+
     def test_dropping_leaves_the_track_attached(self) -> None:
         one = engine()
         one._mpv = Talker()
@@ -228,6 +257,46 @@ class OnePictureAttachedPerSong(unittest.TestCase):
         one.drop_video()
         self.assertIn(("vid", "no"), one._mpv.said)
         self.assertEqual(one._attached, "https://example.invalid/v")
+
+
+class AFrameBelongsToItsFile(unittest.TestCase):
+    """mpv keeps its output, and the last frame in it, from one file to the
+    next when the next one has a picture by the time its sound has opened.
+    The frame report then never says there was none, and a frame counted for
+    the song before was never counted for this one: the page said "Opening
+    the video" over a picture playing underneath it."""
+
+    def test_a_new_file_forgets_the_frame_and_says_so(self) -> None:
+        one = engine()
+        said: list = []
+        one.videoChanged.connect(said.append)
+        one._on_frame("video-frame-info", {"picture-type": "P"})
+        one._new_file()
+        self.assertEqual(said, [True, False])
+        self.assertFalse(one._had_frame)
+
+    def test_so_the_first_frame_of_the_new_one_is_news(self) -> None:
+        one = engine()
+        said: list = []
+        one.videoChanged.connect(said.append)
+        one._on_frame("video-frame-info", {"estimated-smpte-timecode": "00:04:22;10"})
+        one._new_file()
+        # Straight from the old frame to the new, as mpv reports it.
+        one._on_frame("video-frame-info", {"estimated-smpte-timecode": "00:00:00;00"})
+        self.assertEqual(said, [True, False, True])
+
+    def test_a_file_with_no_frame_before_says_nothing(self) -> None:
+        one = engine()
+        said: list = []
+        one.videoChanged.connect(said.append)
+        one._new_file()
+        self.assertEqual(said, [])
+
+    def test_and_forgets_what_was_attached(self) -> None:
+        one = engine()
+        one._attached = one._attaching = "https://example.invalid/v"
+        one._new_file()
+        self.assertEqual((one._attached, one._attaching), ("", ""))
 
 
 class WhetherItIsThere(unittest.TestCase):
