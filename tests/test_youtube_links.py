@@ -203,7 +203,6 @@ class WhereAPressGoes(unittest.TestCase):
         sent to mpv once it reports the video instead."""
         made = bridge_for(self)
         made._set_starting = lambda *_a, **_k: None
-        made._step_aside_for_video = lambda: None
         Bridge._open_youtube_link(made, youtube_link(f"https://youtu.be/{VIDEO}?t=90"))
         Bridge.previewPlay(made)
         self.assertEqual(made._player.handed, [f"https://www.youtube.com/watch?v={VIDEO}"])

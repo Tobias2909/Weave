@@ -207,5 +207,16 @@ Flickable {
                 songMenu.dismiss()
             }
         }
+
+        ThemedMenuSeparator {}
+
+        ThemedMenuItem {
+            objectName: "channelMusicWatch"
+            text: "Watch in mpv"
+            onTriggered: {
+                App.watchChannelGroupSong(root.askedGroup, root.asked)
+                songMenu.dismiss()
+            }
+        }
     }
 }

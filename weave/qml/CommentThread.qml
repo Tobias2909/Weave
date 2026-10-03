@@ -7,6 +7,8 @@ Column {
     // How much bigger than its usual size everything in here is drawn. Passed
     // in from the panel, which decides it from how wide it has been dragged.
     property real textScale: 1.0
+    // Beside a song rather than in the panel. Handed to every comment in it.
+    property bool song: false
     // Replies start where the words of the comment they answer start, past
     // its picture, with a thin line down from that picture beside them. At
     // the old eighteen pixels a reply's picture sat half under its parent's
@@ -20,6 +22,7 @@ Column {
         width: thread.width
         comment: thread.comment
         textScale: thread.textScale
+        song: thread.song
     }
 
     Item {
@@ -57,6 +60,7 @@ Column {
                     // view it sits in is its parent here, and the thread is what
                     // that parent belongs to.
                     textScale: thread.textScale
+                    song: thread.song
                 }
             }
         }

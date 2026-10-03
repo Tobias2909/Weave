@@ -367,3 +367,34 @@ class WhatThePlayerIsHoldingAsNext(unittest.TestCase):
         self.assertEqual(self.next_held(one), signed("yt:d"))
         self.assertEqual(self.next_held(one), self.next_named(one))
 
+
+
+class ClearingTheQueue(unittest.TestCase):
+    """Everything goes except the song playing, the ones heard before it too,
+    and the player lets go of the next song it was holding."""
+
+    def test_only_the_song_playing_is_left(self) -> None:
+        one = playing(at=2)                          # c playing, d held
+        one.clearQueue()
+        self.assertEqual([row["title"] for row in one._queue], ["c"])
+        self.assertEqual(one._queue[one._at]["title"], "c")
+        self.assertIsNone(one._next_index())
+
+    def test_the_player_holds_no_next_song_afterwards(self) -> None:
+        one = playing()
+        self.assertEqual(one._engine.holds_next(), signed("yt:b"))
+        one.clearQueue()
+        self.assertIsNone(one._engine.holds_next())
+        self.assertIsNone(one._appended)
+
+    def test_a_song_added_afterwards_comes_next(self) -> None:
+        one = playing(at=1)
+        one.clearQueue()
+        one.add_item({"key": "yt:e", "title": "e", "url": "ue"})
+        self.assertEqual([one._queue[i]["title"] for i in one._order], ["b", "e"])
+        self.assertEqual(one._queue[one._next_index()]["title"], "e")
+
+    def test_a_queue_of_one_is_left_alone(self) -> None:
+        one = playing(titles="a")
+        one.clearQueue()
+        self.assertEqual([row["title"] for row in one._queue], ["a"])

@@ -24,6 +24,11 @@ round so far has guessed at which:
   application, which is the one measure that cannot be argued with.
 
 Run with WEAVE_TRACE=1, do the thing, then read trace.log next to the images.
+
+The marks are also kept in memory whether or not a log is open, the last few
+hundred of them, because a fault that comes rarely cannot wait for somebody to
+have switched tracing on before it happened. Where the window can tell that
+something is stuck, it writes them out on its own (`dump`).
 """
 
 from __future__ import annotations
@@ -34,6 +39,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from pathlib import Path
 
 from . import paths
@@ -41,6 +47,14 @@ from . import paths
 ENV = "WEAVE_TRACE"
 LOG = paths.CACHE_DIR / "trace.log"
 FAULTS = paths.CACHE_DIR / "trace-faults.log"
+# Where the marks kept in memory are written when something is seen stuck.
+STUCK = paths.CACHE_DIR / "stuck-picture.log"
+# Past this the file is moved aside to one older copy, so a fault that keeps
+# happening cannot fill the disk.
+STUCK_LIMIT = 512 * 1024
+# How many marks are kept in memory. Every mark there is is rare, a few for each
+# song and each opening of the page, so this reaches back over several songs.
+RING = 400
 
 # A tick this far past due on the window's thread is worth a line. One frame
 # at 60 Hz is 16.7 ms, so anything over this was seen.
@@ -55,6 +69,7 @@ CLOCK_SLIP_S = 0.06
 _file = None
 _lock = threading.Lock()
 _t0 = time.monotonic()
+_ring: deque[str] = deque(maxlen=RING)
 
 
 def enabled() -> bool:
@@ -62,13 +77,14 @@ def enabled() -> bool:
 
 
 def mark(event: str, **fields) -> None:
-    """One line. A no-op unless a log is open."""
-    if _file is None:
-        return
+    """One line, kept in memory always and written while a log is open."""
     stamp = (time.monotonic() - _t0) * 1000.0
     thread = threading.current_thread().name[:14]
     tail = "".join(f" {name}={value}" for name, value in fields.items())
     line = f"{stamp:10.1f} {thread:<14} {event}{tail}\n"
+    _ring.append(line)
+    if _file is None:
+        return
     with _lock:
         try:
             _file.write(line)
@@ -152,7 +168,9 @@ class Timed:
 
     def __exit__(self, *_exc) -> None:
         spent = (time.perf_counter() - self._began) * 1000.0
-        if spent > SLOW_RENDER_MS:
+        # Only into a log. A frame is drawn many times a second, and kept in
+        # memory these would push out the marks a report is wanted for.
+        if spent > SLOW_RENDER_MS and _file is not None:
             mark("render_slow", ms=f"{spent:.1f}")
 
 
@@ -166,6 +184,9 @@ class Clock:
         self._pos = 0.0
 
     def report(self, position: float, paused: bool) -> None:
+        # Only into a log, for the reason the render times are.
+        if _file is None:
+            return
         now = time.monotonic()
         if self._wall and not paused and position > self._pos:
             expected = now - self._wall
@@ -187,10 +208,29 @@ PLAYER_WORDS = ("underrun", "not being called", "stuck", "drop", "VO: ",
 
 
 def player_said(level: str, prefix: str, text: str) -> None:
-    if _file is None:
-        return
+    # Kept whether or not a log is open, like every mark. Without tracing the
+    # player is asked for its errors alone, so this is a line or two a song.
     if level in ("warn", "error", "fatal") or any(w in text for w in PLAYER_WORDS):
         mark("mpv", level=level, who=prefix, said=text.strip())
+
+
+def dump(why: str, path: Path | None = None, **fields) -> Path | None:
+    """Write the marks kept in memory to a file of their own, under a line
+    saying when and why. None when it could not be written."""
+    path = path or STUCK
+    head = "".join(f" {name}={value}" for name, value in fields.items())
+    lines = list(_ring)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() and path.stat().st_size > STUCK_LIMIT:
+            path.replace(path.with_name(path.name + ".1"))
+        with open(path, "a", encoding="utf-8") as out:
+            out.write(f"==== {time.strftime('%Y-%m-%d %H:%M:%S')} {why}{head}\n")
+            out.writelines(lines)
+            out.write("\n")
+    except OSError:
+        return None
+    return path
 
 
 # ---- the sound server ------------------------------------------------------

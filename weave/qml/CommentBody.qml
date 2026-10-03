@@ -12,6 +12,9 @@ Row {
     // from how wide it has been dragged and hands it down, since a component
     // in its own file cannot see anything declared in the one that uses it.
     property real textScale: 1.0
+    // Shown beside a song on the Now playing page rather than in the panel, so
+    // a time pressed in it goes to that point in the song and not in mpv.
+    property bool song: false
 
     spacing: 8
 
@@ -53,13 +56,32 @@ Row {
             }
         }
 
+        // Markup, so an address, a channel's handle and a time can be pressed
+        // the way they can in a description. A press anywhere else in the
+        // words is not taken, so a list of comments still scrolls under it.
         Label {
+            id: commentWords
             objectName: "commentText"
             width: parent.width
-            text: body.comment.text ? body.comment.text : ""
+            text: body.comment.markup ? body.comment.markup : ""
+            textFormat: Text.StyledText
+            linkColor: Theme.colors.accent
             color: Theme.colors.text
             font.pixelSize: body.sized(12)
             wrapMode: Text.Wrap
+            onLinkActivated: function (link) {
+                if (link.indexOf("weave-seek:") !== 0)
+                    App.openLink(link)
+                else if (body.song)
+                    Audio.seekTo(parseInt(link.slice(11)))
+                else
+                    App.seekVideo(parseInt(link.slice(11)))
+            }
+
+            HoverHandler {
+                cursorShape: commentWords.linkAt(point.position.x, point.position.y) !== ""
+                             ? Qt.PointingHandCursor : Qt.ArrowCursor
+            }
         }
 
         Label {

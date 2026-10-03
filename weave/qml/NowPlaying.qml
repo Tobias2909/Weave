@@ -448,14 +448,30 @@ Item {
                                 spacing: 10
 
                                 Label {
+                                    id: nowTitle
                                     objectName: "nowPlayingTitle"
+                                    // Markup only when a channel's handle in
+                                    // it can be pressed. Plain text otherwise.
+                                    readonly property string plain: Audio.track.title
+                                                                    ? Audio.track.title : ""
+                                    readonly property string marked: App.titleLinks(plain)
                                     width: parent.width - audioOnly.width
                                            - fillScreen.width - titleRow.spacing * 2
-                                    text: Audio.track.title ? Audio.track.title : ""
+                                    text: marked !== "" ? marked : plain
+                                    textFormat: marked !== "" ? Text.StyledText : Text.PlainText
+                                    linkColor: Theme.colors.accent
                                     color: Theme.colors.text
                                     font.pixelSize: 19
                                     font.weight: Font.DemiBold
                                     elide: Text.ElideRight
+                                    onLinkActivated: function (link) { App.openLink(link) }
+
+                                    HoverHandler {
+                                        enabled: nowTitle.marked !== ""
+                                        cursorShape: nowTitle.linkAt(point.position.x,
+                                                                     point.position.y) !== ""
+                                                     ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                    }
                                 }
 
                                 // Sound alone, and remembered. On, no picture
@@ -899,6 +915,31 @@ Item {
                     onClicked: page.choose(modelData.name)
                 }
             }
+
+            // Something done to the queue rather than a place to go, so it is
+            // set apart from the tabs by a bar. Only beside Next, the one tab
+            // that shows what it clears.
+            Item {
+                visible: page.tab === "next" && Audio.queue.length > 1
+                width: queueBar.implicitWidth + 4
+                height: 28
+
+                Label {
+                    id: queueBar
+                    anchors.centerIn: parent
+                    text: "|"
+                    color: Theme.colors.textMuted
+                    font.pixelSize: 16
+                }
+            }
+
+            FlatButton {
+                objectName: "nowPlayingQueueClear"
+                visible: page.tab === "next" && Audio.queue.length > 1
+                text: "Clear"
+                hint: "Take everything out of the queue except the song playing"
+                onClicked: Audio.clearQueue()
+            }
         }
 
         Label {
@@ -984,6 +1025,7 @@ Item {
                 required property var modelData
                 width: ListView.view.width
                 comment: modelData
+                song: true
             }
 
             Label {

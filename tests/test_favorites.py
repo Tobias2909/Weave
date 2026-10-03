@@ -439,6 +439,7 @@ class TheHeartFollowsTheSong(unittest.TestCase):
         class Video:
             def __init__(self):
                 self.nowPlaying = Wire()
+                self.moving = Wire()
 
         bridge = Bridge.__new__(Bridge)
         bridge._name_favourite_makers = lambda: None

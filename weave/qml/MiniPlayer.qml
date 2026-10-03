@@ -212,7 +212,7 @@ Rectangle {
         y: -height - 8
         x: parent.width - width - 12
         width: 340
-        height: Math.min(360, 46 + queued.count * 46)
+        height: Math.min(366, 52 + queued.count * 46)
         padding: 8
         modal: false
         background: Rectangle {
@@ -226,12 +226,35 @@ Rectangle {
             anchors.fill: parent
             spacing: 6
 
-            Label {
-                text: "QUEUE  ·  " + Audio.queue.length
-                color: Theme.colors.textMuted
-                font.pixelSize: 10
-                font.letterSpacing: 1.2
-                font.weight: Font.DemiBold
+            Item {
+                width: parent.width
+                height: 24
+
+                Label {
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "QUEUE  ·  " + Audio.queue.length
+                    color: Theme.colors.textMuted
+                    font.pixelSize: 10
+                    font.letterSpacing: 1.2
+                    font.weight: Font.DemiBold
+                }
+
+                // Everything but the song playing, so a list thrown together
+                // for one evening can be started over without taking the song
+                // on now away with it.
+                FlatButton {
+                    objectName: "queueClearButton"
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    implicitHeight: 24
+                    padding: 8
+                    fontSize: 11
+                    visible: Audio.queue.length > 1
+                    text: "Clear"
+                    hint: "Take everything out except the song playing"
+                    onClicked: Audio.clearQueue()
+                }
             }
 
             QueueList {
@@ -239,7 +262,7 @@ Rectangle {
                 objectName: "queuedList"
                 owner: upNext
                 width: parent.width
-                height: parent.height - 22
+                height: parent.height - 30
             }
         }
     }

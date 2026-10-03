@@ -97,6 +97,21 @@ Item {
                 songMenu.dismiss()
             }
         }
+
+        ThemedMenuSeparator {}
+
+        // The song as the video it is, in mpv, the way a card plays.
+        ThemedMenuItem {
+            objectName: "songWatchEntry"
+            text: "Watch in mpv"
+            onTriggered: {
+                if (view.askedResult >= 0)
+                    App.watchResult(view.askedResult)
+                else
+                    App.watchShelfItem(view.askedShelf, view.askedItem)
+                songMenu.dismiss()
+            }
+        }
     }
     readonly property var openShelfItems: openShelf.items ? openShelf.items : []
     readonly property bool onShelfPage: openShelfItems.length > 0
@@ -154,15 +169,17 @@ Item {
             }
 
             FlatButton {
+                objectName: "musicHomeButton"
                 visible: App.musicResults.length > 0 || view.onShelfPage
-                // Read from the back history, so it names where it really
-                // goes. Written by hand it said recommended, which is one of
-                // several ways into a list and was wrong from every other one.
-                text: App.backLabel !== "" ? App.backLabel : "Back to music"
+                // Always the shelves, never one step back. A search left open
+                // is still there when the Music tab is pressed again, and a
+                // button that walked back from it went to whatever page was
+                // open before, so the only way home was the whole history.
+                // The mouse's back button is the one that walks.
+                text: "Back to music"
                 onClicked: {
                     query.text = ""
-                    if (App.canGoBack) App.goBack()
-                    else App.clearResults()
+                    App.clearResults()
                 }
             }
 

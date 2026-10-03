@@ -251,8 +251,8 @@ class _Renderer(QQuickFramebufferObject.Renderer):
     def __init__(self, item: VideoSurface) -> None:
         super().__init__()
         self._item = item
-        self._size = (0, 0)
         self._why = ""
+        self._drawn = (0, 0)
 
     def render(self) -> None:
         player = _engine
@@ -266,9 +266,18 @@ class _Renderer(QQuickFramebufferObject.Renderer):
             if not self._item.drawing:
                 _context.render(skip_rendering=True, block_for_target_time=False)
                 return
-            width, height = self._size
+            # The framebuffer's own size, in device pixels. The item's size is
+            # in the window's logical units, and on a screen scaled by 1.7 the
+            # player told that drew into 1/1.7 of each side and left the rest
+            # of the box empty. Qt sizes the framebuffer for the screen the
+            # window is on and makes it again when the window moves.
+            target = self.framebufferObject()
+            width, height = target.width(), target.height()
             if width <= 0 or height <= 0:
                 return
+            if (width, height) != self._drawn:
+                self._drawn = (width, height)
+                trace.mark("surface_size", w=width, h=height)
             # Never waits. The player is told to hand frames over at their
             # display time, and this returns the moment the draw is issued,
             # so the thread painting the window is held for one draw only.
@@ -276,7 +285,7 @@ class _Renderer(QQuickFramebufferObject.Renderer):
                 _context.render(flip_y=False, block_for_target_time=False,
                                 opengl_fbo={
                     "w": width, "h": height,
-                    "fbo": int(self.framebufferObject().handle()),
+                    "fbo": int(target.handle()),
                 })
         except Exception:
             # A frame that will not draw is not worth taking the window down
@@ -317,13 +326,6 @@ class _Renderer(QQuickFramebufferObject.Renderer):
         trace.mark("render_context_built", render_thread=threading.get_ident())
         player.render_ready(True)
         return True
-
-    def synchronize(self, item: VideoSurface) -> None:
-        self._size = (int(item.width()), int(item.height()))
-
-    def createFramebufferObject(self, size):
-        self._size = (size.width(), size.height())
-        return super().createFramebufferObject(size)
 
     def release(self) -> None:
         """Nothing of its own to let go. The context outlives any one renderer

@@ -168,6 +168,7 @@ class WhatTheWindowShows(unittest.TestCase):
 
         class Video(QObject):
             nowPlaying = Signal(str)
+            moving = Signal(str)
 
         self.bridge._player = Video()
 

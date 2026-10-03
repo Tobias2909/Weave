@@ -148,15 +148,16 @@ class PlayRefusesAnAnnouncedVideo(unittest.TestCase):
         Bridge.play(bridge, "yt:aaaaaaaaaaa")
         self.assertEqual(bridge.opened, ["yt:aaaaaaaaaaa"])
 
-    def test_the_music_steps_aside_the_moment_it_is_handed_over(self):
-        """Said here rather than waited for. The watcher says it too, when it
-        sees mpv open a file, but a broadcast is resolved before mpv opens
-        anything and one that has already finished opens nothing at all."""
+    def test_the_music_plays_on_until_the_video_does(self):
+        """Handing an address over is not the video starting. mpv takes
+        seconds to resolve it and a broadcast longer, so the music waits for
+        the watcher to see the picture move."""
         from weave.ui.bridge import Bridge
 
         bridge = make_bridge([ordinary_row()])
         Bridge.play(bridge, "yt:bbbbbbbbbbb")
-        self.assertEqual(bridge._audio.paused, 1)
+        self.assertEqual(bridge._player.calls != [], True)
+        self.assertEqual(bridge._audio.paused, 0)
 
     def test_the_music_stays_where_it_is_when_nothing_was_handed_over(self):
         from weave.ui.bridge import Bridge

@@ -329,3 +329,98 @@ class TheChildrenHandedAVideo(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheVideoReallyPlaying(unittest.TestCase):
+    """The music gives way when the picture moves, not when mpv is handed an
+    address. mpv names the file seconds before it has resolved anything, and
+    the music used to stop at that moment and leave the room silent."""
+
+    def setUp(self):
+        self.watcher = _IpcWatcher(Path("/nonexistent.sock"), threshold=0.85)
+        self.moving: list[str] = []
+        self.watcher.moving.connect(self.moving.append)
+        self.watcher._had_session = True
+
+    def feed(self, name, data):
+        self.watcher._handle({"event": "property-change", "name": name, "data": data})
+
+    def test_naming_the_file_is_not_enough(self):
+        self.feed("path", YT)
+        self.assertEqual(self.moving, [])
+
+    def test_the_first_position_is_not_enough_either(self):
+        """mpv reports where it starts before it plays, and a file opened
+        paused reports one position and stays there."""
+        self.feed("path", YT)
+        self.feed("time-pos", 0.0)
+        self.feed("time-pos", 0.0)
+        self.assertEqual(self.moving, [])
+
+    def test_a_position_that_moves_is(self):
+        self.feed("path", YT)
+        for pos in (0.0, 0.1, 0.2, 0.3):
+            self.feed("time-pos", pos)
+        self.assertEqual(self.moving, ["yt:aaaaaaaaaaa"])
+
+    def test_said_once_per_file(self):
+        self.feed("path", YT)
+        for pos in (0.0, 0.5, 1.0, 5.0):
+            self.feed("time-pos", pos)
+        self.feed("path", YT_OTHER)
+        for pos in (10.0, 10.5):
+            self.feed("time-pos", pos)
+        self.assertEqual(self.moving, ["yt:aaaaaaaaaaa", "yt:bbbbbbbbbbb"])
+
+    def test_resuming_partway_counts_from_where_it_resumed(self):
+        self.feed("path", YT)
+        self.feed("time-pos", 1200.0)
+        self.feed("time-pos", 1200.4)
+        self.assertEqual(self.moving, ["yt:aaaaaaaaaaa"])
+
+    def test_something_it_cannot_name_still_counts(self):
+        """Two things playing at once is never what anybody wanted, whatever
+        the second one is."""
+        self.feed("path", "/tmp/some file.mkv")
+        self.feed("time-pos", 0.0)
+        self.feed("time-pos", 0.5)
+        self.assertEqual(self.moving, [""])
+
+
+class AHandOverWakesTheWatcher(unittest.TestCase):
+    """With no mpv running the watcher looks for one every few seconds, which
+    is up to five seconds of both playing at once once one has started."""
+
+    def test_a_poke_ends_the_wait_at_once(self):
+        import threading
+        import time
+
+        watcher = _IpcWatcher(Path("/nonexistent.sock"), threshold=0.85)
+        thread = threading.Thread(target=watcher.run, daemon=True)
+        thread.start()
+        # Long enough for the wait between looks to have grown past a second,
+        # so a look that comes at once can only be the poke's doing.
+        time.sleep(1.5)
+        looked = []
+        real_exists = Path.exists
+
+        def counting(path):
+            if str(path) == "/nonexistent.sock":
+                looked.append(time.monotonic())
+            return real_exists(path)
+
+        Path.exists = counting
+        try:
+            time.sleep(0.05)
+            before = len(looked)
+            poked_at = time.monotonic()
+            watcher.poke()
+            deadline = poked_at + 1.0
+            while len(looked) == before and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertGreater(len(looked), before)
+            self.assertLess(looked[before] - poked_at, 0.2)
+        finally:
+            Path.exists = real_exists
+            watcher.stop()
+            thread.join(2)

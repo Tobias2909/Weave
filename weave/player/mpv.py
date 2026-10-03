@@ -131,7 +131,13 @@ class _IpcWatcher(QThread):
     # growth rather than any change at all.
     GROWTH_S = 3.0
 
+    # How far a file has to have played before it counts as playing. mpv
+    # says where a file starts before it plays it, and a file opened paused
+    # says it once and stays there.
+    MOVING_S = 0.25
+
     nowPlaying = Signal(str, str)     # key, media title
+    moving = Signal(str)              # key, or "" for a file with none: it plays
     watched = Signal(str, float)      # key, progress
     connectionChanged = Signal(bool)
     stopped = Signal()                # mpv went away
@@ -141,6 +147,10 @@ class _IpcWatcher(QThread):
         self._socket_path = socket_path
         self._threshold = threshold
         self._stop = threading.Event()
+        # Set to end the wait between looks for a player early, when one has
+        # just been handed something and is about to appear.
+        self._poke = threading.Event()
+        self._moving_said = False
         self._sock: socket.socket | None = None
         self._hint_lock = threading.Lock()
         self._twitch_hint: str | None = None
@@ -178,8 +188,20 @@ class _IpcWatcher(QThread):
         with self._hint_lock:
             self._twitch_hint = login
 
+    def poke(self) -> None:
+        """Look for the player now rather than at the next turn of the wait,
+        which grows to five seconds while there is none."""
+        self._poke.set()
+
+    def _rest(self, seconds: float) -> bool:
+        """Wait between looks. Says whether it was cut short by a poke."""
+        poked = self._poke.wait(seconds)
+        self._poke.clear()
+        return poked
+
     def stop(self) -> None:
         self._stop.set()
+        self._poke.set()
         sock = self._sock
         if sock is not None:
             try:
@@ -201,8 +223,9 @@ class _IpcWatcher(QThread):
         while not self._stop.is_set():
             if not self._socket_path.exists():
                 self._announce_gone()
-                self._stop.wait(backoff)
-                backoff = min(backoff * 1.5, 5.0)
+                # A poke means a player is on its way, so it is looked for
+                # often from then on until it is there.
+                backoff = 0.25 if self._rest(backoff) else min(backoff * 1.5, 5.0)
                 continue
             try:
                 self._session()
@@ -211,8 +234,7 @@ class _IpcWatcher(QThread):
                 backoff = 0.5
             except OSError:
                 self._announce_gone()
-                self._stop.wait(backoff)
-                backoff = min(backoff * 1.5, 5.0)
+                backoff = 0.25 if self._rest(backoff) else min(backoff * 1.5, 5.0)
 
     def _announce_gone(self) -> None:
         if not self._had_session:
@@ -302,6 +324,9 @@ class _IpcWatcher(QThread):
             # cheap comparisons instead of a few hundred thousand.
             if self._first_pos is None:
                 self._first_pos = float(data)
+            elif not self._moving_said and float(data) - self._first_pos >= self.MOVING_S:
+                self._moving_said = True
+                self.moving.emit(self._key or "")
             self._max_pos = max(self._max_pos, float(data))
             whole = int(data)
             if whole == self._last_whole_second:
@@ -318,6 +343,7 @@ class _IpcWatcher(QThread):
         self._first_duration = None
         self._duration_grew = False
         self._first_pos = None
+        self._moving_said = False
         if not isinstance(path, str):
             self._key = None
             return
@@ -398,6 +424,8 @@ class Player(QObject):
     """Public playback surface. Owns the handoff and the watcher."""
 
     nowPlaying = Signal(str, str)
+    # What mpv opened has started to play. What the music waits for.
+    moving = Signal(str)
     watched = Signal(str, float)
     connectionChanged = Signal(bool)
     stopped = Signal()
@@ -420,6 +448,7 @@ class Player(QObject):
         self._children: list[subprocess.Popen] = []
         self._watcher = _IpcWatcher(resolve_socket(cfg), cfg.watched_threshold, self)
         self._watcher.nowPlaying.connect(self.nowPlaying)
+        self._watcher.moving.connect(self.moving)
         self._watcher.watched.connect(self.watched)
         self._watcher.connectionChanged.connect(self.connectionChanged)
         self._watcher.stopped.connect(self.stopped)
@@ -477,6 +506,9 @@ class Player(QObject):
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
             ))
+            # A player is on its way, or already there and about to change
+            # what it plays. Either way the watcher should be looking.
+            self._watcher.poke()
             return True
         except OSError as exc:
             self.failed.emit(f"could not start the player: {exc}")

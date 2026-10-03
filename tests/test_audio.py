@@ -17,6 +17,7 @@ from weave.audio import (
     RECOVER_LIMIT,
     RECOVER_WINDOW_S,
     TOGGLE_FADE_MS,
+    VIDEO_FADE_MS,
     AddressCache,
     AudioPlayer,
     address_expiry,
@@ -784,7 +785,9 @@ class Fading(_Base):
             self.player._fade.stop()
             self.player._auto_pause = True
             self.player.pause_for_video()
-        self.assertEqual(self.player._fade.duration(), FADE_MS)
+        # Longer again, since it now plays out under the video's own sound.
+        self.assertEqual(self.player._fade.duration(), VIDEO_FADE_MS)
+        self.assertGreater(VIDEO_FADE_MS, FADE_MS)
 
     def test_toggling_when_idle_starts_the_track(self):
         self.engine.idleChanged.emit(True)

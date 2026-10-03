@@ -801,8 +801,11 @@ class FeedPoller(Worker):
                     if kind == rss.LIVE and pending:
                         self._db.mark_streams_pending(pending)
                     if result.channel_title:
-                        self._db.add_channel(key, "youtube", key.split(":", 1)[1],
-                                             result.channel_title)
+                        # The name only. Following the channel again here
+                        # raised its place in All on every poll, so a channel
+                        # put in one group showed up in All after the first.
+                        self._db.remember_channel(key, "youtube", key.split(":", 1)[1],
+                                                  result.channel_title)
                     self._db.mark_polled(key, None)
                     polled.add(key)
                     if (kind not in (rss.LIVE, rss.MEMBERS) and not result.videos
@@ -1990,7 +1993,10 @@ class LiveWatcher(Worker):
         if not missing or self._cancel.is_set():
             return
         for login, display, picture in client.users(missing):
-            self._db.add_channel(f"twitch:{login}", "twitch", login, display, picture or None)
+            # A name and a picture, written without following the channel
+            # again, which would put one kept for a group into All.
+            self._db.remember_channel(f"twitch:{login}", "twitch", login, display,
+                                      picture or None)
 
 
 class DetailFetcher(Worker):

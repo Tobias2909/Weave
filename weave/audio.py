@@ -96,6 +96,12 @@ HEARD_S = 30.0
 # seek forwards is not the song being heard.
 HEARD_STEP_S = 2.0
 
+# Giving way to a video in mpv. The music now plays on until the video has
+# really started, so this fade happens under the video's own sound, and at the
+# 500 ms above it was drowned and heard as a cut. Long enough to be heard
+# receding behind the video.
+VIDEO_FADE_MS = 2000
+
 # Pausing and carrying on, pressed by hand. Half the fade above, because here
 # the press itself is the thing waited on, and at 500 ms the music was heard
 # answering late. Still a fade and never a cut, which is what a stop in the
@@ -137,6 +143,12 @@ STAGE_LOOKING = "Looking for the video"
 STAGE_OPENING = "Opening the video"
 STAGE_KEPT = "Opening the video kept on disk"
 STAGE_SHOWING = "Showing the video"
+# How long the step line may wait with the page open before the picture counts
+# as one that is not coming, and what was kept in memory is written down. A
+# picture opens in about two and a half seconds and finding its address takes
+# about as long again, so these are far past anything that is merely slow.
+STUCK_OPENING_S = 15
+STUCK_LOOKING_S = 45
 
 
 @dataclass(frozen=True)
@@ -676,6 +688,15 @@ class AudioPlayer(QObject):
         self._stall_timer = QTimer(self)
         self._stall_timer.setSingleShot(True)
         self._stall_timer.timeout.connect(self._on_stalled_too_long)
+        # A picture that never comes is rare and has not been caught in a
+        # trace, which has to be switched on before it happens. So the step
+        # line is watched always, and a wait far past anything slow writes
+        # down what was kept in memory, while it is still there.
+        self._stuck_timer = QTimer(self)
+        self._stuck_timer.setSingleShot(True)
+        self._stuck_timer.timeout.connect(self._picture_stuck)
+        self._stage_seen = ("", "")
+        self.videoChanged.connect(self._watch_stage)
         self._stall_at = -1.0
 
         self._shuffle = (db.get_state("music_shuffle", "0") == "1") if db else False
@@ -1351,6 +1372,8 @@ class AudioPlayer(QObject):
             self._stall_timer.stop()
 
     def _on_started(self, role: str) -> None:
+        trace.mark("song_started", role=role, at=self._at, appended=self._appended,
+                   queue=len(self._queue))
         if role == NEXT and self._appended is not None:
             # mpv moved on by itself, as planned. Weave's pointer follows.
             self._at = self._appended
@@ -1605,6 +1628,29 @@ class AudioPlayer(QObject):
         self.trackChanged.emit()
 
     @Slot()
+    def clearQueue(self) -> None:
+        """Everything but the song playing goes, before it as well as after.
+
+        What is left is a queue of one, so whatever is added next comes
+        straight after it. The player is told to let go of the song it was
+        holding as next, which nothing that follows would tell it, since with
+        nothing wanted next there is nothing for the arrangement to replace.
+        """
+        if not (0 <= self._at < len(self._queue)) or len(self._queue) < 2:
+            return
+        self._queue = [self._queue[self._at]]
+        self._order = [0]
+        self._at = 0
+        if self._appended is not None:
+            self._engine.clear_after()
+            self._appended = None
+        if not self._idle:
+            # Repeating the whole queue still has a next song, the one left.
+            self._prepare_next()
+        self.queueChanged.emit()
+        self.trackChanged.emit()
+
+    @Slot()
     def next(self) -> None:
         if not self._queue:
             return
@@ -1844,6 +1890,9 @@ class AudioPlayer(QObject):
         # a hook rather than reached for, because what counts as kept is the
         # window's business and not the player's.
         kept = self.local_video(key) if self.local_video else ""
+        known = "" if kept else self._video_addresses.get(key)
+        trace.mark("picture_for", key=key, way="kept" if kept else "known" if known
+                   else "looking")
         if kept:
             # A file on disk has its first frame in a moment rather than in the
             # seconds an address and a stream take, so the artwork over it is
@@ -1854,7 +1903,6 @@ class AudioPlayer(QObject):
             self.videoChanged.emit()
             return
         self._video_instant = False
-        known = self._video_addresses.get(key)
         if known:
             self._video_stage = STAGE_OPENING
             self._engine.add_video(known)
@@ -1889,6 +1937,7 @@ class AudioPlayer(QObject):
 
     def _on_video_resolved(self, key: str, url: str) -> None:
         self._video_addresses.put(key, url)
+        trace.mark("picture_found", key=key, playing=self._current().get("key") == key)
         if (self._current().get("key") != key or not self._video_wanted
                 or self._audio_only):
             return
@@ -1966,6 +2015,43 @@ class AudioPlayer(QObject):
             self._video_resolver.cancel()
         self._video_resolver = None
 
+    def _watch_stage(self) -> None:
+        """Note each step the picture takes, and wait on the ones that wait."""
+        stage = self._video_stage
+        key = str(self._current().get("key") or "")
+        if (stage, key) == self._stage_seen:
+            return
+        self._stage_seen = (stage, key)
+        trace.mark("stage", stage=stage.replace(" ", "_") or "-", key=key)
+        if stage in (STAGE_OPENING, STAGE_KEPT, STAGE_LOOKING) and self._video_wanted:
+            wait = STUCK_LOOKING_S if stage == STAGE_LOOKING else STUCK_OPENING_S
+            self._stuck_timer.start(wait * 1000)
+        else:
+            self._stuck_timer.stop()
+
+    def _picture_stuck(self) -> None:
+        """The step line has said the picture is on its way for far too long.
+
+        Nothing is mended here, because the cause has never been seen. What is
+        written is what was kept in memory, which is where the cause will be,
+        with what the player says about the picture at this moment.
+        """
+        stage = self._video_stage
+        if (stage not in (STAGE_OPENING, STAGE_KEPT, STAGE_LOOKING)
+                or not self._video_wanted or self._video_showing):
+            return
+        state = {}
+        report = getattr(self._engine, "picture_state", None)
+        if report is not None:
+            try:
+                state = report()
+            except Exception as exc:
+                state = {"player": f"unanswered {type(exc).__name__}"}
+        trace.dump("the picture never came", stage=stage.replace(" ", "_"),
+                   key=self._current().get("key", ""), at=self._at,
+                   appended=self._appended, queue=len(self._queue), idle=self._idle,
+                   **{name.replace("-", "_"): value for name, value in state.items()})
+
     def _on_video_frame(self, showing: bool) -> None:
         self._video_showing = bool(showing)
         if showing:
@@ -2036,7 +2122,7 @@ class AudioPlayer(QObject):
         """Called when mpv starts something. Two things playing at once is
         never what anyone wanted, but neither is being cut off mid note."""
         if self._auto_pause and self._get_playing():
-            self._fade_to(0.0, pause_after=True)
+            self._fade_to(0.0, pause_after=True, duration_ms=VIDEO_FADE_MS)
 
     def shutdown(self) -> None:
         # The picture resolver goes with the rest. Qt treats destroying

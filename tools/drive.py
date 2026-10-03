@@ -920,6 +920,30 @@ class Smoke:
         settle(0.4)
         self.check("walking back leaves the section page", not read(page, "visible"))
 
+        # The button above a section goes to the shelves, never one step back,
+        # since one step back from a list reached again later is whatever page
+        # was open in between.
+        bridge.openShelf(0)
+        settle(0.4)
+        home = find(window, "musicHomeButton")
+        self.check("a section offers the way back to the shelves",
+                   home is not None and bool(read(home, "visible"))
+                   and read(home, "text") == "Back to music")
+        call(home, "clicked")
+        settle(0.4)
+        self.check("and it lands on the shelves",
+                   not read(page, "visible") and read(bridge, "viewKind") == "music")
+
+        # A song can be watched as the video it is, last in its menu.
+        song_menu = find(window, "songMenu")
+        song_menu.open()
+        settle(0.3)
+        offered = [text.strip() for text, _ in menu_entries(song_menu)]
+        self.check("a song offers to be watched in mpv",
+                   bool(offered) and offered[-1] == "Watch in mpv", ", ".join(offered))
+        song_menu.close()
+        settle(0.2)
+
         # Pressing a song fills the queue and opens nothing. Offline the
         # station never arrives, which is the point: the decision not to open
         # a list is taken when the tile is pressed, not when rows land.
@@ -970,6 +994,10 @@ class Smoke:
         rows = read(find(window, "queuedList"), "count")
         in_queue = colour_count(window.grabWindow(), ARTWORK)
         self.check("the queue lists what is coming", rows == 3, f"{rows} rows")
+        clear = find(window, "queueClearButton")
+        self.check("the queue offers to clear it",
+                   clear is not None and bool(read(clear, "visible"))
+                   and read(clear, "text") == "Clear")
         self.check("with a picture on every row", in_queue > drawn,
                    f"{in_queue} pixels against {drawn} with the queue shut")
         if self.shot:

@@ -636,6 +636,41 @@ class LibmpvEngine(QObject):
     def wants_video(self) -> bool:
         return self._want_video
 
+    def picture_state(self) -> dict:
+        """What the player says about the picture right now, for the report
+        written when one never came. Each answer is asked on its own, since
+        a report that fails over one question says nothing at all."""
+        def short(address) -> str:
+            text = str(address or "")
+            return text[:60] + ("..." if len(text) > 60 else "")
+
+        state = {"can_render": self._can_render, "want_video": self._want_video,
+                 "had_frame": self._had_frame, "attached": short(self._attached),
+                 "roles": dict(self._roles)}
+        if self._mpv is None:
+            state["player"] = "none"
+            return state
+        for name in ("vid", "video-frame-info", "playlist-pos", "idle-active"):
+            try:
+                value = self._mpv[name]
+                state[name] = "set" if name == "video-frame-info" and value else value
+            except Exception as exc:
+                state[name] = f"unanswered {type(exc).__name__}"
+        try:
+            state["video_tracks"] = [
+                f"{track.get('id')}{'*' if track.get('selected') else ''}"
+                f":{short(track.get('external-filename'))}"
+                for track in (self._mpv.track_list or []) if track.get("type") == "video"]
+        except Exception as exc:
+            state["video_tracks"] = f"unanswered {type(exc).__name__}"
+        try:
+            state["playlist"] = [
+                f"{entry.get('id')}{'>' if entry.get('playing') else ''}"
+                for entry in (self._mpv.playlist or [])]
+        except Exception as exc:
+            state["playlist"] = f"unanswered {type(exc).__name__}"
+        return state
+
     # ---- what mpv reports -------------------------------------------------
 
     def _on_position(self, _name, value) -> None:

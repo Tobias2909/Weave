@@ -331,16 +331,30 @@ Rectangle {
 
             Text {
                 id: titleText
+                // Markup only when a channel's handle in the title can be
+                // pressed, so every other title draws exactly as before. A
+                // press on the handle opens that channel and is taken here;
+                // anywhere else in the title the card plays as it always did.
+                readonly property string marked: App.titleLinks(card.title)
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.top: parent.top
-                text: card.title
+                text: marked !== "" ? marked : card.title
+                textFormat: marked !== "" ? Text.StyledText : Text.PlainText
+                linkColor: Theme.colors.accent
                 color: card.watched ? Theme.colors.watchedDim : Theme.colors.text
                 font.pixelSize: 13
                 font.weight: Font.DemiBold
                 wrapMode: Text.Wrap
                 maximumLineCount: 2
                 elide: Text.ElideRight
+                onLinkActivated: function (link) { App.openLink(link) }
+
+                HoverHandler {
+                    enabled: titleText.marked !== ""
+                    cursorShape: titleText.linkAt(point.position.x, point.position.y) !== ""
+                                 ? Qt.PointingHandCursor : Qt.ArrowCursor
+                }
             }
         }
 

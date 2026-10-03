@@ -164,3 +164,55 @@ class TimesInIt(unittest.TestCase):
         said = linked("https://x.test/watch?t=1:20 then 1:20", times=True)
         self.assertEqual(said.count("weave-seek:80"), 1)
         self.assertIn('<a href="https://x.test/watch?t=1:20">', said)
+
+
+class AChannelsHandle(unittest.TestCase):
+    """@name in a title, a description or a comment goes to that channel, the
+    way it does on YouTube. Made into the channel's address, so the press goes
+    through the one route every YouTube link already takes."""
+
+    def test_one_becomes_the_channels_address(self):
+        self.assertEqual(linked("thanks @SomeOne for this"),
+                         'thanks <a href="https://www.youtube.com/@SomeOne">@SomeOne</a> for this')
+
+    def test_full_stops_hyphens_and_digits_belong_to_it(self):
+        self.assertIn('href="https://www.youtube.com/@a.b-c_9"', linked("by @a.b-c_9 today"))
+
+    def test_a_sentence_ending_after_it_is_not_part_of_it(self):
+        self.assertEqual(linked("go see @SomeOne."),
+                         'go see <a href="https://www.youtube.com/@SomeOne">@SomeOne</a>.')
+
+    def test_any_script(self):
+        self.assertIn('href="https://www.youtube.com/@ねこチャンネル"', linked("@ねこチャンネル"))
+
+    def test_an_email_address_is_left_alone(self):
+        self.assertEqual(linked("mail me@example.com"), "mail me@example.com")
+
+    def test_a_handle_already_inside_an_address_is_not_linked_twice(self):
+        said = linked("https://www.youtube.com/@SomeOne")
+        self.assertEqual(said.count("<a href="), 1)
+
+    def test_a_lone_at_sign_or_a_short_one_stays_words(self):
+        self.assertEqual(linked("meet @ noon, @ab"), "meet @ noon, @ab")
+
+    def test_beside_a_time(self):
+        said = linked("@SomeOne at 1:30", times=True)
+        self.assertIn('>@SomeOne</a>', said)
+        self.assertIn('href="weave-seek:90"', said)
+
+
+class ATitleWithAHandle(unittest.TestCase):
+    """A title stays plain text unless something in it is worth pressing, so a
+    card that has nothing to press draws exactly as it always did."""
+
+    def test_nothing_to_press_says_nothing(self):
+        from weave.format import title_linked
+        self.assertEqual(title_linked("A song & a dance"), "")
+        self.assertEqual(title_linked(""), "")
+        self.assertEqual(title_linked("mail me@example.com"), "")
+
+    def test_a_handle_is_made_pressable_and_the_rest_escaped(self):
+        from weave.format import title_linked
+        self.assertEqual(
+            title_linked("Rock & roll ft. @SomeOne"),
+            'Rock &amp; roll ft. <a href="https://www.youtube.com/@SomeOne">@SomeOne</a>')

@@ -122,13 +122,26 @@ Rectangle {
             }
 
             Label {
+                id: detailTitle
                 objectName: "detailTitle"
+                // Markup only when a channel's handle in it can be pressed.
+                readonly property string plain: App.detail.title ? App.detail.title : ""
+                readonly property string marked: App.titleLinks(plain)
                 width: parent.width
-                text: App.detail.title ? App.detail.title : ""
+                text: marked !== "" ? marked : plain
+                textFormat: marked !== "" ? Text.StyledText : Text.PlainText
+                linkColor: Theme.colors.accent
                 color: Theme.colors.text
                 font.pixelSize: panel.sized(15)
                 font.weight: Font.DemiBold
                 wrapMode: Text.Wrap
+                onLinkActivated: function (link) { App.openLink(link) }
+
+                HoverHandler {
+                    enabled: detailTitle.marked !== ""
+                    cursorShape: detailTitle.linkAt(point.position.x, point.position.y) !== ""
+                                 ? Qt.PointingHandCursor : Qt.ArrowCursor
+                }
             }
 
             Row {

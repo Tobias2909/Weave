@@ -830,3 +830,38 @@ class DecidingWhetherAChannelStreams(unittest.TestCase):
         self.run_round()
         self.assertEqual(self.streams_column(), 1)
         self.assertIn("yt:UC1", self.db.channels_that_stream())
+
+
+class AGroupOnlyChannelStaysOutOfAll(unittest.TestCase):
+    """A channel put in a group is wanted there and nowhere else.
+
+    Every poll of a feed writes the name the feed gives back onto the channel,
+    and doing that by following the channel again raised its place in All, so
+    a channel added to a group showed up in All after its first poll.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self._tmp.name) / "t.db")
+        self.cfg = Config(raw={})
+        self.group = self.db.create_group("Only here")
+        self.db.add_to_group(self.group, "yt:UC1")
+        self.poller = poller.FeedPoller(self.db, self.cfg)
+        self._real = poller.rss.fetch
+        self.addCleanup(setattr, poller.rss, "fetch", self._real)
+
+    def tearDown(self):
+        self.db.close()
+        self._tmp.cleanup()
+
+    def test_a_poll_leaves_it_out_of_all(self):
+        def fake(fetcher, ext_id, kind=rss.VIDEOS):
+            return rss.FeedResult("UC1", "One", [], kind)
+        poller.rss.fetch = fake
+        self.assertFalse(self.db.channel("yt:UC1")["in_all"])
+        budget = Budget(self.db, self.cfg.budget_limits, self.cfg.budget_window_s)
+        self.poller._phase_rss(None, budget)
+        row = self.db.channel("yt:UC1")
+        self.assertEqual(row["title"], "One")
+        self.assertTrue(row["tracked"])
+        self.assertFalse(row["in_all"])

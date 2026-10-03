@@ -1212,7 +1212,25 @@ class Bridge(QObject):
         return bool(self._detail_key) and not self._detail_closed
 
     def _get_detail_comments(self) -> list:
-        return list(self._detail_comments)
+        # A time in a comment goes to that point only while mpv is playing this
+        # very video, the same rule the description follows.
+        key = self._detail_key
+        row = self._video_for_detail(key) if key else None
+        return self._marked(self._detail_comments, times=bool(key) and self._mpv_key == key,
+                            within_s=self._extra(row, "duration_s") if row else None)
+
+    @staticmethod
+    def _marked(threads: list, times: bool, within_s: float | None = None) -> list:
+        """Comments with their words as markup, so an address, a handle and a
+        time in one can be pressed the way they can in a description."""
+        def one(comment: dict) -> dict:
+            out = dict(comment)
+            out["markup"] = fmt.linked(str(comment.get("text") or ""), times=times,
+                                       within_s=within_s)
+            out["replies"] = [one(reply) for reply in comment.get("replies") or []]
+            return out
+
+        return [one(thread) for thread in threads]
 
     def _get_detail_loading(self) -> bool:
         return self._detail_loading
@@ -1306,7 +1324,8 @@ class Bridge(QObject):
         return list(self._now_related)
 
     def _get_now_comments(self) -> list:
-        return list(self._now_comments)
+        # A time in one goes to that point in the song.
+        return self._marked(self._now_comments, times=True)
 
     def _get_now_busy(self) -> str:
         return self._now_busy
@@ -2882,6 +2901,12 @@ class Bridge(QObject):
         QDesktopServices.openUrl(url)
         self._set_status(f"opened {url.host()} in the browser")
 
+    @Slot(str, result=str)
+    def titleLinks(self, title: str) -> str:
+        """A title as markup when a channel's handle in it can be pressed, and
+        empty when nothing in it can, so the title stays plain text."""
+        return fmt.title_linked(title or "")
+
     # ---- a YouTube link pressed in a description ---------------------------
 
     def _open_youtube_link(self, link) -> bool:
@@ -3923,21 +3948,6 @@ class Bridge(QObject):
         if self._player.play(url, twitch_login=login, live=live):
             self._set_status(f"playing {title}")
             self._set_starting(key)
-            self._step_aside_for_video()
-
-    def _step_aside_for_video(self) -> None:
-        """The music gives way to something that was just handed to mpv.
-
-        Said here rather than waited for. The watcher also says it, when it
-        sees mpv open a file, and that is what covers a video started from the
-        browser, but it cannot say it until mpv has something to report. A
-        broadcast is the slow case: the address is resolved before mpv opens
-        anything, which for Twitch is a separate program being asked first,
-        and a stream that has already finished never reports anything at all.
-        Weave knows what it handed over, so it does not have to be told.
-        """
-        if self._audio is not None:
-            self._audio.pause_for_video()
 
     def _ask_whether_it_is_still_live(self, key: str, url: str, title: str) -> bool:
         """Make sure a stream is still on air before mpv is given it.
@@ -4377,7 +4387,11 @@ class Bridge(QObject):
         # while something is open to show one, and asking only at the track
         # change made that true only when the page happened to be open then.
         audio.videoChanged.connect(self._keep_this_song)
-        self._player.nowPlaying.connect(lambda *_a: self._audio.pause_for_video())
+        # The music gives way when the video has really started to play, not
+        # when mpv is handed it. Resolving takes seconds, a broadcast longer,
+        # and stopping at the hand over left the room silent for all of them.
+        # A stream that never starts never stops the music either.
+        self._player.moving.connect(lambda *_a: self._audio.pause_for_video())
         # Whether the heart is lit depends on the song playing as much as on
         # which songs are kept, so a new song has to say so too. Without this
         # the heart kept whatever it read for the song before.
@@ -4674,6 +4688,40 @@ class Bridge(QObject):
         found = self._track_items([row])
         self._queue_track(found[0] if found else None, play_next)
 
+    @Slot(int, int)
+    def watchShelfItem(self, shelf_index: int, item_index: int) -> None:
+        """A song from a tile, handed to mpv as the video it is."""
+        try:
+            item = self._get_shelves()[shelf_index]["items"][item_index]
+        except (IndexError, KeyError, TypeError):
+            return
+        video = item.get("videoId")
+        if not video:
+            self._set_notice("Only a song can be watched, not a whole list",
+                             clear_after_s=4)
+            return
+        self._watch_song(f"yt:{video}", str(item.get("title") or ""))
+
+    @Slot(int)
+    def watchResult(self, index: int) -> None:
+        """A song from a row in a list that was opened, handed to mpv."""
+        try:
+            row = self._results[index]
+        except (IndexError, TypeError):
+            return
+        found = self._track_items([row])
+        if found:
+            self._watch_song(str(found[0].get("key") or ""), str(found[0].get("title") or ""),
+                             bool(found[0].get("live")))
+
+    def _watch_song(self, key: str, title: str, live: bool = False) -> None:
+        """Play a song in mpv as a video, the way pressing a card does. The
+        music gives way to it once the video is really playing."""
+        if not key.startswith("yt:"):
+            return
+        address = ids.watch_url("youtube", key.split(":", 1)[1])
+        self._hand_over(key, address, title, None, live)
+
     def _name_favourite_makers(self) -> None:
         """Find who made the favourites that do not say. No request for those
         what is stored already names, one music call each for the rest."""
@@ -4811,6 +4859,16 @@ class Bridge(QObject):
             return
         items = self._track_items([found[1]])
         self._queue_track(items[0] if items else None, play_next)
+
+    @Slot(int, int)
+    def watchChannelGroupSong(self, group_index: int, index: int) -> None:
+        found = self._group_song(group_index, index)
+        if found is None:
+            return
+        items = self._track_items([found[1]])
+        if items:
+            self._watch_song(str(items[0].get("key") or ""), str(items[0].get("title") or ""),
+                             bool(items[0].get("live")))
 
     @Slot(int, int)
     def favoriteChannelGroupSong(self, group_index: int, index: int) -> None:
@@ -5632,7 +5690,6 @@ class Bridge(QObject):
             # A live tile carries its channel rather than a video, so that is
             # what the chip is matched against there.
             self._set_starting(channel_key)
-            self._step_aside_for_video()
 
     @Slot()
     def importSubscriptions(self) -> None:

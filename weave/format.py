@@ -172,6 +172,13 @@ def _escaped(text: str) -> str:
 # than inside a longer run of digits and colons.
 _TIME = re.compile(r"(?<![\d:])(?:(\d{1,2}):)?(\d{1,2}):(\d{2})(?![\d:])")
 
+# A channel's handle, @name, which YouTube makes a link to that channel wherever
+# it is written. Three to thirty letters, digits, underscores, hyphens and full
+# stops, in any script. Not after a letter or digit, which is an email address,
+# and not after a slash or another @, which is part of something else.
+_HANDLE = re.compile(r"(?<![\w@/.])@(\w[\w.\-]{2,29})")
+_HANDLE_HOME = "https://www.youtube.com/@"
+
 # Where a pressed time goes. Not an address anybody could type, so nothing a
 # description says can be mistaken for one.
 SEEK = "weave-seek:"
@@ -182,6 +189,33 @@ def _seconds(found: re.Match) -> int | None:
     if seconds >= 60 or (hours is not None and minutes >= 60):
         return None
     return (int(hours) * 3600 if hours else 0) + minutes * 60 + seconds
+
+
+def _handled(escaped: str) -> str:
+    """Handles in a piece of already escaped text, made into the address of
+    the channel they name. Escaping leaves every character of a handle alone,
+    so this can run on what was escaped."""
+    def one(found: re.Match) -> str:
+        whole = found.group(1)
+        # A sentence that ends right after a handle leaves its full stop on it.
+        name = whole.rstrip(".-")
+        if len(name) < 3:
+            return found.group(0)
+        return f'<a href="{_HANDLE_HOME}{name}">@{name}</a>{whole[len(name):]}'
+
+    return _HANDLE.sub(one, escaped)
+
+
+def title_linked(title: str) -> str:
+    """A title as markup when a handle in it is worth pressing, else empty.
+
+    Empty for the common case, so a title with nothing to press stays plain
+    text and is drawn exactly as it always was.
+    """
+    if "@" not in (title or ""):
+        return ""
+    marked = _handled(_escaped(title))
+    return marked if "<a " in marked else ""
 
 
 def _timed(escaped: str, within_s: float | None) -> str:
@@ -220,12 +254,15 @@ def linked(text: str, times: bool = False, within_s: float | None = None) -> str
     With `times`, a time written in it becomes pressable too, pointing at
     `SEEK` and the second it names, and only up to `within_s` when the length
     is known. Never inside an address, which is linked as a whole first.
+
+    A channel's handle, @name, always becomes that channel's address, which
+    the window answers by opening the channel rather than the browser.
     """
     if not text:
         return ""
 
     def words(part: str) -> str:
-        escaped = _escaped(part)
+        escaped = _handled(_escaped(part))
         return _timed(escaped, within_s) if times else escaped
 
     out: list[str] = []
