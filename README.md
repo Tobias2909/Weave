@@ -39,7 +39,10 @@ https://github.com/user-attachments/assets/cc89faf0-0ee0-4dc1-bbb0-d89526c3ddd2
   player rather than handed over to fail
 * Members only videos live in a feed of their own, read by a button on that
   channel's page, badged wherever they appear and never poured into the feed
-* Search everything stored as you type, or press enter to search YouTube itself
+* Search everything stored as you type, or press enter to search YouTube itself,
+  narrowed by sort order, upload date and length. While you type, the words go to
+  YouTube after each pause, the way its own search box sends them, and what it
+  suggests opens under the box, asked anonymously or as your account
 * What YouTube suggests, the history it keeps and your own playlists, each in its
   own place and never poured into the feed
 * A track that is really a whole record has its songs marked on the player bar,
@@ -47,8 +50,11 @@ https://github.com/user-attachments/assets/cc89faf0-0ee0-4dc1-bbb0-d89526c3ddd2
   under the pointer, and a press with the right button lands on the start of one
 * A detail panel that follows what `mpv` is playing, with views, likes, an
   estimated dislike count and the top comment threads
-* A music area with its own player bar, a queue you can reorder, favourites, the
-  listening it remembers, and media keys through MPRIS
+* A companion page beside whatever `mpv` is playing, with what YouTube
+  recommends for that video and the queue `mpv` holds, which you fill, order and
+  clear from the window
+* A music area with its own player bar, a queue you can reorder, favourites,
+  boxes of songs, the listening it remembers, and media keys through MPRIS
 * Themes are files, fourteen come with it, and there is an editor with a colour
   wheel that derives a whole palette from two dots
 * A channel page in three parts, the videos, the streams it has made and the
@@ -71,6 +77,20 @@ Closing the panel closes it until the next video starts, and closing `mpv`
 closes it as well, since there is then nothing to mirror. A Twitch stream shows
 what a stream has instead, who is on, what they are playing, how many are
 watching and how long it has been going.
+
+![The companion page beside a video mpv is playing](docs/shots/companion.png)
+
+*Blossom. What YouTube recommends beside the video `mpv` is playing, and the
+playlist `mpv` holds in the column on the right, the one playing marked.*
+
+The **Companion** page in the sidebar follows the same video from further
+away. It shows what YouTube recommends beside it, a mix first and then the
+chips YouTube offers itself, with the queue `mpv` holds in a column next to
+them. A recommended video pressed goes on the end of that queue, and its menu
+plays it next or now instead. The queue is put in order by dragging, emptied of
+everything but the video playing with one press, or kept as a box of songs.
+The page asks YouTube only while it is open, and keeps each answer for the rest
+of the session.
 
 ## A channel on its own
 
@@ -108,12 +128,32 @@ the track playing and the one after it. The next address is resolved as the
 current track starts, so a changeover is a millisecond and going back a track
 costs nothing.
 
-Favourites are the exception, and they are kept on disk. Your favourites are a
-short list you mark yourself and play over and over, and streaming one means
-paying for the address and the wait every time. Both halves are kept, the
-sound and the picture, written the first time the song is played rather than
-fetched ahead of it. There is a ceiling on the settings page, and a song that stops
-being a favourite drops what was kept for it.
+![A box of songs on its own tab of the music page](docs/shots/box.png)
+
+*Paper. A box of songs on a tab of its own, next to the shelves and the
+favourites.*
+
+Songs go in boxes of your own as well, each box a tab on the music page beside
+the shelves. A song goes in from its right click menu, a video card can put its
+video in one, and the whole queue can be kept as a box. The songs on a tab are
+put in order by dragging, and **Watch in mpv** on one of them hands `mpv` the
+whole box as a playlist, starting from that song. The shelves themselves can be
+hidden or put in another order in the music settings, behind the dots on
+**Music**.
+
+Favourites, and any box ticked **Keep on disk**, are the exception, and their
+songs are kept on disk. Favourites are a short list you mark yourself and play
+over and over, and streaming one means paying for the address and the wait
+every time. Both halves are kept, the sound and the picture, written the first
+time the song is played rather than fetched ahead of it. There is a ceiling in
+the music settings, and a song that leaves every kept box drops what was kept
+for it.
+
+![The Now playing page on its lyrics tab](docs/shots/nowplaying.png)
+
+*Nitro Pop. The lyrics tab following the song, the line being sung over the next
+one, with the queue beside it. This song has no video, so its artwork stands
+where the picture would be.*
 
 The page behind the chevron on the bar shows the song itself, the video where
 there is one and the artwork where there is not, with the queue beside it. Its
@@ -140,9 +180,11 @@ rather than quietly making it shorter.*
 
 Nothing is read at launch. The menu beside **Playlists** reads the list, which
 carries no contents, and opening one reads that playlist. Each playlist can be
-hidden on its own and the order is yours. Clicking a video hands `mpv` the whole
-playlist starting there. A playlist can also be marked as music, after which a
-press on one of its videos goes to the player bar instead.
+hidden on its own and dragged into the order you want, and any one can be
+turned round, shown and played from its last video to its first. Clicking a
+video hands `mpv` the whole playlist starting there. A playlist can also be
+marked as music, after which a press on one of its videos goes to the player bar
+instead.
 
 ## Themes
 

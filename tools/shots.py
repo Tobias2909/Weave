@@ -42,7 +42,15 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QT_QUICK_BACKEND", "rhi")
 os.environ.setdefault("QSG_RHI_BACKEND", "opengl")
 
-from PySide6.QtCore import QCoreApplication, QEventLoop, QMetaObject, QObject, QPointF, QTimer  # noqa: E402
+from PySide6.QtCore import (  # noqa: E402
+    Q_ARG,
+    QCoreApplication,
+    QEventLoop,
+    QMetaObject,
+    QObject,
+    QPointF,
+    QTimer,
+)
 from PySide6.QtGui import QBrush, QColor, QImage, QLinearGradient, QPainter  # noqa: E402
 from PySide6.QtQml import QQmlProperty  # noqa: E402
 
@@ -219,6 +227,51 @@ TRACKS = [
 
 SHELVES = ("Listen again", "Quick picks", "Covers and remixes", "Long listens")
 
+# A box of songs, which makes the tabs over the music page something to see.
+BOX = ("Late drives", (1, 2, 4, 6, 8, 9, 10, 12, 13, 7, 11, 0, 3, 5))
+
+# Words for the song playing in the Now playing picture, timed the way the
+# music service times them. Written for the picture, nobody's song.
+LYRICS = [
+    (74.0, "Salt on the window, the engine's low hum"),
+    (79.5, "Counting the lighthouses, one after one"),
+    (85.0, "You said the coast would be kinder up there"),
+    (90.5, "\u266a"),
+    (96.0, "Long way north, and the road keeps unwinding"),
+    (101.0, "Every mile is a letter I am still writing"),
+    (106.5, "Hold the map steady, the night is still young"),
+    (112.0, "Long way north, till the morning comes"),
+]
+
+# What YouTube recommends beside the video mpv plays, and mpv's playlist, on
+# the companion page.
+COMPANION_CHIPS = ("Mix", "All", "From Kite and Anchor", "Indie folk", "Related",
+                   "Recently uploaded")
+COMPANION_QUEUE = [
+    ("Night Ferry (Official Video)", "Kite and Anchor", "3:28"),
+    ("Harbour Lights (Live at the Old Mill)", "Mireille Vance", "4:12"),
+    ("Long Way North (Official Video)", "Kite and Anchor", "4:07"),
+    ("Glasshouse (Official Music Video)", "Nocturne Drive", "3:43"),
+    ("Second Winter (Acoustic)", "Field of Aerials", "4:28"),
+    ("Paper Lantern", "Bright Static", "3:09"),
+    ("Blue Hour (Visualiser)", "Ilma Rook", "4:04"),
+    ("Tidal (Official Video)", "Field of Aerials", "3:18"),
+]
+COMPANION_CARDS = [
+    ("Static Bloom (Official Video)", "Nocturne Drive", "3:22"),
+    ("Hollow Coast (Live Session)", "Mireille Vance", "3:34"),
+    ("Copper Rain (Live at the Old Mill)", "Bright Static", "5:03"),
+    ("Kite Season", "Kite and Anchor", "4:41"),
+    ("Slow Ascent (Official Video)", "Ilma Rook", "4:55"),
+    ("Low Tide Radio", "Field of Aerials", "3:51"),
+    ("Winter Grain (Lyric Video)", "Mireille Vance", "3:56"),
+    ("Lamplight", "Bright Static", "3:07"),
+    ("Undertow (Official Video)", "Ilma Rook", "4:17"),
+    ("North Shore Sessions, full set", "Kite and Anchor", "38:12"),
+    ("Glass Coast", "Nocturne Drive", "3:40"),
+    ("Second Light", "Field of Aerials", "4:02"),
+]
+
 
 def track_items(offset: int, count: int) -> list[dict]:
     items = []
@@ -226,6 +279,9 @@ def track_items(offset: int, count: int) -> list[dict]:
         title, artist, _ = TRACKS[(offset + index) % len(TRACKS)]
         items.append({
             "title": title, "subtitle": artist,
+            # Present, even empty. A stored set without it is one written
+            # before songs carried their artist, and is thrown away unshown.
+            "artistId": "",
             "videoId": f"mocktrack{offset + index:03d}",
             "playlistId": f"RDAMVMmocktrack{offset + index:03d}",
             # A shelf carries the address the service gave it, which the tile
@@ -393,6 +449,12 @@ def seed(theme: str, height: int = HEIGHT) -> None:
         title, artist, seconds = TRACKS[index]
         db.set_music_favorite(f"mocktrack{index:03d}", True, title, artist,
                               thumb(f"track{index:02d}", index + 40, 320, 320), seconds)
+    box = db.create_music_box(BOX[0])
+    db.put_many_in_music_box(box, [{
+        "ext_id": f"mocktrack{index:03d}", "title": TRACKS[index][0],
+        "artist": TRACKS[index][1], "duration_s": TRACKS[index][2],
+        "thumbnail_url": thumb(f"track{index:02d}", index + 40, 320, 320),
+    } for index in BOX[1]])
 
     # A login of its own, which is what the bar and the settings page read
     # to decide whether to ask for one. Invented, and in the scratch home.
@@ -566,6 +628,76 @@ def shot_music(bridge, _window) -> None:
     settle(3.0)
 
 
+def shot_box(bridge, _window) -> None:
+    """A box of songs, on its tab of the music page."""
+    bridge.showMusic()
+    playing(bridge, at=4)
+    settle(0.6)
+    box = next(row["id"] for row in bridge._db.music_boxes()
+               if row["name"] == BOX[0])
+    bridge.showMusicTab(box)
+    settle(3.0)
+
+
+def shot_nowplaying(bridge, window) -> None:
+    """The page behind the chevron on its Lyrics tab, following the song.
+
+    The words are handed over the way the reading hands them over, since
+    offline nothing arrives. The song has no video here, so its artwork
+    stands where the picture would be."""
+    playing(bridge)
+    audio = bridge._audio
+    # An id of the length the page reads one out of an address.
+    audio._queue[2]["videoId"] = "mocktrack02"
+    audio.trackChanged.emit()
+    bridge.showNowPlaying()
+    settle(1.2)
+    page = find(window, "nowPlayingPage")
+    if page is not None:
+        QMetaObject.invokeMethod(page, "choose", Q_ARG("QVariant", "words"))
+    settle(1.0)
+    lines = [{"at": at, "end": (LYRICS[place + 1][0] if place + 1 < len(LYRICS)
+                                else at + 6.0), "text": text}
+             for place, (at, text) in enumerate(LYRICS)]
+    bridge._on_now_side({
+        "what": "words", "videoId": "mocktrack02", "wordsId": "", "synced": True,
+        "text": "\n".join(text for _at, text in LYRICS if text != "\u266a"),
+        "source": "", "lines": lines})
+    settle(1.6)
+
+
+def shot_companion(bridge, _window) -> None:
+    """The companion page beside a video mpv is playing, without an mpv.
+
+    What the watcher and the recommendations would hand over is handed over
+    here, and the pictures of the queue are put where the cache would look
+    for them."""
+    queue = [f"compqueue{index:02d}" for index in range(len(COMPANION_QUEUE))]
+    for index, (video_id, (title, channel, duration)) in enumerate(
+            zip(queue, COMPANION_QUEUE)):
+        cache(f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg",
+              _picture(480, 270, index + 70))
+        bridge._companion_known[video_id] = {
+            "title": title, "channel": channel, "duration": duration}
+    cards = [{"video_id": f"compcards{index:02d}", "title": title, "channel": channel,
+              "channel_id": "", "duration": duration, "views": "", "age": "",
+              "picture": thumb(f"companion{index:02d}", index + 90)}
+             for index, (title, channel, duration) in enumerate(COMPANION_CARDS)]
+    playing_at = 2
+    bridge._companion_cache[queue[playing_at]] = {
+        "chips": [{"label": label, "token": "invented"} for label in COMPANION_CHIPS],
+        "cards": {COMPANION_CHIPS[0]: cards}}
+    bridge._remember_companion_cards(cards)
+    bridge._mpv_running = True
+    bridge._mpv_key = f"yt:{queue[playing_at]}"
+    bridge._mpv_playlist = [{
+        "url": f"https://www.youtube.com/watch?v={video_id}",
+        "current": index == playing_at, "title": ""}
+        for index, video_id in enumerate(queue)]
+    bridge.showCompanion()
+    settle(2.4)
+
+
 def shot_channel(bridge, _window) -> None:
     bridge.openChannel(f"yt:UCmock{0:018d}")
     settle(2.0)
@@ -647,8 +779,8 @@ def shot_themes(bridge, window) -> None:
 # row laid out below the fold is never given its pictures, so that one is
 # taken in a taller window rather than by scrolling to it.
 # A different theme in every picture, and none of them twice, because the
-# pictures are also the tour of what ships. Fourteen ship and seven are in the
-# readme, so the ones in it are seven that nothing else shows. Only ones that
+# pictures are also the tour of what ships. Fourteen ship and thirteen are
+# taken here, nine of them in the readme. Only ones that
 # ship: a theme somebody wrote for themselves is not in anybody else's copy,
 # and the shot would come out in whatever the fallback is.
 SHOTS = {
@@ -662,6 +794,9 @@ SHOTS = {
     "search": ("Violet Glow", shot_search, HEIGHT),
     "history": ("Paper Dark", shot_history, HEIGHT),
     "themes": ("Frost", shot_themes, 1080),
+    "nowplaying": ("Nitro Pop", shot_nowplaying, HEIGHT),
+    "companion": ("Blossom", shot_companion, HEIGHT),
+    "box": ("Paper", shot_box, 760),
 }
 
 
