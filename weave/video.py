@@ -22,20 +22,23 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from dataclasses import dataclass, field
 from urllib.parse import parse_qs, urlparse
 
 from PySide6.QtCore import Property, QObject, QThread, QTimer, Signal, Slot
 
 from . import format as fmt
-from . import trace
+from . import net, trace
 from .audio import (FACT_SPEC, VIDEO_HEIGHT_STEPS, AddressCache, _why, nothing_to_play,
                     parse_chapters, parse_facts, reads_as_gone)
+from .budget import SPONSORBLOCK, Budget
 from .config import Config
 from .cookies import args as cookie_args
 from .engine_libmpv import CURRENT, LibmpvEngine
 from .process import Cancelled, Timeout
 from .process import run as run_process
+from .sources import sponsorblock
 from .sources.ytdlp import prepare
 
 # On top of the music's. A name of its own at the sound server, so the two can
@@ -81,6 +84,18 @@ SPEEDS = (0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0)
 QUALITY_STATE = "video_quality"
 CAPTIONS_STATE = "video_captions"
 CAPTION_LANGUAGE_STATE = "video_caption_language"
+
+# SponsorBlock, off until it is switched on, and what each kind of segment does
+# once it is: skipped, offered with a button, or left alone.
+SPONSOR_STATE = "sponsorblock"
+SPONSOR_ACTION_STATE = "sponsorblock_{}"
+
+# How long the word that something was skipped stays up, with its Undo.
+SKIPPED_NOTICE_MS = 6000
+
+# A segment is left this short of its end, so the last report inside it, a
+# moment before the end, does not skip the few frames that are left.
+SEGMENT_TAIL_S = 0.3
 
 # The pictures the bar shows under the pointer come as sheets of frames, in
 # several sizes. Nothing wider than this is taken, which is about what the box
@@ -340,6 +355,45 @@ class _Finder(QThread):
                         dict(found.facts or {}), extras)
 
 
+class _SegmentFinder(QThread):
+    """Asks SponsorBlock about one video. A failure costs only the marks, so
+    it is written down in the trace and the video plays without them."""
+
+    found = Signal(str, list)
+
+    def __init__(self, db, cfg: Config, key: str, video_id: str,
+                 parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._db = db
+        self._cfg = cfg
+        self.key = key
+        self._video_id = video_id
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def run(self) -> None:
+        budget = Budget(self._db, self._cfg.budget_limits, self._cfg.budget_window_s)
+        if budget.allowance(SPONSORBLOCK).empty:
+            trace.mark("sponsorblock_refused", key=self.key)
+            return
+        budget.spend(SPONSORBLOCK)
+        fetcher = net.Fetcher(net.Throttle(1, self._cfg.min_request_interval_s),
+                              cancel=self._cancel)
+        try:
+            found = sponsorblock.fetch(fetcher, self._video_id)
+        except net.Cancelled:
+            return
+        except Exception as exc:
+            budget.spend(SPONSORBLOCK, count=0, refused=1)
+            trace.mark("sponsorblock_failed", key=self.key, why=f"{type(exc).__name__}: {exc}")
+            return
+        finally:
+            fetcher.close()
+        self.found.emit(self.key, list(found))
+
+
 class VideoPlayer(QObject):
     """The videos played in the window, and their queue."""
 
@@ -352,6 +406,9 @@ class VideoPlayer(QObject):
     # The quality, the captions and the storyboard: what the menus on the
     # picture and the box over the bar draw.
     extrasChanged = Signal()
+    # The segments on the bar, the button to skip the one playing, and the
+    # word that one was skipped.
+    sponsorChanged = Signal()
     # A video has begun to play. The music gives way to it here.
     started = Signal(str)
     # Nothing is playing any more and nothing is about to: the queue ran out or
@@ -405,6 +462,25 @@ class VideoPlayer(QObject):
         # The video being fetched again at another height, whose start is not
         # news to anyone listening for a video starting.
         self._quiet = ""
+        self._sponsor_on = bool(db) and db.get_state(SPONSOR_STATE, "off") == "on"
+        self._sponsor_actions = {}
+        for one in sponsorblock.CATEGORIES:
+            said = db.get_state(SPONSOR_ACTION_STATE.format(one.key), one.default) if db else ""
+            self._sponsor_actions[one.key] = said if said in sponsorblock.ACTIONS else one.default
+        self._segments: dict[str, tuple] = {}
+        self._segment_finders: list[_SegmentFinder] = []
+        # Segments let play this time through, by an Undo; the one skipped
+        # last and when, which a late report from inside it does not skip a
+        # second time; the button segment the position is in; the skip the
+        # word is up about.
+        self._let_play: set[str] = set()
+        self._skipping = ("", 0.0)
+        self._here: sponsorblock.Segment | None = None
+        self._skipped: sponsorblock.Segment | None = None
+        self._notice = QTimer(self)
+        self._notice.setSingleShot(True)
+        self._notice.setInterval(SKIPPED_NOTICE_MS)
+        self._notice.timeout.connect(self._drop_notice)
         # The level before a mute, for the same key to give back.
         self._unmuted = 0
         stored = db.get_int("video_volume", VOLUME_DEFAULT) if db else VOLUME_DEFAULT
@@ -569,6 +645,38 @@ class VideoPlayer(QObject):
     def _get_storyboard(self) -> dict:
         return dict(self._known().get("storyboard") or {})
 
+    def _usable(self) -> list:
+        """The segments of the one playing that are acted on: ones marked on
+        the video as it is now, of a kind not left alone."""
+        if not self._sponsor_on:
+            return []
+        found = self._segments.get(self._current().get("key") or "") or ()
+        return [one for one in found if sponsorblock.fits(one, self._dur)
+                and self._sponsor_actions.get(one.category) != sponsorblock.IGNORE]
+
+    def _get_segments(self) -> list:
+        if self._dur <= 0:
+            return []
+        return [{"at": max(0.0, one.start / self._dur), "to": min(1.0, one.end / self._dur),
+                 "colour": sponsorblock.BY_KEY[one.category].colour,
+                 "label": sponsorblock.BY_KEY[one.category].label}
+                for one in self._usable()]
+
+    def _get_segment_button(self) -> str:
+        if self._here is None:
+            return ""
+        return "Skip " + sponsorblock.BY_KEY[self._here.category].short
+
+    def _get_skip_notice(self) -> str:
+        if self._skipped is None:
+            return ""
+        return "Skipped " + sponsorblock.BY_KEY[self._skipped.category].short
+
+    def _get_sponsor_categories(self) -> list:
+        return [{"key": one.key, "label": one.label, "colour": one.colour,
+                 "action": self._sponsor_actions[one.key]}
+                for one in sponsorblock.CATEGORIES]
+
     track = Property("QVariantMap", _get_track, notify=trackChanged)
     playing = Property(bool, _get_playing, notify=stateChanged)
     loading = Property(bool, _get_loading, notify=stateChanged)
@@ -597,6 +705,12 @@ class VideoPlayer(QObject):
     captionsOn = Property(bool, lambda self: self._captions_on, notify=extrasChanged)
     storyboard = Property("QVariantMap", _get_storyboard, notify=extrasChanged)
     speeds = Property("QVariantList", lambda _self: list(SPEEDS), constant=True)
+    segments = Property("QVariantList", _get_segments, notify=sponsorChanged)
+    segmentButton = Property(str, _get_segment_button, notify=sponsorChanged)
+    skipNotice = Property(str, _get_skip_notice, notify=sponsorChanged)
+    sponsorOn = Property(bool, lambda self: self._sponsor_on, notify=sponsorChanged)
+    sponsorCategories = Property("QVariantList", _get_sponsor_categories,
+                                 notify=sponsorChanged)
 
     # ---- the queue -------------------------------------------------------
 
@@ -764,6 +878,11 @@ class VideoPlayer(QObject):
             self._dur = 0.0
             self._counted = ""
             self._saved_at = 0.0
+            self._let_play.clear()
+            self._skipping = ("", 0.0)
+            self._here = None
+            self._drop_notice()
+            self._ask_segments(entry)
         self._finding = True
         if not again:
             self.trackChanged.emit()
@@ -886,10 +1005,13 @@ class VideoPlayer(QObject):
         self._pos = float(seconds)
         self._count_watched()
         self.progressChanged.emit()
+        self._check_segments()
 
     def _on_duration(self, seconds: float) -> None:
         self._dur = float(seconds or 0.0)
         self.progressChanged.emit()
+        # Whether a segment fits is weighed against the length.
+        self.sponsorChanged.emit()
 
     def _on_paused(self, paused: bool) -> None:
         self._paused = bool(paused)
@@ -1129,6 +1251,119 @@ class VideoPlayer(QObject):
                 self._engine.show_subtitle("")
         self.extrasChanged.emit()
 
+    # ---- SponsorBlock -------------------------------------------------------
+
+    def _ask_segments(self, entry: dict) -> None:
+        """Ask about a video as it starts, once a session, while SponsorBlock
+        is on. Only a YouTube video that is not a broadcast has any."""
+        key = str(entry.get("key") or "")
+        if (not self._sponsor_on or entry.get("live") or not key.startswith("yt:")
+                or key in self._segments or self._db is None
+                or any(one.key == key and one.isRunning() for one in self._segment_finders)):
+            return
+        finder = _SegmentFinder(self._db, self._cfg, key, key.split(":", 1)[1], self)
+        finder.found.connect(self._on_segments)
+        finder.finished.connect(self._sweep_segment_finders)
+        self._segment_finders.append(finder)
+        finder.start()
+
+    def _sweep_segment_finders(self) -> None:
+        self._segment_finders = [one for one in self._segment_finders if one.isRunning()]
+
+    def _on_segments(self, key: str, found: list) -> None:
+        self._segments[key] = tuple(found)
+        trace.mark("sponsorblock_found", key=key, segments=len(found))
+        if key == self._current().get("key"):
+            self.sponsorChanged.emit()
+            self._check_segments()
+
+    def _check_segments(self) -> None:
+        """Skip a segment the position is in when its kind is skipped, or
+        offer the button for one whose kind is offered."""
+        here = None
+        if not (self._finding or self._ended or self._idle):
+            for one in self._usable():
+                if not one.start <= self._pos < one.end - SEGMENT_TAIL_S:
+                    continue
+                action = self._sponsor_actions.get(one.category)
+                if action == sponsorblock.SKIP and one.uuid not in self._let_play:
+                    uuid, when = self._skipping
+                    # The seek is under way, and a report from before it landed
+                    # is still inside.
+                    if uuid != one.uuid or time.monotonic() - when > 1.5:
+                        self._skip(one, by_hand=False)
+                    return
+                if action == sponsorblock.BUTTON and here is None:
+                    here = one
+        if here != self._here:
+            self._here = here
+            self.sponsorChanged.emit()
+
+    def _skip(self, segment: sponsorblock.Segment, by_hand: bool) -> None:
+        self._skipping = (segment.uuid, time.monotonic())
+        trace.mark("segment_skipped", key=self._current().get("key", ""),
+                   category=segment.category, start=segment.start, end=segment.end,
+                   by_hand=by_hand)
+        self._here = None
+        if not by_hand:
+            self._skipped = segment
+            self._notice.start()
+        self.seekTo(segment.end)
+        self.sponsorChanged.emit()
+
+    def _drop_notice(self) -> None:
+        self._notice.stop()
+        if self._skipped is not None:
+            self._skipped = None
+            self.sponsorChanged.emit()
+
+    @Slot()
+    def skipSegment(self) -> None:
+        """The button: past the segment the position is in."""
+        if self._here is not None:
+            self._skip(self._here, by_hand=True)
+
+    @Slot()
+    def undoSkip(self) -> None:
+        """Back to the start of what was just skipped, and let it play."""
+        segment = self._skipped
+        if segment is None:
+            return
+        self._let_play.add(segment.uuid)
+        self._drop_notice()
+        self.seekTo(segment.start)
+
+    @Slot(float, result=str)
+    def segmentAt(self, along: float) -> str:
+        """What kind of segment that fraction of the video is in, for the
+        pointer over the bar."""
+        at = max(0.0, min(1.0, float(along))) * self._dur
+        found = next((one for one in self._usable() if one.start <= at < one.end), None)
+        return sponsorblock.BY_KEY[found.category].label if found is not None else ""
+
+    @Slot(bool)
+    def setSponsorBlock(self, on: bool) -> None:
+        self._sponsor_on = bool(on)
+        if self._db is not None:
+            self._db.set_state(SPONSOR_STATE, "on" if self._sponsor_on else "off")
+        if self._sponsor_on and self._current():
+            self._ask_segments(self._current())
+        if not self._sponsor_on:
+            self._here = None
+            self._drop_notice()
+        self.sponsorChanged.emit()
+        self._check_segments()
+
+    @Slot(str, str)
+    def setSegmentAction(self, category: str, action: str) -> None:
+        if category not in sponsorblock.BY_KEY or action not in sponsorblock.ACTIONS:
+            return
+        self._sponsor_actions[category] = action
+        if self._db is not None:
+            self._db.set_state(SPONSOR_ACTION_STATE.format(category), action)
+        self.sponsorChanged.emit()
+        self._check_segments()
+
     @Slot(float)
     def setCaptionLift(self, share: float) -> None:
         """How much of the picture's height a caption keeps clear of at its
@@ -1156,10 +1391,12 @@ class VideoPlayer(QObject):
     def shutdown(self) -> None:
         self._keep_position()
         self._keeper.stop()
-        for finder in list(self._finders):
+        self._notice.stop()
+        running = [*self._finders, *self._segment_finders]
+        for finder in running:
             if finder.isRunning():
                 finder.cancel()
-        for finder in list(self._finders):
+        for finder in running:
             if finder.isRunning():
                 finder.wait(5000)
         self._engine.quit()

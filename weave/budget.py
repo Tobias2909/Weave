@@ -39,6 +39,7 @@ DISLIKES = "dislikes"  # returnyoutubedislikeapi.com
 TWITCH = "twitch"      # api.twitch.tv
 SUGGEST = "suggest"    # suggestions for words being typed, YouTube and its music
 COMPANION = "companion"  # youtubei next: what YouTube puts beside the video mpv plays
+SPONSORBLOCK = "sponsorblock"  # sponsor.ajay.app: the parts of a video its viewers marked
 
 
 # What a ceiling leaves to the work nobody is waiting for. The rest is kept

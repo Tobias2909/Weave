@@ -2693,6 +2693,22 @@ class Smoke:
         call(heights[0], "clicked")
         call(find(window, "videoCaptionsOff"), "clicked")
         settle(0.2)
+        kinds = [item_named(root, f"sponsorKind_{name}") for name in ("sponsor", "filler")]
+        hidden = [bool(read(kind, "visible")) for kind in kinds if kind is not None]
+        call(find(window, "sponsorOn"), "clicked")
+        settle(0.2)
+        shown_kinds = [bool(read(kind, "visible")) for kind in kinds if kind is not None]
+        call(item_named(root, "sponsor_filler_skip"), "clicked")
+        settle(0.2)
+        filler = {one["key"]: one["action"] for one in bridge._video.sponsorCategories}["filler"]
+        call(item_named(root, "sponsor_filler_button"), "clicked")
+        call(find(window, "sponsorOff"), "clicked")
+        settle(0.2)
+        self.check("SponsorBlock is off, with its credit, and its kinds show once it is on",
+                   hidden == [False, False] and shown_kinds == [True, True] and filler == "skip"
+                   and not bridge._video.sponsorOn
+                   and "CC BY-NC-SA 4.0" in str(read(find(window, "sponsorWords"), "text")),
+                   f"hidden {hidden}, shown {shown_kinds}, filler {filler}")
         self.check("in the window's mode it also sets the quality and the captions",
                    shown == [True, True] and picked == (1080, True, True)
                    and bridge._video.quality == 0 and not bridge._video.captionsOn
@@ -2727,6 +2743,7 @@ class Smoke:
                    and not read(find(window, "detailPanel"), "visible"))
         self.where_presses_land_on_the_page(bridge, window, key)
         self.the_menus_on_the_picture(bridge, window, key)
+        self.sponsorblock_on_the_picture(bridge, window, key)
         # The card menu waits a video its turn in the window's queue. Plain
         # videos, since a stream not on air yet is refused.
         menu = find(window, "videoMenu")
@@ -3081,6 +3098,60 @@ class Smoke:
         video._idle, video._paused, video._showing, video._dur, video._pos = was
         for signal in (video.stateChanged, video.videoChanged, video.progressChanged,
                        video.extrasChanged):
+            signal.emit()
+        settle(0.3)
+
+    def sponsorblock_on_the_picture(self, bridge, window, key: str) -> None:
+        """The parts SponsorBlock's users marked: spans on the bar, a sponsor
+        skipped with an Undo, an intro offered with a button, all pressed for
+        real. The answer is put where a request would have left it."""
+        from PySide6.QtCore import QPoint, QPointF
+        from PySide6.QtTest import QTest
+        from weave.sources.sponsorblock import Segment
+
+        def press(item):
+            at = item.mapToScene(QPointF(read(item, "width") / 2, read(item, "height") / 2))
+            QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier,
+                             QPoint(round(at.x()), round(at.y())))
+            settle(0.3)
+
+        video = bridge._video
+        was = (video._idle, video._paused, video._showing, video._dur, video._pos)
+        video._idle, video._paused, video._showing = False, False, True
+        video._dur = 300.0
+        video._segments[key] = (Segment("intro", 0.0, 10.0, "walk-intro", 300.0),
+                                Segment("sponsor", 60.0, 90.0, "walk-sponsor", 300.0))
+        video.setSponsorBlock(True)
+        settle(0.3)
+        marks = items_named_like(find(window, "watchSeekTrack"), "watchSegmentMark")
+        self.check("the bar marks what SponsorBlock's users marked, in its colours",
+                   len(marks) == 2 and str(read(marks[1], "color").name()) == "#00d400",
+                   f"{len(marks)} marks")
+        pill = find(window, "watchingSegmentPill")
+        words = find(window, "watchingSegmentWords")
+        video._on_position(2.0)
+        settle(0.3)
+        offered = (bool(read(pill, "visible")), read(words, "text"))
+        press(find(window, "watchingSegmentPress"))
+        past_intro = video._pos
+        video._on_position(61.0)
+        settle(0.3)
+        skipped = (video._pos, read(words, "text"))
+        press(find(window, "watchingSegmentPress"))
+        undone = video._pos
+        video._on_position(61.0)
+        settle(0.3)
+        self.check("an intro is offered with a button and a sponsor skipped with an undo",
+                   offered == (True, "Skip intro") and past_intro == 10.0
+                   and skipped == (90.0, "Skipped sponsor") and undone == 60.0
+                   and video._pos == 61.0 and not read(pill, "visible"),
+                   f"offered {offered}, past {past_intro}, skipped {skipped}, undone {undone}, "
+                   f"then at {video._pos} pill {read(pill, 'visible')}")
+        video.setSponsorBlock(False)
+        video._segments.pop(key, None)
+        video._idle, video._paused, video._showing, video._dur, video._pos = was
+        for signal in (video.stateChanged, video.videoChanged, video.progressChanged,
+                       video.sponsorChanged):
             signal.emit()
         settle(0.3)
 

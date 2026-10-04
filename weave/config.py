@@ -117,6 +117,11 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         # and only while the page is open. Songs change every few minutes, so
         # this is a song every minute with room to flick through the chips.
         "companion": 20,
+        # The parts of a video SponsorBlock's users marked: one answer per video
+        # started in the window, only while SponsorBlock is on. A video a
+        # quarter of an hour would be four; this is room for flicking through
+        # a queue and a stop for anything running away.
+        "sponsorblock": 60,
     },
     "watched": {"threshold": 0.85},
     "twitch": {
@@ -290,7 +295,7 @@ class Config:
     @property
     def budget_limits(self) -> dict[str, int]:
         keys = ("feeds", "browse", "player", "shorts", "oembed", "dislikes", "twitch",
-                "suggest", "companion")
+                "suggest", "companion", "sponsorblock")
         return {key: max(0, int(self.get("budget", key))) for key in keys}
 
     @property

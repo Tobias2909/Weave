@@ -14,8 +14,10 @@ from tests.support import scratch_db
 from tests import test_audio as music
 from weave.config import Config
 from weave.engine_libmpv import CURRENT
+from weave.sources.sponsorblock import Segment
 from weave.video import (CAPTION_LANGUAGE_STATE, CAPTIONS_STATE, QUALITY_STATE, RESUME_FROM_S,
-                         VideoPlayer, ceiling_for, choose_caption, parse_extras, watch_format)
+                         SPONSOR_STATE, VideoPlayer, ceiling_for, choose_caption, parse_extras,
+                         watch_format)
 
 _app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -435,6 +437,112 @@ class TheMenusOnThePicture(_Base):
         self.assertEqual(self.player.previewAt(0.24), {"sheet": "s0", "column": 1, "row": 1})
         self.assertEqual(self.player.previewAt(0.5), {"sheet": "s1", "column": 1, "row": 0})
         self.assertEqual(self.player.previewAt(1.0), {"sheet": "s1", "column": 2, "row": 2})
+
+
+class SponsorBlock(_Base):
+    SEGMENTS = (Segment("intro", 0.0, 10.0, "intro-1", 300.0),
+                Segment("sponsor", 60.0, 90.0, "sponsor-1", 300.0),
+                Segment("filler", 200.0, 220.0, "filler-1", 300.0))
+
+    def playing(self, name="a", on=True, segments=SEGMENTS):
+        if on:
+            self.player._sponsor_on = True
+        self.player._segments[f"yt:{name}"] = segments
+        self.player.play_now(video(name))
+        self.engine.idleChanged.emit(False)
+        self.engine.durationChanged.emit(300.0)
+
+    def at(self, seconds):
+        self.engine.positionChanged.emit(float(seconds))
+
+    def seeks(self):
+        return [call[1] for call in self.engine.only("seek")]
+
+    def test_off_until_switched_on_and_nothing_is_asked(self):
+        with mock.patch("weave.video._SegmentFinder") as finder:
+            self.player.play_now(video("a"))
+        finder.assert_not_called()
+        self.assertEqual(self.player.segments, [])
+
+    def test_on_it_asks_once_per_video(self):
+        self.player.setSponsorBlock(True)
+        self.assertEqual(self.db.get_state(SPONSOR_STATE), "on")
+        with mock.patch("weave.video._SegmentFinder") as finder:
+            finder.return_value.isRunning.return_value = True
+            finder.return_value.key = "yt:a"
+            self.player.play_now(video("a"))
+            self.player.play_now(video("a"))
+            self.player.play_now(video("live", live=True))
+        self.assertEqual([call.args[2] for call in finder.call_args_list], ["yt:a"])
+
+    def test_a_sponsor_is_skipped_once_with_an_undo(self):
+        self.playing()
+        self.at(61.0)
+        self.assertEqual(self.seeks(), [90.0])
+        self.assertEqual(self.player.skipNotice, "Skipped sponsor")
+        self.at(61.2)
+        self.assertEqual(self.seeks(), [90.0], "a late report from inside is not a second skip")
+        self.player.undoSkip()
+        self.assertEqual(self.seeks()[-1], 60.0)
+        self.assertEqual(self.player.skipNotice, "")
+        self.at(61.0)
+        self.assertEqual(self.seeks()[-1], 60.0, "let play after an undo")
+
+    def test_the_others_are_offered_with_a_button(self):
+        self.playing()
+        self.at(2.0)
+        self.assertEqual(self.seeks(), [], "an intro is only offered")
+        self.assertEqual(self.player.segmentButton, "Skip intro")
+        self.player.skipSegment()
+        self.assertEqual(self.seeks(), [10.0])
+        self.assertEqual(self.player.skipNotice, "", "a skip pressed for is not announced")
+        self.at(12.0)
+        self.assertEqual(self.player.segmentButton, "")
+
+    def test_a_kind_left_alone_is_neither_marked_nor_offered(self):
+        self.player.setSegmentAction("filler", "ignore")
+        self.playing()
+        self.at(205.0)
+        self.assertEqual(self.player.segmentButton, "")
+        self.assertEqual([one["label"] for one in self.player.segments], ["Intro", "Sponsor"])
+        again = VideoPlayer(Config(raw={}), self.db, engine=FakeEngine())
+        self.assertEqual({one["key"]: one["action"] for one in again.sponsorCategories}["filler"],
+                         "ignore")
+
+    def test_the_bar_marks_where_they_are(self):
+        self.playing()
+        marks = self.player.segments
+        self.assertEqual([(one["at"], one["to"]) for one in marks][1], (0.2, 0.3))
+        self.assertEqual(marks[1]["colour"], "#00d400")
+        self.assertEqual(self.player.segmentAt(0.25), "Sponsor")
+        self.assertEqual(self.player.segmentAt(0.5), "")
+
+    def test_marked_on_another_cut_it_is_left_out(self):
+        self.playing(segments=(Segment("sponsor", 60.0, 90.0, "old", 340.0),))
+        self.at(61.0)
+        self.assertEqual(self.seeks(), [])
+        self.assertEqual(self.player.segments, [])
+
+    def test_a_new_video_starts_with_nothing_let_play(self):
+        self.playing()
+        self.at(61.0)
+        self.player.undoSkip()
+        self.player._segments["yt:b"] = self.SEGMENTS
+        self.player.play_now(video("b"))
+        self.engine.idleChanged.emit(False)
+        self.engine.durationChanged.emit(300.0)
+        self.player.jumpTo(0)
+        self.engine.idleChanged.emit(False)
+        self.engine.durationChanged.emit(300.0)
+        self.at(61.0)
+        self.assertEqual(self.seeks()[-1], 90.0)
+
+    def test_switched_off_it_stops(self):
+        self.playing()
+        self.player.setSponsorBlock(False)
+        self.at(61.0)
+        self.assertEqual(self.seeks(), [])
+        self.assertEqual(self.player.segments, [])
 
 
 class HowBig(unittest.TestCase):

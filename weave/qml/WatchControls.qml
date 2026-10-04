@@ -128,6 +128,20 @@ Item {
                 color: Theme.colors.accent
             }
 
+            // What SponsorBlock's users marked, in its own colours, over
+            // the played part and the rest alike.
+            Repeater {
+                model: Video.segments
+                Rectangle {
+                    objectName: "watchSegmentMark"
+                    required property var modelData
+                    x: track.width * modelData.at
+                    width: Math.max(2, track.width * (modelData.to - modelData.at))
+                    height: track.height
+                    color: modelData.colour
+                }
+            }
+
             // The chapters, as gaps cut into the bar.
             Repeater {
                 model: Video.chapters
@@ -205,6 +219,8 @@ Item {
         objectName: "watchSeekPeek"
         visible: bar.visible && bar.pointerAt >= 0
         readonly property string chapter: visible ? Video.chapterAt(bar.pointerAt) : ""
+        readonly property string segment: visible && Video.segments.length > 0
+                                          ? Video.segmentAt(bar.pointerAt) : ""
         readonly property var board: Video.storyboard
         readonly property bool pictured: board.sheets !== undefined
         readonly property var frame: visible && pictured ? Video.previewAt(bar.pointerAt) : ({})
@@ -261,7 +277,8 @@ Item {
             horizontalAlignment: Text.AlignHCenter
             elide: Text.ElideRight
             textFormat: Text.PlainText
-            text: (peek.chapter !== "" ? peek.chapter + "\n" : "")
+            text: (peek.segment !== "" ? peek.segment + "\n" : "")
+                  + (peek.chapter !== "" ? peek.chapter + "\n" : "")
                   + controls.clock(bar.pointerAt * Video.length)
             color: Theme.colors.text
             font.pixelSize: 12

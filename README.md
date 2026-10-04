@@ -374,6 +374,17 @@ it never changes a playlist that is already there. Reading a
 public feed and playing a video outside their player is the line every external
 client sits on, and the same line your `mpv` and `yt-dlp` setup already sits on.
 
+## SponsorBlock
+
+A video played in Weave's own window can skip, or mark with a button, the parts
+other viewers have marked, such as a sponsor read or an intro. It is off until
+you switch it on in Settings. The segments come from
+[SponsorBlock](https://sponsor.ajay.app), whose database and API are shared
+under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/).
+Weave ships none of that data and asks for it as the video starts, sending only
+the first four characters of a hash of the video's id, so SponsorBlock never
+learns which video it was.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

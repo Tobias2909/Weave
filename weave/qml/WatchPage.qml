@@ -882,6 +882,72 @@ Item {
                     }
                     onFullscreenToggled: page.fullscreenToggled()
                 }
+
+                // SponsorBlock over the picture: a button past the marked part
+                // playing, or the word that one was skipped and the way back.
+                // Up whether the controls are or not, and above them when they
+                // are.
+                Rectangle {
+                    id: segmentPill
+                    objectName: "watchingSegmentPill"
+                    readonly property bool skipped: Video.skipNotice !== ""
+                    // Named apart from every id on the page, and asked for by the
+                    // pill's own name: an id is found before a property of the
+                    // item asking, and a bare `words` here read the page's item
+                    // of that name, so the pill never went away.
+                    readonly property string pillText: segmentPill.skipped
+                                                       ? Video.skipNotice : Video.segmentButton
+                    visible: segmentPill.pillText !== "" && !page.small
+                    anchors.right: parent.right
+                    anchors.rightMargin: page.cinema ? 28 : 18
+                    y: parent.height - height - (page.controlsUp ? controls.reach + 10 : 18)
+                    Behavior on y {
+                        NumberAnimation { duration: 180; easing.type: Easing.InOutQuad }
+                    }
+                    width: pillWords.implicitWidth + 28
+                    height: page.cinema ? 40 : 34
+                    radius: 6
+                    color: "#d8000000"
+                    border.width: 1
+                    border.color: Qt.rgba(1, 1, 1, 0.2)
+
+                    Row {
+                        id: pillWords
+                        anchors.centerIn: parent
+                        spacing: 8
+
+                        Label {
+                            objectName: "watchingSegmentWords"
+                            text: segmentPill.pillText
+                            color: "#f2f2f2"
+                            font.pixelSize: page.cinema ? 15 : 13
+                            font.weight: Font.DemiBold
+                        }
+                        Label {
+                            visible: segmentPill.skipped
+                            text: "\u00b7"
+                            color: Qt.rgba(1, 1, 1, 0.6)
+                            font.pixelSize: page.cinema ? 15 : 13
+                        }
+                        // White rather than the accent, which on some themes is
+                        // too dark to read on black.
+                        Label {
+                            visible: segmentPill.skipped
+                            text: "Undo"
+                            color: "#ffffff"
+                            font.pixelSize: page.cinema ? 15 : 13
+                            font.weight: Font.DemiBold
+                            font.underline: true
+                        }
+                    }
+
+                    MouseArea {
+                        objectName: "watchingSegmentPress"
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: segmentPill.skipped ? Video.undoSkip() : Video.skipSegment()
+                    }
+                }
             }
         }
 

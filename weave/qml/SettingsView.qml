@@ -27,6 +27,9 @@ Item {
     // line up down the page rather than each starting wherever its own word
     // happens to end.
     readonly property int wordWidth: 130
+    // SponsorBlock's kinds carry a dot before their names and the longest
+    // name is two words, so its part of the card takes a little more.
+    readonly property int kindWidth: wordWidth + 24
 
     ColumnLayout {
         anchors.fill: parent
@@ -202,6 +205,110 @@ Item {
                             color: Theme.colors.textMuted
                             font.pixelSize: 11
                             wrapMode: Text.Wrap
+                        }
+
+                        SettingsHeading {
+                            visible: App.videosInWeave
+                            text: "SponsorBlock"
+                        }
+
+                        Row {
+                            objectName: "sponsorRow"
+                            visible: App.videosInWeave
+                            spacing: 8
+
+                            Label {
+                                width: view.kindWidth
+                                height: 28
+                                text: "SponsorBlock"
+                                color: Theme.colors.textMuted
+                                font.pixelSize: 12
+                                verticalAlignment: Text.AlignVCenter
+                            }
+
+                            FlatButton {
+                                objectName: "sponsorOff"
+                                text: "Off"
+                                accent: !Video.sponsorOn
+                                onClicked: Video.setSponsorBlock(false)
+                            }
+
+                            FlatButton {
+                                objectName: "sponsorOn"
+                                text: "On"
+                                accent: Video.sponsorOn
+                                onClicked: Video.setSponsorBlock(true)
+                            }
+                        }
+
+                        // The credit its licence asks for, and what is sent.
+                        Label {
+                            objectName: "sponsorWords"
+                            visible: App.videosInWeave
+                            width: parent.width
+                            text: "Skips or marks the parts of a video other viewers have marked, "
+                                  + "such as a sponsor or an intro. Weave sends SponsorBlock only "
+                                  + "the first four characters of a hash of the video's id, so it "
+                                  + "never learns which video you watch. The segments come from "
+                                  + "SponsorBlock (sponsor.ajay.app) and are shared under "
+                                  + "CC BY-NC-SA 4.0."
+                            color: Theme.colors.textMuted
+                            font.pixelSize: 11
+                            wrapMode: Text.Wrap
+                        }
+
+                        // Each kind, only while it is on: skipped, offered with a
+                        // button, or left alone.
+                        Repeater {
+                            model: Video.sponsorCategories
+
+                            Row {
+                                id: kindRow
+                                required property var modelData
+                                objectName: "sponsorKind_" + modelData.key
+                                visible: App.videosInWeave && Video.sponsorOn
+                                spacing: 8
+
+                                Item {
+                                    width: view.kindWidth
+                                    height: 28
+
+                                    Rectangle {
+                                        id: kindDot
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: 8
+                                        height: 8
+                                        radius: 4
+                                        color: kindRow.modelData.colour
+                                    }
+                                    Label {
+                                        anchors.left: kindDot.right
+                                        anchors.leftMargin: 8
+                                        anchors.right: parent.right
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: kindRow.modelData.label
+                                        elide: Text.ElideRight
+                                        color: Theme.colors.textMuted
+                                        font.pixelSize: 12
+                                    }
+                                }
+
+                                Repeater {
+                                    model: [{ action: "skip", label: "Skip" },
+                                            { action: "button", label: "Button" },
+                                            { action: "ignore", label: "Ignore" }]
+
+                                    FlatButton {
+                                        required property var modelData
+                                        objectName: "sponsor_" + kindRow.modelData.key + "_"
+                                                    + modelData.action
+                                        text: modelData.label
+                                        accent: kindRow.modelData.action === modelData.action
+                                        onClicked: Video.setSegmentAction(kindRow.modelData.key,
+                                                                          modelData.action)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
