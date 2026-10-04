@@ -717,6 +717,10 @@ class AudioPlayer(QObject):
         self._fade.finished.connect(self._on_fade_done)
         self._pause_after_fade = False
         self._auto_pause = (db.get_state("music_autopause", "1") != "0") if db else True
+        # Set when a video starting is what paused the music, so the music can
+        # come back once the video stops. Anything done to the music by hand in
+        # between means it is no longer the video's to give back.
+        self._paused_for_video = False
 
     # ---- what QML reads --------------------------------------------------
 
@@ -925,6 +929,8 @@ class AudioPlayer(QObject):
         person who plays their singles does not find every later list shuffled
         too.
         """
+        # Music started by hand is nobody else's to give back.
+        self._paused_for_video = False
         self._queue = [dict(item) for item in items if item.get("url")]
         if not self._queue:
             return
@@ -1504,6 +1510,7 @@ class AudioPlayer(QObject):
     @Slot()
     def toggle(self) -> None:
         trace.mark("music_toggle", playing=self._get_playing())
+        self._paused_for_video = False
         if self._get_playing():
             self._fade_to(0.0, pause_after=True, duration_ms=TOGGLE_FADE_MS)
             return
@@ -1525,6 +1532,7 @@ class AudioPlayer(QObject):
     def jumpTo(self, index: int) -> None:
         """Skip straight to something further down the queue."""
         if 0 <= index < len(self._queue) and index != self._at:
+            self._paused_for_video = False
             self._forget_recovery()
             self._at = index
             self._start_current()
@@ -2159,6 +2167,7 @@ class AudioPlayer(QObject):
     @Slot()
     def stop(self) -> None:
         trace.mark("music_stop")
+        self._paused_for_video = False
         self._engine.stop()
         self._queue = []
         self._order = []
@@ -2169,12 +2178,40 @@ class AudioPlayer(QObject):
         self.stateChanged.emit()
 
     def pause_for_video(self) -> None:
-        """Called when mpv starts something. Two things playing at once is
-        never what anyone wanted, but neither is being cut off mid note."""
+        """Called when a video starts, in mpv or in the window. Two things
+        playing at once is never what anyone wanted, but neither is being cut
+        off mid note."""
         trace.mark("music_gives_way", auto=self._auto_pause, playing=self._get_playing(),
                    output=f"{self._output:.2f}", ms=VIDEO_FADE_MS)
         if self._auto_pause and self._get_playing():
+            self._paused_for_video = True
             self._fade_to(0.0, pause_after=True, duration_ms=VIDEO_FADE_MS)
+
+    def resume_after_video(self) -> None:
+        """The video that paused the music has stopped, so the music comes back.
+
+        Only music the video paused, and only if nothing has been done to it
+        since. Music paused by hand before the video stays paused, and music
+        started again by hand during it is already playing.
+        """
+        trace.mark("music_comes_back", owed=self._paused_for_video,
+                   playing=self._get_playing())
+        if not self._paused_for_video:
+            return
+        self._paused_for_video = False
+        if self._get_playing() or not self._queue or self._idle:
+            return
+        self._fade.stop()
+        self._pause_after_fade = False
+        self._set_output(0.0)
+        self._engine.set_pause(False)
+        self._paused = False
+        self._fade_to(self._level, pause_after=False, duration_ms=VIDEO_FADE_MS)
+        self.stateChanged.emit()
+
+    @property
+    def paused_for_video(self) -> bool:
+        return self._paused_for_video
 
     def shutdown(self) -> None:
         # The picture resolver goes with the rest. Qt treats destroying

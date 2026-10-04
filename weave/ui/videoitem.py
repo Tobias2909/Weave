@@ -39,31 +39,55 @@ from PySide6.QtQuick import QQuickFramebufferObject, QQuickWindow
 
 from .. import trace
 
-# The player whose frames this draws. One music player exists, so it is held
-# here rather than threaded through QML, which cannot carry a Python object
-# that is not a QObject property anyway. Set once while the window is built.
-_engine = None
-
-# mpv allows exactly one render context per player, and Qt is free to throw a
-# renderer away and build another whenever the scene graph is rebuilt. Held here
-# rather than on the renderer, so a second renderer finds the one that exists
-# instead of asking for another and being refused with "Unspecified error".
-_context = None
-_proc = None
-# Set once the picture has been taken down for good. Without it, clearing
-# the context simply invites the next paint to build another, which is
-# then alive when the player closes and takes the process with it.
-_finished = False
+# The players there are pictures of, by name: the music, and the videos played
+# in the window rather than handed to mpv. Two players, two surfaces, two render
+# contexts, MEASURED side by side before any of this was written: both drawing
+# 1080p at once dropped no frame, held none and stalled nothing.
+MUSIC, VIDEO = "music", "video"
 
 
-def attach(engine) -> None:
-    """Say which player the surface draws. Called as the window is put up."""
-    global _engine
-    _engine = engine
+class _Binding:
+    """One player and everything its picture needs, kept apart from any one
+    surface or renderer.
+
+    mpv allows exactly one render context per player, and Qt is free to throw a
+    renderer away and build another whenever the scene graph is rebuilt. Held
+    here rather than on the renderer, so a second renderer finds the one that
+    exists instead of asking for another and being refused with "Unspecified
+    error".
+    """
+
+    __slots__ = ("context", "engine", "finished", "proc")
+
+    def __init__(self) -> None:
+        # The player whose frames this draws. Held here rather than threaded
+        # through QML, which cannot carry a Python object that is not a QObject
+        # property anyway. Set once while the window is built.
+        self.engine = None
+        self.context = None
+        self.proc = None
+        # Set once the picture has been taken down for good. Without it,
+        # clearing the context simply invites the next paint to build another,
+        # which is then alive when the player closes and takes the process with
+        # it.
+        self.finished = False
 
 
-def engine():
-    return _engine
+_bindings: dict[str, _Binding] = {MUSIC: _Binding(), VIDEO: _Binding()}
+
+
+def _binding(name: str) -> _Binding:
+    return _bindings.get(name) or _bindings[MUSIC]
+
+
+def attach(engine, name: str = MUSIC) -> None:
+    """Say which player a surface of that name draws. Called as the window is
+    put up."""
+    _binding(name).engine = engine
+
+
+def engine(name: str = MUSIC):
+    return _binding(name).engine
 
 
 def get_process_address(_ctx, name: bytes) -> int:
@@ -110,17 +134,22 @@ def display_params() -> dict:
 
 
 class VideoSurface(QQuickFramebufferObject):
-    """Where the video is drawn. One of these, on the Now playing page."""
+    """Where a player's picture is drawn. One for the music, on the Now playing
+    page, and one for the videos, on the page they play on."""
 
     # Raised from mpv's own thread when a frame is waiting. The item cannot be
     # told to redraw from there, so it is bounced through here, which lands it
     # on the window's thread.
     frameReady = Signal()
     drawingChanged = Signal()
+    playerChanged = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._renderer: _Renderer | None = None
+        # Which player this draws. Named once, by the page that makes it.
+        self._player = MUSIC
+        self._wanting = None
         # Whether frames are to be painted. Not the same as being visible:
         # hiding a framebuffer item makes Qt destroy its renderer and give the
         # graphics resources back, which is a synchronous cost paid at exactly
@@ -129,10 +158,7 @@ class VideoSurface(QQuickFramebufferObject):
         # are drawn.
         self._drawing = True
         self.frameReady.connect(self._redraw)
-        # Told to paint when the player has something to draw and nowhere to
-        # draw it, which is how the render context gets built at all.
-        if _engine is not None and hasattr(_engine, "surfaceWanted"):
-            _engine.surfaceWanted.connect(self._nudge)
+        self._listen()
         # The window closing is what takes the picture down in a running
         # application, and nothing else does. Freed at destruction instead, the
         # context outlives the scene that made it and the process dies on the
@@ -141,6 +167,39 @@ class VideoSurface(QQuickFramebufferObject):
         # One flip, not two. mpv draws into the framebuffer the right way up
         # for Qt already, so mirroring it as well turns the picture over.
         self.setMirrorVertically(False)
+
+    def _listen(self) -> None:
+        """Told to paint when the player has something to draw and nowhere to
+        draw it, which is how the render context gets built at all."""
+        if self._wanting is not None:
+            try:
+                self._wanting.surfaceWanted.disconnect(self._nudge)
+            except (RuntimeError, TypeError):
+                pass
+            self._wanting = None
+        player = self.binding.engine
+        if player is not None and hasattr(player, "surfaceWanted"):
+            player.surfaceWanted.connect(self._nudge)
+            self._wanting = player
+
+    @property
+    def binding(self) -> _Binding:
+        return _binding(self._player)
+
+    def _get_player(self) -> str:
+        return self._player
+
+    def _set_player(self, name: str) -> None:
+        name = name if name in _bindings else MUSIC
+        if name == self._player:
+            return
+        self._player = name
+        self._listen()
+        self.playerChanged.emit()
+        self.update()
+
+    # "music" or "video". Set where the surface is declared and never changed.
+    player = Property(str, _get_player, _set_player, notify=playerChanged)
 
     def _get_drawing(self) -> bool:
         return self._drawing
@@ -184,17 +243,17 @@ class VideoSurface(QQuickFramebufferObject):
             self._let_go, Qt.ConnectionType.DirectConnection)
 
     def _let_go(self) -> None:
-        global _context, _proc, _finished
-        _finished = True
-        context, _context = _context, None
-        if _engine is not None:
-            _engine.render_ready(False)
+        held = self.binding
+        held.finished = True
+        context, held.context = held.context, None
+        if held.engine is not None:
+            held.engine.render_ready(False)
         if context is not None:
             try:
                 context.free()
             except Exception:
                 pass
-        _proc = None
+        held.proc = None
 
     def createRenderer(self) -> QQuickFramebufferObject.Renderer:
         self._renderer = _Renderer(self)
@@ -208,23 +267,22 @@ class VideoSurface(QQuickFramebufferObject):
         the player itself be closed. Freed the other way round, mpv is still
         holding a context over a window that has gone.
         """
-        global _context, _proc, _finished
-        _finished = True
+        held = self.binding
+        held.finished = True
         self._renderer = None
-        if _engine is not None:
-            _engine.render_ready(False)
-        context, _context = _context, None
+        if held.engine is not None:
+            held.engine.render_ready(False)
+        context, held.context = held.context, None
         if context is None:
-            _proc = None
+            held.proc = None
             return
 
         def let_go() -> None:
-            global _proc
             try:
                 context.free()
             except Exception:
                 pass
-            _proc = None
+            held.proc = None
 
         window = self.window()
         if window is None:
@@ -253,18 +311,30 @@ class _Renderer(QQuickFramebufferObject.Renderer):
         self._item = item
         self._why = ""
         self._drawn = (0, 0)
+        self._said_why = False
 
     def render(self) -> None:
-        player = _engine
-        if player is None or not player.running() or _finished:
+        held = self._item.binding
+        player = held.engine
+        if player is None or not player.running() or held.finished:
+            if held.context is None and not self._said_why:
+                # Once, and only while there is no picture: a surface asked to
+                # draw that never builds anything is otherwise silent.
+                self._said_why = True
+                trace.mark("render_waits", player=self._item.player,
+                           engine=player is not None,
+                           running=bool(player is not None and player.running()),
+                           finished=held.finished)
             return
-        if _context is None and not self._make_context(player):
+        self._said_why = False
+        if held.context is None and not self._make_context(held):
             return
+        context = held.context
         try:
             # Collected but not drawn. The player counts the frame as shown
             # and moves on, and whatever was last in the framebuffer stays.
             if not self._item.drawing:
-                _context.render(skip_rendering=True, block_for_target_time=False)
+                context.render(skip_rendering=True, block_for_target_time=False)
                 return
             # The framebuffer's own size, in device pixels. The item's size is
             # in the window's logical units, and on a screen scaled by 1.7 the
@@ -277,12 +347,12 @@ class _Renderer(QQuickFramebufferObject.Renderer):
                 return
             if (width, height) != self._drawn:
                 self._drawn = (width, height)
-                trace.mark("surface_size", w=width, h=height)
+                trace.mark("surface_size", w=width, h=height, player=self._item.player)
             # Never waits. The player is told to hand frames over at their
             # display time, and this returns the moment the draw is issued,
             # so the thread painting the window is held for one draw only.
             with trace.Timed():
-                _context.render(flip_y=False, block_for_target_time=False,
+                context.render(flip_y=False, block_for_target_time=False,
                                 opengl_fbo={
                     "w": width, "h": height,
                     "fbo": int(target.handle()),
@@ -292,8 +362,8 @@ class _Renderer(QQuickFramebufferObject.Renderer):
             # for. The player says separately when it has nothing to give.
             return
 
-    def _make_context(self, player) -> bool:
-        global _context, _proc
+    def _make_context(self, held: _Binding) -> bool:
+        player = held.engine
         try:
             import mpv
         except (ImportError, OSError):
@@ -304,26 +374,28 @@ class _Renderer(QQuickFramebufferObject.Renderer):
         # Wrapped as a C function pointer rather than handed over as it is.
         # mpv keeps this and calls it from its own side, and a plain Python
         # function is refused outright with "expected CFunctionType instance".
-        _proc = mpv.MpvGlGetProcAddressFn(get_process_address)
+        held.proc = mpv.MpvGlGetProcAddressFn(get_process_address)
         try:
-            _context = mpv.MpvRenderContext(
+            held.context = mpv.MpvRenderContext(
                 raw, "opengl",
-                opengl_init_params={"get_proc_address": _proc},
+                opengl_init_params={"get_proc_address": held.proc},
                 **display_params())
         except Exception as exc:
-            _context = None
+            held.context = None
             # Said rather than swallowed. A picture that never appears with no
             # reason given is the hardest kind of fault to chase, and this one
             # cost a round of exactly that.
             self._why = f"{type(exc).__name__}: {exc}"
+            trace.mark("render_context_failed", player=self._item.player, why=self._why)
             report = getattr(player, "render_failed", None)
             if report is not None:
                 report(self._why)
             return False
         # mpv raises this from its own thread whenever a frame is ready, and
         # all it may do there is ask the window to come and draw.
-        _context.update_cb = self._item.frameReady.emit
-        trace.mark("render_context_built", render_thread=threading.get_ident())
+        held.context.update_cb = self._item.frameReady.emit
+        trace.mark("render_context_built", render_thread=threading.get_ident(),
+                   player=self._item.player)
         player.render_ready(True)
         return True
 
@@ -333,26 +405,29 @@ class _Renderer(QQuickFramebufferObject.Renderer):
 
 
 def shutdown() -> None:
-    """Take the picture down before the player it draws is closed.
+    """Take every picture down before the players they draw are closed.
 
     Order rather than politeness. mpv closing while a render context still
     points at it takes the process with it, and it does so at the exit rather
     than at the fault, so it reads as a crash in whatever ran last.
 
-    Rendering is stopped first so the render thread cannot enter the context
-    again, and only then is it freed.
+    Rendering is stopped first so the render thread cannot enter a context
+    again, and only then is it freed. MEASURED with two players: the picture
+    switched off on both, both contexts freed from this thread, then mpv
+    closed, exits cleanly.
     """
-    global _context, _proc, _finished
-    _finished = True
-    if _engine is not None:
-        _engine.render_ready(False)
-    context, _context = _context, None
-    if context is not None:
-        try:
-            context.free()
-        except Exception:
-            pass
-    _proc = None
+    for held in _bindings.values():
+        held.finished = True
+        if held.engine is not None:
+            held.engine.render_ready(False)
+    for held in _bindings.values():
+        context, held.context = held.context, None
+        if context is not None:
+            try:
+                context.free()
+            except Exception:
+                pass
+        held.proc = None
 
 
 def register() -> None:

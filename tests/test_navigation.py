@@ -507,6 +507,8 @@ class TheMusicPlaces(unittest.TestCase):
         self.open_mix(bridge)
         del bridge.playResult                # the real one, since that is the question
         bridge._audio = Audio()
+        # The videos played in the window, which a hand-built bridge has none of.
+        bridge._video = None
         before = [e.view for e in bridge._nav.entries]
         Bridge.playResult(bridge, 1)
         self.assertEqual(bridge._audio.queued, [(2, 1)])
@@ -584,6 +586,8 @@ class PressingATile(unittest.TestCase):
 
         bridge = make_bridge()
         bridge._audio = Audio()
+        # The videos played in the window, which a hand-built bridge has none of.
+        bridge._video = None
         rows = [dict(track("a"), thumbnail="a picture"),
                 dict(track("b"), thumbnail="another picture")]
         Bridge._on_station(bridge, rows)
@@ -599,6 +603,8 @@ class PressingATile(unittest.TestCase):
 
         bridge = make_bridge()
         bridge._audio = None
+        # The videos played in the window, which a hand-built bridge has none of.
+        bridge._video = None
         Bridge._on_station(bridge, [])
         self.assertFalse(bridge._searching)
 

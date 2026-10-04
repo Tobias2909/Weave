@@ -114,10 +114,19 @@ class LibmpvEngine(QObject):
     # The surface builds its render context only when it paints, and it has
     # no reason of its own to paint, so it is told.
     surfaceWanted = Signal()
+    # The end of what is playing has been reached and the player is holding its
+    # last frame there. Only ever true for a player told to keep files open at
+    # their end, which the music is not.
+    eofChanged = Signal(bool)
 
-    def __init__(self, parent: QObject | None = None) -> None:
+    def __init__(self, parent: QObject | None = None,
+                 options: dict | None = None) -> None:
         super().__init__(parent)
         self._videoTaken.connect(self._on_video_taken)
+        # Whatever this player is started with on top of OPTIONS. The music
+        # takes none; the videos played in the window are another player with a
+        # name of its own at the sound server.
+        self._options = dict(options or {})
         self._mpv = None
         self._roles: dict[int, str] = {}
         # An entry mpv began playing before the load that made it had
@@ -177,7 +186,7 @@ class LibmpvEngine(QObject):
             # nowhere else.
             level = "v" if trace.enabled() else "error"
             self._mpv = mpv.MPV(log_handler=self._on_log, loglevel=level,
-                                **OPTIONS)
+                                **{**OPTIONS, **self._options})
         except Exception as exc:
             self._mpv = None
             self.gone.emit(f"the player would not start, {exc}")
@@ -202,6 +211,7 @@ class LibmpvEngine(QObject):
         # configured, which is about two seconds before anything can be drawn,
         # and drawing from that point shows a black box.
         player.observe_property("video-frame-info", self._on_frame)
+        player.observe_property("eof-reached", self._on_eof)
 
         @player.event_callback("start-file")
         def _started(event):
@@ -443,6 +453,18 @@ class LibmpvEngine(QObject):
 
     def set_loop(self, loop: bool) -> None:
         self._set("loop-file", "inf" if loop else "no")
+
+    def set_speed(self, speed: float) -> None:
+        self._set("speed", max(0.25, min(4.0, float(speed))))
+
+    def position(self) -> float:
+        """Where the player is, asked rather than waited for."""
+        if self._mpv is None:
+            return 0.0
+        try:
+            return float(self._mpv.time_pos or 0.0)
+        except Exception:
+            return 0.0
 
     # ---- the picture ------------------------------------------------------
 
@@ -726,6 +748,9 @@ class LibmpvEngine(QObject):
 
     def _on_buffering(self, _name, value) -> None:
         self.bufferingChanged.emit(bool(value))
+
+    def _on_eof(self, _name, value) -> None:
+        self.eofChanged.emit(bool(value))
 
     def _on_frame(self, _name, value) -> None:
         has = value is not None

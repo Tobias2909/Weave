@@ -22,6 +22,9 @@ ListView {
     property var owner: null
     // Small rows, for a narrow list.
     property bool compact: width < 400
+    // Whose queue this is: the music's, or the videos played in the window,
+    // which keep theirs in the same shape so this one list draws both.
+    property var player: Audio
     readonly property int rowHeight: compact ? 44 : 88
 
     // A right press on a row, for the window's menu of its boxes.
@@ -29,7 +32,7 @@ ListView {
 
     clip: true
     spacing: compact ? 2 : 4
-    model: Audio.queue
+    model: queued.player.queue
     // Scrolled by the wheel, the bar, or by carrying a row to an edge, never
     // by dragging, so a row taken a little off its grip moves the row rather
     // than the list.
@@ -42,7 +45,7 @@ ListView {
 
     // The one playing in sight whenever it changes, unless a row is being
     // carried, when the list is the hand's to move.
-    readonly property int playingAt: Audio.queueIndex
+    readonly property int playingAt: queued.player.queueIndex
     onPlayingAtChanged: if (playingAt >= 0 && !rowOrder.carrying)
                             positionViewAtIndex(playingAt, ListView.Contain)
 
@@ -51,8 +54,8 @@ ListView {
         objectName: "queueSongRow"
         // Which row is playing is read beside the list rather than carried in
         // it, so moving through the queue does not rebuild every row.
-        readonly property bool playing: index === Audio.queueIndex
-        readonly property bool played: Audio.queueIndex >= 0 && index < Audio.queueIndex
+        readonly property bool playing: index === queued.player.queueIndex
+        readonly property bool played: queued.player.queueIndex >= 0 && index < queued.player.queueIndex
         readonly property bool compact: queued.compact
         required property var modelData
         required property int index
@@ -83,7 +86,7 @@ ListView {
                         queued.menuRequested(key)
                     return
                 }
-                Audio.jumpTo(queuedRow.modelData.at)
+                queued.player.jumpTo(queuedRow.modelData.at)
                 var holder = queuedRow.ListView.view.owner
                 if (holder)
                     holder.close()
@@ -239,7 +242,7 @@ ListView {
             MouseArea {
                 anchors.fill: parent
                 anchors.margins: -6
-                onClicked: Audio.removeFromQueue(queuedRow.modelData.at)
+                onClicked: queued.player.removeFromQueue(queuedRow.modelData.at)
             }
         }
     }
@@ -260,6 +263,6 @@ ListView {
         list: queued
         rowHeight: queued.rowHeight + queued.spacing
         rowCount: queued.count
-        onDropped: (from, to) => Audio.moveInQueue(from, to)
+        onDropped: (from, to) => queued.player.moveInQueue(from, to)
     }
 }

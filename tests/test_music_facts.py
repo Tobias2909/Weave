@@ -294,6 +294,8 @@ class WhatTheWindowDrawsFromThem(unittest.TestCase):
     def filled(self, detail, facts, db=None):
         bridge = Bridge.__new__(Bridge)
         bridge._audio = self.Player(facts)
+        # The videos played in the window, which a hand-built bridge has none of.
+        bridge._video = None
         bridge._db = db if db is not None else scratch_db(self)
         return Bridge._with_player_facts(bridge, dict(detail))
 

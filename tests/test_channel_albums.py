@@ -243,6 +243,8 @@ class PressingASongOnARecord(unittest.TestCase):
         bridge = Bridge.__new__(Bridge)
         bridge._channel_music_groups = groups
         bridge._audio = _Audio()
+        # The videos played in the window, which a hand-built bridge has none of.
+        bridge._video = None
         bridge._track_items = lambda songs: [
             {"key": one["key"], "title": one["title"], "url": "https://example.test"}
             for one in songs]

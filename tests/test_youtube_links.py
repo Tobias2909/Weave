@@ -54,6 +54,8 @@ def bridge_for(case, mpv_key=""):
     made._cfg = Config(raw={})
     made._mpv_key = mpv_key
     made._audio = None
+    # The videos played in the window, which a hand-built bridge has none of.
+    made._video = None
     made._preview = {}
     made._link_facts = None
     made._link_target = None

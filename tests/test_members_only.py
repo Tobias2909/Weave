@@ -751,6 +751,8 @@ class AQueueOfAPlaylist(unittest.TestCase):
         bridge = Bridge.__new__(Bridge)
         bridge._model = Model()
         bridge._audio = Audio()
+        # The videos played in the window, which a hand-built bridge has none of.
+        bridge._video = None
         bridge._view_kind = "playlist"
         bridge._set_status = lambda *a, **k: None
         bridge._set_notice = lambda *a, **k: None

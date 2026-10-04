@@ -14,18 +14,29 @@ Popup {
     id: root
     objectName: "wizard"
 
-    readonly property int last: 5
+    readonly property int last: 6
     readonly property int step: App.wizardStep
+    // The page that asks where videos play.
+    readonly property int videosStep: 5
 
-    anchors.centerIn: parent
-    width: Math.min(560, (parent ? parent.width : 600) - 80)
-    // One size for all four, so the buttons stay under the hand from page to
-    // page instead of moving with the length of the words. Tall enough for the
-    // longest of them, which is the subscription page once an import has
-    // failed and the card has to explain why.
-    // 370 measured against the longest page, which needs 278 of the 296 this
-    // leaves it. Anything less clips the explanation of a failed import.
-    height: Math.min((parent ? parent.height : 500) - 60, 370)
+    readonly property real roomWidth: parent ? parent.width : 640
+    readonly property real roomHeight: parent ? parent.height : 620
+    width: Math.min(600, roomWidth - 80)
+    // As tall as the page in it and no taller, so no page stands half empty
+    // beside the one with two pictures on it. One size for all of them left
+    // every words page with a hole under its words.
+    readonly property real wantedHeight: page.implicitHeight + page.anchors.bottomMargin
+                                         + footer.height + topPadding + bottomPadding
+    height: Math.min(roomHeight - 60, Math.ceil(wantedHeight))
+    // The bottom edge stays where it is and the top moves, so Back and Next
+    // stay under the hand from page to page however long the words are.
+    readonly property real bottomEdge: Math.min(roomHeight - 30, Math.round((roomHeight + 370) / 2))
+    x: Math.round((roomWidth - width) / 2)
+    y: Math.max(30, bottomEdge - height)
+    Behavior on height {
+        enabled: root.opened
+        NumberAnimation { duration: 200; easing.type: Easing.OutCubic }
+    }
     padding: 20
     focus: true
     // Not modal, and dimmed by a rectangle of the window's own rather than by
@@ -57,6 +68,73 @@ Popup {
         color: Theme.colors.surfaceRaised
         border.width: 1
         border.color: Theme.colors.border
+    }
+
+    // One way a video can play: what happens, drawn, and who it suits. The
+    // whole card is the button, the way a picture of the thing is easier to
+    // choose by than its name.
+    component PlaceChoice: Rectangle {
+        id: choice
+        property string place: "weave"
+        property string name: ""
+        property string words: ""
+        property bool chosen: false
+        property bool offered: true
+        property string refusal: ""
+        signal picked()
+
+        radius: 8
+        color: chosen ? Theme.washOver(Theme.colors.accent, 0.1, Theme.colors.surfaceRaised)
+                      : "transparent"
+        border.width: chosen ? 2 : 1
+        border.color: chosen ? Theme.colors.accent
+                             : (pointing.hovered ? Theme.colors.textMuted : Theme.colors.border)
+        opacity: offered ? 1 : 0.5
+
+        VideoPlaceScene {
+            id: picture
+            x: 10
+            y: 10
+            width: parent.width - 20
+            height: 150
+            place: choice.place
+            running: root.opened && root.step === root.videosStep && choice.offered
+        }
+
+        Label {
+            id: placeName
+            x: 14
+            y: picture.y + picture.height + 16
+            text: choice.name
+            color: Theme.colors.text
+            font.pixelSize: 15
+            font.weight: Font.DemiBold
+        }
+
+        Label {
+            x: 14
+            anchors.top: placeName.bottom
+            anchors.topMargin: 6
+            width: parent.width - 28
+            text: choice.offered ? choice.words : choice.refusal
+            color: Theme.colors.text
+            font.pixelSize: 12
+            lineHeight: 1.35
+            wrapMode: Text.Wrap
+        }
+
+        HoverHandler {
+            id: pointing
+            enabled: choice.offered
+            cursorShape: Qt.PointingHandCursor
+        }
+        // Kept to itself. A handler shares a press with every handler under
+        // it, and under this card are the cards of the feed, which played.
+        TapHandler {
+            enabled: choice.offered
+            gesturePolicy: TapHandler.ReleaseWithinBounds
+            onTapped: choice.picked()
+        }
     }
 
     // ---- the pages ------------------------------------------------------
@@ -95,18 +173,22 @@ Popup {
             anchors.top: parent.top
             anchors.bottom: footer.top
             anchors.bottomMargin: 14
-            anchors.rightMargin: 40
             spacing: 10
+            // While the card is still growing to a taller page, what does not
+            // fit yet is hidden rather than drawn over the buttons.
+            clip: true
 
             Label {
                 objectName: "wizardTitle"
-                width: parent.width
+                // Clear of the count and the cross beside it.
+                width: parent.width - 90
                 text: [
                     "Welcome to Weave",
                     "Your subscriptions",
                     "Twitch",
                     "Search suggestions",
                     "How it looks",
+                    "How videos play",
                     "How it is used",
                 ][root.step]
                 color: Theme.colors.text
@@ -119,8 +201,11 @@ Popup {
                 objectName: "wizardBody"
                 width: parent.width
                 text: [
-                    "This is your subscriptions first. Every video opens in mpv rather "
-                        + "than in a page. These few pages are only the parts worth knowing before you "
+                    "This is your subscriptions first. "
+                        + (App.videosInWeave ? "Every video plays on a page of its own, "
+                                               + "right here in the window. "
+                                             : "Every video opens in mpv rather than in a page. ")
+                        + "These few pages are only the parts worth knowing before you "
                         + "start. There is a good deal more in here than they cover, and the "
                         + "rest is worth finding as you go. None of it is final either, and "
                         + "the Getting started button on the settings page opens these pages "
@@ -142,7 +227,13 @@ Popup {
                         + "one of them looks right. Whichever is on when you leave this page "
                         + "is the one you keep. The settings page can also make one of your "
                         + "own from a colour wheel.",
-                    "Press a card to watch it in mpv. The headphone on a card listens without "
+                    "A video can open in mpv, in a window of its own, or right here on a "
+                        + "page of its own like the music. Press the one you want. The settings "
+                        + "page changes it later, and a right click on any card plays that one "
+                        + "video the other way.",
+                    (App.videosInWeave ? "Press a card to watch it on its own page. "
+                                       : "Press a card to watch it in mpv. ")
+                        + "The headphone on a card listens without "
                         + "a window. A group holds channels you pick, a box holds videos you "
                         + "pick, and both live in the panel on the left. Right click a card "
                         + "for everything else, and the settings page holds the rest.",
@@ -161,6 +252,43 @@ Popup {
                 color: Theme.colors.accent
                 font.pixelSize: 14
                 wrapMode: Text.Wrap
+            }
+
+            // ---- where videos play, shown rather than described
+            Item {
+                objectName: "wizardVideoPlaces"
+                visible: root.step === root.videosStep
+                width: page.width
+                height: 320
+
+                PlaceChoice {
+                    objectName: "wizardInMpv"
+                    width: (parent.width - 16) / 2
+                    height: parent.height
+                    place: "mpv"
+                    name: "In mpv"
+                    words: "Your own mpv opens in its own window, with your mpv.conf, your "
+                           + "scripts and your keys. For people with their own mpv setup, or a "
+                           + "second screen."
+                    chosen: !App.videosInWeave
+                    offered: App.mpvFound
+                    refusal: "mpv is not installed on this machine. Once it is, this can be "
+                             + "picked here or on the settings page."
+                    onPicked: App.setVideosInWeave(false)
+                }
+
+                PlaceChoice {
+                    objectName: "wizardInWeave"
+                    x: parent.width - width
+                    width: (parent.width - 16) / 2
+                    height: parent.height
+                    place: "weave"
+                    name: "In Weave"
+                    words: "The video plays on a page in this window, with recommendations, "
+                           + "comments and a stream's chat beside it. For one screen."
+                    chosen: App.videosInWeave
+                    onPicked: App.setVideosInWeave(true)
+                }
             }
 
             // ---- page 1, the subscription list
@@ -384,13 +512,20 @@ Popup {
                 // The box draws no text of its own in this style, so the words
                 // are a label beside it.
                 Label {
+                    objectName: "wizardHideWords"
                     anchors.verticalCenter: parent.verticalCenter
                     text: "Do not show this again"
                     color: Theme.colors.textMuted
                     font.pixelSize: 13
 
-                    // The words are as much of the control as the box is.
-                    TapHandler { onTapped: App.setWizardHidden(!App.wizardHidden) }
+                    // The words are as much of the control as the box is. An
+                    // area rather than a handler: a handler shares the press
+                    // with the card under the pages, which played, and one
+                    // told to keep it never fires on words at all.
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: App.setWizardHidden(!App.wizardHidden)
+                    }
                 }
             }
 

@@ -36,12 +36,15 @@ ApplicationWindow {
         if (App.viewKind === "playlist") return "Read it again"
         if (App.viewKind === "search") return App.searchScope === "youtube"
                                               ? "Search again" : "Search YouTube"
+        // A press on a card in a box plays that one alone. This is all of it.
+        if (App.viewKind === "box") return grid.count > 0 ? "Play all" : ""
         return ""
     }
 
     function doViewAction() {
         if (App.viewKind === "playlist") App.refreshPlaylist()
         else if (App.viewKind === "search") App.searchYouTube()
+        else if (App.viewKind === "box") App.playBox()
     }
 
     // ---- walking between the halves of a page ----------------------------
@@ -265,15 +268,21 @@ ApplicationWindow {
     // banner without touching any of them. Only the toolbar is outside the
     // window's content and has to be told, and only the bar stays over the
     // page, which is what it is for.
-    readonly property bool cinema: App.viewKind === "nowplaying"
+    readonly property bool cinema: (App.viewKind === "nowplaying" || App.viewKind === "watching")
                                    && visibility === Window.FullScreen
+    // Which of the two pages fills it. Each page and its slot follow their
+    // own, so the one that is away never lays itself out for a screen it is
+    // not on.
+    readonly property bool musicCinema: cinema && App.viewKind === "nowplaying"
+    readonly property bool watchCinema: cinema && App.viewKind === "watching"
 
     // What to go back to. A window that was maximised before must not come
     // back merely normal, and the compositor does not remember it for us.
     property int shapeBefore: Window.Windowed
 
     function enterCinema() {
-        if (App.viewKind !== "nowplaying" || root.visibility === Window.FullScreen)
+        if ((App.viewKind !== "nowplaying" && App.viewKind !== "watching")
+                || root.visibility === Window.FullScreen)
             return
         root.shapeBefore = root.visibility
         root.showFullScreen()
@@ -302,7 +311,7 @@ ApplicationWindow {
         target: App
         // viewKind is reported by viewChanged, which every view change raises.
         function onViewChanged() {
-            if (App.viewKind !== "nowplaying")
+            if (App.viewKind !== "nowplaying" && App.viewKind !== "watching")
                 root.leaveCinema()
         }
     }
@@ -790,7 +799,7 @@ ApplicationWindow {
         // it is there once something is queued -- and setting visible here
         // replaced that rule outright, which put a bar across the bottom of
         // every view with nothing playing.
-        dimmed: root.cinema && !root.chromeAwake
+        dimmed: root.watchCinema || (root.musicCinema && !root.chromeAwake)
 
         // Keeps itself up while the pointer is on it. Asked by the timer
         // rather than acted on here, so resting on the bar and moving over it
@@ -1080,9 +1089,26 @@ ApplicationWindow {
 
                 SidebarHeading { objectName: "yoursHeading"; text: "Yours" }
 
+                // The way back to the video playing in the window, for as long
+                // as something is queued there.
+                SidebarRow {
+                    objectName: "watchingRow"
+                    width: sidebarColumn.width
+                    visible: Video.hasQueue
+                    label: "Now watching"
+                    count: 0
+                    selected: App.viewKind === "watching"
+                    onActivated: App.showWatching()
+                    onRevealRequested: root.revealRow(this)
+                }
+
+                // mpv's own queue beside YouTube's suggestions. With videos
+                // played in the window there is no mpv queue to show, and the
+                // video page carries the suggestions itself.
                 SidebarRow {
                     objectName: "companionRow"
                     width: sidebarColumn.width
+                    visible: !App.videosInWeave
                     label: "Companion"
                     count: 0
                     selected: App.viewKind === "companion"
@@ -1242,7 +1268,8 @@ ApplicationWindow {
         anchors.bottom: miniPlayer.top
         width: App.panelWidth
         visible: App.detailOpen && App.viewKind !== "music"
-                 && App.viewKind !== "nowplaying" && App.viewKind !== "companion"
+                 && App.viewKind !== "nowplaying" && App.viewKind !== "watching"
+                 && App.viewKind !== "companion"
     }
 
     MusicView {
@@ -1390,11 +1417,11 @@ ApplicationWindow {
         // The whole window when the screen is filled, which is what covers
         // the sidebar, the live bar and the banner without any of them being
         // told anything. The bar is the one thing left over it, on purpose.
-        anchors.left: root.cinema ? parent.left : sidebar.right
+        anchors.left: root.musicCinema ? parent.left : sidebar.right
         anchors.right: parent.right
-        anchors.top: root.cinema || !liveBar.visible ? parent.top : liveBar.bottom
-        anchors.topMargin: root.cinema || liveBar.visible ? 0 : banner.height
-        anchors.bottom: root.cinema ? parent.bottom : miniPlayer.top
+        anchors.top: root.musicCinema || !liveBar.visible ? parent.top : liveBar.bottom
+        anchors.topMargin: root.musicCinema || liveBar.visible ? 0 : banner.height
+        anchors.bottom: root.musicCinema ? parent.bottom : miniPlayer.top
 
         // Movement anywhere over the picture brings the bar back. A handler
         // rather than a covering area, because an area over the whole page
@@ -1408,7 +1435,7 @@ ApplicationWindow {
         // of it that says the hand moved.
         HoverHandler {
             id: pointerWatch
-            enabled: root.cinema
+            enabled: root.musicCinema
             property point wasAt: Qt.point(-1, -1)
             onPointChanged: {
                 if (point.scenePosition.x === pointerWatch.wasAt.x
@@ -1427,7 +1454,7 @@ ApplicationWindow {
             anchors.fill: parent
             // Handed down. A component in its own file cannot see an id
             // declared in this one.
-            cinema: root.cinema
+            cinema: root.musicCinema
             chromeAwake: root.chromeAwake
             barRoom: miniPlayer.visible ? miniPlayer.height : 0
             // The page paints the window's own ground under itself, held
@@ -1442,6 +1469,105 @@ ApplicationWindow {
             onCardMenuRequested: (index, key) => root.askAboutTile("music", index, key)
             onQueueMenuRequested: (key) => root.askAboutQueueEntry(key)
         }
+    }
+
+    // The page a video plays on, when videos play in the window. Placed and
+    // layered exactly as the music page is, for the same reasons; when the
+    // screen is filled the music bar goes away rather than lying over it, since
+    // the video has controls of its own.
+    Item {
+        id: watchSlot
+        objectName: "watchSlot"
+        clip: true
+        z: 3
+        visible: watchPage.everShown
+        anchors.left: root.watchCinema ? parent.left : sidebar.right
+        anchors.right: parent.right
+        anchors.top: root.watchCinema || !liveBar.visible ? parent.top : liveBar.bottom
+        anchors.topMargin: root.watchCinema || liveBar.visible ? 0 : banner.height
+        anchors.bottom: root.watchCinema || !miniPlayer.visible ? parent.bottom : miniPlayer.top
+
+        HoverHandler {
+            id: watchPointer
+            enabled: root.watchCinema
+            property point wasAt: Qt.point(-1, -1)
+            onPointChanged: {
+                if (point.scenePosition.x === watchPointer.wasAt.x
+                        && point.scenePosition.y === watchPointer.wasAt.y)
+                    return
+                watchPointer.wasAt = point.scenePosition
+                root.wakeChrome()
+            }
+        }
+
+        WatchPage {
+            id: watchPage
+            objectName: "watchPage"
+            anchors.fill: parent
+            cinema: root.watchCinema
+            chromeAwake: root.chromeAwake
+            barRoom: 0
+            groundX: watchSlot.x
+            groundY: watchSlot.y
+            groundWidth: windowGround.width
+            groundHeight: windowGround.height
+            onFullscreenToggled: root.toggleCinema()
+            onCardMenuRequested: (key) => root.askAboutQueueEntry(key)
+            onQueueMenuRequested: (key) => root.askAboutQueueEntry(key)
+        }
+    }
+
+    // The keys of a player, on the page a video plays on. Not while something
+    // is being typed into, where every one of them is a letter or a caret.
+    Shortcut {
+        sequence: "Escape"
+        enabled: App.viewKind === "watching"
+        onActivated: {
+            if (root.cinema)
+                root.leaveCinema()
+            else
+                App.closeWatching()
+        }
+    }
+    Shortcut {
+        sequence: "F"
+        enabled: App.viewKind === "watching" && !root.typingSomewhere
+        onActivated: root.toggleCinema()
+    }
+    Shortcut {
+        sequence: "Space"
+        enabled: App.viewKind === "watching" && Video.hasQueue && !root.typingSomewhere
+        onActivated: Video.toggle()
+    }
+    Shortcut {
+        sequence: "Left"
+        enabled: App.viewKind === "watching" && !root.typingSomewhere
+        onActivated: Video.nudgeSeek(-1)
+    }
+    Shortcut {
+        sequence: "Right"
+        enabled: App.viewKind === "watching" && !root.typingSomewhere
+        onActivated: Video.nudgeSeek(1)
+    }
+    Shortcut {
+        sequence: "Up"
+        enabled: App.viewKind === "watching" && !root.typingSomewhere
+        onActivated: Video.nudgeVolume(1)
+    }
+    Shortcut {
+        sequence: "Down"
+        enabled: App.viewKind === "watching" && !root.typingSomewhere
+        onActivated: Video.nudgeVolume(-1)
+    }
+    Shortcut {
+        sequence: "M"
+        enabled: App.viewKind === "watching" && !root.typingSomewhere
+        onActivated: Video.toggleMute()
+    }
+    Shortcut {
+        sequence: "N"
+        enabled: App.viewKind === "watching" && !root.typingSomewhere
+        onActivated: Video.next()
     }
 
     // Out of the page and back where you were, with the music still playing.
@@ -1491,7 +1617,7 @@ ApplicationWindow {
     // whatever else might want it and do nothing visible in return.
     Shortcut {
         sequence: "Space"
-        enabled: Audio.hasQueue && !root.typingSomewhere
+        enabled: Audio.hasQueue && !root.typingSomewhere && App.viewKind !== "watching"
         onActivated: Audio.toggle()
     }
 
@@ -1996,7 +2122,7 @@ ApplicationWindow {
         Component.onCompleted: grid.contentItem.transform = [gridShift]
         opacity: root.tabFade * root.pageFade
         visible: App.viewKind !== "music" && App.viewKind !== "debug"
-                 && App.viewKind !== "nowplaying"
+                 && App.viewKind !== "nowplaying" && App.viewKind !== "watching"
                  && !(App.viewKind === "channel" && App.channelTab === "music")
                  && App.viewKind !== "settings"
                  && App.viewKind !== "musicSettings"
@@ -2154,7 +2280,7 @@ ApplicationWindow {
             anchors.centerIn: parent
             width: Math.min(420, grid.width - 80)
             visible: grid.count === 0 && App.viewKind !== "music"
-                     && App.viewKind !== "nowplaying"
+                     && App.viewKind !== "nowplaying" && App.viewKind !== "watching"
             spacing: 10
 
             // The first line is what happened, the rest is why or what to do
@@ -2586,9 +2712,29 @@ ApplicationWindow {
         // Every entry dismisses the menu itself. A Menu is supposed to close
         // on its own when an item fires, and it did not here, so it is done
         // explicitly rather than left to chance.
+        // Where videos play in the window, a video can wait its turn in the
+        // window's queue as a song waits in the music's, and that comes first.
+        // mpv keeps its own.
         ThemedMenuItem {
-            text: "Play in mpv"
-            onTriggered: { App.play(root.menuKey); videoMenu.dismiss() }
+            objectName: "playNextEntry"
+            visible: App.videosInWeave
+            text: "Play next"
+            onTriggered: { App.queueVideo(root.menuKey, true); videoMenu.dismiss() }
+        }
+        ThemedMenuItem {
+            objectName: "addToQueueEntry"
+            visible: App.videosInWeave
+            text: "Add to queue"
+            onTriggered: { App.queueVideo(root.menuKey, false); videoMenu.dismiss() }
+        }
+        // A press already plays it wherever videos play, so this is the other
+        // place, for this one video, without changing that.
+        ThemedMenuItem {
+            objectName: "playElsewhereEntry"
+            // Never mpv on a machine without one.
+            visible: !App.videosInWeave || App.mpvFound
+            text: App.videosInWeave ? "Play in mpv" : "Play in Weave"
+            onTriggered: { App.playElsewhere(root.menuKey); videoMenu.dismiss() }
         }
         ThemedMenuItem {
             objectName: "hideVideoEntry"
@@ -3236,7 +3382,8 @@ ApplicationWindow {
                         HintBubble {
                             parent: musicBox
                             shown: musicBox.hovered
-                            words: "Play its videos in the music player rather than in mpv"
+                            words: "Play its videos in the music player rather than "
+                                   + (App.videosInWeave ? "as videos" : "in mpv")
                         }
                     }
 
@@ -3450,7 +3597,8 @@ ApplicationWindow {
                         HintBubble {
                             parent: keptMusicBox
                             shown: keptMusicBox.hovered
-                            words: "Play its videos in the music player rather than in mpv"
+                            words: "Play its videos in the music player rather than "
+                                   + (App.videosInWeave ? "as videos" : "in mpv")
                         }
                     }
 

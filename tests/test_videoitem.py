@@ -26,6 +26,24 @@ class WhichPlayerItDraws(unittest.TestCase):
         videoitem.attach(None)
         self.assertIsNone(videoitem.engine())
 
+    def test_the_two_players_are_held_apart(self) -> None:
+        # The music and the videos played in the window are two players, each
+        # with a picture of its own. Attaching one must not replace the other.
+        music, video = object(), object()
+        videoitem.attach(music)
+        videoitem.attach(video, videoitem.VIDEO)
+        try:
+            self.assertIs(videoitem.engine(), music)
+            self.assertIs(videoitem.engine(videoitem.MUSIC), music)
+            self.assertIs(videoitem.engine(videoitem.VIDEO), video)
+        finally:
+            videoitem.attach(None, videoitem.VIDEO)
+
+    def test_an_unknown_name_is_the_music(self) -> None:
+        marker = object()
+        videoitem.attach(marker)
+        self.assertIs(videoitem.engine("nothing like it"), marker)
+
 
 class TheNativeDisplay(unittest.TestCase):
     def test_it_answers_rather_than_raising(self) -> None:
@@ -48,15 +66,23 @@ class OneContextOnly(unittest.TestCase):
     rebuilt. Asking twice is refused with "Unspecified error"."""
 
     def test_the_context_is_held_apart_from_any_one_renderer(self) -> None:
-        self.assertTrue(hasattr(videoitem, "_context"))
+        for name in (videoitem.MUSIC, videoitem.VIDEO):
+            self.assertTrue(hasattr(videoitem._bindings[name], "context"))
         self.assertFalse(hasattr(videoitem._Renderer, "_context"),
                          "a renderer owning the context means a second one asks again")
+        self.assertFalse(hasattr(videoitem._Renderer, "context"),
+                         "a renderer owning the context means a second one asks again")
+
+    def test_each_player_has_its_own(self) -> None:
+        self.assertIsNot(videoitem._bindings[videoitem.MUSIC],
+                         videoitem._bindings[videoitem.VIDEO])
 
     def test_nothing_is_rebuilt_once_the_picture_is_down(self) -> None:
         # Clearing the context alone invites the next paint to build another,
         # which is then alive when the player closes and takes the process with
         # it. The flag is what stops that.
-        self.assertTrue(hasattr(videoitem, "_finished"))
+        for name in (videoitem.MUSIC, videoitem.VIDEO):
+            self.assertTrue(hasattr(videoitem._bindings[name], "finished"))
 
 
 if __name__ == "__main__":
@@ -90,4 +116,6 @@ class TakenDownBeforeThePlayer(unittest.TestCase):
     def test_taking_it_down_twice_is_harmless(self) -> None:
         videoitem.shutdown()
         videoitem.shutdown()
-        self.assertIsNone(videoitem._context)
+        for held in videoitem._bindings.values():
+            self.assertIsNone(held.context)
+            self.assertTrue(held.finished)

@@ -1547,12 +1547,19 @@ class Smoke:
                    "Hide this video" in labels, ", ".join(labels))
         # The order of that menu is a decision, not an accident: what a press
         # does most often is at the top and the boxes stay at the foot.
-        wanted = ["Play in mpv", "Hide this video", "Mark as", "Put channel in a group",
-                  "Put in a box", "Put in a music box", "Share"]
+        # Then the other place a video can play, which depends on where videos
+        # play on the machine running this, after the window's queue, which is
+        # there only where videos play in the window.
+        wanted = ["Play next", "Add to queue", "Play in ", "Hide this video", "Mark as",
+                  "Put channel in a group", "Put in a box", "Put in a music box", "Share"]
         first = labels[:len(wanted)]
         self.check("and its entries are in the order they were asked for",
                    all(want in got for want, got in zip(wanted, first)),
                    ", ".join(first))
+        queueing = [read(find(window, name), "visible")
+                    for name in ("playNextEntry", "addToQueueEntry")]
+        self.check("and it queues in the window only where videos play there",
+                   queueing == [bridge.videosInWeave] * 2, str(queueing))
         menu.close()
         settle(0.2)
 
@@ -2654,6 +2661,210 @@ class Smoke:
         self.check("and a box thrown away leaves the row", len(chips()) == 3,
                    f"{len(chips())} chips")
 
+    def watching(self, bridge, window) -> None:
+        """A video played in the window rather than handed to mpv.
+
+        Offline, so nothing is found and nothing plays: what is checked is
+        where a press goes, the page it opens and the queue beside it, the
+        companion leaving the sidebar, and the way back out.
+        """
+        step("a video played in the window")
+        was = bridge.videosInWeave
+        bridge.showSettings()
+        settle(0.4)
+        card = find(window, "videosCard")
+        here = find(window, "videosInWeave")
+        self.check("the settings page says where videos play, first of all",
+                   card is not None and bool(read(card, "visible")) and here is not None)
+        bridge.setVideosInWeave(True)
+        settle(0.3)
+        self.check("and its switch follows the choice",
+                   here is not None and bool(read(here, "accent")))
+        companion = find(window, "companionRow")
+        self.check("in the window's mode the companion leaves the sidebar",
+                   companion is not None and not bool(read(companion, "visible")))
+        key = bridge._model.key_at(0)
+        bridge.play(key)
+        settle(0.6)
+        page = find(window, "watchPage")
+        queue = bridge._video.queue
+        self.check("a press opens the page a video plays on",
+                   read(bridge, "viewKind") == "watching" and page is not None
+                   and bool(read(page, "visible")),
+                   read(bridge, "viewKind"))
+        self.check("with the video in its queue",
+                   [entry["key"] for entry in queue] == [key], str(len(queue)))
+        row = find(window, "watchingRow")
+        self.check("and a way back to it in the sidebar",
+                   row is not None and bool(read(row, "visible")))
+        surface = find(window, "watchingVideo")
+        self.check("its picture is drawn by the video's own player",
+                   surface is not None and read(surface, "player") == "video")
+        title = find(window, "watchingTitle")
+        self.check("the title is the video's",
+                   title is not None and read(title, "text") == queue[0]["title"],
+                   read(title, "text") if title is not None else "none")
+        self.check("the cards it was opened over are put away under it",
+                   not read(find(window, "grid"), "visible")
+                   and not read(find(window, "detailPanel"), "visible"))
+        self.where_presses_land_on_the_page(bridge, window, key)
+        # The card menu waits a video its turn in the window's queue. Plain
+        # videos, since a stream not on air yet is refused.
+        menu = find(window, "videoMenu")
+        plain = [row["key"] for row in (bridge._model.row_at(index)
+                                        for index in range(read(find(window, "grid"), "count")))
+                 if row["key"] != key and row["key"].startswith("yt:")
+                 and not (row["isUpcoming"] or row["isLocked"] or row["isLive"])]
+        second, third = plain[:2]
+        clicked = []
+        for other, entry in ((second, "Add to queue"), (third, "Play next")):
+            write(window, "menuKey", other)
+            menu.open()
+            settle(0.3)
+            clicked.append(click_entry(menu, entry))
+            settle(0.3)
+        queued = [entry["key"] for entry in bridge._video.queue]
+        self.check("the card menu puts a video in the window's queue, next or last",
+                   clicked == [True, True] and queued == [key, third, second],
+                   f"clicked {clicked}, queue {len(queued)}")
+        bridge.closeWatching()
+        settle(0.4)
+        self.check("closing it walks back", read(bridge, "viewKind") != "watching",
+                   read(bridge, "viewKind"))
+        bridge.showWatching()
+        settle(0.4)
+        bridge.stopWatching()
+        settle(0.4)
+        self.check("the cross stops it and the queue goes",
+                   not bridge._video.hasQueue and read(bridge, "viewKind") != "watching")
+        # A box plays one card at a press, and all of it from the bar.
+        box_id = bridge.createBox("Walk box")
+        for other in plain[:3]:
+            bridge.addToBox(box_id, other)
+        bridge.selectBox(box_id)
+        settle(0.5)
+        shown = [bridge._model.key_at(index) for index in range(read(find(window, "grid"),
+                                                                     "count"))]
+        self.check("a box offers to play all of it",
+                   read(find(window, "viewAction"), "text") == "Play all",
+                   read(find(window, "viewAction"), "text"))
+        call(window, "doViewAction")
+        settle(0.5)
+        self.check("and all of it fills the window's queue in the order shown",
+                   [entry["key"] for entry in bridge._video.queue] == shown
+                   and read(bridge, "viewKind") == "watching",
+                   f"{len(bridge._video.queue)} queued")
+        bridge.stopWatching()
+        settle(0.4)
+        bridge.deleteBox(box_id)
+        settle(0.3)
+        bridge.setVideosInWeave(was)
+        settle(0.3)
+
+    def where_presses_land_on_the_page(self, bridge, window, key: str) -> None:
+        """Which item a real press on the video page reaches.
+
+        Real presses rather than calls, since what went wrong was the item
+        that took them: a press between the page's parts went through to the
+        cards under it, and a press on a button counted on the picture too.
+        """
+        from PySide6.QtCore import QPoint, QPointF
+        from PySide6.QtTest import QTest
+
+        def spot(item, x, y):
+            at = item.mapToScene(QPointF(x, y))
+            return QPoint(round(at.x()), round(at.y()))
+
+        page = find(window, "watchPage")
+        catch = find(window, "watchingCatch")
+        side = find(window, "watchingSide")
+        caught = []
+        for at in (spot(page, 8, read(page, "height") / 2),
+                   spot(side, -8, read(side, "height") / 2)):
+            QTest.mousePress(window, Qt.LeftButton, Qt.NoModifier, at)
+            caught.append(bool(read(catch, "pressed")))
+            QTest.mouseRelease(window, Qt.LeftButton, Qt.NoModifier, at)
+            settle(0.2)
+        self.check("a press between the page's parts stays on the page",
+                   caught == [True, True] and read(bridge, "viewKind") == "watching"
+                   and [entry["key"] for entry in bridge._video.queue] == [key],
+                   f"caught {caught}, view {read(bridge, 'viewKind')}")
+
+        surface = find(window, "watchingSurface")
+        button = find(window, "watchPlayButton")
+        on_button = spot(button, read(button, "width") / 2, read(button, "height") / 2)
+        on_picture = spot(surface, read(surface, "width") / 2, read(surface, "height") / 3)
+        QTest.mousePress(window, Qt.LeftButton, Qt.NoModifier, on_button)
+        shared = bool(read(surface, "pressed"))
+        # Let go off the button, so the press is not a tap and plays nothing.
+        QTest.mouseRelease(window, Qt.LeftButton, Qt.NoModifier, on_picture)
+        settle(0.2)
+        self.check("a press on a button over the picture is the button's alone",
+                   not shared)
+
+        corner = find(window, "watchFullscreen")
+        QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier,
+                         spot(corner, read(corner, "width") / 2, read(corner, "height") / 2))
+        settle(0.4)
+        pressed_full = read(window, "cinema")
+        call(window, "leaveCinema")
+        settle(0.4)
+        self.check("a button over the picture still answers a press",
+                   pressed_full is True, f"filled {pressed_full}")
+
+        QTest.mouseDClick(window, Qt.LeftButton, Qt.NoModifier, on_picture)
+        settle(0.4)
+        filled = read(window, "cinema")
+        call(window, "leaveCinema")
+        settle(0.4)
+        self.check("two presses on the picture fill the screen",
+                   filled is True and not read(window, "cinema")
+                   and read(bridge, "viewKind") == "watching",
+                   f"filled {filled}")
+
+    def where_videos_play_in_the_wizard(self, bridge, window) -> None:
+        """The two pictures on the welcome page are the two buttons. Pressed
+        for real, since a TapHandler cannot be called."""
+        from PySide6.QtCore import QPoint, QPointF
+        from PySide6.QtTest import QTest
+
+        root = window.contentItem()
+        bridge.stepWizard(-1)
+        settle(0.4)
+        was = bridge.videosInWeave
+        places = item_named(root, "wizardVideoPlaces")
+        in_mpv, in_weave = item_named(root, "wizardInMpv"), item_named(root, "wizardInWeave")
+        self.check("the page on where videos play shows both ways",
+                   places is not None and bool(read(places, "visible"))
+                   and in_mpv is not None and in_weave is not None)
+
+        def press(item):
+            at = item.mapToScene(QPointF(read(item, "width") / 2, read(item, "height") / 2))
+            QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier,
+                             QPoint(round(at.x()), round(at.y())))
+            settle(0.3)
+
+        queued = len(bridge._video.queue)
+        press(in_weave)
+        weave_picked = bridge.videosInWeave and bool(read(in_weave, "chosen"))
+        # Where videos play in the window, a press that reached a card under
+        # the pages would fill the window's queue, which makes it visible.
+        hidden = read(bridge, "wizardHidden")
+        press(item_named(root, "wizardBody"))
+        press(item_named(root, "wizardHideWords"))
+        words_took_it = read(bridge, "wizardHidden") != hidden
+        bridge.setWizardHidden(hidden)
+        press(in_mpv)
+        mpv_picked = not bridge.videosInWeave and bool(read(in_mpv, "chosen"))
+        self.check("and pressing a picture picks that way",
+                   weave_picked and mpv_picked, f"weave {weave_picked}, mpv {mpv_picked}")
+        self.check("and no press on the pages reaches the cards under them",
+                   words_took_it and len(bridge._video.queue) == queued,
+                   f"words {words_took_it}, queued {len(bridge._video.queue) - queued}")
+        bridge.setVideosInWeave(was)
+        bridge.stepWizard(1)
+        settle(0.3)
+
     def the_companion(self, bridge, window) -> None:
         """What YouTube puts beside the song mpv plays, and mpv's playlist.
 
@@ -3199,6 +3410,8 @@ class Smoke:
                    ", ".join(titles))
         self.check("one of them asks where search suggestions come from",
                    "Search suggestions" in titles, ", ".join(titles))
+        self.check("and one where videos play, before how it is used",
+                   titles[-2:] == ["How videos play", "How it is used"], ", ".join(titles))
 
         self.check("the last one finishes rather than going on",
                    str(read(item_named(root, "wizardNext"), "text")) == "Done",
@@ -3206,11 +3419,13 @@ class Smoke:
         if self.shot:
             self.check("wizard written", screenshot(window, shot_beside(self.shot, "wizard")))
 
+        self.where_videos_play_in_the_wizard(bridge, window)
+
         # The themes are tried here rather than described, so the buttons have
         # to be the real ones and pressing one has to change the window.
-        # Back onto the page that holds them, since the walk above ended on the
-        # last one.
-        bridge.stepWizard(-1)
+        # Back onto the page that holds them, two before the last one the walk
+        # above ended on.
+        bridge.stepWizard(-2)
         settle(0.4)
         was = str(read(current, "text"))
         buttons = items_named_like(item_named(root, "wizardThemes"), "wizardTheme")
@@ -3617,6 +3832,11 @@ class Smoke:
                    read(bridge, "wizardOpen"))
         bridge.closeWizard()
         settle(0.3)
+        # Where videos play is decided per machine when nobody has chosen, by
+        # what mpv this one has, so the walk chooses mpv and walks the same on
+        # every one. The window's own page is walked by asking for it.
+        bridge.setVideosInWeave(False)
+        settle(0.2)
         grid = find(window, "grid")
         self.check("grid has the seeded videos", read(grid, "count") == 6,
                    f"count {read(grid, 'count')}")
@@ -4023,6 +4243,7 @@ class Smoke:
         self.telling_youtube_music(bridge, window)
         self.a_link_in_a_description(bridge, window)
         self.the_companion(bridge, window)
+        self.watching(bridge, window)
 
         if self.shot:
             self.check("screenshot written", screenshot(window, self.shot), self.shot)

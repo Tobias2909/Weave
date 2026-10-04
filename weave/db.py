@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 51
+SCHEMA_VERSION = 52
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -351,6 +351,16 @@ CREATE TABLE IF NOT EXISTS hidden_videos (
     thumbnail_url TEXT,
     hidden_at     INTEGER NOT NULL
 );
+
+-- Where a video played in the window was left, so it starts there again next
+-- time. Weave's own record: mpv keeps its own in its watch_later files, and the
+-- two are left apart. Gone once the video counts as watched.
+CREATE TABLE IF NOT EXISTS video_positions (
+    video_key  TEXT PRIMARY KEY,
+    seconds    REAL NOT NULL,
+    length     REAL NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
+);
 """
 
 
@@ -664,6 +674,13 @@ class Database:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
             row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             was = int(row["value"]) if row else 0
+            if was and was < 52:
+                # Every copy from before there was a choice handed its videos
+                # to mpv, and goes on doing that until somebody says otherwise.
+                # A fresh one is asked on the welcome pages.
+                conn.execute(
+                    "INSERT INTO meta(key, value) VALUES('state.videos_in', 'mpv') "
+                    "ON CONFLICT(key) DO NOTHING")
             if was and was < 51:
                 # The favourites stood newest first before they had places of
                 # their own, so that is the order they are given.
@@ -3944,6 +3961,26 @@ class Database:
                 "progress=excluded.progress, source=excluded.source",
                 (video_key, int(time.time()), progress, source),
             )
+
+    def video_position(self, video_key: str) -> tuple[float, float] | None:
+        """Where a video played in the window was left, and how long it is."""
+        row = self.conn.execute(
+            "SELECT seconds, length FROM video_positions WHERE video_key=?",
+            (video_key,)).fetchone()
+        return (float(row["seconds"]), float(row["length"])) if row else None
+
+    def set_video_position(self, video_key: str, seconds: float, length: float) -> None:
+        with self.conn as conn:
+            conn.execute(
+                "INSERT INTO video_positions(video_key, seconds, length, updated_at) "
+                "VALUES(?,?,?,?) ON CONFLICT(video_key) DO UPDATE SET "
+                "seconds=excluded.seconds, length=excluded.length, "
+                "updated_at=excluded.updated_at",
+                (video_key, float(seconds), float(length), int(time.time())))
+
+    def forget_video_position(self, video_key: str) -> None:
+        with self.conn as conn:
+            conn.execute("DELETE FROM video_positions WHERE video_key=?", (video_key,))
 
     def clear_watched(self, video_key: str) -> None:
         with self.conn as conn:

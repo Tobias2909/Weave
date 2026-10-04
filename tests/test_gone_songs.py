@@ -400,6 +400,8 @@ class WhatTheWindowSaysAboutIt(unittest.TestCase):
         bridge = Bridge.__new__(Bridge)
         bridge._db = self.Lists()
         bridge._audio = self.Player(playing)
+        # The videos played in the window, which a hand-built bridge has none of.
+        bridge._video = None
         said = []
         bridge._set_notice = lambda text, **_k: said.append(text)
         bridge._set_status = lambda *_a, **_k: None

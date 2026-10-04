@@ -24,6 +24,7 @@ from PySide6.QtQuickControls2 import QQuickStyle
 
 from . import config, desktop, imagecache, mpris, paths, trace
 from .audio import AudioPlayer
+from .video import VideoPlayer
 from .db import Database
 from .engine_libmpv import OPTIONS as PLAYER_OPTIONS
 from .player.mpv import Player
@@ -117,12 +118,17 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
     player = Player(cfg, parent=app)
     bridge = Bridge(db, cfg, model, player, parent=app)
     audio = AudioPlayer(cfg, db, parent=app)
+    # The videos played in the window rather than in mpv. A second player of
+    # its own, with its own picture, beside the music's.
+    video = VideoPlayer(cfg, db, parent=app)
     bridge.attach_theme(theme)
     bridge.attach_audio(audio)
+    bridge.attach_video(video)
     # Which player the video surface draws. One music player exists, and
     # the surface is built by QML rather than here, so it is told once
     # rather than handed down through the window.
     videoitem.attach(audio.engine)
+    videoitem.attach(video.engine, videoitem.VIDEO)
     # The mouse back and forward buttons are not delivered to any one item,
     # so they are read at the application before anything else sees them.
     navigation.install(app, bridge)
@@ -143,6 +149,7 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
     context.setContextProperty("Theme", theme)
     context.setContextProperty("feedModel", model)
     context.setContextProperty("Audio", audio)
+    context.setContextProperty("Video", video)
     # Rounding a picture needs a shader, and the software scene graph cannot
     # run one. Told to QML so it can fall back to square pictures rather than
     # drawing nothing at all.

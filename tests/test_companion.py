@@ -70,6 +70,8 @@ def make(test, alive=True):
     bridge._companion_asked = set()
     # Weave's own player, and its page's tab, neither of which is in play here.
     bridge._audio = None
+    # The videos played in the window, which a hand-built bridge has none of.
+    bridge._video = None
     bridge._now_rec_open = False
     bridge._web_results = []
     bridge.asked = []

@@ -59,6 +59,8 @@ def bridge_with(audio=None, view=ALL, has_previous=True) -> Bridge:
     bridge = Bridge.__new__(Bridge)
     QObject.__init__(bridge)
     bridge._audio = audio
+    # The videos played in the window, which a hand-built bridge has none of.
+    bridge._video = None
     bridge._view_kind = view
     bridge._nav = FakeNav(has_previous)
     bridge._now_side = None
@@ -446,12 +448,15 @@ class OneQueueDrawnOneWay(unittest.TestCase):
         # grew a feature, so there is only the one component.
         qml = Path(__file__).resolve().parent.parent / "weave" / "qml"
         shared = (qml / "QueueList.qml").read_text()
-        self.assertIn("Audio.moveInQueue", shared)
-        self.assertIn("Audio.removeFromQueue", shared)
-        for name in ("MiniPlayer.qml", "NowPlaying.qml"):
+        # Whose queue it is, handed in: the music's unless told otherwise, so
+        # the videos played in the window are drawn by the same list.
+        self.assertIn("property var player: Audio", shared)
+        self.assertIn("player.moveInQueue", shared)
+        self.assertIn("player.removeFromQueue", shared)
+        for name in ("MiniPlayer.qml", "NowPlaying.qml", "WatchPage.qml"):
             body = (qml / name).read_text()
             self.assertIn("QueueList {", body, name)
-            self.assertNotIn("Audio.moveInQueue", body,
+            self.assertNotIn(".moveInQueue", body,
                              f"{name} carries its own copy of the queue")
 
 
@@ -635,6 +640,8 @@ class APressIsHeardAtOnce(unittest.TestCase):
         bridge = Bridge.__new__(Bridge)
         QObject.__init__(bridge)
         bridge._audio = audio
+        # The videos played in the window, which a hand-built bridge has none of.
+        bridge._video = None
         bridge._searching = True
         bridge._station_seed = ""
         bridge.musicChanged = Recorder()

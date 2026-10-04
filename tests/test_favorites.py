@@ -206,6 +206,8 @@ class TheBridgeMarksThem(unittest.TestCase):
         bridge._name_favourite_makers = lambda: None
         bridge._db = db
         bridge._audio = None
+        # The videos played in the window, which a hand-built bridge has none of.
+        bridge._video = None
         bridge._music_list = None
         bridge._shelves = [{"title": "A section", "kind": "songs", "items": [
             {"title": "A song", "subtitle": "An artist", "thumbnail": "",
@@ -335,6 +337,8 @@ class FromAnOpenedList(unittest.TestCase):
         bridge = Bridge.__new__(Bridge)
         bridge._name_favourite_makers = lambda: None
         bridge._audio = None
+        # The videos played in the window, which a hand-built bridge has none of.
+        bridge._video = None
         bridge._db = scratch_db(self)
         bridge._results = rows
         bridge._music_list = None
@@ -444,14 +448,21 @@ class TheHeartFollowsTheSong(unittest.TestCase):
             def pause_for_video(self):
                 pass
 
+            def resume_after_video(self):
+                pass
+
         class Video:
             def __init__(self):
                 self.nowPlaying = Wire()
                 self.moving = Wire()
+                # mpv going away, which is when music a video paused comes back.
+                self.stopped = Wire()
 
         bridge = Bridge.__new__(Bridge)
         bridge._name_favourite_makers = lambda: None
         bridge._audio = None
+        # The videos played in the window, which a hand-built bridge has none of.
+        bridge._video = None
         bridge._player = Video()
         # A track change now also empties what sits beside the song on the Now
         # playing page, and asks whether that page has outlived the music it is
@@ -508,6 +519,8 @@ class WithNothingKept(unittest.TestCase):
         bridge._name_favourite_makers = lambda: None
         bridge._db = db
         bridge._audio = Audio()
+        # The videos played in the window, which a hand-built bridge has none of.
+        bridge._video = None
         bridge._shelves = []
         bridge._favorites_order = []
         bridge._view_kind = "music"
@@ -629,6 +642,8 @@ class ThePicture(unittest.TestCase):
         bridge = Bridge.__new__(Bridge)
         bridge._name_favourite_makers = lambda: None
         bridge._audio = None
+        # The videos played in the window, which a hand-built bridge has none of.
+        bridge._video = None
         bridge._db = self.db
         bridge._music_list = None
         bridge._set_notice = lambda *a, **k: None

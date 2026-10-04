@@ -54,6 +54,77 @@ Item {
                 width: sheet.width - 16
                 spacing: 14
 
+                // ---- where videos play ---------------------------------------
+                // First, because it decides what pressing anything does.
+                Rectangle {
+                    objectName: "videosCard"
+                    width: body.width
+                    height: videosBody.height + 28
+                    radius: 6
+                    color: Theme.colors.surface
+                    border.width: 1
+                    border.color: Theme.colors.border
+
+                    Column {
+                        id: videosBody
+                        x: 14
+                        y: 14
+                        width: parent.width - 28
+                        spacing: 10
+
+                        Label {
+                            text: "Videos"
+                            color: Theme.colors.text
+                            font.pixelSize: 15
+                            font.weight: Font.DemiBold
+                        }
+
+                        Row {
+                            spacing: 8
+
+                            Label {
+                                width: view.wordWidth
+                                height: 28
+                                text: "Videos play in"
+                                color: Theme.colors.textMuted
+                                font.pixelSize: 12
+                                verticalAlignment: Text.AlignVCenter
+                            }
+
+                            FlatButton {
+                                objectName: "videosInMpv"
+                                text: "In mpv"
+                                accent: !App.videosInWeave
+                                enabled: App.mpvFound
+                                onClicked: App.setVideosInWeave(false)
+                            }
+
+                            FlatButton {
+                                objectName: "videosInWeave"
+                                text: "In Weave"
+                                accent: App.videosInWeave
+                                onClicked: App.setVideosInWeave(true)
+                            }
+                        }
+
+                        Label {
+                            objectName: "videosWords"
+                            width: parent.width
+                            text: "In mpv hands every video and stream to your own mpv, in a window "
+                                  + "of its own, with your mpv.conf, your scripts and your keys. That "
+                                  + "suits an mpv set up the way you like it, or a second screen. In "
+                                  + "Weave plays it on a page in this window, the way the music plays, "
+                                  + "with the queue beside it. A right click on any card plays that "
+                                  + "one video the other way without changing this."
+                                  + (App.mpvFound ? "" : " mpv is not installed on this machine, "
+                                                         + "so for now they play in Weave.")
+                            color: Theme.colors.textMuted
+                            font.pixelSize: 11
+                            wrapMode: Text.Wrap
+                        }
+                    }
+                }
+
                 // ---- appearance ---------------------------------------------
                 Rectangle {
                     width: body.width

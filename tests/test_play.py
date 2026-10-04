@@ -101,6 +101,8 @@ def make_bridge(rows):
     # The music, which steps aside for anything handed to mpv. Recorded here
     # rather than played.
     bridge._audio = Music()
+    # The videos played in the window, which a hand-built bridge has none of.
+    bridge._video = None
     bridge.asked = []
     bridge._db = None
     bridge._cfg = None

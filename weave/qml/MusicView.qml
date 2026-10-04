@@ -190,10 +190,11 @@ Item {
 
         ThemedMenuSeparator {}
 
-        // The song as the video it is, in mpv, the way a card plays.
+        // The song as the video it is, wherever videos play, the way a card
+        // plays.
         ThemedMenuItem {
             objectName: "songWatchEntry"
-            text: "Watch in mpv"
+            text: App.videosInWeave ? "Watch in Weave" : "Watch in mpv"
             onTriggered: {
                 if (view.askedTab >= 0)
                     App.watchSong("tab", view.askedTab, -1)

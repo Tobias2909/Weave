@@ -81,6 +81,8 @@ class PressingAVideoInAMusicPlaylist(unittest.TestCase):
         # says there is no player rather than that it is silent, which is what
         # a bridge built for one press has.
         bridge._audio = None
+        # The videos played in the window, which a hand-built bridge has none of.
+        bridge._video = None
         bridge.listened = []
         bridge.playAudio = bridge.listened.append
         self.db.set_playlist_music("PL1", is_music)

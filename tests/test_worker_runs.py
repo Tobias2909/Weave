@@ -626,6 +626,8 @@ class WorkerRuns(unittest.TestCase):
         bridge._stopping = False
         bridge._threads = {idle}
         bridge._audio = None
+        # The videos played in the window, which a hand-built bridge has none of.
+        bridge._video = None
         Bridge.shutdown(bridge, timeout_ms=10)
         self.assertTrue(idle.cancelled)
         self.assertTrue(idle.waited)
@@ -661,6 +663,8 @@ class WorkerRuns(unittest.TestCase):
         bridge._stopping = False
         bridge._threads = set()
         bridge._audio = None
+        # The videos played in the window, which a hand-built bridge has none of.
+        bridge._video = None
         self.assertTrue(Bridge._launch(bridge, worker))
         self.assertIn(worker, bridge._threads)
         Bridge.shutdown(bridge, timeout_ms=10)

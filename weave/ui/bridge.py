@@ -40,7 +40,7 @@ from ..sources import release as release_source
 from ..sources import search as search_source
 from ..sources import watchnext
 from ..sources import progress as mpv_progress
-from ..player.mpv import Player
+from ..player.mpv import WRAPPER_NAME, Player
 from ..poller import (
     ChannelAdder,
     ChannelAvatarsFetcher,
@@ -101,6 +101,14 @@ MUSIC_SETTINGS = "musicSettings"
 NOWPLAYING = "nowplaying"
 # What YouTube puts beside the video mpv plays, with mpv's own playlist.
 COMPANION = "companion"
+# The page a video plays on when videos play in the window rather than in mpv.
+WATCHING = "watching"
+
+# Where a pressed video plays: handed to mpv, or played on a page in the window.
+# Per machine, since it lives in the database: two screens make mpv's own
+# window the natural place, one screen makes a page of the window it.
+VIDEOS_IN_STATE = "videos_in"
+IN_MPV, IN_WEAVE = "mpv", "weave"
 
 # How long a set of recommendations is worth showing before asking for another,
 # and how long a playlist's contents are trusted before reading them again.
@@ -226,7 +234,7 @@ CHANNEL_PLAYLISTS_TRUST_S = 24 * 60 * 60
 
 # The pages of the walk through, counted from the welcome one, so the number
 # reads as how far there is to go rather than as a page number.
-WIZARD_LAST = 5
+WIZARD_LAST = 6
 
 
 class _ChallengeProbe(QObject, QRunnable):
@@ -326,6 +334,9 @@ class Bridge(QObject):
     twitchChanged = Signal()
     detailChanged = Signal()
     nowChanged = Signal()
+    videosInChanged = Signal()
+    # The video playing in the window changed, or what is known about it grew.
+    watchChanged = Signal()
     # The line being sung, apart from everything else about the song, because
     # it changes every few seconds and nothing else on the page should be
     # read again when it does.
@@ -441,7 +452,17 @@ class Bridge(QObject):
         self._now_starts: list = []
         self._now_lyric: dict = {}
         self._audio = None
-        self._search: MusicSearch | None = None
+        # The videos played in the window, given after construction like the
+        # music. None until then, which is also what a harness has.
+        self._video = None
+        # A card whose next press goes the other way: "Play in mpv" in the
+        # window's mode, "Play in Weave" in mpv's. Held by key, because a live
+        # press is answered only after a question to YouTube.
+        self._elsewhere_key = ""
+        # Set while the page hands its video to mpv, when the window's player
+        # stopping is not the video being over: mpv carries on with it, and
+        # the music stays where it is until mpv is done.
+        self._handing_to_mpv = False
         self._results: list = []
         self._searching = False
         self._home: MusicHome | None = None
@@ -1400,7 +1421,10 @@ class Bridge(QObject):
         """
         if self._audio is None:
             return detail
-        facts = self._audio.trackFacts
+        return self._with_facts(detail, self._audio.trackFacts)
+
+    def _with_facts(self, detail: dict, facts: dict) -> dict:
+        """The same filling, from whichever player's resolve said it."""
         if not facts:
             return detail
         for name, into, shape in self._FACT_TEXT:
@@ -1453,6 +1477,17 @@ class Bridge(QObject):
         return sorted(self._now_read)
 
     nowDetail = Property("QVariantMap", _get_now_detail, notify=nowChanged)
+
+    def _get_watch_detail(self) -> dict:
+        """What is known about the video playing in the window, in the same
+        shape: the stored row where there is one, the resolve for the rest."""
+        if self._video is None:
+            return {}
+        key = (self._video.track or {}).get("key") or ""
+        detail = dict(self._detail_for(key)) if key else {}
+        return self._with_facts(detail, self._video.trackFacts)
+
+    watchDetail = Property("QVariantMap", _get_watch_detail, notify=watchChanged)
     nowWords = Property("QVariantMap", _get_now_words, notify=nowChanged)
     # The line being sung and the one after it, and which line that is, so
     # the page can tell the next line coming up from a jump elsewhere.
@@ -1844,7 +1879,8 @@ class Bridge(QObject):
         # A channel page and a box both ignore the hide watched toggle. The
         # channel page is meant to show everything that channel has, and a box
         # was hand picked, so hiding half of it would be surprising.
-        if self._view_kind in (MUSIC, DEBUG, SETTINGS, MUSIC_SETTINGS, NOWPLAYING, COMPANION):
+        if self._view_kind in (MUSIC, DEBUG, SETTINGS, MUSIC_SETTINGS, NOWPLAYING, WATCHING,
+                               COMPANION):
             # These draw their own page and the grid is hidden behind them, so
             # the rows in it are nobody's business. Emptying it cost a query
             # that could only answer nothing, and a walk along the sidebar
@@ -1977,6 +2013,11 @@ class Bridge(QObject):
                 self._view_playlist, showing):
             return
         left_search = self._view_kind == SEARCH and kind != SEARCH
+        if (self._view_kind == WATCHING and kind != WATCHING and self._video is not None
+                and self._video.playing):
+            # Until the picture can follow you round the window in a corner,
+            # leaving its page pauses it, so nothing plays that cannot be seen.
+            self._video.setPaused(True)
         self._view_kind = kind
         self._view_id = view_id
         self._view_channel = channel_key
@@ -4657,10 +4698,288 @@ class Bridge(QObject):
 
     def _hand_over(self, key: str, url: str, title: str,
                    login: str | None, live: bool) -> None:
-        """Give mpv the address, and say on the card that it is on its way."""
+        """Give mpv the address, and say on the card that it is on its way.
+
+        Or play it in the window, when that is where videos play, or when this
+        one card was asked to go the other way."""
+        if self._plays_here(key):
+            self._watch_here(key, url, title, login, live)
+            return
         if self._player.play(url, twitch_login=login, live=live):
             self._set_status(f"playing {title}")
             self._set_starting(key)
+
+    # ---- videos played in the window ---------------------------------------
+
+    def attach_video(self, video) -> None:
+        """Given after construction, like the music."""
+        self._video = video
+        video.started.connect(self._on_video_started)
+        video.stopped.connect(self._on_video_stopped)
+        video.watched.connect(self._on_video_watched)
+        video.failed.connect(self._on_video_failed)
+        video.gone.connect(self._on_video_gone)
+        video.trackChanged.connect(self.watchChanged.emit)
+        video.factsChanged.connect(self.watchChanged.emit)
+
+    def _get_videos_in_weave(self) -> bool:
+        return self._videos_in() == IN_WEAVE
+
+    def _videos_in(self) -> str:
+        """Where videos play: what was chosen on the welcome pages or in the
+        settings. A copy from before there was a choice was given mpv as it
+        was upgraded, since that is how it had always behaved.
+
+        Never chosen, mpv where this machine has one set up for it, and the
+        window where it only has the package or none. With no mpv at all it is
+        the window whatever was chosen, since there is nothing to hand a video
+        to."""
+        if not self._player.command:
+            return IN_WEAVE
+        chosen = self._db.get_state(VIDEOS_IN_STATE)
+        if chosen in (IN_MPV, IN_WEAVE):
+            return chosen
+        return IN_MPV if self._mpv_is_set_up() else IN_WEAVE
+
+    def _mpv_is_set_up(self) -> bool:
+        """Whether mpv here was set up for this rather than only installed:
+        the wrapper Weave hands videos to, or a player written into the
+        config by hand."""
+        command = self._player.command or []
+        if not command:
+            return False
+        configured = str(getattr(self._cfg, "player_command", "") or "")
+        return configured not in ("", "auto") or Path(command[0]).name == WRAPPER_NAME
+
+    mpvFound = Property(bool, lambda self: bool(self._player.command), notify=videosInChanged)
+
+    @Slot(bool)
+    def setVideosInWeave(self, wanted: bool) -> None:
+        self._db.set_state(VIDEOS_IN_STATE, IN_WEAVE if wanted else IN_MPV)
+        self.videosInChanged.emit()
+
+    videosInWeave = Property(bool, _get_videos_in_weave, notify=videosInChanged)
+
+    def _plays_here(self, key: str) -> bool:
+        """Whether this press plays in the window. The setting decides, unless
+        the card was asked to go the other way, which it is told once."""
+        if self._video is None:
+            return False
+        here = self._videos_in() == IN_WEAVE
+        if key and key == self._elsewhere_key:
+            self._elsewhere_key = ""
+            here = not here
+        return here
+
+    @Slot(str)
+    def playElsewhere(self, key: str) -> None:
+        """The card menu's first entry: this one video the other way, without
+        changing where videos play."""
+        self._elsewhere_key = key
+        self.play(key)
+        if self._elsewhere_key == key and not (
+                self._stream_check is not None and self._stream_check.isRunning()):
+            # Nothing reached the hand over, so nothing is waiting for it.
+            self._elsewhere_key = ""
+
+    @Slot(str, bool)
+    def queueVideo(self, key: str, play_next: bool) -> None:
+        """The card menu's Play next and Add to queue, where videos play in the
+        window: into its queue without stopping what plays. With nothing in
+        the queue it plays at once, the way the music's does."""
+        if self._video is None or not key:
+            return
+        row = self._model.row_for_key(key) or {}
+        if row.get("isUpcoming"):
+            self._set_notice("That stream has not started yet", clear_after_s=4)
+            return
+        login = key.split(":", 1)[1] if key.startswith("twitch:") else None
+        live = bool(row.get("isLive")) or login is not None
+        item = self._video_item(key, str(row.get("url") or ""), str(row.get("title") or ""),
+                                login, live)
+        if not self._video.hasQueue:
+            self._play_items([item])
+            return
+        self._video.add_item(item, play_next)
+        self._set_notice("Playing it next" if play_next else "Added to the video queue",
+                         clear_after_s=4)
+        self._set_status(f"queued {item['title']}")
+
+    @Slot()
+    def playBox(self) -> None:
+        """A box's Play all: its videos in the order shown, from the first.
+
+        A press on one card plays that one alone, since a box mostly holds
+        videos still to be watched one at a time, and this is the way to have
+        all of them. In the window they fill its queue. mpv is handed the
+        first and the rest are put after it once it reports it, the way a
+        turned round playlist is."""
+        if self._view_kind != BOX:
+            return
+        rows = [self._model.row_at(index) for index in range(self._model.rowCount())]
+        # Left out is what could only be refused or never end: a stream not on
+        # air yet, a video behind a membership not held, and a Twitch channel.
+        rows = [row for row in rows if row and not row.get("isUpcoming")
+                and not row.get("isLocked") and not row["key"].startswith("twitch:")]
+        if not rows:
+            self._set_notice("Nothing in this box can be played", clear_after_s=4)
+            return
+        self._queue_on_start = None
+        first = rows[0]
+        if self._video is not None and self._videos_in() == IN_WEAVE:
+            self._play_items([self._video_item(row["key"], row["url"], str(row.get("title") or ""),
+                                               None, bool(row.get("isLive")))
+                              for row in rows])
+            return
+        if len(rows) > 1:
+            self._queue_on_start = (first["key"], [row["url"] for row in rows[1:]],
+                                    time.monotonic(), [])
+        if self._player.play(first["url"], live=bool(first.get("isLive"))):
+            self._set_status(f"playing {first.get('title') or 'the box'}")
+            self._set_starting(first["key"])
+
+    def _video_item(self, key: str, url: str, title: str, login: str | None,
+                    live: bool) -> dict:
+        """One video as the window's player queues it, from what is stored
+        about it where anything is."""
+        row = (self._db.video(key) if self._db is not None and not login else None) or {}
+        platform, _, ext_id = key.partition(":")
+        channel_key = row.get("channel_key") or ""
+        channel_id = channel_key.split(":", 1)[1] if channel_key.startswith("yt:") else ""
+        return {
+            "key": key,
+            "title": title or row.get("title") or "",
+            "channel": row.get("channel_title") or "",
+            "channelId": channel_id,
+            "channelKey": channel_key,
+            "thumbnail": qml_source(row.get("thumbnail_url")) if row.get("thumbnail_url") else "",
+            # The canonical address, never a playlist's: the window's own queue
+            # holds the rest of a playlist, one video at a time.
+            "url": ids.watch_url("twitch" if login else "youtube", login or ext_id)
+                   if platform in ("yt", "twitch") or login else url,
+            "live": bool(live),
+            "login": login or "",
+            "duration_s": row.get("duration_s"),
+            "videoId": ext_id if platform == "yt" else "",
+        }
+
+    def _watch_here(self, key: str, url: str, title: str, login: str | None,
+                    live: bool) -> None:
+        item = self._video_item(key, url, title, login, live)
+        items = [item]
+        if self._view_kind == PLAYLIST and self._view_playlist and not login:
+            # Pressed in a playlist, the rest of the playlist follows it, the
+            # way mpv is handed the whole list.
+            items += self._playlist_items_after(key)
+        self._play_items(items)
+
+    def _playlist_items_after(self, key: str) -> list[dict]:
+        rows = self._db.playlist_items(self._view_playlist)
+        keys = [row["key"] for row in rows]
+        if key not in keys:
+            return []
+        out = []
+        for row in rows[keys.index(key) + 1:]:
+            if (row["members_only"] and not row["member_of"]) \
+                    or row["title"] in flatlist.UNAVAILABLE_TITLES:
+                continue
+            ext_id = row["key"].split(":", 1)[1]
+            # Built outside the entry: a video in the window's queue names its
+            # channel rather than an artist, and the guard over the music's
+            # entries reads any entry with an address written into it.
+            address = ids.watch_url("youtube", ext_id)
+            out.append({
+                "key": row["key"], "title": row["title"] or "",
+                "channel": row["channel_title"] or "",
+                "channelId": (row["channel_key"] or "").removeprefix("yt:"),
+                "channelKey": row["channel_key"] or "",
+                "thumbnail": qml_source(row["thumbnail_url"]) if row["thumbnail_url"] else "",
+                "url": address, "live": False, "login": "",
+                "duration_s": row["duration_s"], "videoId": ext_id,
+            })
+        return out
+
+    def _play_items(self, items: list[dict], at_s: float | None = None) -> None:
+        if self._video is None or not items:
+            return
+        self._video.play_list(items, at_s)
+        self._set_status(f"playing {items[0].get('title') or 'the video'}")
+        self._set_view(WATCHING, -1)
+
+    @Slot()
+    def showWatching(self) -> None:
+        if self._video is None or not self._video.hasQueue:
+            return
+        self._set_view(WATCHING, -1)
+
+    @Slot()
+    def closeWatching(self) -> None:
+        """Leave the page. Walking back when this was the last place landed
+        on, the feed otherwise, as the music page does."""
+        if self._view_kind != WATCHING:
+            return
+        if self._nav.previous() is not None:
+            self.goBack()
+        else:
+            self._set_view(ALL, -1)
+
+    @Slot()
+    def stopWatching(self) -> None:
+        """The cross: the video stops, the queue goes, the page closes."""
+        if self._video is not None:
+            self._video.stop()
+        self.closeWatching()
+
+    def _on_video_started(self, key: str) -> None:
+        # The music gives way to the video, as it does to mpv, and the card
+        # stops saying it is on its way.
+        if self._audio is not None:
+            self._audio.pause_for_video()
+        self._set_starting("")
+
+    def _on_video_stopped(self) -> None:
+        if self._audio is not None and not self._handing_to_mpv:
+            self._audio.resume_after_video()
+
+    @Slot()
+    def watchInMpv(self) -> None:
+        """The page's own button: the video playing here goes to mpv from the
+        second it is at, and stops here.
+
+        The wrapper strips a time from the address, so the time is sent to mpv
+        once it reports the video, the way the link card's play from a time
+        does it."""
+        if self._video is None:
+            return
+        entry = dict(self._video.track or {})
+        key = entry.get("key") or ""
+        if not key:
+            return
+        live = bool(entry.get("live"))
+        seconds = 0 if live else int(self._video.seconds)
+        if seconds > 5:
+            self._seek_on_start = (key, seconds, time.monotonic())
+        self._handing_to_mpv = True
+        try:
+            self._video.stop()
+        finally:
+            self._handing_to_mpv = False
+        self.closeWatching()
+        if self._player.play(entry.get("url") or "", twitch_login=entry.get("login") or None,
+                             live=live):
+            self._set_status(f"playing {entry.get('title') or 'the video'} in mpv")
+            self._set_starting(key)
+
+    def _on_video_watched(self, key: str, progress: float) -> None:
+        self._db.set_watched(key, progress, "weave")
+        self.reload()
+
+    def _on_video_failed(self, said: str) -> None:
+        self._set_status(said)
+        self._set_notice(said, clear_after_s=8)
+
+    def _on_video_gone(self, key: str) -> None:
+        self._set_notice("That video is no longer on YouTube", clear_after_s=6)
 
     def _ask_whether_it_is_still_live(self, key: str, url: str, title: str) -> bool:
         """Make sure a stream is still on air before mpv is given it.
@@ -5184,6 +5503,9 @@ class Bridge(QObject):
         # and stopping at the hand over left the room silent for all of them.
         # A stream that never starts never stops the music either.
         self._player.moving.connect(lambda *_a: self._audio.pause_for_video())
+        # And comes back when the video is over. For mpv that is its window
+        # going away; for the window's own player, its stopping.
+        self._player.stopped.connect(audio.resume_after_video)
         # Whether the heart is lit depends on the song playing as much as on
         # which songs are kept, so a new song has to say so too. Without this
         # the heart kept whatever it read for the song before.
@@ -5516,7 +5838,10 @@ class Bridge(QObject):
             self._set_notice("Only a song can be watched, not a whole list",
                              clear_after_s=4)
             return
-        self._watch_song(f"yt:{video}", str(item.get("title") or ""))
+        self._watch_song(f"yt:{video}", str(item.get("title") or ""),
+                         song={"key": f"yt:{video}", "title": item.get("title"),
+                               "artist": item.get("subtitle"),
+                               "thumbnail": item.get("thumbnail")})
 
     @Slot(int)
     def watchResult(self, index: int) -> None:
@@ -5528,15 +5853,43 @@ class Bridge(QObject):
         found = self._track_items([row])
         if found:
             self._watch_song(str(found[0].get("key") or ""), str(found[0].get("title") or ""),
-                             bool(found[0].get("live")))
+                             bool(found[0].get("live")), song=found[0])
 
-    def _watch_song(self, key: str, title: str, live: bool = False) -> None:
-        """Play a song in mpv as a video, the way pressing a card does. The
-        music gives way to it once the video is really playing."""
+    def _watch_song(self, key: str, title: str, live: bool = False,
+                    song: dict | None = None) -> None:
+        """Play a song as a video, the way pressing a card does, wherever
+        videos play. The music gives way to it once the video is really
+        playing."""
         if not key.startswith("yt:"):
+            return
+        if song is not None and self._plays_here(key):
+            # What the song carries is better than what is stored about a
+            # video that was never in a feed, which is usually nothing.
+            self._play_items(self._songs_as_videos([song]))
             return
         address = ids.watch_url("youtube", key.split(":", 1)[1])
         self._hand_over(key, address, title, None, live)
+
+    def _songs_as_videos(self, songs: list[dict]) -> list[dict]:
+        """Songs as the window's queue takes videos: the artist named where a
+        video names its channel."""
+        out = []
+        for song in songs:
+            ext_id = str(song.get("key") or "").removeprefix("yt:")
+            if not ext_id:
+                continue
+            # Built outside the entry, as the playlist's are: a video in the
+            # window's queue names a channel rather than an artist.
+            address = ids.watch_url("youtube", ext_id)
+            out.append({
+                "key": f"yt:{ext_id}", "title": str(song.get("title") or ""),
+                "channel": str(song.get("artist") or ""), "channelId": "", "channelKey": "",
+                "thumbnail": song.get("thumbnail") or "", "url": address,
+                "live": bool(song.get("live")), "login": "",
+                "duration_s": song.get("duration_s") or self._seconds(song.get("duration")),
+                "videoId": ext_id,
+            })
+        return out
 
     def _name_favourite_makers(self) -> None:
         """Find who made the favourites that do not say. No request for those
@@ -5684,7 +6037,7 @@ class Bridge(QObject):
         items = self._track_items([found[1]])
         if items:
             self._watch_song(str(items[0].get("key") or ""), str(items[0].get("title") or ""),
-                             bool(items[0].get("live")))
+                             bool(items[0].get("live")), song=items[0])
 
     @Slot(int, int)
     def favoriteChannelGroupSong(self, group_index: int, index: int) -> None:
@@ -5932,21 +6285,28 @@ class Bridge(QObject):
 
     @Slot(str, int, int)
     def watchSong(self, where: str, first: int, second: int) -> None:
-        """A song in mpv as the video it is. From a box's tab, the whole box
-        goes, as a playlist in the box's order starting on the one pressed:
-        that one is handed over alone and the rest are put around it once mpv
-        reports it, the way a turned round playlist is."""
+        """A song as the video it is. From a box's tab, the whole box goes, as
+        a playlist in the box's order starting on the one pressed: mpv is
+        handed that one alone and the rest are put around it once it reports
+        it, the way a turned round playlist is. In the window the box fills
+        its queue from the one pressed on, as a playlist pressed in the middle
+        does there."""
         song = self._song_from(where, first, second)
         if song is None:
             return
         self._queue_on_start = None
         if where == "tab" and self._music_tab >= 0:
-            urls = [ids.watch_url("youtube", row["videoId"])
-                    for row in self._box_rows(self._music_tab)]
+            rows = self._box_rows(self._music_tab)
+            if self._plays_here(song["key"]):
+                if 0 <= first < len(rows):
+                    self._play_items(self._songs_as_videos(rows[first:]))
+                return
+            urls = [ids.watch_url("youtube", row["videoId"]) for row in rows]
             if 0 <= first < len(urls):
                 self._queue_on_start = (song["key"], urls[first + 1:], time.monotonic(),
                                         urls[:first])
-        self._watch_song(song["key"], song["title"])
+        picture = qml_source(song["thumbnail_url"]) if song["thumbnail_url"] else ""
+        self._watch_song(song["key"], song["title"], song={**song, "thumbnail": picture})
 
     @Slot(str, int, int, result=bool)
     def songIsFavorite(self, where: str, first: int, second: int) -> bool:
@@ -7101,6 +7461,20 @@ class Bridge(QObject):
                     if entry["channelKey"] == channel_key), None)
         if not row:
             return
+        if self._plays_here(channel_key):
+            twitch = row["platform"] == "twitch"
+            self._play_items([{
+                "key": f"twitch:{row['login']}" if twitch else f"yt:{row['login']}",
+                "title": row.get("title") or row.get("name") or "",
+                "channel": row.get("name") or "",
+                "channelId": "",
+                "channelKey": channel_key,
+                "thumbnail": row.get("thumbnail") or "",
+                "url": ids.watch_url(row["platform"], row["login"]),
+                "live": True,
+                "login": row["login"] if twitch else "",
+            }])
+            return
         if row["platform"] == "twitch":
             url = ids.watch_url("twitch", row["login"])
             started = self._player.play(url, twitch_login=row["login"], live=True)
@@ -7437,6 +7811,8 @@ class Bridge(QObject):
             thread.cancel()
         for thread in alive:
             thread.wait(timeout_ms)
+        if self._video is not None:
+            self._video.shutdown()
         if self._audio is not None:
             self._audio.shutdown()
 

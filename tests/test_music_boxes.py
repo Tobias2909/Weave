@@ -97,6 +97,8 @@ def make_bridge(test, shelves=None, audio=None):
     bridge = Bridge.__new__(Bridge)
     bridge._db = scratch_db(test)
     bridge._audio = audio
+    # The videos played in the window, which a hand-built bridge has none of.
+    bridge._video = None
     bridge._music_list = None
     bridge._view_kind = "music"
     bridge._shelves = shelves or []

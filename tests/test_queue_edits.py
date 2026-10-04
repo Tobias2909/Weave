@@ -297,6 +297,8 @@ class TheBridgeQueuesOne(unittest.TestCase):
 
         bridge = Bridge.__new__(Bridge)
         bridge._audio = Player()
+        # The videos played in the window, which a hand-built bridge has none of.
+        bridge._video = None
         bridge._shelves = [{"title": "A section", "kind": "songs", "items": [
             {"title": "A song", "subtitle": "An artist", "thumbnail": "",
              "videoId": "aaaaaaaaaaa", "playlistId": "RDAMVMaaa"},

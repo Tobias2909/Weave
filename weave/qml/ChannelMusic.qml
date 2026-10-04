@@ -228,7 +228,7 @@ Flickable {
 
         ThemedMenuItem {
             objectName: "channelMusicWatch"
-            text: "Watch in mpv"
+            text: App.videosInWeave ? "Watch in Weave" : "Watch in mpv"
             onTriggered: {
                 App.watchChannelGroupSong(root.askedGroup, root.asked)
                 songMenu.dismiss()

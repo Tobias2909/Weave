@@ -1,0 +1,588 @@
+"""Videos played in the window rather than in mpv.
+
+The player's own logic, against an engine that records what it was told and
+lets a test say what mpv reported back, the way the music's tests do it. What
+the picture really does was measured in a real window before this was written.
+"""
+
+import unittest
+
+from PySide6.QtCore import QCoreApplication, QEventLoop, QObject, QTimer, Signal
+
+from tests.support import scratch_db
+from tests import test_audio as music
+from weave.config import Config
+from weave.engine_libmpv import CURRENT
+from weave.video import (RESUME_FROM_S, VideoPlayer, ceiling_for, watch_format)
+
+_app = QCoreApplication.instance() or QCoreApplication([])
+
+
+def video(name, live=False):
+    return {"key": f"yt:{name}", "title": name, "channel": "somebody",
+            "url": f"https://www.youtube.com/watch?v={name}", "live": live,
+            "thumbnail": "", "channelId": "", "channelKey": ""}
+
+
+class FakeEngine(QObject):
+    positionChanged = Signal(float)
+    durationChanged = Signal(float)
+    pausedChanged = Signal(bool)
+    idleChanged = Signal(bool)
+    bufferingChanged = Signal(bool)
+    started = Signal(str)
+    ended = Signal(str)
+    gone = Signal(str)
+    videoChanged = Signal(bool)
+    eofChanged = Signal(bool)
+    surfaceWanted = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self.calls = []
+
+    def only(self, kind):
+        return [call for call in self.calls if call[0] == kind]
+
+    def set_volume(self, volume):
+        self.calls.append(("volume", volume))
+
+    def set_video(self, wanted):
+        self.calls.append(("video", wanted))
+
+    def load(self, url, start=None, video=None):
+        self.calls.append(("load", url, start, video))
+
+    def set_pause(self, paused):
+        self.calls.append(("pause", paused))
+
+    def set_speed(self, speed):
+        self.calls.append(("speed", speed))
+
+    def seek(self, seconds):
+        self.calls.append(("seek", seconds))
+
+    def stop(self):
+        self.calls.append(("stop",))
+
+    def quit(self):
+        self.calls.append(("quit",))
+
+
+class _Base(unittest.TestCase):
+    def setUp(self):
+        self.db = scratch_db(self)
+        self.engine = FakeEngine()
+        self.player = VideoPlayer(Config(raw={}), self.db, engine=self.engine)
+        self.finding = []
+        # Finding a video is a subprocess. Every test here answers for it, by
+        # putting what it would have found where a second look finds it.
+        original = self.player._start_current
+
+        def start():
+            entry = self.player._current()
+            self.finding.append(entry.get("key"))
+            # Everything up to the finder, which is not started.
+            self.player._addresses.put(f"{entry.get('key')}@{self.player._height()}",
+                                       f"https://picture.example/{entry.get('key')} "
+                                       f"https://sound.example/{entry.get('key')}")
+            original()
+        self.player._start_current = start
+        self.watched = []
+        self.player.watched.connect(lambda key, progress: self.watched.append((key, progress)))
+        self.stops = []
+        self.player.stopped.connect(lambda: self.stops.append(True))
+
+    def keys(self):
+        return [entry["key"] for entry in self.player.queue]
+
+    def playing(self):
+        return self.player.track.get("key")
+
+
+class TheQueue(_Base):
+    def test_the_first_press_plays_it(self):
+        self.player.play_now(video("a"))
+        self.assertEqual(self.keys(), ["yt:a"])
+        self.assertEqual(self.playing(), "yt:a")
+        self.assertEqual(self.engine.only("load")[-1][1:],
+                         ("https://sound.example/yt:a", None, "https://picture.example/yt:a"))
+
+    def test_a_press_while_one_plays_goes_in_straight_after_it_and_plays(self):
+        """What was playing stays above it as played, and is not played again
+        once the new one ends."""
+        self.player.play_now(video("a"))
+        self.player.add_item(video("c"))
+        self.player.play_now(video("b"))
+        self.assertEqual(self.keys(), ["yt:a", "yt:b", "yt:c"])
+        self.assertEqual(self.playing(), "yt:b")
+        self.assertEqual(self.player.queueIndex, 1)
+
+    def test_a_playlist_is_played_from_the_one_pressed_with_the_rest_after_it(self):
+        self.player.play_now(video("x"))
+        self.player.play_list([video("a"), video("b"), video("c")])
+        self.assertEqual(self.keys(), ["yt:x", "yt:a", "yt:b", "yt:c"])
+        self.assertEqual(self.playing(), "yt:a")
+
+    def test_play_next_and_add_to_queue(self):
+        self.player.play_now(video("a"))
+        self.player.add_item(video("z"))
+        self.player.add_item(video("b"), play_next=True)
+        self.assertEqual(self.keys(), ["yt:a", "yt:b", "yt:z"])
+        self.assertEqual(self.playing(), "yt:a")
+
+    def test_adding_to_nothing_plays_it(self):
+        self.player.add_item(video("a"))
+        self.assertEqual(self.playing(), "yt:a")
+
+    def test_moving_and_taking_out_keep_the_one_playing(self):
+        self.player.play_list([video("a"), video("b"), video("c"), video("d")])
+        self.player.jumpTo(2)
+        self.player.moveInQueue(3, 0)
+        self.assertEqual(self.keys(), ["yt:d", "yt:a", "yt:b", "yt:c"])
+        self.assertEqual(self.playing(), "yt:c")
+        self.player.removeFromQueue(0)
+        self.assertEqual(self.playing(), "yt:c")
+        self.assertEqual(self.player.queueIndex, 2)
+
+    def test_clear_keeps_only_the_one_playing(self):
+        self.player.play_list([video("a"), video("b"), video("c")])
+        self.player.next()
+        self.player.clearQueue()
+        self.assertEqual(self.keys(), ["yt:b"])
+        self.assertEqual(self.playing(), "yt:b")
+
+    def test_stop_empties_it_and_says_so(self):
+        self.player.play_now(video("a"))
+        self.player.stop()
+        self.assertEqual(self.keys(), [])
+        self.assertEqual(self.stops, [True])
+        self.assertIn(("stop",), self.engine.calls)
+
+
+class TheEnd(_Base):
+    def test_the_end_of_one_plays_the_next(self):
+        self.player.play_list([video("a"), video("b")])
+        self.player._dur = 100.0
+        self.engine.eofChanged.emit(True)
+        self.assertEqual(self.playing(), "yt:b")
+        self.assertEqual(self.stops, [])
+        self.assertIn(("yt:a", 1.0), self.watched)
+
+    def test_the_end_of_the_last_holds_its_frame_and_says_it_has_stopped(self):
+        """The music comes back here, and nothing else plays."""
+        self.player.play_now(video("a"))
+        self.player._dur = 100.0
+        self.engine.eofChanged.emit(True)
+        self.assertTrue(self.player.ended)
+        self.assertEqual(self.stops, [True])
+        self.assertEqual(self.keys(), ["yt:a"], "the queue is kept to look at")
+
+    def test_play_again_starts_it_over(self):
+        self.player.play_now(video("a"))
+        self.engine.eofChanged.emit(True)
+        self.player.replay()
+        self.assertFalse(self.player.ended)
+        self.assertEqual(self.engine.only("seek")[-1], ("seek", 0.0))
+
+
+class Watched(_Base):
+    def test_watched_at_the_share_mpv_uses_and_only_once(self):
+        self.player.play_now(video("a"))
+        self.engine.durationChanged.emit(100.0)
+        self.engine.positionChanged.emit(84.0)
+        self.assertEqual(self.watched, [])
+        self.engine.positionChanged.emit(85.0)
+        self.engine.positionChanged.emit(90.0)
+        self.assertEqual(self.watched, [("yt:a", 0.85)])
+
+    def test_a_broadcast_is_never_watched(self):
+        self.player.play_now(video("live", live=True))
+        self.engine.durationChanged.emit(100.0)
+        self.engine.positionChanged.emit(99.0)
+        self.engine.eofChanged.emit(True)
+        self.assertEqual(self.watched, [])
+
+
+class WhereItWasLeft(_Base):
+    def test_it_starts_again_where_it_was_left(self):
+        self.db.set_video_position("yt:a", 300.0, 1200.0)
+        self.player.play_now(video("a"))
+        self.assertEqual(self.engine.only("load")[-1][2], 300.0)
+
+    def test_a_look_is_not_a_watch(self):
+        self.db.set_video_position("yt:a", RESUME_FROM_S - 1, 1200.0)
+        self.player.play_now(video("a"))
+        self.assertIsNone(self.engine.only("load")[-1][2])
+
+    def test_one_nearly_finished_starts_from_the_top(self):
+        self.db.set_video_position("yt:a", 1100.0, 1200.0)
+        self.player.play_now(video("a"))
+        self.assertIsNone(self.engine.only("load")[-1][2])
+
+    def test_where_it_is_is_kept_when_another_is_pressed(self):
+        self.player.play_now(video("a"))
+        self.player._dur = 1200.0
+        self.player._pos = 400.0
+        self.player.play_now(video("b"))
+        self.assertEqual(self.db.video_position("yt:a"), (400.0, 1200.0))
+
+    def test_watching_it_through_forgets_where_it_was(self):
+        self.db.set_video_position("yt:a", 300.0, 100.0)
+        self.player.play_now(video("a"))
+        self.player._dur = 100.0
+        self.engine.eofChanged.emit(True)
+        self.assertIsNone(self.db.video_position("yt:a"))
+
+    def test_a_time_asked_for_wins(self):
+        """A link's own time, or the second the page was left at."""
+        self.db.set_video_position("yt:a", 300.0, 1200.0)
+        self.player.play_now(video("a"), at_s=42.0)
+        self.assertEqual(self.engine.only("load")[-1][2], 42.0)
+
+
+class TheControls(_Base):
+    def test_the_volume_is_its_own_and_is_kept(self):
+        self.player.setVolume(35)
+        self.assertEqual(self.db.get_int("video_volume", 0), 35)
+        again = VideoPlayer(Config(raw={}), self.db, engine=FakeEngine())
+        self.assertEqual(again.volume, 35)
+
+    def test_mute_gives_the_level_back(self):
+        self.player.setVolume(40)
+        self.player.toggleMute()
+        self.assertEqual(self.player.volume, 0)
+        self.player.toggleMute()
+        self.assertEqual(self.player.volume, 40)
+
+    def test_a_started_report_says_which(self):
+        heard = []
+        self.player.started.connect(heard.append)
+        self.player.play_now(video("a"))
+        self.engine.started.emit(CURRENT)
+        self.assertEqual(heard, ["yt:a"])
+
+
+class HowBig(unittest.TestCase):
+    def test_never_bigger_than_the_screen(self):
+        self.assertEqual(ceiling_for(1440), 1440)
+        self.assertEqual(ceiling_for(1600), 1440)
+        self.assertEqual(ceiling_for(1080), 1080)
+        self.assertEqual(ceiling_for(2160), 2160)
+        self.assertEqual(ceiling_for(200), 360)
+
+    def test_picture_and_sound_apart_and_vp9_first(self):
+        asked = watch_format(1440, live=False)
+        self.assertTrue(asked.startswith("bestvideo[height<=1440][vcodec^=vp9]+bestaudio/"))
+        self.assertIn("best[height<=1440]", asked)
+
+    def test_a_broadcast_is_only_offered_joined(self):
+        self.assertEqual(watch_format(1080, live=True), "best[height<=1080]/best")
+
+
+class TheMusicComesBack(music._Base):
+    """A video starting paused the music, and the music comes back when the
+    video is over, unless anything was done to the music by hand between."""
+
+    def setUp(self):
+        super().setUp()
+        self.player.setVolume(60)
+        self.queue("aaa")
+        self.cache("aaa")
+        self.player._start_current()
+
+    def finish_fade(self):
+        loop = QEventLoop()
+        self.player._fade.finished.connect(loop.quit)
+        QTimer.singleShot(3000, loop.quit)
+        loop.exec()
+        self.player._fade.finished.disconnect(loop.quit)
+
+    def test_music_the_video_paused_comes_back(self):
+        self.player._auto_pause = True
+        self.player.pause_for_video()
+        self.finish_fade()
+        self.assertTrue(self.player.paused_for_video)
+        self.player.resume_after_video()
+        self.assertEqual(self.engine.only("pause")[-1], ("pause", False))
+        self.assertFalse(self.player.paused_for_video)
+
+    def test_music_paused_by_hand_stays_paused(self):
+        self.player.toggle()
+        self.finish_fade()
+        self.player._auto_pause = True
+        self.player.pause_for_video()
+        self.engine.calls.clear()
+        self.player.resume_after_video()
+        self.assertEqual(self.engine.only("pause"), [])
+
+    def test_music_played_by_hand_during_the_video_is_not_given_back_twice(self):
+        self.player._auto_pause = True
+        self.player.pause_for_video()
+        self.finish_fade()
+        self.player.toggle()
+        self.assertFalse(self.player.paused_for_video)
+        self.engine.calls.clear()
+        self.player.resume_after_video()
+        self.assertEqual(self.engine.only("pause"), [])
+
+    def test_with_the_button_off_nothing_is_owed(self):
+        self.player._auto_pause = False
+        self.player.pause_for_video()
+        self.assertFalse(self.player.paused_for_video)
+
+
+class AnUpgradedCopy(unittest.TestCase):
+    """A copy from before the choice keeps mpv; a fresh one is asked."""
+
+    def test_an_older_database_keeps_mpv(self):
+        import tempfile
+        from pathlib import Path
+
+        from weave.db import Database
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "old.db"
+            db = Database(path)
+            self.assertIsNone(db.get_state("videos_in"), "a fresh copy has not chosen")
+            with db.conn as conn:
+                conn.execute("UPDATE meta SET value='51' WHERE key='schema_version'")
+            db.close()
+            again = Database(path)
+            self.assertEqual(again.get_state("videos_in"), "mpv")
+            again.close()
+
+    def test_a_choice_already_made_is_kept(self):
+        import tempfile
+        from pathlib import Path
+
+        from weave.db import Database
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "old.db"
+            db = Database(path)
+            db.set_state("videos_in", "weave")
+            with db.conn as conn:
+                conn.execute("UPDATE meta SET value='51' WHERE key='schema_version'")
+            db.close()
+            again = Database(path)
+            self.assertEqual(again.get_state("videos_in"), "weave")
+            again.close()
+
+
+class Positions(unittest.TestCase):
+    def test_kept_and_forgotten(self):
+        db = scratch_db(self)
+        self.assertIsNone(db.video_position("yt:a"))
+        db.set_video_position("yt:a", 12.5, 300.0)
+        db.set_video_position("yt:a", 20.0, 300.0)
+        self.assertEqual(db.video_position("yt:a"), (20.0, 300.0))
+        db.forget_video_position("yt:a")
+        self.assertIsNone(db.video_position("yt:a"))
+
+
+class WherePressesGo(unittest.TestCase):
+    """The setting, and the card asked once to go the other way."""
+
+    WRAPPER = ("/usr/local/bin/mpv-ff2mpv-single.sh",)
+
+    def make(self, chosen, command=WRAPPER, configured="auto"):
+        from weave.ui.bridge import Bridge
+
+        class Player:
+            pass
+
+        class Settings:
+            player_command = configured
+
+        bridge = Bridge.__new__(Bridge)
+        bridge._db = scratch_db(self)
+        bridge._cfg = Settings()
+        bridge._player = Player()
+        bridge._player.command = list(command) if command else None
+        bridge._video = object()
+        bridge._elsewhere_key = ""
+        if chosen:
+            bridge._db.set_state("videos_in", chosen)
+        return bridge
+
+    def test_never_chosen_is_mpv_where_one_was_set_up_for_it(self):
+        from weave.ui.bridge import Bridge
+
+        self.assertFalse(Bridge._plays_here(self.make(None), "yt:a"), "the wrapper")
+        self.assertFalse(Bridge._plays_here(
+            self.make(None, command=("/usr/bin/mpv", "--fs"), configured="mpv --fs"), "yt:a"),
+            "a player written into the config")
+        self.assertTrue(Bridge._plays_here(self.make(None, command=("/usr/bin/mpv",)), "yt:a"),
+                        "mpv only installed")
+        self.assertTrue(Bridge._plays_here(self.make(None, command=None), "yt:a"), "no mpv")
+
+    def test_with_no_mpv_at_all_it_is_the_window_whatever_was_chosen(self):
+        from weave.ui.bridge import Bridge
+
+        bridge = self.make("mpv", command=None)
+        self.assertTrue(Bridge._plays_here(bridge, "yt:a"))
+        self.assertFalse(Bridge.mpvFound.fget(bridge))
+        self.assertTrue(Bridge.mpvFound.fget(self.make("mpv")))
+
+    def test_chosen_is_chosen(self):
+        from weave.ui.bridge import Bridge
+
+        self.assertTrue(Bridge._plays_here(self.make("weave"), "yt:a"))
+        self.assertFalse(Bridge._plays_here(self.make("mpv"), "yt:a"))
+
+    def test_the_other_way_once(self):
+        from weave.ui.bridge import Bridge
+
+        bridge = self.make("weave")
+        bridge._elsewhere_key = "yt:a"
+        self.assertTrue(Bridge._plays_here(bridge, "yt:b"), "another card is not asked")
+        self.assertFalse(Bridge._plays_here(bridge, "yt:a"))
+        self.assertTrue(Bridge._plays_here(bridge, "yt:a"), "only once")
+
+
+def card(name, **marks):
+    ext_id = (name * 11)[:11]
+    row = {"key": f"yt:{ext_id}", "url": f"https://www.youtube.com/watch?v={ext_id}",
+           "title": name.upper(), "isLive": False, "isUpcoming": False, "isLocked": False}
+    row.update(marks)
+    return row
+
+
+class QueuedFromTheWindow(unittest.TestCase):
+    """The card menu's Play next and Add to queue, a box's Play all, and a
+    song watched as a video, in either place videos play."""
+
+    def make(self, chosen, rows=(), queued=False):
+        from weave.ui.bridge import BOX, Bridge
+
+        class Player:
+            command = ["mpv"]
+
+            def __init__(self):
+                self.played = []
+
+            def play(self, url, twitch_login=None, live=False):
+                self.played.append(url)
+                return True
+
+        class Video:
+            def __init__(self):
+                self.hasQueue = queued
+                self.calls = []
+
+            def add_item(self, item, play_next=False):
+                self.calls.append(("add", item["key"], play_next))
+
+            def play_list(self, items, at_s=None):
+                self.calls.append(("play", [item["key"] for item in items]))
+                self.items = items
+                self.hasQueue = True
+
+        class Model:
+            def __init__(self, rows):
+                self.rows = list(rows)
+
+            def row_for_key(self, key):
+                return next((row for row in self.rows if row["key"] == key), None)
+
+            def row_at(self, index):
+                return self.rows[index] if 0 <= index < len(self.rows) else None
+
+            def rowCount(self):
+                return len(self.rows)
+
+        bridge = Bridge.__new__(Bridge)
+        bridge._db = scratch_db(self)
+        bridge._db.set_state("videos_in", chosen)
+        bridge._player = Player()
+        bridge._video = Video()
+        bridge._model = Model(rows)
+        bridge._elsewhere_key = ""
+        bridge._view_kind = BOX
+        bridge._view_playlist = ""
+        bridge._queue_on_start = None
+        bridge.views, bridge.notices = [], []
+        bridge._set_view = lambda kind, view_id=-1, *rest: bridge.views.append(kind)
+        bridge._set_notice = lambda words, clear_after_s=0: bridge.notices.append(words)
+        bridge._set_status = lambda words: None
+        bridge._set_starting = lambda key, clear_after_s=0: None
+        return bridge
+
+    def test_into_an_empty_queue_it_plays_at_once(self):
+        bridge = self.make("weave", [card("a")])
+        bridge.queueVideo(card("a")["key"], False)
+        self.assertEqual(bridge._video.calls, [("play", [card("a")["key"]])])
+        self.assertEqual(bridge.views, ["watching"])
+
+    def test_into_a_queue_it_waits_its_turn(self):
+        bridge = self.make("weave", [card("a"), card("b")], queued=True)
+        bridge.queueVideo(card("a")["key"], True)
+        bridge.queueVideo(card("b")["key"], False)
+        self.assertEqual(bridge._video.calls, [("add", card("a")["key"], True),
+                                               ("add", card("b")["key"], False)])
+        self.assertEqual(bridge.notices, ["Playing it next", "Added to the video queue"])
+        self.assertEqual(bridge.views, [], "the page is not opened over what is open")
+
+    def test_a_stream_not_on_air_is_not_queued(self):
+        bridge = self.make("weave", [card("a", isUpcoming=True)], queued=True)
+        bridge.queueVideo(card("a")["key"], False)
+        self.assertEqual(bridge._video.calls, [])
+
+    def test_play_all_fills_the_window_queue_in_order(self):
+        rows = [card("a"), card("b", isUpcoming=True), card("c", isLocked=True), card("d"),
+                {**card("e"), "key": "twitch:somebody"}, card("f")]
+        bridge = self.make("weave", rows)
+        bridge.playBox()
+        self.assertEqual(bridge._video.calls,
+                         [("play", [card("a")["key"], card("d")["key"], card("f")["key"]])])
+        self.assertEqual(bridge._player.played, [])
+
+    def test_play_all_hands_mpv_the_first_and_the_rest_after(self):
+        bridge = self.make("mpv", [card("a"), card("b"), card("c")])
+        bridge.playBox()
+        self.assertEqual(bridge._player.played, [card("a")["url"]])
+        self.assertEqual(bridge._queue_on_start[0], card("a")["key"])
+        self.assertEqual(bridge._queue_on_start[1], [card("b")["url"], card("c")["url"]])
+        self.assertEqual(bridge._video.calls, [])
+
+    def test_play_all_is_only_a_box_s(self):
+        from weave.ui.bridge import ALL
+
+        bridge = self.make("weave", [card("a")])
+        bridge._view_kind = ALL
+        bridge.playBox()
+        self.assertEqual(bridge._video.calls, [])
+
+    def test_a_music_box_fills_the_window_queue_from_the_song_pressed(self):
+        bridge = self.make("weave")
+        songs = [{"key": f"yt:{(name * 11)[:11]}", "videoId": (name * 11)[:11],
+                  "title": name.upper(), "artist": "Band", "artistId": "", "album": "",
+                  "thumbnail": "", "duration": "3:05"} for name in "xyz"]
+        bridge._music_tab = 7
+        bridge._box_rows = lambda box_id: songs
+        bridge.watchSong("tab", 1, -1)
+        self.assertEqual(bridge._video.calls, [("play", [songs[1]["key"], songs[2]["key"]])])
+        entry = bridge._video.items[0]
+        self.assertEqual(entry["channel"], "Band", "the artist where a channel would be")
+        self.assertEqual(entry["duration_s"], 185)
+        self.assertEqual(entry["url"], "https://www.youtube.com/watch?v=yyyyyyyyyyy")
+        self.assertEqual(bridge._player.played, [])
+
+    def test_a_music_box_in_mpv_is_handed_over_as_before(self):
+        bridge = self.make("mpv")
+        songs = [{"key": f"yt:{(name * 11)[:11]}", "videoId": (name * 11)[:11],
+                  "title": name.upper(), "artist": "Band", "artistId": "", "album": "",
+                  "thumbnail": "", "duration": "3:05"} for name in "xyz"]
+        bridge._music_tab = 7
+        bridge._box_rows = lambda box_id: songs
+        bridge._hand_over = lambda key, url, title, login, live: bridge._player.play(url)
+        bridge.watchSong("tab", 1, -1)
+        self.assertEqual(bridge._player.played, ["https://www.youtube.com/watch?v=yyyyyyyyyyy"])
+        self.assertEqual(bridge._queue_on_start[1],
+                         ["https://www.youtube.com/watch?v=zzzzzzzzzzz"])
+        self.assertEqual(bridge._video.calls, [])
+
+
+if __name__ == "__main__":
+    unittest.main()

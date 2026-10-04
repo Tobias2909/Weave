@@ -159,6 +159,9 @@ class WhatTheWindowShows(unittest.TestCase):
             def pause_for_video(self):
                 pass
 
+            def resume_after_video(self):
+                pass
+
         from weave.ui.bridge import Bridge
 
         self.Bridge = Bridge
@@ -171,6 +174,8 @@ class WhatTheWindowShows(unittest.TestCase):
         class Video(QObject):
             nowPlaying = Signal(str)
             moving = Signal(str)
+            # mpv going away, which is when music a video paused comes back.
+            stopped = Signal()
 
         self.bridge._player = Video()
 

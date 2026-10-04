@@ -232,6 +232,8 @@ def bridge_with(audio) -> Bridge:
     bridge = Bridge.__new__(Bridge)
     QObject.__init__(bridge)
     bridge._audio = audio
+    # The videos played in the window, which a hand-built bridge has none of.
+    bridge._video = None
     bridge._now_busy = "words"
     bridge._now_read = set()
     bridge._now_ids = {}
