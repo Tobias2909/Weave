@@ -8,7 +8,7 @@ from PySide6.QtCore import QObject
 
 from weave.config import Config
 from weave.sources import watchnext
-from weave.ui.bridge import COMPANION, COMPANION_CHIP_STATE, Bridge
+from weave.ui.bridge import COMPANION, COMPANION_CHIP_STATE, WATCHING, WATCH_CHIP_STATE, Bridge
 
 from .support import scratch_db
 
@@ -160,6 +160,25 @@ class WhatIsShown(unittest.TestCase):
                          [("yt:mixmixmix01", False), ("yt:mixmixmix02", True)])
         chips = Bridge._get_companion_chips(bridge)
         self.assertEqual([one["label"] for one in chips if one["chosen"]], ["Mix"])
+
+    def test_beside_a_video_in_the_window_all_comes_first_and_its_pick_is_its_own(self):
+        bridge = make(self)
+        answered(bridge)
+        chosen = lambda **k: [one["label"] for one in Bridge._chips(bridge, NOW, **k)  # noqa: E731
+                              if one["chosen"]]
+        self.assertEqual(chosen(watching=True), ["All"])
+        self.assertEqual([one["key"] for one in Bridge._tiles(bridge, NOW, set(), watching=True)],
+                         ["yt:allallall01"])
+        self.assertEqual(chosen(), ["Mix"], "the music's tab starts on its mix as before")
+        bridge._view_kind = WATCHING
+        bridge._watch_rec_open = False
+        Bridge.chooseCompanionChip(bridge, "Related")
+        self.assertEqual(bridge._db.get_state(WATCH_CHIP_STATE), "Related")
+        self.assertEqual(bridge._db.get_state(COMPANION_CHIP_STATE), None,
+                         "a pick beside a video is not the music's")
+        # A pick the next video has no chip for falls back to All again.
+        answered(bridge, video_id="othervideo1", chips=CHIPS[:2])
+        self.assertEqual(Bridge._companion_chip(bridge, "othervideo1", True), "All")
 
     def test_the_queue_rows_say_what_plays_and_what_has_played(self):
         bridge = make(self)

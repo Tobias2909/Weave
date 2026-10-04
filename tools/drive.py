@@ -911,7 +911,8 @@ class Smoke:
         settle(0.3)
         inner = {text for name in ("companionMusicBoxMenu", "companionVideoBoxMenu")
                  for text, _ in menu_entries(find(window, name))}
-        labels = [text.strip() for text, _ in menu_entries(menu) if text not in inner]
+        labels = [text.strip() for text, item in menu_entries(menu)
+                  if text not in inner and read(item, "visible")]
         self.check("a tile's menu here is the companion's",
                    labels == ["Play next", "Play now", "Put in a box", "Put in a music box",
                               "Share"], ", ".join(labels))
@@ -2727,6 +2728,7 @@ class Smoke:
         self.check("the card menu puts a video in the window's queue, next or last",
                    clicked == [True, True] and queued == [key, third, second],
                    f"clicked {clicked}, queue {len(queued)}")
+        self.the_tabs_of_the_video_page(bridge, window, key)
         bridge.closeWatching()
         settle(0.4)
         self.check("closing it walks back", read(bridge, "viewKind") != "watching",
@@ -2760,6 +2762,114 @@ class Smoke:
         settle(0.3)
         bridge.setVideosInWeave(was)
         settle(0.3)
+
+    def the_tabs_of_the_video_page(self, bridge, window, key: str) -> None:
+        """Recommended and Comments beside the video playing in the window,
+        the music page's tabs aimed at it, with the picture small in a corner."""
+        from PySide6.QtCore import QPoint, QPointF
+        from PySide6.QtTest import QTest
+
+        page = find(window, "watchPage")
+        tabs = [item_named(page, f"watchingTab_{name}")
+                for name in ("video", "recommended", "comments")]
+        self.check("the video's page has its three tabs, the video's first",
+                   None not in tabs
+                   and [read(tab, "text") for tab in tabs] == ["Video", "Recommended", "Comments"],
+                   ", ".join(str(read(tab, "text")) for tab in tabs if tab is not None))
+        video_id = key.split(":", 1)[1]
+        cards = [{"video_id": f"walkwrec{i:03d}", "title": f"Walk video {i}",
+                  "channel": "Walk channel", "channel_id": "UC" + "w" * 22,
+                  "duration": "4:00", "views": "", "age": "", "picture": ""}
+                 for i in range(5)]
+        bridge._companion_cache[video_id] = {
+            "chips": [{"label": "Mix", "token": ""}, {"label": "All", "token": ""}],
+            "cards": {"Mix": cards, "All": cards[:1]}}
+        call(tabs[1], "clicked")
+        settle(0.9)
+        tiles = find(window, "watchingRecommended")
+        first = [chip["label"] for chip in read(bridge, "watchRecommendedChips") if chip["chosen"]]
+        self.check("beside a video the Recommended tab starts on All, not on a mix",
+                   first == ["All"] and read(tiles, "count") == 1,
+                   f"chosen {first}, {read(tiles, 'count')} tiles")
+        bridge.chooseCompanionChip("Mix")
+        settle(0.4)
+        call(tiles, "forceLayout")
+        drawn = [tile for tile in items_named_like(tiles, "watchingTile")
+                 if tile.objectName() == "watchingTile"]
+        self.check("the Recommended tab shows the tiles for the video playing",
+                   read(tiles, "visible") is True and read(tiles, "count") == 5
+                   and len(drawn) == 5, f"{read(tiles, 'count')} tiles")
+        frame = find(window, "watchingFrame")
+        self.check("and the picture waits small in its corner, its real size",
+                   abs(read(frame, "width") - 320) < 1 and read(frame, "scale") == 1
+                   and not read(find(window, "watchingVideoPart"), "visible")
+                   and read(find(window, "watchingBackToVideo"), "visible") is True,
+                   f"{read(frame, 'width')} wide at scale {read(frame, 'scale')}")
+        # The menu first: a tile played is a new video, and the tiles beside
+        # it are that one's.
+        menu = find(window, "companionMenu")
+        write(menu, "where", "watch")
+        write(menu, "index", 2)
+        write(menu, "key", "yt:walkwrec002")
+        menu.open()
+        settle(0.3)
+        added = click_entry(menu, "Add to queue")
+        settle(0.3)
+        write(menu, "where", "mpv")
+        self.check("a tile's menu puts one on the end of the window's queue",
+                   added and bridge._video.queue[-1]["key"] == "yt:walkwrec002",
+                   bridge._video.queue[-1]["key"])
+        bridge.playWatchRecommended(1)
+        settle(0.4)
+        queued = [entry["key"] for entry in bridge._video.queue]
+        self.check("and a tile pressed plays at once, after the one it was beside",
+                   queued[:2] == [key, "yt:walkwrec001"]
+                   and bridge._video.queueIndex == 1, ", ".join(queued))
+
+        bridge._watch_comments = [{"author": "Walker", "avatar": "", "text": "At 0:30 it starts",
+                                   "likes": 3, "when": "1 day ago", "replies": []}]
+        bridge._watch_on = bridge._watch_key()
+        bridge.watchSideChanged.emit()
+        call(tabs[2], "clicked")
+        settle(0.6)
+        said = read(bridge, "watchComments")
+        self.check("the Comments tab shows what was read for it, times pressable",
+                   read(find(window, "watchingComments"), "visible") is True
+                   and len(said) == 1 and "weave-seek:30" in said[0]["markup"],
+                   said[0]["markup"] if said else "none")
+
+        at = frame.mapToScene(QPointF(read(frame, "width") / 2, read(frame, "height") / 2))
+        QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier, QPoint(round(at.x()), round(at.y())))
+        settle(0.6)
+        self.check("a press on the small picture goes back to it",
+                   read(find(window, "watchPage"), "tab") == "video"
+                   and read(find(window, "watchingVideoPart"), "visible") is True)
+
+        # A stream on YouTube has nothing to read under it while it is on, and
+        # a Twitch stream only its picture.
+        video = bridge._video
+        entry = video._queue[video._at]
+        was = dict(entry)
+
+        def names():
+            return [str(read(tab, "text")) for tab in items_named_like(page, "watchingTab_")
+                    if read(tab, "visible")]
+
+        entry["live"] = True
+        video.trackChanged.emit()
+        settle(0.3)
+        live = names()
+        entry["login"] = "somebody"
+        video.trackChanged.emit()
+        settle(0.3)
+        twitch = read(find(window, "watchingTabs"), "visible")
+        entry.clear()
+        entry.update(was)
+        video.trackChanged.emit()
+        settle(0.3)
+        self.check("a live stream has no Comments tab, and a Twitch one no tabs at all",
+                   live == ["Video", "Recommended"] and twitch is False,
+                   f"live {live}, Twitch tabs shown {twitch}")
 
     def where_presses_land_on_the_page(self, bridge, window, key: str) -> None:
         """Which item a real press on the video page reaches.
@@ -2812,15 +2922,36 @@ class Smoke:
         self.check("a button over the picture still answers a press",
                    pressed_full is True, f"filled {pressed_full}")
 
+        # A left press pauses and plays and the right one does nothing, with
+        # the video as it is once its picture is up.
+        video = bridge._video
+        was = (video._idle, video._paused, video._showing)
+        video._idle, video._paused, video._showing = False, False, True
+        video.stateChanged.emit()
+        video.videoChanged.emit()
+        settle(0.2)
+        paused = []
+        for button in (Qt.LeftButton, Qt.RightButton, Qt.LeftButton):
+            QTest.mouseClick(window, button, Qt.NoModifier, on_picture)
+            # Past the time a second press would make the pair.
+            settle(0.6)
+            paused.append(video._paused)
+        self.check("a left press on the picture pauses and plays, a right one does nothing",
+                   paused == [True, True, False], str(paused))
+
         QTest.mouseDClick(window, Qt.LeftButton, Qt.NoModifier, on_picture)
         settle(0.4)
         filled = read(window, "cinema")
+        kept = video._paused
         call(window, "leaveCinema")
         settle(0.4)
-        self.check("two presses on the picture fill the screen",
-                   filled is True and not read(window, "cinema")
+        self.check("two presses on the picture fill the screen, and leave it playing",
+                   filled is True and not read(window, "cinema") and kept is False
                    and read(bridge, "viewKind") == "watching",
-                   f"filled {filled}")
+                   f"filled {filled}, paused {kept}")
+        video._idle, video._paused, video._showing = was
+        video.stateChanged.emit()
+        video.videoChanged.emit()
 
     def where_videos_play_in_the_wizard(self, bridge, window) -> None:
         """The two pictures on the welcome page are the two buttons. Pressed
@@ -2915,7 +3046,9 @@ class Smoke:
         settle(0.3)
         inner = {text for name in ("companionMusicBoxMenu", "companionVideoBoxMenu")
                  for text, _ in menu_entries(find(window, name))}
-        labels = [text.strip() for text, _ in menu_entries(menu) if text not in inner]
+        # The end of the queue is offered on the video page's tiles alone.
+        labels = [text.strip() for text, item in menu_entries(menu)
+                  if text not in inner and read(item, "visible")]
         self.check("a tile's menu puts it in mpv first, then in a box",
                    labels == ["Play next", "Play now", "Put in a box", "Put in a music box",
                               "Share"], ", ".join(labels))

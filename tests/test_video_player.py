@@ -6,6 +6,7 @@ the picture really does was measured in a real window before this was written.
 """
 
 import unittest
+from unittest import mock
 
 from PySide6.QtCore import QCoreApplication, QEventLoop, QObject, QTimer, Signal
 
@@ -330,6 +331,143 @@ class TheMusicComesBack(music._Base):
         self.player._auto_pause = False
         self.player.pause_for_video()
         self.assertFalse(self.player.paused_for_video)
+
+
+class TheVideoPageTabs(unittest.TestCase):
+    """Recommended and Comments beside the video playing in the window."""
+
+    KEY = "yt:aaaaaaaaaaa"
+
+    def make(self, key=KEY):
+        from weave.ui.bridge import WATCHING, Bridge
+
+        class Video:
+            def __init__(self):
+                self.track = {"key": key}
+                self.queue = [{"key": key}]
+                self.length = 300
+                self.played = []
+
+            def play_now(self, item, at_s=None):
+                self.played.append(item)
+
+        bridge = Bridge.__new__(Bridge)
+        QObject.__init__(bridge)
+        bridge._db = scratch_db(self)
+        # Held by the worker and never read here.
+        bridge._cfg = None
+        bridge._video = Video()
+        bridge._audio = None
+        bridge._view_kind = WATCHING
+        bridge._watch_tab = "video"
+        bridge._watch_rec_open = False
+        bridge._watch_on = key
+        bridge._watch_comments = []
+        bridge._watch_threads = 5
+        bridge._watch_busy = ""
+        bridge._watch_detail = None
+        bridge._detail_key = ""
+        bridge._detail_closed = False
+        bridge._detail_loading = False
+        bridge._detail_comments = []
+        bridge._detail_threads = 5
+        bridge._web_results = [{"key": key}]
+        bridge._companion_cache = {}
+        bridge.launched = []
+        bridge._launch = lambda worker: bridge.launched.append(worker) or True
+        bridge._set_status = lambda words: None
+        return bridge
+
+    def test_recommended_follows_the_video_playing_here(self):
+        from weave.ui.bridge import Bridge
+
+        bridge = self.make()
+        self.assertEqual(Bridge._rec_video(bridge), "", "not while the tab is shut")
+        followed = []
+        bridge._companion_follow = lambda: followed.append(Bridge._rec_video(bridge))
+        Bridge.setWatchTab(bridge, "recommended")
+        self.assertEqual(followed, ["aaaaaaaaaaa"])
+        self.assertEqual(Bridge._rec_video(self.make("twitch:somebody")), "",
+                         "YouTube recommends nothing beside a Twitch stream")
+
+    def test_a_tile_pressed_plays_it_now(self):
+        from weave.ui.bridge import Bridge
+
+        bridge = self.make()
+        bridge._db.set_state("companion_chip", "Mix")
+        bridge._companion_cache["aaaaaaaaaaa"] = {
+            "chips": [{"label": "Mix", "token": ""}],
+            "cards": {"Mix": [{"video_id": "bbbbbbbbbbb", "title": "B", "channel": "Chan",
+                               "channel_id": "UC" + "c" * 22, "duration": "2:05",
+                               "picture": ""}]}}
+        Bridge.playWatchRecommended(bridge, 0)
+        item = bridge._video.played[0]
+        self.assertEqual((item["key"], item["channelKey"], item["duration_s"]),
+                         ("yt:bbbbbbbbbbb", "yt:UC" + "c" * 22, 125))
+        self.assertEqual(item["url"], "https://www.youtube.com/watch?v=bbbbbbbbbbb")
+
+    def test_comments_the_panel_is_reading_are_waited_for_not_asked_twice(self):
+        from weave.ui.bridge import Bridge
+
+        bridge = self.make()
+        bridge._detail_key = self.KEY
+        bridge._detail_loading = True
+        Bridge.readWatchComments(bridge)
+        self.assertEqual((bridge.launched, bridge._watch_busy), ([], "comments"))
+        Bridge._on_comments(bridge, self.KEY, [{"text": "one"}])
+        self.assertEqual((bridge._watch_comments, bridge._watch_busy), ([{"text": "one"}], ""))
+
+    def test_comments_the_panel_has_read_are_taken(self):
+        from weave.ui.bridge import Bridge
+
+        bridge = self.make()
+        bridge._detail_key = self.KEY
+        bridge._detail_comments = [{"text": "kept"}]
+        Bridge.readWatchComments(bridge)
+        self.assertEqual((bridge.launched, bridge._watch_comments), ([], [{"text": "kept"}]))
+
+    def test_comments_are_read_here_when_the_panel_is_on_another_video(self):
+        from weave.ui.bridge import Bridge
+
+        bridge = self.make()
+        bridge._detail_key = "yt:ccccccccccc"
+        with mock.patch("weave.ui.bridge.DetailFetcher") as fetcher:
+            Bridge.readWatchComments(bridge)
+        self.assertEqual(len(bridge.launched), 1)
+        self.assertEqual(fetcher.call_args.args[2:5],
+                         (self.KEY, "aaaaaaaaaaa",
+                          "https://www.youtube.com/watch?v=aaaaaaaaaaa"))
+        self.assertEqual(bridge._watch_busy, "comments")
+
+    def test_a_new_video_starts_its_tabs_afresh(self):
+        from weave.ui.bridge import Bridge
+
+        bridge = self.make()
+        bridge._watch_comments = [{"text": "old"}]
+        Bridge._on_watch_track(bridge)
+        self.assertEqual(bridge._watch_comments, [{"text": "old"}], "the same video")
+        bridge._video.track = {"key": "yt:ddddddddddd"}
+        Bridge._on_watch_track(bridge)
+        self.assertEqual(bridge._watch_comments, [])
+
+    def test_times_in_its_comments_go_to_that_point(self):
+        from weave.ui.bridge import Bridge
+
+        bridge = self.make()
+        bridge._watch_comments = [{"text": "at 1:00 and 9:00", "replies": []}]
+        markup = Bridge._get_watch_comments(bridge)[0]["markup"]
+        self.assertIn("weave-seek:60", markup)
+        self.assertNotIn("weave-seek:540", markup, "past the end of the video")
+
+    def test_the_panel_follows_the_video_that_starts(self):
+        from weave.ui.bridge import Bridge
+
+        bridge = self.make()
+        opened = []
+        bridge._set_starting = lambda key, clear_after_s=0: None
+        bridge.openDetail = opened.append
+        Bridge._on_video_started(bridge, self.KEY)
+        self.assertEqual(opened, [self.KEY])
 
 
 class AnUpgradedCopy(unittest.TestCase):

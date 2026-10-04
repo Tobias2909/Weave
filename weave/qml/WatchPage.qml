@@ -74,6 +74,39 @@ Item {
     // A right press on the title, for the card menu of the video playing.
     signal cardMenuRequested(string key)
     signal queueMenuRequested(string key)
+    // A right press on a tile of the Recommended tab.
+    signal tileMenuRequested(int index, string key)
+
+    // Which tab the middle shows; the queue beside it is the same on all of
+    // them. A Twitch stream has only its picture. A stream on YouTube has no
+    // comments to read while it is on, only its chat.
+    property string tab: "video"
+    readonly property bool twitch: (Video.track.login || "") !== ""
+    readonly property var tabs: twitch ? []
+        : [{ name: "video", label: "Video" }, { name: "recommended", label: "Recommended" }]
+          .concat(Video.isLive ? [] : [{ name: "comments", label: "Comments" }])
+    // On every tab but the video's the picture sits small in a corner, so the
+    // video stays in sight while the rest of the page is about it.
+    readonly property bool small: tab !== "video" && !cinema
+
+    // Asked every time the tab is opened, the way the music page does.
+    function choose(name) {
+        page.tab = name
+        App.setWatchTab(name)
+        if (name === "comments")
+            App.readWatchComments()
+    }
+
+    // The screen filled is the picture and nothing else.
+    onCinemaChanged: if (cinema && tab !== "video") choose("video")
+    // A tab the next video does not have leaves for its picture.
+    onTabsChanged: {
+        for (var i = 0; i < tabs.length; ++i)
+            if (tabs[i].name === tab)
+                return
+        if (tab !== "video")
+            choose("video")
+    }
 
     // The screen the window is on decides how big a picture is worth fetching,
     // counted in its real pixels so a scaled screen counts what it really has.
@@ -132,11 +165,42 @@ Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
 
+            // Where the tabs leave off. The screen filled has none, and
+            // neither has a video with only its picture to show.
+            readonly property real contentTop: page.cinema || page.tabs.length === 0
+                                               ? 0 : tabRow.height + 12
+
+            Row {
+                id: tabRow
+                objectName: "watchingTabs"
+                visible: !page.cinema && page.tabs.length > 0
+                spacing: 6
+
+                Repeater {
+                    model: page.tabs
+                    FlatButton {
+                        required property var modelData
+                        objectName: "watchingTab_" + modelData.name
+                        text: modelData.label
+                        accent: page.tab === modelData.name
+                        onClicked: page.choose(modelData.name)
+                    }
+                }
+            }
+
+            // ---- the Video tab: the picture and what is known about it ----
+            //
+            // Gone quickly as the picture leaves for its corner, so the words
+            // are never seen sliding about under it.
             Item {
                 id: videoPart
                 objectName: "watchingVideoPart"
+                y: stage.contentTop
                 width: stage.width
-                height: stage.height
+                height: stage.height - y
+                opacity: 1 - Math.min(1, frame.glide * 2.5)
+                visible: opacity > 0
+                enabled: !page.small
 
                 Column {
                     id: middle
@@ -370,15 +434,297 @@ Item {
                 }
             }
 
+            // ---- every other tab: the picture small, and beside it what the
+            // tab is about ---------------------------------------------------
+            Item {
+                id: tabPart
+                objectName: "watchingTabPart"
+                y: stage.contentTop
+                width: stage.width
+                height: stage.height - y
+                // In as the picture arrives, a little after it set off.
+                opacity: Math.max(0, (frame.glide - 0.25) / 0.75)
+                visible: opacity > 0 && !page.cinema
+                enabled: page.small
+
+                // Where the picture comes to rest.
+                Item {
+                    id: miniSlot
+                    width: 320
+                    height: 180
+                }
+
+                Column {
+                    id: heading
+                    anchors.left: miniSlot.right
+                    anchors.leftMargin: 18
+                    anchors.right: parent.right
+                    y: 4
+                    spacing: 6
+
+                    Row {
+                        spacing: 10
+
+                        Label {
+                            text: page.tab === "recommended" ? "Recommended for" : "Comments on"
+                            color: Theme.colors.textMuted
+                            font.pixelSize: 12
+                        }
+
+                        BusyWord {
+                            objectName: "watchingBusy"
+                            visible: page.tab === "recommended" ? App.companionBusy
+                                                                : App.watchBusy !== ""
+                            text: page.tab === "recommended" ? "Asking YouTube"
+                                                             : "Reading the comments"
+                        }
+                    }
+
+                    Label {
+                        width: parent.width
+                        text: Video.track.title ? Video.track.title : ""
+                        color: Theme.colors.text
+                        font.pixelSize: 19
+                        font.weight: Font.DemiBold
+                        elide: Text.ElideRight
+                    }
+
+                    Label {
+                        width: parent.width
+                        visible: text !== ""
+                        text: Video.track.channel ? Video.track.channel : ""
+                        color: Theme.colors.textMuted
+                        font.pixelSize: 13
+                        elide: Text.ElideRight
+                    }
+
+                    Item { width: 1; height: 6; visible: page.tab === "recommended" }
+
+                    // The chips YouTube offers beside the video, the mix
+                    // first. The one picked is the same one the companion
+                    // page and the music page remember.
+                    Flow {
+                        objectName: "watchingChips"
+                        visible: page.tab === "recommended"
+                        width: parent.width
+                        spacing: 8
+
+                        Repeater {
+                            model: App.watchRecommendedChips
+
+                            Rectangle {
+                                id: chip
+                                required property var modelData
+                                height: 30
+                                radius: 15
+                                width: chipWords.implicitWidth + 28
+                                color: modelData.chosen ? Theme.wash(Theme.colors.accent, 0.26)
+                                       : (chipHover.hovered ? Theme.wash(Theme.colors.accent, 0.16)
+                                                            : Theme.colors.surfaceRaised)
+                                border.width: 1
+                                border.color: modelData.chosen || chipHover.hovered
+                                              ? Theme.wash(Theme.colors.accent, 0.6)
+                                              : Theme.colors.border
+
+                                Label {
+                                    id: chipWords
+                                    anchors.centerIn: parent
+                                    text: chip.modelData.label
+                                    color: Theme.colors.text
+                                    font.pixelSize: 12
+                                    font.weight: chip.modelData.chosen ? Font.DemiBold
+                                                                       : Font.Normal
+                                }
+
+                                HoverHandler { id: chipHover; cursorShape: Qt.PointingHandCursor }
+                                TapHandler { onTapped: App.chooseCompanionChip(chip.modelData.label) }
+                            }
+                        }
+
+                        FlatButton {
+                            objectName: "watchingRefresh"
+                            visible: App.watchRecommendedChips.length > 1
+                            height: 30
+                            text: "Refresh"
+                            onClicked: App.refreshCompanion()
+                        }
+                    }
+                }
+
+                // Under the picture and the heading, whichever reaches lower.
+                Item {
+                    id: tabBody
+                    objectName: "watchingTabBody"
+                    y: Math.max(miniSlot.height, heading.y + heading.height) + 18
+                    width: parent.width
+                    height: Math.max(0, parent.height - y)
+
+                    // ---- Recommended ------------------------------------
+                    Rectangle {
+                        objectName: "watchingRecommendedNote"
+                        visible: page.tab === "recommended" && App.watchRecommendedNote !== ""
+                        width: parent.width
+                        height: visible ? noteWords.implicitHeight + 16 : 0
+                        radius: 6
+                        color: Theme.colors.surfaceRaised
+                        border.width: 1
+                        border.color: Theme.colors.border
+
+                        Label {
+                            id: noteWords
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.margins: 10
+                            text: App.watchRecommendedNote
+                            color: Theme.colors.text
+                            font.pixelSize: 12
+                            wrapMode: Text.Wrap
+                        }
+                    }
+
+                    GridView {
+                        id: tileGrid
+                        objectName: "watchingRecommended"
+                        visible: page.tab === "recommended"
+                        anchors.fill: parent
+                        anchors.topMargin: App.watchRecommendedNote !== "" ? 60 : 0
+                        clip: true
+                        model: App.watchRecommended
+                        readonly property int gap: 12
+                        readonly property int columns:
+                            Math.max(2, Math.floor((width + gap) / (250 + gap)))
+                        cellWidth: Math.floor(width / columns)
+                        cellHeight: Math.round((cellWidth - gap) * 9 / 16) + gap
+                        boundsBehavior: Flickable.StopAtBounds
+                        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                        delegate: Item {
+                            id: cell
+                            objectName: "watchingTile"
+                            required property var modelData
+                            required property int index
+                            width: tileGrid.cellWidth
+                            height: tileGrid.cellHeight
+
+                            // A press plays it now, the way a card pressed
+                            // while a video plays does: straight after this
+                            // one, which stays above it as played.
+                            VideoTile {
+                                width: cell.width - tileGrid.gap
+                                height: cell.height - tileGrid.gap
+                                title: cell.modelData.title
+                                channel: cell.modelData.channel
+                                picture: cell.modelData.picture
+                                duration: cell.modelData.duration
+                                queued: cell.modelData.queued
+                                channelLeads: cell.modelData.channelId !== ""
+                                onChannelChosen: App.openChannel("yt:" + cell.modelData.channelId)
+                                onChosen: App.playWatchRecommended(cell.index)
+                                onAskedFor: page.tileMenuRequested(cell.index, cell.modelData.key)
+                            }
+                        }
+                    }
+
+                    SmoothScroll {
+                        flickable: tileGrid
+                        step: tileGrid.cellHeight * App.scrollRowsPerNotch
+                    }
+
+                    // ---- Comments ---------------------------------------
+                    //
+                    // A column rather than a list view, the way the music
+                    // page draws them: more comments arrive as a whole new
+                    // answer, and a list view goes back to its top for one.
+                    Flickable {
+                        id: commentArea
+                        objectName: "watchingComments"
+                        visible: page.tab === "comments"
+                        width: Math.min(parent.width, 860)
+                        height: parent.height
+                        clip: true
+                        contentWidth: width
+                        contentHeight: commentColumn.height
+                        boundsBehavior: Flickable.StopAtBounds
+                        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                        // A different video's comments are read from the top.
+                        Connections {
+                            target: Video
+                            function onTrackChanged() { commentArea.contentY = 0 }
+                        }
+
+                        Column {
+                            id: commentColumn
+                            width: commentArea.width - 14
+                            spacing: 12
+
+                            Label {
+                                visible: App.watchComments.length === 0 && App.watchBusy === ""
+                                text: "Nothing here"
+                                color: Theme.colors.textMuted
+                                font.pixelSize: 12
+                            }
+
+                            Repeater {
+                                model: App.watchComments
+                                CommentThread {
+                                    required property var modelData
+                                    width: commentColumn.width
+                                    comment: modelData
+                                    watching: true
+                                }
+                            }
+
+                            FlatButton {
+                                objectName: "watchingMoreComments"
+                                visible: App.watchCommentsMore
+                                enabled: App.watchBusy === ""
+                                text: App.watchBusy === "comments" ? "Loading" : "Show more"
+                                onClicked: App.loadMoreWatchComments()
+                            }
+
+                            Item { width: 1; height: 4 }
+                        }
+                    }
+
+                }
+            }
+
             // ---- the picture ---------------------------------------------
+            //
+            // Over the room kept for it on the Video tab, and small in the
+            // corner of every other tab. It travels by being scaled and moved,
+            // never resized on the way, the music page's rule for the music
+            // page's reason: a box that changes size every frame is a
+            // framebuffer made again every frame.
             Item {
                 id: frame
                 objectName: "watchingFrame"
                 z: 3
-                x: videoPart.x + middle.x
-                y: videoPart.y + middle.y
-                width: frameSlot.width
-                height: frameSlot.height
+                readonly property real bigX: videoPart.x + middle.x
+                readonly property real bigY: videoPart.y + middle.y
+                readonly property real bigW: frameSlot.width
+                readonly property real bigH: frameSlot.height
+                readonly property real smallX: tabPart.x + miniSlot.x
+                readonly property real smallY: tabPart.y + miniSlot.y
+                // 0 at rest on the Video tab and 1 in the corner.
+                property real glide: page.small ? 1 : 0
+                Behavior on glide {
+                    enabled: !page.cinema
+                    NumberAnimation {
+                        id: glideStep
+                        duration: 260
+                        easing.type: Easing.OutCubic
+                    }
+                }
+                readonly property bool shrunk: glide === 1 && !glideStep.running
+                x: bigX + (smallX - bigX) * glide
+                y: bigY + (smallY - bigY) * glide
+                width: shrunk ? miniSlot.width : bigW
+                height: shrunk ? miniSlot.height : bigH
+                transformOrigin: Item.TopLeft
+                scale: shrunk ? 1 : 1 + (miniSlot.width / Math.max(1, bigW) - 1) * glide
                 clip: true
 
                 Rectangle {
@@ -425,7 +771,8 @@ Item {
                 HoverHandler {
                     id: pictureHover
                     objectName: "watchingPictureHover"
-                    cursorShape: page.cinema && !page.chromeAwake ? Qt.BlankCursor : Qt.ArrowCursor
+                    cursorShape: page.cinema && !page.chromeAwake ? Qt.BlankCursor
+                                 : (page.small ? Qt.PointingHandCursor : Qt.ArrowCursor)
                     onHoveredChanged: {
                         page.pointerOverPicture = hovered
                         if (hovered)
@@ -434,20 +781,41 @@ Item {
                     onPointChanged: if (hovered) page.stirControls()
                 }
 
-                // The left button does nothing on the picture: a press there is
-                // how the window is brought forward to take keys. Two presses
-                // fill the screen, and the right button pauses and plays.
+                // A left press pauses and plays, and two fill the screen. The
+                // right button does nothing here, though it is taken so that
+                // nothing under the picture gets it. Small in the corner of
+                // another tab, a press is the way back to the video.
                 MouseArea {
                     objectName: "watchingSurface"
                     anchors.fill: parent
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
+                    // Whether the first press of a pair paused or played, so
+                    // the second can take that back and only fill the screen,
+                    // and whether it was on the big picture at all.
+                    property bool tookPause: false
+                    property bool onBig: false
                     onClicked: function (mouse) {
-                        if (mouse.button === Qt.RightButton)
-                            Video.toggle()
+                        tookPause = false
+                        onBig = false
+                        if (mouse.button !== Qt.LeftButton)
+                            return
+                        if (page.small) {
+                            page.choose("video")
+                            return
+                        }
+                        onBig = true
+                        // An ended video starts again on a press, which a
+                        // second press would only stop.
+                        tookPause = !Video.ended && Video.videoShowing
+                        Video.toggle()
                     }
                     onDoubleClicked: function (mouse) {
-                        if (mouse.button === Qt.LeftButton)
-                            page.fullscreenToggled()
+                        if (mouse.button !== Qt.LeftButton || !onBig)
+                            return
+                        if (tookPause)
+                            Video.toggle()
+                        tookPause = false
+                        page.fullscreenToggled()
                     }
                     WheelHandler {
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
@@ -460,11 +828,32 @@ Item {
                     }
                 }
 
+                // Pressed in the corner, it takes the page back to the video.
+                Rectangle {
+                    objectName: "watchingBackToVideo"
+                    visible: frame.shrunk
+                    anchors.left: parent.left
+                    anchors.bottom: parent.bottom
+                    anchors.margins: 6
+                    width: backWords.implicitWidth + 14
+                    height: 20
+                    radius: 4
+                    color: "#c0000000"
+
+                    Label {
+                        id: backWords
+                        anchors.centerIn: parent
+                        text: "▲  Back to the video"
+                        color: "#ffffff"
+                        font.pixelSize: 10
+                    }
+                }
+
                 // The queue has run out and the last frame is held.
                 FlatButton {
                     objectName: "watchingReplay"
                     anchors.centerIn: parent
-                    visible: Video.ended
+                    visible: Video.ended && !page.small
                     accent: true
                     text: "↻  Play again"
                     onClicked: Video.replay()
@@ -477,7 +866,7 @@ Item {
                     anchors.bottom: parent.bottom
                     big: page.cinema
                     cinema: page.cinema
-                    opacity: page.controlsUp ? 1 : 0
+                    opacity: page.controlsUp && !page.small ? 1 : 0
                     visible: opacity > 0
                     Behavior on opacity {
                         NumberAnimation { duration: 180; easing.type: Easing.InOutQuad }

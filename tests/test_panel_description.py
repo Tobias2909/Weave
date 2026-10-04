@@ -31,6 +31,8 @@ def bridge_with(mpv_key: str = ""):
     made._detail_extra = {}
     made._detail_dislikes = None
     made._mpv_key = mpv_key
+    # The videos played in the window, which a hand-built bridge has none of.
+    made._video = None
     row = {"key": KEY, "title": "Theirs", "channel_key": "yt:UC1", "channel_title": "One",
            "avatar_url": None, "thumbnail_url": None, "published_at": None,
            "duration_s": None, "views": None, "likes": None, "watched": 0,

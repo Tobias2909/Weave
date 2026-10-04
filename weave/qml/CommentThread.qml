@@ -9,6 +9,8 @@ Column {
     property real textScale: 1.0
     // Beside a song rather than in the panel. Handed to every comment in it.
     property bool song: false
+    // Beside the video playing in the window, the same way.
+    property bool watching: false
     // Replies start where the words of the comment they answer start, past
     // its picture, with a thin line down from that picture beside them. At
     // the old eighteen pixels a reply's picture sat half under its parent's
@@ -23,6 +25,7 @@ Column {
         comment: thread.comment
         textScale: thread.textScale
         song: thread.song
+        watching: thread.watching
     }
 
     Item {
@@ -61,6 +64,7 @@ Column {
                     // that parent belongs to.
                     textScale: thread.textScale
                     song: thread.song
+                    watching: thread.watching
                 }
             }
         }

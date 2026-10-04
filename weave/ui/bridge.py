@@ -175,6 +175,10 @@ REPORT_LISTENS_STATE = "music_report_listens"
 SUGGEST_STATE = "search_suggestions"
 # The chip last picked on the companion page.
 COMPANION_CHIP_STATE = "companion_chip"
+# The chip last picked on the video's page in Weave, kept apart from the
+# music's: a mix is what goes on after a song, and beside a video it is the
+# whole of what YouTube suggests that is wanted first.
+WATCH_CHIP_STATE = "watch_chip"
 
 # Said beside the pointer while the channel behind a pressed name is looked up,
 # and for how long at most.
@@ -337,6 +341,8 @@ class Bridge(QObject):
     videosInChanged = Signal()
     # The video playing in the window changed, or what is known about it grew.
     watchChanged = Signal()
+    # What the tabs of its page show: the comments, and what is being read.
+    watchSideChanged = Signal()
     # The line being sung, apart from everything else about the song, because
     # it changes every few seconds and nothing else on the page should be
     # read again when it does.
@@ -463,6 +469,15 @@ class Bridge(QObject):
         # stopping is not the video being over: mpv carries on with it, and
         # the music stays where it is until mpv is done.
         self._handing_to_mpv = False
+        # The tabs of the video's page, kept apart from the music page's since
+        # the two play different things at once.
+        self._watch_tab = "video"
+        self._watch_rec_open = False
+        self._watch_on = ""
+        self._watch_comments: list = []
+        self._watch_threads = 5
+        self._watch_busy = ""
+        self._watch_detail = None
         self._results: list = []
         self._searching = False
         self._home: MusicHome | None = None
@@ -1244,11 +1259,12 @@ class Bridge(QObject):
         row = self._video_for_detail(self._detail_key) if detail else None
         said = self._extra(row, "description") if row else None
         if said:
-            # A time in it goes to that point, but only while mpv is playing
-            # this very video, which is the only one a time can be about.
+            # A time in it goes to that point, but only while mpv or the
+            # window is playing this very video, which is the only one a time
+            # can be about.
+            playing = detail.get("key") in (self._mpv_key, self._watch_key())
             detail["descriptionText"] = fmt.linked(
-                said, times=self._mpv_key == detail.get("key"),
-                within_s=self._extra(row, "duration_s"))
+                said, times=playing, within_s=self._extra(row, "duration_s"))
         return detail
 
     def _detail_for(self, key: str) -> dict:
@@ -1347,11 +1363,12 @@ class Bridge(QObject):
         return bool(self._detail_key) and not self._detail_closed
 
     def _get_detail_comments(self) -> list:
-        # A time in a comment goes to that point only while mpv is playing this
-        # very video, the same rule the description follows.
+        # A time in a comment goes to that point only while mpv or the window
+        # is playing this very video, the same rule the description follows.
         key = self._detail_key
         row = self._video_for_detail(key) if key else None
-        return self._marked(self._detail_comments, times=bool(key) and self._mpv_key == key,
+        playing = bool(key) and key in (self._mpv_key, self._watch_key())
+        return self._marked(self._detail_comments, times=playing,
                             within_s=self._extra(row, "duration_s") if row else None)
 
     @staticmethod
@@ -2089,6 +2106,8 @@ class Bridge(QObject):
             self._companion_arrive()
         if kind == NOWPLAYING:
             self._read_now_tab()
+        if kind == WATCHING:
+            self._read_watch_tab()
 
     def _name_of_view(self, view) -> str:
         """What to call a view in a sentence, from the record of it.
@@ -2724,6 +2743,8 @@ class Bridge(QObject):
             return self._companion_video
         if self._view_kind == NOWPLAYING and self._now_rec_open:
             return self._now_video_id()
+        if self._view_kind == WATCHING and self._watch_rec_open:
+            return self._watch_video_id()
         return ""
 
     @Slot()
@@ -2754,10 +2775,22 @@ class Bridge(QObject):
             self._companion_follow()
             self.companionQueueChanged.emit()
 
-    def _companion_chip(self, video_id: str) -> str:
+    def _chip_memory(self, watching: bool | None) -> tuple[str, str]:
+        """Where the chip picked is kept, and the one a page starts on: All
+        on the video's page, the mix everywhere else. Asked of the view on
+        screen unless the caller says which page it is drawing."""
+        if watching is None:
+            watching = self._view_kind == WATCHING
+        if watching:
+            return WATCH_CHIP_STATE, watchnext.ALL
+        return COMPANION_CHIP_STATE, watchnext.MIX
+
+    def _companion_chip(self, video_id: str, watching: bool | None = None) -> str:
         """The chip last picked, or the nearest this video has: another
-        artist's From chip for a From chip, and the mix for anything else."""
-        wanted = self._db.get_state(COMPANION_CHIP_STATE, watchnext.MIX) or watchnext.MIX
+        artist's From chip for a From chip, and the page's first chip for
+        anything else."""
+        state, first = self._chip_memory(watching)
+        wanted = self._db.get_state(state, first) or first
         known = self._companion_cache.get(video_id)
         if known is None:
             return wanted
@@ -2768,12 +2801,13 @@ class Bridge(QObject):
             nearest = next((label for label in labels if label.startswith("From ")), "")
             if nearest:
                 return nearest
-        return watchnext.MIX
+        return first if first in labels else watchnext.MIX
 
     def _companion_follow(self) -> None:
         """Show what is known about the video, and ask for what is not."""
         if not (self._view_kind == COMPANION
-                or (self._view_kind == NOWPLAYING and self._now_rec_open)):
+                or (self._view_kind == NOWPLAYING and self._now_rec_open)
+                or (self._view_kind == WATCHING and self._watch_rec_open)):
             return
         video_id = self._rec_video()
         if not video_id:
@@ -2852,7 +2886,7 @@ class Bridge(QObject):
 
     @Slot(str)
     def chooseCompanionChip(self, label: str) -> None:
-        self._db.set_state(COMPANION_CHIP_STATE, label)
+        self._db.set_state(self._chip_memory(None)[0], label)
         self._companion_follow()
 
     @Slot()
@@ -2871,25 +2905,25 @@ class Bridge(QObject):
             known["cards"].pop(chip, None)
         self._companion_follow()
 
-    def _companion_shown(self, video_id: str) -> list:
+    def _companion_shown(self, video_id: str, watching: bool = False) -> list:
         known = self._companion_cache.get(video_id)
         if known is None:
             return []
-        return list(known["cards"].get(self._companion_chip(video_id)) or [])
+        return list(known["cards"].get(self._companion_chip(video_id, watching)) or [])
 
-    def _tiles(self, video_id: str, queued: set) -> list:
+    def _tiles(self, video_id: str, queued: set, watching: bool = False) -> list:
         return [{"key": f"yt:{card['video_id']}", "title": card["title"],
                  "channel": card["channel"], "channelId": card["channel_id"],
                  "duration": card["duration"],
                  "picture": qml_source(card["picture"]),
                  "queued": card["video_id"] in queued}
-                for card in self._companion_shown(video_id)]
+                for card in self._companion_shown(video_id, watching)]
 
-    def _chips(self, video_id: str) -> list:
+    def _chips(self, video_id: str, watching: bool = False) -> list:
         known = self._companion_cache.get(video_id)
-        chosen = self._companion_chip(video_id)
+        chosen = self._companion_chip(video_id, watching)
         labels = ([chip["label"] for chip in known["chips"]] if known is not None
-                  else [watchnext.MIX])
+                  else [self._chip_memory(watching)[1]])
         return [{"label": label, "chosen": label == chosen} for label in labels]
 
     def _refusal_note(self) -> str:
@@ -4721,6 +4755,8 @@ class Bridge(QObject):
         video.gone.connect(self._on_video_gone)
         video.trackChanged.connect(self.watchChanged.emit)
         video.factsChanged.connect(self.watchChanged.emit)
+        video.trackChanged.connect(self._on_watch_track)
+        video.queueChanged.connect(self._on_video_queue_changed)
 
     def _get_videos_in_weave(self) -> bool:
         return self._videos_in() == IN_WEAVE
@@ -4932,10 +4968,12 @@ class Bridge(QObject):
 
     def _on_video_started(self, key: str) -> None:
         # The music gives way to the video, as it does to mpv, and the card
-        # stops saying it is on its way.
+        # stops saying it is on its way. The panel beside the feed follows it
+        # the way it follows mpv.
         if self._audio is not None:
             self._audio.pause_for_video()
         self._set_starting("")
+        self.openDetail(key)
 
     def _on_video_stopped(self) -> None:
         if self._audio is not None and not self._handing_to_mpv:
@@ -4969,6 +5007,191 @@ class Bridge(QObject):
                              live=live):
             self._set_status(f"playing {entry.get('title') or 'the video'} in mpv")
             self._set_starting(key)
+
+    # ---- the tabs of the video's page ---------------------------------------
+    #
+    # Recommended is the companion's engine aimed at the video playing here,
+    # and Comments the panel's reader. While the panel follows the same video,
+    # which it does unless somebody opened another one in it, the comments it
+    # already read are taken rather than asked for a second time.
+
+    def _watch_key(self) -> str:
+        if self._video is None:
+            return ""
+        return str((self._video.track or {}).get("key") or "")
+
+    def _watch_video_id(self) -> str:
+        """The YouTube id of the video playing in the window. Nothing for a
+        Twitch stream, beside which YouTube recommends nothing."""
+        key = self._watch_key()
+        return key.split(":", 1)[1] if key.startswith("yt:") else ""
+
+    def _on_watch_track(self) -> None:
+        """A different video, so the tabs are about the last one. Only when it
+        really changed: the signal also comes with a stop and a refill."""
+        key = self._watch_key()
+        if key == self._watch_on:
+            return
+        self._watch_on = key
+        self._watch_comments = []
+        self._watch_threads = 5
+        self._watch_busy = ""
+        if self._watch_detail is not None and self._watch_detail.isRunning():
+            self._watch_detail.cancel()
+        self._watch_detail = None
+        self.watchSideChanged.emit()
+        self._read_watch_tab()
+
+    def _on_video_queue_changed(self) -> None:
+        # The tiles say which of them are queued.
+        if self._view_kind == WATCHING and self._watch_rec_open:
+            self.companionChanged.emit()
+
+    def _read_watch_tab(self) -> None:
+        """Ask for what the open tab shows, while the page is open. Nothing is
+        fetched for it while it is closed, and opening it asks then."""
+        if self._view_kind != WATCHING:
+            return
+        if self._watch_tab == "comments":
+            if not self._watch_comments:
+                self.readWatchComments()
+        elif self._watch_tab == "recommended":
+            self._companion_follow()
+
+    @Slot(str)
+    def setWatchTab(self, name: str) -> None:
+        self._watch_tab = name
+        self._watch_rec_open = name == "recommended"
+        if self._watch_rec_open:
+            self._companion_follow()
+
+    def _panel_reads_it(self, key: str) -> bool:
+        """Whether the panel is reading, or has read, this video's comments."""
+        return (key == self._detail_key and not self._detail_closed
+                and self._video_for_detail(key) is not None)
+
+    @Slot()
+    def readWatchComments(self) -> None:
+        key = self._watch_key()
+        if not key.startswith("yt:") or self._watch_busy:
+            return
+        if self._panel_reads_it(key) and self._detail_threads >= self._watch_threads:
+            if self._detail_loading:
+                self._watch_busy = "comments"
+            else:
+                self._watch_comments = list(self._detail_comments)
+                self._watch_threads = self._detail_threads
+            self.watchSideChanged.emit()
+            return
+        ext_id = key.split(":", 1)[1]
+        self._watch_busy = "comments"
+        self.watchSideChanged.emit()
+        self._watch_detail = DetailFetcher(self._db, self._cfg, key, ext_id,
+                                           ids.watch_url("youtube", ext_id),
+                                           self._watch_threads, parent=self)
+        self._watch_detail.comments.connect(self._on_watch_comments)
+        self._watch_detail.failed.connect(self._on_watch_detail_failed)
+        if not self._launch(self._watch_detail):
+            self._watch_detail = None
+            self._watch_busy = ""
+            self.watchSideChanged.emit()
+
+    def _on_watch_comments(self, key: str, threads: list, extra: dict) -> None:
+        if extra:
+            self._keep_extra(key, extra)
+        if self._stale(self._watch_detail) or key != self._watch_key():
+            return
+        self._watch_detail = None
+        self._watch_busy = ""
+        self._watch_comments = threads
+        self.watchSideChanged.emit()
+
+    def _on_watch_detail_failed(self, what: str, message: str) -> None:
+        if self._stale(self._watch_detail) or what != "comments":
+            return
+        self._watch_detail = None
+        self._watch_busy = ""
+        self.watchSideChanged.emit()
+        self._set_status(f"{what}, {message}")
+
+    @Slot()
+    def loadMoreWatchComments(self) -> None:
+        if self._watch_busy or not self._watch_comments:
+            return
+        self._watch_threads += 10
+        key = self._watch_key()
+        if self._panel_reads_it(key) and not self._detail_loading:
+            # The panel reads ten more for both of them.
+            self._watch_busy = "comments"
+            self.watchSideChanged.emit()
+            self.loadMoreComments()
+            return
+        self.readWatchComments()
+
+    def _get_watch_comments_more(self) -> bool:
+        return bool(self._watch_comments) and len(self._watch_comments) >= self._watch_threads
+
+    def _get_watch_comments(self) -> list:
+        # A time in one goes to that point in the video playing.
+        length = self._video.length if self._video is not None else 0
+        return self._marked(self._watch_comments, times=True, within_s=length or None)
+
+    watchComments = Property("QVariantList", _get_watch_comments, notify=watchSideChanged)
+    watchCommentsMore = Property(bool, _get_watch_comments_more, notify=watchSideChanged)
+    watchBusy = Property(str, lambda self: self._watch_busy, notify=watchSideChanged)
+
+    def _video_queued(self) -> set:
+        entries = self._video.queue if self._video is not None else []
+        return {str(entry.get("key") or "").split(":", 1)[-1] for entry in entries}
+
+    def _get_watch_recommended_note(self) -> str:
+        if not self._watch_video_id():
+            return "Recommendations come from YouTube, and this is not a YouTube video."
+        return self._refusal_note()
+
+    watchRecommended = Property(
+        "QVariantList",
+        lambda self: self._tiles(self._watch_video_id(), self._video_queued(), watching=True),
+        notify=companionChanged)
+    watchRecommendedChips = Property(
+        "QVariantList", lambda self: self._chips(self._watch_video_id(), watching=True),
+        notify=companionChanged)
+    watchRecommendedNote = Property(str, _get_watch_recommended_note, notify=companionChanged)
+
+    def _watch_recommended_item(self, index: int) -> dict | None:
+        """A tile of the video page's Recommended tab, as its queue takes a
+        video."""
+        shown = self._companion_shown(self._watch_video_id(), watching=True)
+        if not 0 <= index < len(shown):
+            return None
+        card = shown[index]
+        # Built outside the entry, as every video entry of the window is.
+        address = ids.watch_url("youtube", card["video_id"])
+        channel = card["channel_id"] or ""
+        return {"key": f"yt:{card['video_id']}", "title": card["title"],
+                "channel": card["channel"], "channelId": channel,
+                "channelKey": f"yt:{channel}" if channel else "",
+                "thumbnail": qml_source(card["picture"]), "url": address,
+                "live": False, "login": "", "duration_s": self._seconds(card["duration"]),
+                "videoId": card["video_id"]}
+
+    @Slot(int)
+    def playWatchRecommended(self, index: int) -> None:
+        """A tile pressed: straight after the video playing, and then at once,
+        the way a card pressed while a video plays goes."""
+        item = self._watch_recommended_item(index)
+        if item is None or self._video is None:
+            return
+        self._video.play_now(item)
+
+    @Slot(int, bool)
+    def queueWatchRecommended(self, index: int, play_next: bool) -> None:
+        item = self._watch_recommended_item(index)
+        if item is None or self._video is None:
+            return
+        self._video.add_item(item, play_next)
+        self._set_notice("Playing it next" if play_next else "Added to the video queue",
+                         clear_after_s=3)
 
     def _on_video_watched(self, key: str, progress: float) -> None:
         self._db.set_watched(key, progress, "weave")
@@ -7320,6 +7543,13 @@ class Bridge(QObject):
         if key == self._detail_key:
             self._detail_comments = threads
         self.detailChanged.emit()
+        if key == self._watch_key() and self._watch_busy == "comments" \
+                and self._watch_detail is None:
+            # The video's page was waiting on these rather than asking twice.
+            self._watch_comments = list(threads)
+            self._watch_threads = self._detail_threads
+            self._watch_busy = ""
+            self.watchSideChanged.emit()
 
     def _keep_details(self, key: str, details: dict) -> None:
         """Write what the panel learned back onto the stored row.
@@ -7343,6 +7573,10 @@ class Bridge(QObject):
     def _on_detail_failed(self, source: str, message: str) -> None:
         self._detail_loading = False
         self.detailChanged.emit()
+        if source == "comments" and self._watch_busy == "comments" \
+                and self._watch_detail is None:
+            self._watch_busy = ""
+            self.watchSideChanged.emit()
         self._set_status(f"could not load the {source}, {message}")
 
     def _on_player_stopped(self) -> None:
@@ -7384,8 +7618,12 @@ class Bridge(QObject):
 
     @Slot(int)
     def seekVideo(self, seconds: int) -> None:
-        """A time pressed in the panel's description, handed to mpv, which is
-        playing the video it belongs to or the time would not be pressable."""
+        """A time pressed in the panel's description, handed to whichever is
+        playing the video it belongs to, or the time would not be pressable."""
+        if self._video is not None and self._detail_key \
+                and self._watch_key() == self._detail_key:
+            self._video.seekTo(seconds)
+            return
         if not self._mpv_key or self._mpv_key != self._detail_key:
             return
         if not self._player.seek(seconds):
@@ -7697,6 +7935,10 @@ class Bridge(QObject):
         elif worker in (self._now_side, self._now_detail):
             self._now_busy = ""
             self.nowChanged.emit()
+        elif worker is self._watch_detail:
+            self._watch_detail = None
+            self._watch_busy = ""
+            self.watchSideChanged.emit()
         elif worker is self._artist_music:
             self._channel_music_busy = False
             self.channelTabChanged.emit()

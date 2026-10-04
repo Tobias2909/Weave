@@ -1514,6 +1514,7 @@ ApplicationWindow {
             onFullscreenToggled: root.toggleCinema()
             onCardMenuRequested: (key) => root.askAboutQueueEntry(key)
             onQueueMenuRequested: (key) => root.askAboutQueueEntry(key)
+            onTileMenuRequested: (index, key) => root.askAboutTile("watch", index, key)
         }
     }
 
@@ -2793,7 +2794,8 @@ ApplicationWindow {
     }
 
     // A tile of recommendations, on the companion page or on the Recommended
-    // tab of Now playing: which queue it is for, mpv's or the music's.
+    // tab of Now playing or of the video's page: which queue it is for, mpv's,
+    // the music's or the window's videos'.
     function askAboutTile(where, index, key) {
         companionMenu.where = where
         companionMenu.index = index
@@ -2815,7 +2817,8 @@ ApplicationWindow {
     ThemedMenu {
         id: companionMenu
         objectName: "companionMenu"
-        // "mpv" on the companion page, "music" on the Now playing page.
+        // "mpv" on the companion page, "music" on the Now playing page and
+        // "watch" on the video's page.
         property string where: "mpv"
         property int index: -1
         property string key: ""
@@ -2825,8 +2828,21 @@ ApplicationWindow {
             onTriggered: {
                 if (companionMenu.where === "music")
                     App.queueNowRecommended(companionMenu.index, true)
+                else if (companionMenu.where === "watch")
+                    App.queueWatchRecommended(companionMenu.index, true)
                 else
                     App.companionPlayNext(companionMenu.index)
+                companionMenu.dismiss()
+            }
+        }
+        // The window's queue alone has an end worth putting a video on: a
+        // tile pressed there already plays at once.
+        ThemedMenuItem {
+            objectName: "companionAddToQueue"
+            visible: companionMenu.where === "watch"
+            text: "Add to queue"
+            onTriggered: {
+                App.queueWatchRecommended(companionMenu.index, false)
                 companionMenu.dismiss()
             }
         }
@@ -2835,6 +2851,8 @@ ApplicationWindow {
             onTriggered: {
                 if (companionMenu.where === "music")
                     App.playNowRecommended(companionMenu.index)
+                else if (companionMenu.where === "watch")
+                    App.playWatchRecommended(companionMenu.index)
                 else
                     App.companionPlayNow(companionMenu.index)
                 companionMenu.dismiss()

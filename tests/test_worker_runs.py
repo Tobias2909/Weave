@@ -1206,7 +1206,7 @@ class WorkerRuns(unittest.TestCase):
                    "_channel_members", "_channel_lists", "_now_side", "_now_detail",
                    "_artist_music", "_artist_open", "_stream_check", "_music_history",
                    "_members_check", "_listen_reporter", "_link_facts", "_link_target",
-                   "_playlist_maker", "_companion_fetch")
+                   "_playlist_maker", "_companion_fetch", "_watch_detail")
 
         def make(held: str):
             bridge = Bridge.__new__(Bridge)
@@ -1262,7 +1262,7 @@ class WorkerRuns(unittest.TestCase):
                            "cacheChanged", "twitchChanged", "viewChanged",
                            "nowChanged", "channelTabChanged", "pageReadingChanged",
                            "channelLookingChanged", "cardNoteChanged", "musicBoxesChanged",
-                           "companionChanged"):
+                           "companionChanged", "watchSideChanged"):
                 setattr(bridge, signal, Recorder())
             return bridge, worker
 
@@ -1338,6 +1338,11 @@ class WorkerRuns(unittest.TestCase):
             bridge, worker = make(held)
             Bridge._on_worker_crashed(bridge, worker, "x")
             self.assertEqual(bridge._now_busy, "", held)
+
+        bridge, worker = make("_watch_detail")
+        bridge._watch_busy = "comments"
+        Bridge._on_worker_crashed(bridge, worker, "x")
+        self.assertEqual(bridge._watch_busy, "", "a crashed read left the video's tab waiting")
 
         bridge, worker = make("_artist_music")
         Bridge._on_worker_crashed(bridge, worker, "x")

@@ -15,6 +15,8 @@ Row {
     // Shown beside a song on the Now playing page rather than in the panel, so
     // a time pressed in it goes to that point in the song and not in mpv.
     property bool song: false
+    // Beside the video playing in the window, which the time goes to instead.
+    property bool watching: false
 
     spacing: 8
 
@@ -74,6 +76,8 @@ Row {
                     App.openLink(link)
                 else if (body.song)
                     Audio.seekTo(parseInt(link.slice(11)))
+                else if (body.watching)
+                    Video.seekTo(parseInt(link.slice(11)))
                 else
                     App.seekVideo(parseInt(link.slice(11)))
             }
