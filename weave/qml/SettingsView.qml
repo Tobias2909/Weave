@@ -122,6 +122,87 @@ Item {
                             font.pixelSize: 11
                             wrapMode: Text.Wrap
                         }
+
+                        // What a video played here is fetched at, and whether it
+                        // has captions. Only for the window's own player: mpv
+                        // goes by its own configuration.
+                        Row {
+                            objectName: "videoQualityRow"
+                            visible: App.videosInWeave
+                            spacing: 8
+
+                            Label {
+                                width: view.wordWidth
+                                height: 28
+                                text: "Quality"
+                                color: Theme.colors.textMuted
+                                font.pixelSize: 12
+                                verticalAlignment: Text.AlignVCenter
+                            }
+
+                            Repeater {
+                                model: [0, 2160, 1440, 1080, 720, 480]
+
+                                FlatButton {
+                                    required property int modelData
+                                    objectName: "videoQuality_" + modelData
+                                    text: modelData ? modelData + "p"
+                                                    : "Auto (" + Video.autoHeight + "p)"
+                                    accent: Video.quality === modelData
+                                    onClicked: Video.setQuality(modelData)
+                                }
+                            }
+                        }
+
+                        Label {
+                            visible: App.videosInWeave
+                            width: parent.width
+                            text: "Auto follows the screen the window is on. A height picked here "
+                                  + "or in the player stays until Auto is picked again."
+                            color: Theme.colors.textMuted
+                            font.pixelSize: 11
+                            wrapMode: Text.Wrap
+                        }
+
+                        Row {
+                            objectName: "videoCaptionsRow"
+                            visible: App.videosInWeave
+                            spacing: 8
+
+                            Label {
+                                width: view.wordWidth
+                                height: 28
+                                text: "Captions"
+                                color: Theme.colors.textMuted
+                                font.pixelSize: 12
+                                verticalAlignment: Text.AlignVCenter
+                            }
+
+                            FlatButton {
+                                objectName: "videoCaptionsOff"
+                                text: "Off"
+                                accent: !Video.captionsOn
+                                onClicked: Video.setCaptionsOn(false)
+                            }
+
+                            FlatButton {
+                                objectName: "videoCaptionsOn"
+                                text: "On"
+                                accent: Video.captionsOn
+                                onClicked: Video.setCaptionsOn(true)
+                            }
+                        }
+
+                        Label {
+                            visible: App.videosInWeave
+                            width: parent.width
+                            text: "On shows them in the language last picked with CC on a video, "
+                                  + "the uploader's own before YouTube's, and otherwise in the "
+                                  + "video's own language."
+                            color: Theme.colors.textMuted
+                            font.pixelSize: 11
+                            wrapMode: Text.Wrap
+                        }
                     }
                 }
 

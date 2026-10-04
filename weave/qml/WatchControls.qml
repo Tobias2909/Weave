@@ -22,6 +22,18 @@ Item {
     readonly property bool live: Video.isLive
     height: big ? 132 : 104
 
+    // How far up from the foot of the picture the controls reach, which is
+    // how far a caption is lifted while they are up.
+    readonly property real reach: height - bar.y + 8
+
+    // A menu open on the picture keeps the controls up under it.
+    readonly property bool menuOpen: speedMenu.opened || captionMenu.opened
+                                     || qualityMenu.opened
+
+    function speedText(speed) {
+        return (Math.round(speed * 100) / 100) + "\u00d7"
+    }
+
     function clock(seconds) {
         seconds = Math.max(0, Math.floor(seconds))
         var h = Math.floor(seconds / 3600)
@@ -58,9 +70,22 @@ Item {
             gesturePolicy: TapHandler.ReleaseWithinBounds
             onTapped: button.pressed()
         }
-        ToolTip.visible: hint !== "" && hover.hovered
+        // Not over a menu the button has opened.
+        ToolTip.visible: hint !== "" && hover.hovered && !controls.menuOpen
         ToolTip.delay: 450
         ToolTip.text: hint
+    }
+
+    // A menu of the buttons on the right, rising from the button it belongs
+    // to and lined up with its right edge. A long one scrolls rather than
+    // reaching past the picture.
+    component PictureMenu: ThemedMenu {
+        id: pictureMenu
+        property real tallest: controls.big ? 520 : 340
+        implicitWidth: 190
+        height: Math.min(implicitHeight, tallest)
+        x: parent ? parent.width - width : 0
+        y: -height - 6
     }
 
     // The fade the controls stand on.
@@ -173,14 +198,22 @@ Item {
         }
     }
 
-    // What the pointer over the bar would go to: the chapter, and when.
+    // What the pointer over the bar would go to: a picture of that moment
+    // when YouTube made some, the chapter, and when.
     Rectangle {
         id: peek
         objectName: "watchSeekPeek"
         visible: bar.visible && bar.pointerAt >= 0
         readonly property string chapter: visible ? Video.chapterAt(bar.pointerAt) : ""
-        width: Math.max(80, Math.min(260, peekWords.implicitWidth + 20))
-        height: peekWords.implicitHeight + 12
+        readonly property var board: Video.storyboard
+        readonly property bool pictured: board.sheets !== undefined
+        readonly property var frame: visible && pictured ? Video.previewAt(bar.pointerAt) : ({})
+        readonly property real shotWidth: controls.big ? 256 : 200
+        readonly property real shotHeight: pictured
+                                           ? Math.round(shotWidth * board.height / board.width) : 0
+        width: pictured ? shotWidth + 12
+                        : Math.max(80, Math.min(260, peekWords.implicitWidth + 20))
+        height: (pictured ? shotHeight + 6 : 0) + peekWords.implicitHeight + 12
         radius: 6
         color: Theme.colors.surfaceRaised
         border.width: 1
@@ -188,10 +221,43 @@ Item {
         x: Math.max(4, Math.min(controls.width - width - 4,
                                 bar.x + bar.width * bar.pointerAt - width / 2))
         y: bar.y - height - 6
+
+        // One frame of a sheet of them, the sheet scaled to the box and moved
+        // so that frame is the part showing. Sized by the sheet itself, since
+        // the last one of a video holds only the frames that are left.
+        Rectangle {
+            id: shot
+            visible: peek.pictured
+            x: 6
+            y: 6
+            width: peek.shotWidth
+            height: peek.shotHeight
+            radius: 3
+            clip: true
+            color: "#000000"
+
+            Image {
+                objectName: "watchSeekShot"
+                readonly property real scaled: peek.shotWidth / Math.max(1, peek.board.width || 1)
+                source: peek.frame.sheet || ""
+                asynchronous: true
+                cache: true
+                // The sheet before stays up while the next one comes, rather
+                // than a black box for the time it takes.
+                retainWhileLoading: true
+                smooth: true
+                width: implicitWidth * scaled
+                height: implicitHeight * scaled
+                x: -(peek.frame.column || 0) * peek.shotWidth
+                y: -(peek.frame.row || 0) * peek.shotHeight
+            }
+        }
+
         Label {
             id: peekWords
-            anchors.centerIn: parent
-            width: Math.min(240, implicitWidth)
+            anchors.horizontalCenter: parent.horizontalCenter
+            y: peek.pictured ? shot.y + shot.height + 4 : (peek.height - height) / 2
+            width: Math.min(peek.pictured ? peek.shotWidth : 240, implicitWidth)
             horizontalAlignment: Text.AlignHCenter
             elide: Text.ElideRight
             textFormat: Text.PlainText
@@ -352,6 +418,107 @@ Item {
         y: parent.height - controls.rowHeight - (controls.big ? 18 : 10)
         height: controls.rowHeight
         spacing: 4
+
+        ControlButton {
+            id: speedButton
+            objectName: "watchSpeed"
+            visible: !controls.live
+            text: controls.speedText(Video.speed)
+            hint: "Speed"
+            onPressed: speedMenu.open()
+
+            PictureMenu {
+                id: speedMenu
+                objectName: "watchSpeedMenu"
+                implicitWidth: 120
+
+                Repeater {
+                    model: Video.speeds
+
+                    ThemedMenuItem {
+                        required property var modelData
+                        text: controls.speedText(modelData)
+                              + (Math.abs(modelData - Video.speed) < 0.001 ? "   \u2713" : "")
+                        onTriggered: {
+                            var picked = modelData
+                            speedMenu.dismiss()
+                            Video.setSpeed(picked)
+                        }
+                    }
+                }
+            }
+        }
+
+        ControlButton {
+            id: captionButton
+            objectName: "watchCaptions"
+            visible: Video.captions.length > 0
+            text: "CC"
+            hint: Video.captionShowing ? "Captions" : "Captions are off"
+            on: Video.captionShowing
+            onPressed: captionMenu.open()
+
+            PictureMenu {
+                id: captionMenu
+                objectName: "watchCaptionMenu"
+                implicitWidth: 240
+
+                ThemedMenuItem {
+                    objectName: "watchCaptionOff"
+                    text: "Off" + (Video.captionShowing ? "" : "   \u2713")
+                    onTriggered: {
+                        captionMenu.dismiss()
+                        Video.setCaption(-1)
+                    }
+                }
+                Repeater {
+                    model: Video.captions
+
+                    ThemedMenuItem {
+                        required property var modelData
+                        required property int index
+                        objectName: "watchCaptionEntry"
+                        text: modelData.label + (modelData.chosen ? "   \u2713" : "")
+                        // Shut first: what is picked changes the list, and
+                        // the entry pressed is made again under the hand.
+                        onTriggered: {
+                            var picked = index
+                            captionMenu.dismiss()
+                            Video.setCaption(picked)
+                        }
+                    }
+                }
+            }
+        }
+
+        ControlButton {
+            id: qualityButton
+            objectName: "watchQuality"
+            text: Video.qualityText
+            hint: "Quality"
+            onPressed: qualityMenu.open()
+
+            PictureMenu {
+                id: qualityMenu
+                objectName: "watchQualityMenu"
+                implicitWidth: 170
+
+                Repeater {
+                    model: Video.qualities
+
+                    ThemedMenuItem {
+                        required property var modelData
+                        text: modelData.label + (modelData.playing ? "  \u00b7  playing" : "")
+                              + (modelData.chosen ? "   \u2713" : "")
+                        onTriggered: {
+                            var picked = modelData.height
+                            qualityMenu.dismiss()
+                            Video.setQuality(picked)
+                        }
+                    }
+                }
+            }
+        }
 
         ControlButton {
             objectName: "watchFullscreen"

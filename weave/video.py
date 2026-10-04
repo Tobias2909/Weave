@@ -20,8 +20,10 @@ goes in straight after it and plays.
 
 from __future__ import annotations
 
+import json
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from urllib.parse import parse_qs, urlparse
 
 from PySide6.QtCore import Property, QObject, QThread, QTimer, Signal, Slot
 
@@ -44,6 +46,13 @@ OPTIONS = {
     "audio_client_name": "weave-video",
     "keep_open": "yes",
     "prefetch_playlist": False,
+    # Decoded on the graphics card where that is known to work. MEASURED in a
+    # real window through the render API, 1440p VP9 at 25 fps: 11.1 % of one
+    # core in software, 3.5 % on the card, no frame dropped either way.
+    # auto-safe only takes a decoder mpv vouches for and falls back to software
+    # otherwise. Forcing vaapi through an NVIDIA card's translation layer froze
+    # the drawing for 5.6 s, and auto-safe never chose it there.
+    "hwdec": "auto-safe",
 }
 
 # A video left before this far in starts again from the beginning: that much
@@ -62,6 +71,37 @@ VOLUME_DEFAULT = 70
 # When no ceiling has been picked, the screen decides, and before the window has
 # said which screen it is on, this does.
 FALLBACK_HEIGHT = 1080
+
+# The speeds the player's menu offers.
+SPEEDS = (0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0)
+
+# Kept between runs on this machine: the height picked in the player or the
+# settings ("auto" lets the screen decide), whether captions are on, and the
+# language they were last picked in.
+QUALITY_STATE = "video_quality"
+CAPTIONS_STATE = "video_captions"
+CAPTION_LANGUAGE_STATE = "video_caption_language"
+
+# The pictures the bar shows under the pointer come as sheets of frames, in
+# several sizes. Nothing wider than this is taken, which is about what the box
+# under the pointer shows them at.
+STORYBOARD_WIDTH = 320
+
+# What rides along in the same call as the addresses, each on a line of its own
+# behind a tag. The chapters and the facts are found by the shape of their line,
+# a list and an object, and these are lists and objects too.
+#
+# Only the last way each caption is offered is printed, which is its WebVTT
+# one, and that is what keeps the line short: every way of every language of
+# YouTube's own captions came to 588 KB for one video, MEASURED, and the last
+# of each to about a tenth of that.
+EXTRA_PRINTS = (
+    "--print", "weave-height:%(height)s",
+    "--print", ("weave-formats:%(formats.:.{format_id,height,vcodec,width,rows,columns,"
+                "fps,fragments})j"),
+    "--print", "weave-captions:%(subtitles.:.-1)j",
+    "--print", "weave-auto:%(automatic_captions.:.-1)j",
+)
 
 
 def ceiling_for(screen_height: int) -> int:
@@ -96,6 +136,134 @@ class Found:
     sound: str = ""
     chapters: tuple[dict, ...] = ()
     facts: dict | None = None
+    extras: dict = field(default_factory=dict)
+
+
+def _tagged_list(text: str | None) -> list[dict]:
+    if not text:
+        return []
+    try:
+        found = json.loads(text)
+    except ValueError:
+        return []
+    return [one for one in found if isinstance(one, dict)] if isinstance(found, list) else []
+
+
+def offered_heights(formats: list[dict]) -> tuple[int, ...]:
+    """Every height the video's picture is offered at, tallest first. The
+    sound alone and the storyboards are offered too and have none."""
+    heights = set()
+    for one in formats:
+        height = one.get("height")
+        if (isinstance(height, (int, float)) and height > 0
+                and one.get("vcodec") != "none"):
+            heights.add(int(height))
+    return tuple(sorted(heights, reverse=True))
+
+
+def storyboard_of(formats: list[dict]) -> dict | None:
+    """The sheets of small frames YouTube makes of a video, in the largest
+    size that is not wider than the box shows them, or None without any."""
+    boards = [one for one in formats
+              if str(one.get("format_id") or "").startswith("sb") and one.get("fragments")
+              and all(isinstance(one.get(name), (int, float)) and one.get(name) > 0
+                      for name in ("width", "height", "columns", "rows", "fps"))]
+    fitting = [one for one in boards if one["width"] <= STORYBOARD_WIDTH] or boards
+    if not fitting:
+        return None
+    best = max(fitting, key=lambda one: one["width"])
+    sheets = [str(part.get("url") or "") for part in best["fragments"] if isinstance(part, dict)]
+    if not sheets or not all(sheets):
+        return None
+    return {"sheets": sheets, "width": int(best["width"]), "height": int(best["height"]),
+            "columns": int(best["columns"]), "rows": int(best["rows"]),
+            "fps": float(best["fps"])}
+
+
+def _query(url: str) -> dict:
+    return parse_qs(urlparse(url).query)
+
+
+def captions_of(uploaded: list[dict], automatic: list[dict]) -> tuple[dict, ...]:
+    """Every caption a video offers, in the order the menu lists them: the
+    uploader's own by name, then the one YouTube made from the sound.
+
+    YouTube offers its own in every language there is, translated from the
+    one it heard, and only that one is kept. It is the one whose address asks
+    for no translation.
+    """
+    made = []
+    for one in uploaded:
+        url = str(one.get("url") or "")
+        code = (_query(url).get("lang") or [""])[0]
+        if one.get("ext") != "vtt" or not url or not code:
+            continue
+        made.append({"code": code, "name": str(one.get("name") or code), "auto": False,
+                     "url": url})
+    made.sort(key=lambda one: one["name"].casefold())
+    heard: list[dict] = []
+    for one in automatic:
+        url = str(one.get("url") or "")
+        asked = _query(url)
+        code = (asked.get("lang") or [""])[0]
+        if (one.get("ext") != "vtt" or not url or not code or "tlang" in asked
+                or any(other["code"] == code for other in heard)):
+            continue
+        name = str(one.get("name") or code).removesuffix(" (Original)")
+        heard.append({"code": code, "name": name, "auto": True, "url": url})
+    return tuple(made + heard)
+
+
+def parse_extras(text: str) -> dict:
+    """What the tagged lines of one resolve said: the height fetched, the
+    heights offered, the storyboard and the captions. Each is an extra the
+    video plays without, so anything missing is simply left out."""
+    tagged: dict[str, str] = {}
+    for line in text.splitlines():
+        tag, sep, rest = line.strip().partition(":")
+        if sep and tag.startswith("weave-") and tag not in tagged:
+            tagged[tag] = rest
+    out: dict = {}
+    try:
+        out["height"] = int(float(tagged.get("weave-height", "")))
+    except ValueError:
+        pass
+    formats = _tagged_list(tagged.get("weave-formats"))
+    out["heights"] = list(offered_heights(formats))
+    board = storyboard_of(formats)
+    if board is not None:
+        out["storyboard"] = board
+    out["captions"] = list(captions_of(_tagged_list(tagged.get("weave-captions")),
+                                       _tagged_list(tagged.get("weave-auto"))))
+    return out
+
+
+def _language(code: str) -> str:
+    return code.split("-", 1)[0].casefold()
+
+
+def choose_caption(tracks: list[dict], language: str) -> dict | None:
+    """The caption shown when captions are on.
+
+    The language picked last, the uploader's before YouTube's and an exact
+    match before a kindred one (en-GB for en). Failing that the video's own
+    language, which is the one YouTube's caption is in. Never a stranger: a
+    video with only someone else's language uploaded shows none.
+    """
+    if not tracks:
+        return None
+    wanted = [language] if language else []
+    heard = next((one for one in tracks if one["auto"]), None)
+    if heard is not None:
+        wanted.append(heard["code"])
+    for code in wanted:
+        for auto in (False, True):
+            for same in (lambda one, c=code: one["code"] == c,
+                         lambda one, c=code: _language(one["code"]) == _language(c)):
+                found = next((one for one in tracks if one["auto"] == auto and same(one)), None)
+                if found is not None:
+                    return found
+    return None
 
 
 class NoAddress(RuntimeError):
@@ -114,7 +282,7 @@ def resolve_watch(cfg: Config, url: str, height: int, live: bool,
     command = prepare(["yt-dlp", *cookie_args(cfg),
                        "-f", watch_format(height, live),
                        "--get-url", "--print", "%(chapters)j",
-                       "--print", FACT_SPEC, url])
+                       "--print", FACT_SPEC, *EXTRA_PRINTS, url])
     result = run_process(command, cancel=cancel, timeout=180)
     addresses = [line for line in result.stdout.splitlines() if line.startswith("http")]
     if not addresses:
@@ -122,13 +290,14 @@ def resolve_watch(cfg: Config, url: str, height: int, live: bool,
     # The picture is asked for first, so it comes first. A joined stream is one
     # address carrying both.
     return Found(addresses[0], addresses[1] if len(addresses) > 1 else "",
-                 parse_chapters(result.stdout), parse_facts(result.stdout))
+                 parse_chapters(result.stdout), parse_facts(result.stdout),
+                 parse_extras(result.stdout))
 
 
 class _Finder(QThread):
     """Turns one video into what the player needs."""
 
-    found = Signal(str, str, str, list, "QVariantMap")
+    found = Signal(str, str, str, list, "QVariantMap", "QVariantMap")
     failed = Signal(str, str)
     gone = Signal(str)
 
@@ -163,8 +332,12 @@ class _Finder(QThread):
                 return
             self.failed.emit(self.key, said)
             return
+        extras = dict(found.extras)
+        # Which ceiling this was fetched under, which is what the height it
+        # came back at is kept against.
+        extras["asked"] = self._height
         self.found.emit(self.key, found.picture, found.sound, list(found.chapters),
-                        dict(found.facts or {}))
+                        dict(found.facts or {}), extras)
 
 
 class VideoPlayer(QObject):
@@ -176,6 +349,9 @@ class VideoPlayer(QObject):
     progressChanged = Signal()
     factsChanged = Signal()
     videoChanged = Signal()
+    # The quality, the captions and the storyboard: what the menus on the
+    # picture and the box over the bar draw.
+    extrasChanged = Signal()
     # A video has begun to play. The music gives way to it here.
     started = Signal(str)
     # Nothing is playing any more and nothing is about to: the queue ran out or
@@ -211,6 +387,24 @@ class VideoPlayer(QObject):
         self._saved_at = 0.0
         self._screen_height = 0
         self._speed = 1.0
+        # Per video, what its resolve said besides the addresses, and per
+        # video and ceiling, the height it came back at.
+        self._extras: dict[str, dict] = {}
+        self._fetched: dict[str, int] = {}
+        # The ceiling the one playing was fetched under, which a new pick is
+        # weighed against.
+        self._under = 0
+        quality = db.get_state(QUALITY_STATE, "auto") if db else "auto"
+        self._quality = int(quality) if str(quality).isdigit() else 0
+        self._captions_on = bool(db) and db.get_state(CAPTIONS_STATE, "off") == "on"
+        self._caption_language = (db.get_state(CAPTION_LANGUAGE_STATE, "") or "") if db else ""
+        # The address of the caption on screen, or nothing, and how far up the
+        # picture captions sit, in mpv's percent of its height.
+        self._caption_shown = ""
+        self._caption_place = 100
+        # The video being fetched again at another height, whose start is not
+        # news to anyone listening for a video starting.
+        self._quiet = ""
         # The level before a mute, for the same key to give back.
         self._unmuted = 0
         stored = db.get_int("video_volume", VOLUME_DEFAULT) if db else VOLUME_DEFAULT
@@ -335,6 +529,46 @@ class VideoPlayer(QObject):
     def _get_ceiling(self) -> int:
         return self._height()
 
+    def _known(self) -> dict:
+        return self._extras.get(self._current().get("key") or "", {})
+
+    def _auto_height(self) -> int:
+        return ceiling_for(self._screen_height) if self._screen_height else FALLBACK_HEIGHT
+
+    def _playing_height(self) -> int:
+        key = self._current().get("key") or ""
+        return int(self._fetched.get(f"{key}@{self._under}") or 0)
+
+    def _get_qualities(self) -> list:
+        """The menu of heights: Auto first, saying what the screen makes it,
+        then every height this video is offered at, or the usual steps for one
+        not fetched yet. The one picked is chosen, the one fetched is playing."""
+        offered = self._known().get("heights") or [
+            step for step in reversed(VIDEO_HEIGHT_STEPS) if step >= 480]
+        playing = self._playing_height()
+        out = [{"height": 0, "label": f"Auto ({self._auto_height()}p)",
+                "chosen": self._quality == 0, "playing": False}]
+        out += [{"height": height, "label": f"{height}p", "chosen": self._quality == height,
+                 "playing": height == playing}
+                for height in offered]
+        return out
+
+    def _get_quality_text(self) -> str:
+        if self._quality:
+            return f"{self._quality}p"
+        return f"Auto ({self._auto_height()}p)"
+
+    def _tracks(self) -> list:
+        return list(self._known().get("captions") or [])
+
+    def _get_captions(self) -> list:
+        return [{"label": one["name"] + (" (auto)" if one["auto"] else ""),
+                 "chosen": one["url"] == self._caption_shown}
+                for one in self._tracks()]
+
+    def _get_storyboard(self) -> dict:
+        return dict(self._known().get("storyboard") or {})
+
     track = Property("QVariantMap", _get_track, notify=trackChanged)
     playing = Property(bool, _get_playing, notify=stateChanged)
     loading = Property(bool, _get_loading, notify=stateChanged)
@@ -353,6 +587,16 @@ class VideoPlayer(QObject):
     currentChapter = Property(str, _get_current_chapter, notify=progressChanged)
     trackFacts = Property("QVariantMap", _get_facts, notify=factsChanged)
     ceiling = Property(int, _get_ceiling, notify=stateChanged)
+    qualities = Property("QVariantList", _get_qualities, notify=extrasChanged)
+    qualityText = Property(str, _get_quality_text, notify=extrasChanged)
+    quality = Property(int, lambda self: self._quality, notify=extrasChanged)
+    autoHeight = Property(int, _auto_height, notify=extrasChanged)
+    captions = Property("QVariantList", _get_captions, notify=extrasChanged)
+    captionShowing = Property(bool, lambda self: bool(self._caption_shown),
+                              notify=extrasChanged)
+    captionsOn = Property(bool, lambda self: self._captions_on, notify=extrasChanged)
+    storyboard = Property("QVariantMap", _get_storyboard, notify=extrasChanged)
+    speeds = Property("QVariantList", lambda _self: list(SPEEDS), constant=True)
 
     # ---- the queue -------------------------------------------------------
 
@@ -491,33 +735,44 @@ class VideoPlayer(QObject):
     # ---- playing ---------------------------------------------------------
 
     def _height(self) -> int:
-        return ceiling_for(self._screen_height) if self._screen_height else FALLBACK_HEIGHT
+        """The ceiling a video is fetched under: the height picked, or else
+        what the screen can show."""
+        return self._quality or self._auto_height()
 
     @Slot(int)
     def setScreenHeight(self, pixels: int) -> None:
-        """How tall the screen the window is on is, in its real pixels. The
-        picture is never fetched taller than that."""
+        """How tall the screen the window is on is, in its real pixels. Auto
+        never fetches the picture taller than that."""
         pixels = int(pixels)
         if pixels > 0 and pixels != self._screen_height:
             self._screen_height = pixels
             self.stateChanged.emit()
+            self.extrasChanged.emit()
 
-    def _start_current(self) -> None:
+    def _start_current(self, again: bool = False) -> None:
+        """Find the one in the queue's place and play it. Again is the same
+        video fetched once more at another height: where it was, whether it
+        was watched and the page about it all stay as they are."""
         entry = self._current()
         if not entry:
             return
         self._stop_finder()
         self._ended = False
-        self._pos = 0.0
-        self._dur = 0.0
-        self._counted = ""
-        self._saved_at = 0.0
+        self._caption_shown = ""
+        if not again:
+            self._pos = 0.0
+            self._dur = 0.0
+            self._counted = ""
+            self._saved_at = 0.0
         self._finding = True
-        self.trackChanged.emit()
+        if not again:
+            self.trackChanged.emit()
         self.stateChanged.emit()
         self.progressChanged.emit()
+        self.extrasChanged.emit()
         key = entry.get("key", "")
         height = self._height()
+        self._under = height
         cached = self._addresses.get(f"{key}@{height}")
         if cached:
             picture, _, sound = cached.partition(" ")
@@ -535,9 +790,15 @@ class VideoPlayer(QObject):
         finder.start()
 
     def _on_found(self, key: str, picture: str, sound: str, chapters: list,
-                  facts: dict) -> None:
+                  facts: dict, extras: dict | None = None) -> None:
         if chapters:
             self._chapters[key] = tuple(chapters)
+        if extras:
+            extras = dict(extras)
+            asked = extras.pop("asked", None)
+            if asked and extras.get("height"):
+                self._fetched[f"{key}@{asked}"] = int(extras["height"])
+            self._extras[key] = extras
         if facts:
             self._facts[key] = dict(facts)
             if key == self._current().get("key"):
@@ -553,17 +814,25 @@ class VideoPlayer(QObject):
     def _hand_over(self, entry: dict, picture: str, sound: str) -> None:
         self._finding = False
         start = entry.pop("start_s", None)
+        if entry.pop("go_on", False):
+            start = self._pos
         if start is None and not entry.get("live"):
             start = self._resume_point(entry.get("key", ""))
-        self._paused = False
+        # Fetched again at another height while paused, it stays paused.
+        paused = bool(entry.pop("hold_pause", False))
+        caption = (choose_caption(self._tracks(), self._caption_language)
+                   if self._captions_on else None)
+        self._caption_shown = caption["url"] if caption else ""
+        self._paused = paused
         self._engine.set_video(True)
         if sound:
-            self._engine.load(sound, start, video=picture)
+            self._engine.load(sound, start, video=picture, subtitle=self._caption_shown)
         else:
-            self._engine.load(picture, start)
-        self._engine.set_pause(False)
+            self._engine.load(picture, start, subtitle=self._caption_shown)
+        self._engine.set_pause(paused)
         self._engine.set_speed(self._speed)
         self.stateChanged.emit()
+        self.extrasChanged.emit()
 
     def _resume_point(self, key: str) -> float | None:
         if self._db is None or not key:
@@ -606,6 +875,9 @@ class VideoPlayer(QObject):
         if role != CURRENT:
             return
         entry = self._current()
+        if entry and self._quiet == entry.get("key"):
+            self._quiet = ""
+            return
         if entry:
             trace.mark("video_started", key=entry.get("key", ""))
             self.started.emit(entry.get("key", ""))
@@ -775,6 +1047,111 @@ class VideoPlayer(QObject):
         self._speed = max(0.25, min(4.0, float(speed)))
         self._engine.set_speed(self._speed)
         self.stateChanged.emit()
+
+    # ---- the menus on the picture ----------------------------------------
+
+    @Slot(int)
+    def setQuality(self, height: int) -> None:
+        """A height to fetch every video at from now on, or 0 for Auto. It
+        holds until Auto is picked again, and the one playing is fetched again
+        at once if that changes what it plays at."""
+        height = max(0, int(height))
+        if height == self._quality:
+            return
+        before = self._height()
+        self._quality = height
+        if self._db is not None:
+            self._db.set_state(QUALITY_STATE, str(height) if height else "auto")
+        self.extrasChanged.emit()
+        if self._height() != before and self._would_change():
+            self._fetch_again()
+
+    def _would_change(self) -> bool:
+        """Whether the ceiling now in force picks another height than the one
+        playing. The same video offered no taller than either ceiling would
+        only be fetched again to come back the same."""
+        playing = self._playing_height()
+        offered = self._known().get("heights") or []
+        if not playing or not offered:
+            return True
+        ceiling = self._height()
+        fitting = [height for height in offered if height <= ceiling]
+        return (max(fitting) if fitting else min(offered)) != playing
+
+    def _fetch_again(self) -> None:
+        """The one playing, from where it is, fetched under the new ceiling."""
+        entry = self._current()
+        if not entry or self._ended:
+            return
+        if not self._finding:
+            # Where it is when the new address is handed over, not now: the
+            # old one plays on for the seconds the finding takes.
+            entry["go_on"] = not entry.get("live")
+            entry["hold_pause"] = self._paused
+            self._keep_position()
+            self._quiet = entry.get("key", "")
+        self._start_current(again=True)
+
+    @Slot(int)
+    def setCaption(self, index: int) -> None:
+        """A caption picked from the menu, or Off with any other number. The
+        language picked is remembered for the next video, and on stays on
+        until Off is picked."""
+        tracks = self._tracks()
+        track = tracks[index] if 0 <= index < len(tracks) else None
+        self._captions_on = track is not None
+        if track is not None:
+            self._caption_language = track["code"]
+        if self._db is not None:
+            self._db.set_state(CAPTIONS_STATE, "on" if self._captions_on else "off")
+            if track is not None:
+                self._db.set_state(CAPTION_LANGUAGE_STATE, track["code"])
+        self._show_caption(track)
+
+    @Slot(bool)
+    def setCaptionsOn(self, on: bool) -> None:
+        """On or off from the settings, in the language picked last."""
+        self._captions_on = bool(on)
+        if self._db is not None:
+            self._db.set_state(CAPTIONS_STATE, "on" if self._captions_on else "off")
+        self._show_caption(choose_caption(self._tracks(), self._caption_language)
+                           if self._captions_on else None)
+
+    def _show_caption(self, track: dict | None) -> None:
+        url = track["url"] if track else ""
+        # While a video is still being found there is no file to show it on,
+        # and the hand over picks it up.
+        if url != self._caption_shown and not self._finding and not self._idle:
+            self._caption_shown = url
+            if track is not None:
+                self._engine.show_subtitle(url, track["name"], track["code"])
+            else:
+                self._engine.show_subtitle("")
+        self.extrasChanged.emit()
+
+    @Slot(float)
+    def setCaptionLift(self, share: float) -> None:
+        """How much of the picture's height a caption keeps clear of at its
+        foot, which is the controls while they are up."""
+        place = round(100 - 100 * max(0.0, min(0.5, float(share))))
+        if place != self._caption_place:
+            self._caption_place = place
+            self._engine.set_subtitle_place(place)
+
+    @Slot(float, result="QVariantMap")
+    def previewAt(self, along: float) -> dict:
+        """The frame of the storyboard at that fraction of the video: which
+        sheet, and the column and row of it."""
+        board = self._known().get("storyboard")
+        if not board or self._dur <= 0:
+            return {}
+        each = board["columns"] * board["rows"]
+        sheets = board["sheets"]
+        frame = int(max(0.0, min(1.0, float(along))) * self._dur * board["fps"])
+        frame = max(0, min(frame, len(sheets) * each - 1))
+        sheet, cell = divmod(frame, each)
+        return {"sheet": sheets[sheet], "column": cell % board["columns"],
+                "row": cell // board["columns"]}
 
     def shutdown(self) -> None:
         self._keep_position()

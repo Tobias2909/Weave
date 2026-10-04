@@ -212,6 +212,8 @@ class LibmpvEngine(QObject):
         # and drawing from that point shows a black box.
         player.observe_property("video-frame-info", self._on_frame)
         player.observe_property("eof-reached", self._on_eof)
+        # Which decoder a picture got, for the trace of one that stutters.
+        player.observe_property("hwdec-current", self._on_decoder)
 
         @player.event_callback("start-file")
         def _started(event):
@@ -290,18 +292,19 @@ class LibmpvEngine(QObject):
     # ---- what is playing --------------------------------------------------
 
     def load(self, url: str, start: float | None = None,
-             video: str | None = None) -> None:
+             video: str | None = None, subtitle: str = "") -> None:
         """Play this now, dropping whatever was held as next.
 
         A video address is a separate stream, handed to the entry as its own
         file, which is how one track can carry both without either being
-        re-fetched when the picture is turned on or off.
+        re-fetched when the picture is turned on or off. A caption handed over
+        here is opened with the file and shown from its first frame.
         """
         if not self.ensure():
             return
         self._roles.clear()
         self._attached = ""
-        entry = self._play(url, "replace", start, video)
+        entry = self._play(url, "replace", start, video, subtitle)
         if entry is not None:
             self._claim(entry, CURRENT)
 
@@ -320,10 +323,13 @@ class LibmpvEngine(QObject):
             self.started.emit(role)
 
     def _play(self, url: str, mode: str, start: float | None,
-              video: str | None) -> int | None:
+              video: str | None, subtitle: str = "") -> int | None:
         options: dict[str, str] = {}
         if start:
             options["start"] = f"{start:.3f}"
+        if subtitle:
+            # One caption given with the file is shown by default, measured.
+            options["sub-file"] = subtitle
         if video:
             # The picture is the file and the sound rides along with it, rather
             # than the other way round, because mpv times a playlist entry by
@@ -456,6 +462,40 @@ class LibmpvEngine(QObject):
 
     def set_speed(self, speed: float) -> None:
         self._set("speed", max(0.25, min(4.0, float(speed))))
+
+    def set_subtitle_place(self, percent: int) -> None:
+        """How far down the picture a caption sits, 100 being its foot."""
+        self._set("sub-pos", max(0, min(100, int(percent))))
+
+    def show_subtitle(self, url: str, title: str = "", lang: str = "") -> None:
+        """Show this caption on the file playing, or none with no address.
+
+        One added before is chosen again rather than fetched again: mpv's own
+        `cached` flag was MEASURED to add a second copy all the same. A new
+        one is asked for without waiting, since mpv fetches it inside the
+        call, on the thread that paints the window, as it does a picture.
+        """
+        if self._mpv is None:
+            return
+        if not url:
+            self._set("sid", "no")
+            return
+        try:
+            tracks = list(self._mpv.track_list or [])
+        except Exception:
+            tracks = []
+        for track in tracks:
+            if track.get("type") == "sub" and track.get("external-filename") == url:
+                self._set("sid", track.get("id"))
+                return
+        ask = getattr(self._mpv, "command_async", None)
+        if ask is None:
+            self._command("sub-add", url, "select", title, lang)
+            return
+        try:
+            ask("sub-add", url, "select", title, lang, callback=_subtitle_answered)
+        except Exception:
+            pass
 
     def position(self) -> float:
         """Where the player is, asked rather than waited for."""
@@ -749,6 +789,11 @@ class LibmpvEngine(QObject):
     def _on_buffering(self, _name, value) -> None:
         self.bufferingChanged.emit(bool(value))
 
+    def _on_decoder(self, _name, value) -> None:
+        if value:
+            trace.mark("decoder", player=self._options.get("audio_client_name", "weave"),
+                       current=value)
+
     def _on_eof(self, _name, value) -> None:
         self.eofChanged.emit(bool(value))
 
@@ -782,6 +827,13 @@ class LibmpvEngine(QObject):
             self._mpv[name] = value
         except Exception:
             pass
+
+
+def _subtitle_answered(error, _result) -> None:
+    """Raised from the player's own thread. A caption that would not open
+    leaves the video playing without one, so a line in the trace is all."""
+    if error is not None:
+        trace.mark("subtitle_refused", why=str(error))
 
 
 def _entry_id(event) -> int:

@@ -14,7 +14,8 @@ from tests.support import scratch_db
 from tests import test_audio as music
 from weave.config import Config
 from weave.engine_libmpv import CURRENT
-from weave.video import (RESUME_FROM_S, VideoPlayer, ceiling_for, watch_format)
+from weave.video import (CAPTION_LANGUAGE_STATE, CAPTIONS_STATE, QUALITY_STATE, RESUME_FROM_S,
+                         VideoPlayer, ceiling_for, choose_caption, parse_extras, watch_format)
 
 _app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -51,8 +52,16 @@ class FakeEngine(QObject):
     def set_video(self, wanted):
         self.calls.append(("video", wanted))
 
-    def load(self, url, start=None, video=None):
+    def load(self, url, start=None, video=None, subtitle=""):
         self.calls.append(("load", url, start, video))
+        if subtitle:
+            self.calls.append(("caption", subtitle))
+
+    def show_subtitle(self, url, title="", lang=""):
+        self.calls.append(("caption", url))
+
+    def set_subtitle_place(self, percent):
+        self.calls.append(("caption place", percent))
 
     def set_pause(self, paused):
         self.calls.append(("pause", paused))
@@ -80,14 +89,14 @@ class _Base(unittest.TestCase):
         # putting what it would have found where a second look finds it.
         original = self.player._start_current
 
-        def start():
+        def start(again=False):
             entry = self.player._current()
             self.finding.append(entry.get("key"))
             # Everything up to the finder, which is not started.
             self.player._addresses.put(f"{entry.get('key')}@{self.player._height()}",
                                        f"https://picture.example/{entry.get('key')} "
                                        f"https://sound.example/{entry.get('key')}")
-            original()
+            original(again)
         self.player._start_current = start
         self.watched = []
         self.player.watched.connect(lambda key, progress: self.watched.append((key, progress)))
@@ -262,6 +271,170 @@ class TheControls(_Base):
         self.player.play_now(video("a"))
         self.engine.started.emit(CURRENT)
         self.assertEqual(heard, ["yt:a"])
+
+
+def caption(code, auto=False, name=None):
+    return {"code": code, "name": name or code, "auto": auto,
+            "url": f"https://captions.example/{code}{'-auto' if auto else ''}.vtt"}
+
+
+# The tagged lines of one resolve, shaped as yt-dlp prints them for a video
+# offered up to 1440p with a storyboard, two uploaded captions and YouTube's
+# own in English, translated into another language too.
+RESOLVED = "\n".join([
+    "https://picture.example/a", "https://sound.example/a", "NA", "{}",
+    "weave-height:1080",
+    'weave-formats:[{"format_id": "sb1", "height": 90, "vcodec": "none", "width": 160,'
+    ' "rows": 5, "columns": 5, "fps": 0.2, "fragments": [{"url": "https://sb.example/L2/M0"}]},'
+    ' {"format_id": "sb0", "height": 180, "vcodec": "none", "width": 320, "rows": 3,'
+    ' "columns": 3, "fps": 0.2, "fragments": [{"url": "https://sb.example/L3/M0"},'
+    ' {"url": "https://sb.example/L3/M1"}]},'
+    ' {"format_id": "251", "vcodec": "none"},'
+    ' {"format_id": "247", "height": 720, "vcodec": "vp9", "width": 1280},'
+    ' {"format_id": "136", "height": 720, "vcodec": "avc1", "width": 1280},'
+    ' {"format_id": "271", "height": 1440, "vcodec": "vp9", "width": 2560}]',
+    'weave-captions:[{"ext": "vtt", "name": "German",'
+    ' "url": "https://www.youtube.com/api/timedtext?v=a&lang=de&fmt=vtt"},'
+    ' {"ext": "vtt", "name": "English (United Kingdom)",'
+    ' "url": "https://www.youtube.com/api/timedtext?v=a&lang=en-GB&fmt=vtt"}]',
+    'weave-auto:[{"ext": "vtt", "name": "English (Original)",'
+    ' "url": "https://www.youtube.com/api/timedtext?v=a&kind=asr&lang=en&fmt=vtt"},'
+    ' {"ext": "vtt", "name": "English",'
+    ' "url": "https://www.youtube.com/api/timedtext?v=a&kind=asr&lang=en&fmt=vtt"},'
+    ' {"ext": "vtt", "name": "French",'
+    ' "url": "https://www.youtube.com/api/timedtext?v=a&kind=asr&lang=en&tlang=fr&fmt=vtt"}]',
+])
+
+
+class WhatRidesAlong(unittest.TestCase):
+    def test_heights_storyboard_and_captions_come_out_of_the_one_call(self):
+        found = parse_extras(RESOLVED)
+        self.assertEqual(found["height"], 1080)
+        self.assertEqual(found["heights"], [1440, 720])
+        board = found["storyboard"]
+        self.assertEqual((board["width"], board["columns"], board["rows"]), (320, 3, 3))
+        self.assertEqual(board["sheets"], ["https://sb.example/L3/M0", "https://sb.example/L3/M1"])
+        self.assertEqual([(one["code"], one["name"], one["auto"]) for one in found["captions"]],
+                         [("en-GB", "English (United Kingdom)", False), ("de", "German", False),
+                          ("en", "English", True)])
+
+    def test_a_video_with_none_of_it_plays_without_it(self):
+        found = parse_extras("https://picture.example/a\nNA\n{}\nweave-height:NA\n"
+                             "weave-formats:NA\nweave-captions:NA\nweave-auto:NA")
+        self.assertEqual(found, {"heights": [], "captions": []})
+
+    def test_the_tagged_lines_are_not_taken_for_chapters_or_facts(self):
+        from weave.audio import parse_chapters, parse_facts
+        self.assertEqual(parse_chapters(RESOLVED), ())
+        self.assertEqual(parse_facts(RESOLVED), {})
+
+
+class WhichCaption(unittest.TestCase):
+    TRACKS = [caption("de"), caption("en-GB"), caption("en", auto=True)]
+
+    def test_the_language_picked_last_and_the_uploaders_first(self):
+        self.assertEqual(choose_caption(self.TRACKS, "de")["code"], "de")
+        self.assertEqual(choose_caption(self.TRACKS, "en")["code"], "en-GB")
+        self.assertEqual(choose_caption([caption("en", auto=True), caption("en-GB")], "en")["code"],
+                         "en-GB", "the uploader's before YouTube's, even an exact one")
+
+    def test_otherwise_the_videos_own_language(self):
+        self.assertEqual(choose_caption(self.TRACKS, "")["code"], "en-GB")
+        self.assertEqual(choose_caption(self.TRACKS, "ja")["code"], "en-GB")
+        self.assertEqual(choose_caption([caption("en", auto=True)], "de")["auto"], True)
+
+    def test_never_a_strangers_language(self):
+        self.assertIsNone(choose_caption([caption("es")], "de"))
+        self.assertIsNone(choose_caption([], "de"))
+
+
+class TheMenusOnThePicture(_Base):
+    def playing_with(self, extras, name="a", height=1440):
+        self.player.setScreenHeight(height)
+        self.player._extras[f"yt:{name}"] = extras
+        self.player.play_now(video(name))
+        self.engine.idleChanged.emit(False)
+
+    def test_a_height_picked_fetches_the_one_playing_again_where_it_is(self):
+        heard = []
+        self.player.started.connect(heard.append)
+        tracks = []
+        self.player.trackChanged.connect(lambda: tracks.append(True))
+        self.playing_with({"heights": [1440, 1080, 720]})
+        self.player._fetched["yt:a@1440"] = 1440
+        self.engine.started.emit(CURRENT)
+        self.player._dur = 600.0
+        self.player._pos = 123.0
+        self.player.setPaused(True)
+        tracks.clear()
+        self.player.setQuality(720)
+        load = self.engine.only("load")[-1]
+        self.assertEqual(load[2], 123.0)
+        self.assertEqual(self.engine.only("pause")[-1], ("pause", True), "paused stays paused")
+        self.assertEqual(self.finding[-2:], ["yt:a", "yt:a"])
+        self.engine.started.emit(CURRENT)
+        self.assertEqual(heard, ["yt:a"], "the second start is not news")
+        self.assertEqual(tracks, [], "the page about it stays as it is")
+        self.assertEqual(self.db.get_state(QUALITY_STATE), "720")
+        self.assertEqual(self.player.qualityText, "720p")
+
+    def test_a_height_that_would_come_back_the_same_is_not_fetched_again(self):
+        self.playing_with({"heights": [720, 480]})
+        self.player._fetched["yt:a@1440"] = 720
+        loads = len(self.engine.only("load"))
+        self.player.setQuality(1080)
+        self.assertEqual(len(self.engine.only("load")), loads)
+        self.assertEqual(self.player._height(), 1080, "but it holds for the next video")
+
+    def test_auto_says_what_the_screen_makes_it_and_a_pick_is_kept(self):
+        self.player.setScreenHeight(1600)
+        self.assertEqual(self.player.qualityText, "Auto (1440p)")
+        self.player.setQuality(1080)
+        again = VideoPlayer(Config(raw={}), self.db, engine=FakeEngine())
+        self.assertEqual(again.quality, 1080)
+        self.player.setQuality(0)
+        self.assertEqual(self.db.get_state(QUALITY_STATE), "auto")
+
+    def test_the_menu_lists_the_videos_own_heights_and_which_plays(self):
+        self.playing_with({"heights": [1440, 720]})
+        self.player._fetched["yt:a@1440"] = 1440
+        menu = [(one["label"], one["chosen"], one["playing"]) for one in self.player.qualities]
+        self.assertEqual(menu, [("Auto (1440p)", True, False), ("1440p", False, True),
+                                ("720p", False, False)])
+
+    def test_a_caption_picked_shows_and_the_next_video_has_it_too(self):
+        self.playing_with({"captions": [caption("en", auto=True), caption("de")]})
+        self.assertEqual(self.engine.only("caption"), [], "off by default")
+        self.player.setCaption(1)
+        self.assertEqual(self.engine.only("caption")[-1], ("caption", caption("de")["url"]))
+        self.assertTrue(self.player.captionShowing)
+        self.assertEqual(self.db.get_state(CAPTIONS_STATE), "on")
+        self.assertEqual(self.db.get_state(CAPTION_LANGUAGE_STATE), "de")
+        self.player._extras["yt:b"] = {"captions": [caption("de-AT"), caption("fr")]}
+        self.player.play_now(video("b"))
+        self.assertEqual(self.engine.only("caption")[-1], ("caption", caption("de-AT")["url"]),
+                         "handed over with the file")
+        self.player.setCaption(-1)
+        self.assertEqual(self.engine.only("caption")[-1], ("caption", ""))
+        self.assertFalse(self.player.captionShowing)
+        self.assertEqual(self.db.get_state(CAPTIONS_STATE), "off")
+        self.assertEqual(self.db.get_state(CAPTION_LANGUAGE_STATE), "de", "the language stays")
+
+    def test_captions_on_from_the_settings(self):
+        self.playing_with({"captions": [caption("en", auto=True)]})
+        self.player.setCaptionsOn(True)
+        self.assertEqual(self.engine.only("caption")[-1], ("caption", caption("en", True)["url"]))
+        self.assertEqual([one["chosen"] for one in self.player.captions], [True])
+
+    def test_the_frame_under_the_pointer(self):
+        self.playing_with({"storyboard": {"sheets": ["s0", "s1"], "width": 320, "height": 180,
+                                          "columns": 3, "rows": 3, "fps": 0.2}})
+        self.player._dur = 100.0
+        # One frame every five seconds, nine to a sheet.
+        self.assertEqual(self.player.previewAt(0.0), {"sheet": "s0", "column": 0, "row": 0})
+        self.assertEqual(self.player.previewAt(0.24), {"sheet": "s0", "column": 1, "row": 1})
+        self.assertEqual(self.player.previewAt(0.5), {"sheet": "s1", "column": 1, "row": 0})
+        self.assertEqual(self.player.previewAt(1.0), {"sheet": "s1", "column": 2, "row": 2})
 
 
 class HowBig(unittest.TestCase):

@@ -2681,6 +2681,23 @@ class Smoke:
         settle(0.3)
         self.check("and its switch follows the choice",
                    here is not None and bool(read(here, "accent")))
+        root = window.contentItem()
+        rows = [find(window, name) for name in ("videoQualityRow", "videoCaptionsRow")]
+        heights = [item_named(root, f"videoQuality_{height}") for height in (0, 1080)]
+        on = find(window, "videoCaptionsOn")
+        shown = [bool(read(row, "visible")) for row in rows if row is not None]
+        call(heights[1], "clicked")
+        call(on, "clicked")
+        settle(0.2)
+        picked = (bridge._video.quality, bridge._video.captionsOn, bool(read(heights[1], "accent")))
+        call(heights[0], "clicked")
+        call(find(window, "videoCaptionsOff"), "clicked")
+        settle(0.2)
+        self.check("in the window's mode it also sets the quality and the captions",
+                   shown == [True, True] and picked == (1080, True, True)
+                   and bridge._video.quality == 0 and not bridge._video.captionsOn
+                   and str(read(heights[0], "text")).startswith("Auto ("),
+                   f"rows {shown}, picked {picked}")
         companion = find(window, "companionRow")
         self.check("in the window's mode the companion leaves the sidebar",
                    companion is not None and not bool(read(companion, "visible")))
@@ -2709,6 +2726,7 @@ class Smoke:
                    not read(find(window, "grid"), "visible")
                    and not read(find(window, "detailPanel"), "visible"))
         self.where_presses_land_on_the_page(bridge, window, key)
+        self.the_menus_on_the_picture(bridge, window, key)
         # The card menu waits a video its turn in the window's queue. Plain
         # videos, since a stream not on air yet is refused.
         menu = find(window, "videoMenu")
@@ -2952,6 +2970,119 @@ class Smoke:
         video._idle, video._paused, video._showing = was
         video.stateChanged.emit()
         video.videoChanged.emit()
+
+    def the_menus_on_the_picture(self, bridge, window, key: str) -> None:
+        """Speed, captions and quality over the picture, and the frame the bar
+        shows under the pointer, as a video whose resolve brought them all."""
+        import os
+        from PySide6.QtCore import QPoint, QPointF
+        from PySide6.QtGui import QColor, QImage
+        from PySide6.QtTest import QTest
+
+        def spot(item, fx, fy):
+            at = item.mapToScene(QPointF(read(item, "width") * fx, read(item, "height") * fy))
+            return QPoint(round(at.x()), round(at.y()))
+
+        def entries(menu):
+            listed = menu.property("contentItem")
+            inner = listed.property("contentItem") if listed is not None else None
+            return [(str(read(child, "text")), child) for child in
+                    (inner.childItems() if inner is not None else [])
+                    if read(child, "text") is not None and hasattr(child, "click")]
+
+        root = window.contentItem()
+        video = bridge._video
+        sheet = os.path.join(os.environ.get("XDG_CACHE_HOME", "/tmp"), "walk-storyboard.png")
+        picture = QImage(960, 540, QImage.Format.Format_RGB32)
+        picture.fill(QColor("#336699"))
+        picture.save(sheet)
+        was = (video._idle, video._paused, video._showing, video._dur, video._pos)
+        video._idle, video._paused, video._showing = False, False, True
+        video._dur, video._pos = 300.0, 10.0
+        video._extras[key] = {
+            "heights": [1440, 720],
+            "captions": [{"code": "de", "name": "German", "auto": False,
+                          "url": "file:///walk/de.vtt"},
+                         {"code": "en", "name": "English", "auto": True,
+                          "url": "file:///walk/en.vtt"}],
+            "storyboard": {"sheets": [f"file://{sheet}"], "width": 320, "height": 180,
+                           "columns": 3, "rows": 3, "fps": 0.03}}
+        video._fetched[f"{key}@{video._under}"] = 1440
+        for signal in (video.stateChanged, video.videoChanged, video.progressChanged,
+                       video.extrasChanged):
+            signal.emit()
+        settle(0.3)
+        speed, captions, quality = (find(window, name) for name in
+                                    ("watchSpeed", "watchCaptions", "watchQuality"))
+        self.check("the picture offers its speed, captions and quality",
+                   read(speed, "text") == "1×" and read(captions, "visible") is True
+                   and str(read(quality, "text")).startswith("Auto ("),
+                   f"{read(speed, 'text')}, CC {read(captions, 'visible')}, "
+                   f"{read(quality, 'text')}")
+
+        frame = find(window, "watchingFrame")
+        QTest.mouseMove(window, spot(frame, 0.5, 0.4) - QPoint(8, 0))
+        settle(0.2)
+        QTest.mouseMove(window, spot(frame, 0.5, 0.4))
+        settle(0.4)
+        opened = []
+        for button, name in ((speed, "watchSpeedMenu"), (captions, "watchCaptionMenu"),
+                             (quality, "watchQualityMenu")):
+            QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier, spot(button, 0.5, 0.5))
+            settle(0.4)
+            menu = find(window, name)
+            opened.append((name, bool(read(menu, "opened")),
+                           [text.strip() for text, _ in entries(menu)]))
+            if name == "watchSpeedMenu":
+                pick = next((item for text, item in entries(menu) if text.strip() == "1.5×"), None)
+            elif name == "watchCaptionMenu":
+                pick = next((item for text, item in entries(menu)
+                             if text.strip() == "German"), None)
+            else:
+                pick = next((item for text, item in entries(menu) if text.strip() == "720p"),
+                            None)
+            if pick is not None:
+                pick.click()
+            settle(0.4)
+        self.check("a press on each opens its menu, with what this video offers",
+                   [one[1] for one in opened] == [True, True, True]
+                   and opened[1][2] == ["Off   ✓", "German", "English (auto)"]
+                   and opened[2][2] == [f"Auto ({video.autoHeight}p)   ✓", "1440p  ·  playing",
+                                        "720p"],
+                   "; ".join(f"{name} {up} {labels}" for name, up, labels in opened))
+        self.check("and what is picked in them takes hold",
+                   video.speed == 1.5 and video.captionShowing and video.quality == 720
+                   and read(quality, "text") == "720p" and bool(read(captions, "on")),
+                   f"speed {video.speed}, caption {video.captionShowing}, "
+                   f"quality {video.quality}")
+        menus_closed = not any(read(find(window, name), "opened") for name in
+                               ("watchSpeedMenu", "watchCaptionMenu", "watchQualityMenu"))
+
+        bar = find(window, "watchSeekBar")
+        QTest.mouseMove(window, spot(bar, 0.5, 0.5) - QPoint(6, 0))
+        settle(0.2)
+        QTest.mouseMove(window, spot(bar, 0.5, 0.5))
+        settle(0.6)
+        peek = find(window, "watchSeekPeek")
+        shot = find(window, "watchSeekShot")
+        self.check("the bar shows the frame under the pointer from the storyboard",
+                   menus_closed and read(peek, "visible") is True
+                   and str(read(shot, "source").toString()).endswith("walk-storyboard.png")
+                   and read(shot, "implicitWidth") == 960
+                   and round(read(shot, "width")) == 600,
+                   f"peek {read(peek, 'visible')}, sheet {read(shot, 'source')}, "
+                   f"{read(shot, 'implicitWidth')} wide drawn {read(shot, 'width')}")
+        QTest.mouseMove(window, spot(find(window, "watchingSide"), 0.5, 0.5))
+        settle(0.2)
+        video.setSpeed(1.0)
+        video.setCaption(-1)
+        video.setQuality(0)
+        video._extras.pop(key, None)
+        video._idle, video._paused, video._showing, video._dur, video._pos = was
+        for signal in (video.stateChanged, video.videoChanged, video.progressChanged,
+                       video.extrasChanged):
+            signal.emit()
+        settle(0.3)
 
     def where_videos_play_in_the_wizard(self, bridge, window) -> None:
         """The two pictures on the welcome page are the two buttons. Pressed

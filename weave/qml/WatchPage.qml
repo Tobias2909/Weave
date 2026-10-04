@@ -126,10 +126,19 @@ Item {
     // the screen is filled the window decides, the way it does for the music.
     property bool pointerOverPicture: false
     property bool controlsRest: false
-    readonly property bool controlsUp: !Video.playing || Video.ended
+    readonly property bool controlsUp: !Video.playing || Video.ended || controls.menuOpen
                                        || (page.cinema ? page.chromeAwake
                                                        : (page.pointerOverPicture
                                                           && !page.controlsRest))
+    // Captions rise over the controls while they are up, rather than being
+    // read through the bar, and settle back as the controls go.
+    property real captionLift: page.controlsUp && !page.small
+                               ? controls.reach / Math.max(1, frame.height) : 0
+    Behavior on captionLift {
+        NumberAnimation { duration: 180; easing.type: Easing.InOutQuad }
+    }
+    onCaptionLiftChanged: Video.setCaptionLift(captionLift)
+
     Timer {
         id: controlsNap
         interval: 2500
