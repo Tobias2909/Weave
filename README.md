@@ -10,7 +10,7 @@ its own window or in your `mpv`. Music has a player of its own.
 Nothing recommends anything in the feed, nothing autoplays, and everything
 Weave knows sits in one SQLite file in your home directory.
 
-https://github.com/user-attachments/assets/cc89faf0-0ee0-4dc1-bbb0-d89526c3ddd2
+https://github.com/user-attachments/assets/1bf1764e-1f51-4d7b-8c48-599ce9d67333
 
 ## Features
 
@@ -30,7 +30,7 @@ https://github.com/user-attachments/assets/cc89faf0-0ee0-4dc1-bbb0-d89526c3ddd2
 * Search what is stored as you type, or YouTube itself with return
 * A panel beside the feed with views, likes, an estimated dislike count and the
   top comments
-* Fourteen themes, and an editor that builds a whole theme from two dots on a
+* Fourteen themes, and an editor that builds a whole theme from three dots on a
   colour wheel
 
 ## Screenshots
