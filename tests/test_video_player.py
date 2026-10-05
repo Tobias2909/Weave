@@ -558,6 +558,14 @@ class TheMenusOnThePicture(_Base):
         self.player.setQuality(0)
         self.assertEqual(self.db.get_state(QUALITY_STATE), "auto")
 
+    def test_a_turn_of_the_wheel_over_the_bar_moves_five_seconds(self):
+        self.playing_with({})
+        self.player._dur, self.player._pos = 600.0, 100.0
+        self.player.nudgeSeek(2)
+        self.assertEqual(self.engine.only("seek")[-1], ("seek", 110.0))
+        self.player.nudgeSeek(-30)
+        self.assertEqual(self.engine.only("seek")[-1], ("seek", 0.0), "not before the start")
+
     def menu(self):
         return [(one["label"], one["chosen"], one["playing"]) for one in self.player.qualities]
 
@@ -960,6 +968,29 @@ class TheVideoPageTabs(unittest.TestCase):
         bridge.openDetail = opened.append
         Bridge._on_video_started(bridge, self.KEY)
         self.assertEqual(opened, [self.KEY])
+
+    def stopped(self, queued=False, handing=False, mpv_key=""):
+        from weave.ui.bridge import Bridge
+
+        bridge = self.make()
+        bridge._video.hasQueue = queued
+        bridge._handing_to_mpv = handing
+        bridge._mpv_key = mpv_key
+        bridge._detail = None
+        bridge._detail_key = self.KEY
+        bridge._detail_comments = [{"text": "one"}]
+        Bridge._on_video_stopped(bridge)
+        return bridge._detail_key
+
+    def test_the_panel_goes_with_a_video_stopped_for_good(self):
+        self.assertEqual(self.stopped(), "")
+
+    def test_the_panel_stays_on_a_video_come_to_its_end(self):
+        self.assertEqual(self.stopped(queued=True), self.KEY, "its page still holds it")
+
+    def test_the_panel_stays_on_a_video_handed_to_mpv(self):
+        self.assertEqual(self.stopped(handing=True), self.KEY)
+        self.assertEqual(self.stopped(mpv_key=self.KEY), self.KEY, "and mpv playing it")
 
 
 class AnUpgradedCopy(unittest.TestCase):

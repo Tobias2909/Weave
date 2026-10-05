@@ -162,7 +162,7 @@ Item {
                         channel: cell.modelData.channel
                         picture: cell.modelData.picture
                         duration: cell.modelData.duration
-                        queued: cell.modelData.queued
+                        queued: App.companionQueued.indexOf(cell.modelData.key) >= 0
                         channelLeads: cell.modelData.channelId !== ""
                         onChannelChosen: App.openChannel("yt:" + cell.modelData.channelId)
                         onChosen: App.companionAdd(cell.index)
@@ -258,15 +258,23 @@ Item {
                 boundsBehavior: Flickable.StopAtBounds
                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-                // The one playing in sight whenever it changes.
+                // The one playing at the top whenever it changes, and whenever
+                // the list is shown or handed mpv's playlist anew, the way the
+                // music's queue does it.
                 readonly property int playingAt: {
                     for (var i = 0; i < App.companionQueue.length; i++)
                         if (App.companionQueue[i].playing)
                             return i
                     return -1
                 }
-                onPlayingAtChanged: if (playingAt >= 0 && !queueOrder.carrying)
-                                        positionViewAtIndex(playingAt, ListView.Contain)
+                function placePlaying() {
+                    if (playingAt >= 0 && !queueOrder.carrying)
+                        positionViewAtIndex(playingAt, ListView.Beginning)
+                }
+                onPlayingAtChanged: Qt.callLater(placePlaying)
+                onModelChanged: Qt.callLater(placePlaying)
+                onVisibleChanged: if (visible) Qt.callLater(placePlaying)
+                Component.onCompleted: Qt.callLater(placePlaying)
 
                 delegate: Rectangle {
                     id: queueRow

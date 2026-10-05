@@ -43,11 +43,21 @@ ListView {
     boundsBehavior: Flickable.StopAtBounds
     ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-    // The one playing in sight whenever it changes, unless a row is being
-    // carried, when the list is the hand's to move.
+    // The one playing at the top whenever it changes, and whenever the list
+    // is shown or handed the queue anew, unless a row is being carried, when
+    // the list is the hand's to move. At the top rather than merely in sight,
+    // so what comes next fills the list; near the end of the queue the list
+    // stops at its own end rather than leaving room below. A narrow list, the
+    // popup's, only keeps it in sight.
     readonly property int playingAt: queued.player.queueIndex
-    onPlayingAtChanged: if (playingAt >= 0 && !rowOrder.carrying)
-                            positionViewAtIndex(playingAt, ListView.Contain)
+    function placePlaying() {
+        if (playingAt >= 0 && !rowOrder.carrying)
+            positionViewAtIndex(playingAt, compact ? ListView.Contain : ListView.Beginning)
+    }
+    onPlayingAtChanged: Qt.callLater(placePlaying)
+    onModelChanged: Qt.callLater(placePlaying)
+    onVisibleChanged: if (visible) Qt.callLater(placePlaying)
+    Component.onCompleted: Qt.callLater(placePlaying)
 
     delegate: Rectangle {
         id: queuedRow

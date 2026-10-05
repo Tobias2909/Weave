@@ -35,6 +35,24 @@ ThemedMenu {
             boxes.owner.dismiss()
     }
 
+    // A press on the entry that opens this menu, rather than resting on it,
+    // is the quick way: into the favourites, which are always the first of
+    // the boxes, or out of them again, which is what pressing a ticked box
+    // does anyway.
+    readonly property bool quickPick: true
+    function takeQuickPick() {
+        var first = App.musicBoxes.length > 0 ? App.musicBoxes[0] : null
+        if (!first) {
+            boxes.open()
+            return
+        }
+        if (boxes.key !== "")
+            App.putCardInMusicBox(boxes.key, first.id)
+        else
+            App.putSongInBox(boxes.where, boxes.first, boxes.second, first.id)
+        boxes.dismissAll()
+    }
+
     Instantiator {
         model: App.musicBoxes
         // A delegate made here does not inherit this file's ids, so the menu

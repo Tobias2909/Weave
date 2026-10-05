@@ -397,9 +397,10 @@ class TheRecommendedTiles(unittest.TestCase):
     def test_a_tile_in_the_queue_says_so(self) -> None:
         audio = FakeAudio(track=dict(self.TRACK))
         bridge = with_tiles(bridge_with(audio=audio))
-        self.assertFalse(Bridge._get_now_recommended(bridge)[0]["queued"])
+        key = Bridge._get_now_recommended(bridge)[0]["key"]
+        self.assertNotIn(key, bridge.nowQueued)
         Bridge.queueNowRecommended(bridge, 0, False)
-        self.assertTrue(Bridge._get_now_recommended(bridge)[0]["queued"])
+        self.assertIn(key, bridge.nowQueued)
 
     def test_a_song_that_is_no_youtube_video_says_why_there_is_nothing(self) -> None:
         bridge = with_tiles(bridge_with(audio=FakeAudio(track={"key": "source:1",

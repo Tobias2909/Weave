@@ -742,6 +742,8 @@ class AQueueOfAPlaylist(unittest.TestCase):
                 return len(rows)
 
         class Audio:
+            hasQueue = False
+
             def __init__(self):
                 self.played = None
 
@@ -758,3 +760,12 @@ class AQueueOfAPlaylist(unittest.TestCase):
         bridge._set_notice = lambda *a, **k: None
         Bridge.playAudio(bridge, "yt:ccccccccccc")
         self.assertEqual(bridge._audio.played, (["yt:aaaaaaaaaaa", "yt:ccccccccccc"], 1))
+
+        # With music already in the bar, the one video joins its queue instead.
+        added = []
+        bridge._audio.hasQueue = True
+        bridge._audio.add_item = lambda item, play_next=False: added.append(
+            (item["key"], play_next)) or True
+        bridge._audio.played = None
+        Bridge.playAudio(bridge, "yt:ccccccccccc")
+        self.assertEqual((added, bridge._audio.played), ([("yt:ccccccccccc", False)], None))

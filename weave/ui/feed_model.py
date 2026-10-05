@@ -23,6 +23,20 @@ ROLES = (
 )
 
 
+def _gone(known: list[str], keys: list[str]) -> list[int] | None:
+    """Which of the rows shown are missing from the keys, when the keys are
+    the rows shown with only some taken out, in the same order; None when
+    they are anything else."""
+    gone: list[int] = []
+    at = 0
+    for index, key in enumerate(known):
+        if at < len(keys) and keys[at] == key:
+            at += 1
+        else:
+            gone.append(index)
+    return gone if at == len(keys) else None
+
+
 def _runs(indices: list[int]) -> list[tuple[int, int]]:
     """Neighbouring numbers gathered into ranges, so a change to a stretch of
     rows is announced once rather than row by row."""
@@ -67,13 +81,14 @@ class FeedModel(QAbstractListModel):
     def reload(self, hide_watched: bool = True, group_id: int | None = None,
                channel_key: str | None = None, box_id: int | None = None,
                query: str | None = None, watched_only: bool = False,
-               streams: bool | None = None, members: bool = False) -> None:
+               streams: bool | None = None, members: bool = False,
+               in_place: bool = False) -> None:
         self.show(self._db.feed(hide_watched=hide_watched, group_id=group_id,
                                 channel_key=channel_key, box_id=box_id,
                                 query=query, watched_only=watched_only,
-                                streams=streams, members=members))
+                                streams=streams, members=members), in_place=in_place)
 
-    def show(self, rows) -> None:
+    def show(self, rows, in_place: bool = False) -> None:
         """Draw these rows, whatever produced them.
 
         Recommendations come from their own table rather than from the feed,
@@ -127,6 +142,24 @@ class FeedModel(QAbstractListModel):
             self.beginInsertRows(QModelIndex(), 0, len(built) - len(known) - 1)
             self._rows = built
             self.endInsertRows()
+            return
+
+        # Some rows gone and the rest as they were, in their order, when the
+        # caller says this is the same list read again: a video taken out of
+        # the box being looked at. Removing them keeps the view where it is.
+        # Only when asked, because a group's list is a part of the feed's too,
+        # and going from one to the other is a new list that starts at the top.
+        gone = _gone(known, keys) if in_place and known and len(keys) < len(known) else None
+        if gone is not None:
+            for first, last in reversed(_runs(gone)):
+                self.beginRemoveRows(QModelIndex(), first, last)
+                del self._rows[first:last + 1]
+                self.endRemoveRows()
+            changed = [index for index, (fresh, old) in enumerate(zip(built, self._rows))
+                       if fresh != old]
+            self._rows = built
+            for first, last in _runs(changed):
+                self.dataChanged.emit(self.index(first), self.index(last))
             return
 
         self.beginResetModel()

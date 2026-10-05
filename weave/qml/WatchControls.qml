@@ -230,6 +230,22 @@ Item {
                 Video.seek(alongAt(mouse.x))
             }
             onCanceled: dragging = false
+
+            // The wheel over the bar moves along the video, five seconds a
+            // turn, the way it does over the music's bar, and carried the same
+            // way for a touchpad. Here rather than on the bar, so the strip
+            // above and below it that takes a press takes the wheel too, and
+            // the volume the picture gives the wheel does not.
+            WheelHandler {
+                objectName: "watchScrubWheel"
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                property real carried: 0
+                onWheel: function (event) {
+                    carried += event.angleDelta.y
+                    while (carried >= 120) { carried -= 120; Video.nudgeSeek(1) }
+                    while (carried <= -120) { carried += 120; Video.nudgeSeek(-1) }
+                }
+            }
         }
     }
 

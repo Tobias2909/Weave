@@ -524,6 +524,16 @@ Rectangle {
             onClicked: upNext.open()
         }
 
+        // The stop before the page's button rather than after it, so the
+        // corner a hand goes to for the page is not the one that ends the
+        // music.
+        FlatButton {
+            objectName: "stopButton"
+            text: "✕"
+            hint: "Stop the music"
+            fontSize: 13
+            onClicked: Audio.stop()
+        }
         FlatButton {
             // The page where the queue, the words and the picture are. A mark
             // rather than a word, because the bar it sits on already says what
@@ -538,13 +548,6 @@ Rectangle {
             enabled: Audio.queue.length > 0
             Layout.preferredWidth: 42
             onClicked: App.toggleNowPlaying()
-        }
-        FlatButton {
-            objectName: "stopButton"
-            text: "✕"
-            hint: "Stop the music"
-            fontSize: 13
-            onClicked: Audio.stop()
         }
     }
 }

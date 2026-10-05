@@ -36,6 +36,17 @@ MenuItem {
         }
     }
 
+    // An entry that opens a menu offering a quick pick takes the pick on a
+    // press, and the menu still opens on the pointer resting on the entry.
+    // The press is caught here, so the entry is not clicked as well, which
+    // would open the menu over the pick. Hover is left to the entry.
+    MouseArea {
+        anchors.fill: parent
+        enabled: item.subMenu !== null && item.subMenu.quickPick === true
+        acceptedButtons: Qt.LeftButton
+        onClicked: item.subMenu.takeQuickPick()
+    }
+
     // Drawn only on an entry that opens a menu of its own.
     arrow: Label {
         x: item.width - width - item.rightPadding

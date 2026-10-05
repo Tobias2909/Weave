@@ -156,8 +156,8 @@ class WhatIsShown(unittest.TestCase):
         bridge._mpv_playlist = [{"url": "https://www.youtube.com/watch?v=mixmixmix02",
                                  "current": True, "title": ""}]
         tiles = Bridge._get_companion_cards(bridge)
-        self.assertEqual([(one["key"], one["queued"]) for one in tiles],
-                         [("yt:mixmixmix01", False), ("yt:mixmixmix02", True)])
+        self.assertEqual([one["key"] for one in tiles], ["yt:mixmixmix01", "yt:mixmixmix02"])
+        self.assertEqual(Bridge._get_companion_queued(bridge), ["yt:mixmixmix02"])
         chips = Bridge._get_companion_chips(bridge)
         self.assertEqual([one["label"] for one in chips if one["chosen"]], ["Mix"])
 
@@ -167,7 +167,7 @@ class WhatIsShown(unittest.TestCase):
         chosen = lambda **k: [one["label"] for one in Bridge._chips(bridge, NOW, **k)  # noqa: E731
                               if one["chosen"]]
         self.assertEqual(chosen(watching=True), ["All"])
-        self.assertEqual([one["key"] for one in Bridge._tiles(bridge, NOW, set(), watching=True)],
+        self.assertEqual([one["key"] for one in Bridge._tiles(bridge, NOW, watching=True)],
                          ["yt:allallall01"])
         self.assertEqual(chosen(), ["Mix"], "the music's tab starts on its mix as before")
         bridge._view_kind = WATCHING

@@ -68,9 +68,32 @@ class Showing(unittest.TestCase):
         self.assertEqual(self.events, ["reset"])
 
     def test_a_shorter_list_is_a_reset(self):
+        # Going from the feed to a group is a shorter list of the same videos,
+        # and a new list starts at the top.
         self.model.show([row("aaaaaaaaaaa"), row("bbbbbbbbbbb")])
         self.events.clear()
         self.model.show([row("aaaaaaaaaaa")])
+        self.assertEqual(self.events, ["reset"])
+
+    def test_rows_gone_from_the_same_list_are_removed_where_they_were(self):
+        # A video taken out of the box being looked at. A reset threw the
+        # reader back to the top of the box.
+        removed = []
+        self.model.rowsRemoved.connect(lambda _p, first, last: removed.append((first, last)))
+        self.model.show([row(name * 11) for name in "abcde"])
+        self.events.clear()
+        self.model.show([row("a" * 11), row("c" * 11, title="Renamed"), row("e" * 11)],
+                        in_place=True)
+        self.assertEqual(self.events, [])
+        self.assertEqual(removed, [(3, 3), (1, 1)])
+        self.assertEqual([self.model.key_at(i) for i in range(3)],
+                         ["yt:" + "a" * 11, "yt:" + "c" * 11, "yt:" + "e" * 11])
+        self.assertEqual(self.changes, [(1, 1)], "and what changed on the rest is said")
+
+    def test_a_list_read_again_in_another_order_is_still_a_reset(self):
+        self.model.show([row("aaaaaaaaaaa"), row("bbbbbbbbbbb"), row("ccccccccccc")])
+        self.events.clear()
+        self.model.show([row("ccccccccccc"), row("aaaaaaaaaaa")], in_place=True)
         self.assertEqual(self.events, ["reset"])
 
     def test_the_same_list_again_changes_rows_rather_than_resetting(self):

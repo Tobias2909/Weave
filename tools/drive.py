@@ -910,7 +910,8 @@ class Smoke:
                    and audio._queue[-1]["key"] == "yt:walkrec0001",
                    f"{held} then {len(audio._queue)}")
         self.check("and says it is in the queue",
-                   [tile["queued"] for tile in read(bridge, "nowRecommended")]
+                   [tile["key"] in read(bridge, "nowQueued")
+                    for tile in read(bridge, "nowRecommended")]
                    == [False, True, False, False, False, False])
         menu = find(window, "companionMenu")
         write(menu, "where", "music")
@@ -3261,6 +3262,69 @@ class Smoke:
         video.stateChanged.emit()
         video.videoChanged.emit()
 
+    def quick_boxes(self, bridge, window) -> None:
+        """A press on Put in a box takes the first box, and on Put in a music
+        box the favourites, a second press takes it out again, and the menu
+        of all of them is left for the pointer resting on the entry."""
+        from PySide6.QtCore import QPoint, QPointF
+        from PySide6.QtTest import QTest
+
+        model = bridge._model
+        key = model.key_at(0)
+        first = read(bridge, "boxes")[0]["id"]
+        menu = find(window, "videoMenu")
+        found = []
+        for name, entry_text in (("cardVideoBoxMenu", "Put in a box"),
+                                 ("cardMusicBoxMenu", "Put in a music box")):
+            for _ in range(2):
+                write(window, "menuKey", key)
+                find(window, "cardVideoBoxMenu").setProperty(
+                    "holding", bridge.boxesHolding(key))
+                find(window, "cardMusicBoxMenu").setProperty(
+                    "holding", bridge.cardSongBoxes(key))
+                menu.open()
+                settle(0.3)
+                entry = next((item for text, item in menu_entries(menu)
+                              if text.strip() == entry_text), None)
+                if entry is None:
+                    found.append(None)
+                    menu.close()
+                    continue
+                at = entry.mapToScene(QPointF(read(entry, "width") / 2,
+                                              read(entry, "height") / 2))
+                QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier,
+                                 QPoint(round(at.x()), round(at.y())))
+                settle(0.4)
+                held = (first in bridge.boxesHolding(key) if name == "cardVideoBoxMenu"
+                        else 0 in bridge.cardSongBoxes(key))
+                found.append((held, bool(read(menu, "opened")),
+                              bool(read(find(window, name), "opened"))))
+                menu.close()
+                settle(0.2)
+        self.check("a press on Put in a box puts it in the first box and a second takes it out, "
+                   "and the same with the favourites",
+                   found == [(True, False, False), (False, False, False)] * 2, str(found))
+        # Resting on the entry still opens the menu of every box. A control
+        # takes whether it follows hover from the platform, and offscreen says
+        # no, so it is told to here; on Wayland it is on by itself (measured).
+        menu.open()
+        settle(0.3)
+        entry = next((item for text, item in menu_entries(menu)
+                      if text.strip() == "Put in a box"), None)
+        rested = None
+        if entry is not None:
+            write(entry, "hoverEnabled", True)
+            at = entry.mapToScene(QPointF(read(entry, "width") / 2, read(entry, "height") / 2))
+            QTest.mouseMove(window, QPoint(round(at.x()) - 6, round(at.y())))
+            settle(0.1)
+            QTest.mouseMove(window, QPoint(round(at.x()), round(at.y())))
+            settle(0.6)
+            rested = bool(read(find(window, "cardVideoBoxMenu"), "opened"))
+        menu.close()
+        settle(0.3)
+        self.check("and resting the pointer on it opens the menu of every box", rested is True,
+                   str(rested))
+
     def the_menus_on_the_picture(self, bridge, window, key: str) -> None:
         """Speed, captions and quality over the picture, and the frame the bar
         shows under the pointer, as a video whose resolve brought them all."""
@@ -3351,6 +3415,14 @@ class Smoke:
                    f"quality {video.quality} '{read(quality, 'text')}'")
         menus_closed = not any(read(find(window, name), "opened") for name in
                                ("watchSpeedMenu", "watchCaptionMenu", "watchQualityMenu"))
+        # The wheel over the bar, as over the music's. Offscreen delivers no
+        # synthetic wheel, so what a turn does is the player's own tests' and a
+        # real window's; here the bar's pressing strip has something to catch it,
+        # ahead of the volume the picture gives the wheel.
+        scrub = find(window, "watchScrubWheel")
+        self.check("the video's bar catches the wheel as well as the pointer",
+                   scrub is not None and read(scrub, "enabled") is True
+                   and scrub.parent() is find(window, "watchSeekArea"))
 
         bar = find(window, "watchSeekBar")
         QTest.mouseMove(window, spot(bar, 0.5, 0.5) - QPoint(6, 0))
@@ -3524,7 +3596,8 @@ class Smoke:
         self.check("its tiles are the mix", read(tiles, "count") == 9,
                    f"{read(tiles, 'count')} tiles")
         self.check("and the one in mpv's queue says so",
-                   [card["queued"] for card in read(bridge, "companionCards")].count(True) == 1)
+                   [card["key"] in read(bridge, "companionQueued")
+                    for card in read(bridge, "companionCards")].count(True) == 1)
         self.check("mpv's playlist is beside them", read(find(window, "companionQueue"),
                                                         "count") == 2)
         bridge.chooseCompanionChip("All")
@@ -4506,6 +4579,7 @@ class Smoke:
                                    "Put in a music box", "Share"], ", ".join(labels[-4:]))
         menu.close()
         settle(0.2)
+        self.quick_boxes(bridge, window)
 
         step("the sidebar order and the history's own button")
         self.sidebar_order(bridge, window, box_id)

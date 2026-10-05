@@ -1161,7 +1161,7 @@ Item {
                                 channel: cell.modelData.channel
                                 picture: cell.modelData.picture
                                 duration: cell.modelData.duration
-                                queued: cell.modelData.queued
+                                queued: App.nowQueued.indexOf(cell.modelData.key) >= 0
                                 channelLeads: cell.modelData.channelId !== ""
                                 onChannelChosen: App.openChannel("yt:" + cell.modelData.channelId)
                                 onChosen: App.queueNowRecommended(cell.index, false)

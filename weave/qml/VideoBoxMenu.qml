@@ -27,6 +27,24 @@ ThemedMenu {
             boxes.owner.dismiss()
     }
 
+    // A press on the entry that opens this menu, rather than resting on it,
+    // is the quick way: into the first box, or out of it again when the video
+    // is in it already. With no box yet there is nothing quick to do, so the
+    // menu opens instead, with its New box.
+    readonly property bool quickPick: true
+    function takeQuickPick() {
+        var first = App.boxes.length > 0 ? App.boxes[0] : null
+        if (!first) {
+            boxes.open()
+            return
+        }
+        if (boxes.holding.indexOf(first.id) >= 0)
+            App.removeFromBox(first.id, boxes.key)
+        else
+            App.addToBox(first.id, boxes.key)
+        boxes.dismissAll()
+    }
+
     Instantiator {
         model: App.boxes
         // A delegate made here does not inherit this file's ids, so the menu

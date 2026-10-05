@@ -355,6 +355,10 @@ class Bridge(QObject):
     # so a skip in mpv does not draw every tile again.
     companionChanged = Signal()
     companionQueueChanged = Signal()
+    # Which tiles beside a video are in the queue they go into. Apart from the
+    # tiles themselves, so a tile queued does not hand the grid a new list,
+    # which takes it back to its top.
+    tilesQueuedChanged = Signal()
     musicTabChanged = Signal()
     themesChanged = Signal()
 
@@ -1915,7 +1919,9 @@ class Bridge(QObject):
     # ---- the current view ------------------------------------------------
 
     @Slot()
-    def reload(self) -> None:
+    def reload(self, in_place: bool = False) -> None:
+        """The view read again. In place is the same list read after a change
+        to it, which keeps the grid where it is if rows only went."""
         # Fired unconditionally, not only from the playlist branch below, so
         # the foot of the list clears the moment the view moves on rather than
         # keeping a stale count from whichever playlist was open before.
@@ -1989,6 +1995,7 @@ class Bridge(QObject):
             # in the query beside the one that keeps them out of everywhere
             # else, so no caller can forget half of it.
             members=members,
+            in_place=in_place,
         )
         self.emptyHintChanged.emit()
         self.groupsChanged.emit()
@@ -2939,13 +2946,16 @@ class Bridge(QObject):
             return []
         return list(known["cards"].get(self._companion_chip(video_id, watching)) or [])
 
-    def _tiles(self, video_id: str, queued: set, watching: bool = False) -> list:
+    def _tiles(self, video_id: str, watching: bool = False) -> list:
         return [{"key": f"yt:{card['video_id']}", "title": card["title"],
                  "channel": card["channel"], "channelId": card["channel_id"],
                  "duration": card["duration"],
-                 "picture": qml_source(card["picture"]),
-                 "queued": card["video_id"] in queued}
+                 "picture": qml_source(card["picture"])}
                 for card in self._companion_shown(video_id, watching)]
+
+    @staticmethod
+    def _queued_keys(video_ids) -> list:
+        return sorted(f"yt:{one}" for one in video_ids if one)
 
     def _chips(self, video_id: str, watching: bool = False) -> list:
         known = self._companion_cache.get(video_id)
@@ -2964,10 +2974,14 @@ class Bridge(QObject):
         return ""
 
     def _get_companion_cards(self) -> list:
-        queued = {entry.get("video_id") for entry in self._queue_entries()}
-        return self._tiles(self._companion_video, queued)
+        return self._tiles(self._companion_video)
+
+    def _get_companion_queued(self) -> list:
+        return self._queued_keys(entry.get("video_id") for entry in self._queue_entries())
 
     companionCards = Property("QVariantList", _get_companion_cards, notify=companionChanged)
+    companionQueued = Property("QVariantList", _get_companion_queued,
+                               notify=tilesQueuedChanged)
 
     def _get_companion_chips(self) -> list:
         return self._chips(self._companion_video)
@@ -3006,8 +3020,8 @@ class Bridge(QObject):
         self._mpv_playlist = list(entries)
         if self._view_kind == COMPANION:
             self._name_queue()
-            # Whether a tile says it is in the queue follows the playlist.
-            self.companionChanged.emit()
+        # Whether a tile says it is in the queue follows the playlist.
+        self.tilesQueuedChanged.emit()
         self.companionQueueChanged.emit()
 
     def _on_mpv_loop(self, looping: bool) -> None:
@@ -4474,6 +4488,7 @@ class Bridge(QObject):
             self._set_status("that video could not be stored")
             return
         self.boxesChanged.emit()
+        self._set_notice(f"Put in {self._video_box_name(box_id)}", clear_after_s=4)
         if self._view_kind == BOX:
             self.reload()
 
@@ -4501,8 +4516,13 @@ class Bridge(QObject):
     def removeFromBox(self, box_id: int, video_key: str) -> None:
         self._db.remove_from_box(box_id, video_key)
         self.boxesChanged.emit()
+        self._set_notice(f"Taken out of {self._video_box_name(box_id)}", clear_after_s=4)
         if self._view_kind == BOX:
-            self.reload()
+            # Where the reader was in the box, not its top.
+            self.reload(in_place=True)
+
+    def _video_box_name(self, box_id: int) -> str:
+        return next((box["name"] for box in self._db.boxes() if box["id"] == box_id), "the box")
 
     @Slot(str, result="QVariantList")
     def boxesHolding(self, video_key: str) -> list:
@@ -5031,8 +5051,15 @@ class Bridge(QObject):
         self.openDetail(key)
 
     def _on_video_stopped(self) -> None:
-        if self._audio is not None and not self._handing_to_mpv:
+        if self._handing_to_mpv:
+            return
+        if self._audio is not None:
             self._audio.resume_after_video()
+        # Stopped for good rather than come to its end: the panel mirrored it,
+        # and mirrors nothing now, unless mpv is playing what it shows.
+        if (self._video is not None and not self._video.hasQueue
+                and self._detail_key and self._detail_key != self._mpv_key):
+            self._drop_detail()
 
     @Slot()
     def watchInMpv(self) -> None:
@@ -5099,8 +5126,7 @@ class Bridge(QObject):
 
     def _on_video_queue_changed(self) -> None:
         # The tiles say which of them are queued.
-        if self._view_kind == WATCHING and self._watch_rec_open:
-            self.companionChanged.emit()
+        self.tilesQueuedChanged.emit()
 
     def _read_watch_tab(self) -> None:
         """Ask for what the open tab shows, while the page is open. Nothing is
@@ -5206,8 +5232,11 @@ class Bridge(QObject):
 
     watchRecommended = Property(
         "QVariantList",
-        lambda self: self._tiles(self._watch_video_id(), self._video_queued(), watching=True),
+        lambda self: self._tiles(self._watch_video_id(), watching=True),
         notify=companionChanged)
+    watchQueued = Property("QVariantList",
+                           lambda self: self._queued_keys(self._video_queued()),
+                           notify=tilesQueuedChanged)
     watchRecommendedChips = Property(
         "QVariantList", lambda self: self._chips(self._watch_video_id(), watching=True),
         notify=companionChanged)
@@ -7161,7 +7190,9 @@ class Bridge(QObject):
     def playAudio(self, video_key: str) -> None:
         """The headphone button on a video card.
 
-        In a playlist the whole list is queued, starting on the video that was
+        With music already in the bar, the video goes on the end of its queue
+        and the music plays on. Otherwise it starts the listening: in a
+        playlist the whole list is queued, starting on the video that was
         clicked, so listening to a playlist behaves like a playlist. Anywhere
         else it is the one video, since queueing a feed of several hundred is
         not what a headphone on one card means.
@@ -7173,6 +7204,11 @@ class Bridge(QObject):
             # The headphone reaches the same address the card does, so it is
             # asked about in the same way.
             self._ask_about_the_membership(video_key, LISTEN)
+            return
+        if self._audio.hasQueue:
+            track = self._as_track(row)
+            if track and self._audio.add_item(track):
+                self._set_notice("Put on the end of the queue", clear_after_s=3)
             return
         if self._view_kind == PLAYLIST:
             # A members video in the list is left out rather than reached and
@@ -7482,15 +7518,14 @@ class Bridge(QObject):
     # pressed into Weave's own queue rather than mpv's.
 
     def _on_music_queue_changed(self) -> None:
-        if self._view_kind == NOWPLAYING and self._now_rec_open:
-            self.companionChanged.emit()
+        self.tilesQueuedChanged.emit()
 
     def _music_queued(self) -> set:
         entries = self._audio.queue_entries() if self._audio is not None else []
         return {str(entry.get("key") or "").split(":", 1)[-1] for entry in entries}
 
     def _get_now_recommended(self) -> list:
-        return self._tiles(self._now_video_id(), self._music_queued())
+        return self._tiles(self._now_video_id())
 
     def _get_now_recommended_chips(self) -> list:
         return self._chips(self._now_video_id())
@@ -7503,6 +7538,8 @@ class Bridge(QObject):
     # Notified with the companion's own signal: the answers, the asking and
     # the chip remembered are the same ones.
     nowRecommended = Property("QVariantList", _get_now_recommended, notify=companionChanged)
+    nowQueued = Property("QVariantList", lambda self: self._queued_keys(self._music_queued()),
+                         notify=tilesQueuedChanged)
     nowRecommendedChips = Property("QVariantList", _get_now_recommended_chips,
                                    notify=companionChanged)
     nowRecommendedNote = Property(str, _get_now_recommended_note, notify=companionChanged)
@@ -7637,8 +7674,11 @@ class Bridge(QObject):
     def _on_player_stopped(self) -> None:
         """Nothing is playing any more, so there is nothing for the panel to
         mirror. The next video brings it back."""
-        self._detail_key = ""
         self._mpv_key = ""
+        self._drop_detail()
+
+    def _drop_detail(self) -> None:
+        self._detail_key = ""
         self._detail_comments = []
         self._detail_closed = False
         if self._detail is not None and self._detail.isRunning():
