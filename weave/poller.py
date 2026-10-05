@@ -36,7 +36,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-from . import backoff, ids, imagecache, tokens, songcache
+from . import backoff, ids, imagecache, tokens
 from .budget import (BROWSE, COMPANION, DISLIKES, FEEDS, OEMBED, PLAYER, SHORTS, SUGGEST, TWITCH,
                      Budget)
 from .config import Config
@@ -2365,80 +2365,6 @@ class MusicHome(Worker):
                 "thumbnail": square_source(f"https://i.ytimg.com/vi/{parts[0]}/hqdefault.jpg"),
             })
         return {"title": "From your YouTube", "items": items}
-
-
-class SongKeeper(Worker):
-    """Write one half of a song to disk, so the next play of it costs nothing.
-
-    Only ever asked for a song that is kept. The address alone would not do:
-    a signed one expires within hours, and the point of this is the play
-    tomorrow rather than the play in ten minutes.
-
-    Sound or picture, the same worker either way, since the only difference
-    between them is which format is asked for and what it is filed under.
-
-    It is a second fetch of something mpv is already streaming, which is the
-    honest cost of the first play of a favourite. Every play after it is a
-    local file, with no address to find and no bytes to pull.
-    """
-
-    kept = Signal(str, str, str)          # key, which half, the file written
-    failed = Signal(str, str)
-
-    def __init__(self, cfg: Config, key: str, url: str, into: Path,
-                 mark: str | int, parent: QObject | None = None) -> None:
-        super().__init__(parent)
-        self._cfg = cfg
-        self.key = key
-        self._url = url
-        self._into = into
-        # A height for the picture, the word for the sound.
-        self._mark = mark
-
-    @property
-    def half(self) -> str:
-        return "sound" if self._mark == songcache.SOUND else "picture"
-
-    @property
-    def mark(self) -> str | int:
-        """What this one is filed under, so whoever is holding a waiting list
-        can tell which list this finishing frees."""
-        return self._mark
-
-    def work(self) -> None:
-        from .audio import MUSIC_FORMAT, video_format
-        from .cookies import args as cookie_args
-        from .process import Timeout
-        from .sources import ytdlp
-
-        wanted = (MUSIC_FORMAT if self._mark == songcache.SOUND
-                  else video_format(int(self._mark)))
-        target = songcache.target(self._into, self.key, self._mark)
-        command = prepare([
-            "yt-dlp", "--no-warnings", *cookie_args(self._cfg),
-            "-f", wanted,
-            # One file, named here rather than after the title, and no part
-            # left behind to be mistaken for a whole one if this is stopped.
-            "-o", str(target) + ".%(ext)s",
-            "--no-playlist", "--no-progress",
-            self._url,
-        ])
-        try:
-            result = run_process(command, cancel=self._cancel, timeout=900)
-        except ProcessCancelled:
-            return
-        except (OSError, Timeout) as exc:
-            self.failed.emit(self.key, str(exc))
-            return
-        if self._cancel.is_set():
-            return
-        written = songcache.held(self._into, self.key, self._mark)
-        if written is None:
-            said = (result.stderr or "").strip().splitlines()
-            self.failed.emit(self.key, ytdlp.explain(
-                said[-1] if said else "nothing was written", result.stderr or ""))
-            return
-        self.kept.emit(self.key, self.half, str(written))
 
 
 class MusicHistoryReader(Worker):

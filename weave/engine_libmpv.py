@@ -595,10 +595,10 @@ class LibmpvEngine(QObject):
         # the context arriving afterwards only sets `vid`, and by then the
         # output has already given up.
         #
-        # It is a race only a song kept on disk ever lost. A streamed one
-        # spends seconds finding an address, by which time the surface has
-        # long since painted and built the context; a kept one is handed over
-        # at once and beat the first paint by 105 ms, measured.
+        # It is a race only a picture handed over at once can lose. One that
+        # spends seconds finding an address arrives after the surface has long
+        # since painted and built the context; one handed over at once, as a
+        # song once kept on disk was, beat the first paint by 105 ms, measured.
         #
         # So the track is added and left alone until there is somewhere for
         # it to go, and `render_ready` turns it on.

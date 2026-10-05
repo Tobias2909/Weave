@@ -7,6 +7,7 @@ future non Linux port has one place to change instead of a dozen.
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 
 from platformdirs import PlatformDirs
@@ -21,12 +22,24 @@ CONFIG_FILE = CONFIG_DIR / "config.toml"
 THEMES_DIR = CONFIG_DIR / "themes"
 DB_FILE = STATE_DIR / "weave.db"
 IMAGE_CACHE = CACHE_DIR / "images"
-MOVING_CACHE = CACHE_DIR / "moving"
+# Where songs were once written to disk, sound and picture. Nothing is written
+# there any more, and a copy that still has the folder lets it go at start.
+OLD_SONG_CACHE = CACHE_DIR / "moving"
 
 
 def ensure_dirs() -> None:
-    for path in (CONFIG_DIR, THEMES_DIR, STATE_DIR, IMAGE_CACHE, MOVING_CACHE):
+    for path in (CONFIG_DIR, THEMES_DIR, STATE_DIR, IMAGE_CACHE):
         path.mkdir(parents=True, exist_ok=True)
+
+
+def forget_old_songs(folder: Path | None = None) -> bool:
+    """Delete the folder songs were once written to, and say whether there
+    was one. After the first start there is not, so this costs a single look."""
+    folder = OLD_SONG_CACHE if folder is None else folder
+    if not folder.is_dir():
+        return False
+    shutil.rmtree(folder, ignore_errors=True)
+    return True
 
 
 def data_home() -> Path:

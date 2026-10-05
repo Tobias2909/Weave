@@ -148,7 +148,6 @@ REPEAT_OFF, REPEAT_ALL, REPEAT_ONE = 0, 1, 2
 # no picture coming carries no line at all.
 STAGE_LOOKING = "Looking for the video"
 STAGE_OPENING = "Opening the video"
-STAGE_KEPT = "Opening the video kept on disk"
 STAGE_SHOWING = "Showing the video"
 # How long the step line may wait with the page open before the picture counts
 # as one that is not coming, and what was kept in memory is written down. A
@@ -600,9 +599,6 @@ class AudioPlayer(QObject):
         self._loading = False
         self._resolver: _Resolver | None = None
         self._next_resolvers: list[_Resolver] = []
-        # Look ups for songs played from disk, which need no address but still
-        # have a description, counts and chapters that only a look up knows.
-        self._fact_resolvers: list[_Resolver] = []
         self._addresses = AddressCache()
         # What each track's chapters are, by track key. A video that is really
         # an album marks its songs in them, and they came free with the address
@@ -670,13 +666,6 @@ class AudioPlayer(QObject):
         # later. A list rather than one, the way the sound's own look ahead is
         # kept, since a queue can be walked faster than a resolve finishes.
         self._next_video_resolvers: list = []
-        # Asked whether a song's picture is already on disk, and answering
-        # with the file when it is. Installed from outside, since which songs
-        # are worth keeping is not something the player knows.
-        self.local_video = None
-        # And the same for the sound. Asked before any address is looked for,
-        # which is the only wait in the whole chain.
-        self.local_audio = None
         # Where each song's picture is, kept the way the sound's addresses
         # are and not in a plain map. A signed address stops being accepted
         # after a few hours, and a map that never forgets one hands a dead
@@ -690,10 +679,6 @@ class AudioPlayer(QObject):
         # sitting there says nothing about which of them is being waited on.
         self._video_stage = ""
         self._video_showing = False
-        # Whether the picture for this song came off the disk rather than off
-        # the wire, which decides whether the artwork over it is faded away or
-        # simply goes.
-        self._video_instant = False
         self._recover_at = 0.0
         self._recover_count = 0
         self._stall_timer = QTimer(self)
@@ -1040,18 +1025,10 @@ class AudioPlayer(QObject):
         self.progressChanged.emit()
         if self._resolver is not None and self._resolver.isRunning():
             self._resolver.cancel()
-        # Kept on disk, for a song he keeps. No address to find and nothing to
-        # pull, so the sound starts at once rather than after the few seconds
-        # a resolve takes. Never for a broadcast, which has no file and no end.
-        kept = (self.local_audio(entry["key"])
-                if self.local_audio and not entry.get("live") else "")
-        address = kept or (None if entry.get("live")
-                           else self._addresses.get(entry["key"]))
+        address = None if entry.get("live") else self._addresses.get(entry["key"])
         if address:
             self._loading = False
             self.stateChanged.emit()
-            if kept:
-                self._from_disk(entry)
             self._hand_over(entry, address)
             return
         self._loading = True
@@ -1145,15 +1122,10 @@ class AudioPlayer(QObject):
             self._engine.clear_after()
             self._appended = None
         entry = self._queue[wanted]
-        kept = (self.local_audio(entry["key"])
-                if self.local_audio and not entry.get("live") else "")
-        address = kept or (None if entry.get("live")
-                           else self._addresses.get(entry["key"]))
+        address = None if entry.get("live") else self._addresses.get(entry["key"])
         if address:
             self._engine.append(address)
             self._appended = wanted
-            if kept:
-                self._from_disk(entry)
             return
         if any(r.key == entry["key"] and r.isRunning() for r in self._next_resolvers):
             return
@@ -1186,9 +1158,6 @@ class AudioPlayer(QObject):
         key = entry.get("key", "")
         if (not key or self._video_addresses.get(key)
                 or self._refuse_video(entry)):
-            return
-        if self.local_video and self.local_video(key):
-            # Already on disk, so there is nothing to look ahead for.
             return
         if any(r.key == key and r.isRunning() for r in self._next_video_resolvers):
             return
@@ -1264,64 +1233,12 @@ class AudioPlayer(QObject):
 
     def _learned(self, key: str, chapters: list | None,
                  facts: dict | None) -> None:
-        """Keep what a look up said about a song, whichever look up it was.
-
-        The chapters are written down as well, so a song kept on disk still
-        has its songs on the bar when there is nobody to ask. None is a look
-        up that said nothing about them, which leaves what is stored alone; an
-        empty list is one that found none.
-        """
+        """Keep what a look up said about a song, whichever look up it was."""
         if chapters:
             self._chapters[key] = tuple(chapters)
-        if chapters is not None and self._db is not None and key.startswith("yt:"):
-            self._db.set_song_chapters(key.split(":", 1)[1], list(chapters))
         if facts:
             self._facts[key] = dict(facts)
             self.factsChanged.emit()
-
-    def _from_disk(self, entry: dict) -> None:
-        """A song played from disk still gets what a look up would say.
-
-        Its chapters from what was written down, at once and with no
-        connection needed. Its description and counts from a look up of its
-        own, in the background, since the sound needs none and does not wait:
-        the same one call every other song costs, and nothing lost but the
-        words under the picture when there is no connection to make it. Once
-        per song for the life of the process, like everything else a look up
-        brings.
-        """
-        key = entry.get("key", "")
-        if not key.startswith("yt:") or entry.get("live"):
-            return
-        if key not in self._chapters and self._db is not None:
-            stored = self._db.song_chapters(key.split(":", 1)[1])
-            if stored:
-                self._chapters[key] = tuple(stored)
-        if key in self._facts:
-            return
-        if any(r.key == key and r.isRunning() for r in self._fact_resolvers):
-            return
-        resolver = self._make_resolver(entry)
-        resolver.resolved.connect(self._on_looked_up)
-        # Nothing is said about a failure or a song found gone. It plays from
-        # disk either way, which is the whole point of keeping it, and taking
-        # it out of the queue for want of a description would be worse than
-        # the missing words. The trace still hears of it.
-        resolver.failed.connect(self._on_look_up_failed)
-        resolver.finished.connect(self._sweep_fact_resolvers)
-        self._fact_resolvers.append(resolver)
-        resolver.start()
-
-    def _on_looked_up(self, key: str, address: str, chapters: list | None = None,
-                      facts: dict | None = None) -> None:
-        self._addresses.put(key, address)
-        self._learned(key, chapters, facts)
-
-    def _on_look_up_failed(self, key: str, why: str) -> None:
-        trace.mark("look_up_failed", key=key, why=why[:80])
-
-    def _sweep_fact_resolvers(self) -> None:
-        self._fact_resolvers = [r for r in self._fact_resolvers if r.isRunning()]
 
     # ---- what mpv reports ------------------------------------------------
 
@@ -1390,7 +1307,7 @@ class AudioPlayer(QObject):
             # says it still holds one, and then the report is older than the
             # handover. A player that has just been started reports its idle
             # first state only after the first song and the next have both
-            # been given to it, which is at once when both are kept on disk.
+            # been given to it, which is at once when both addresses are known.
             # Forgetting the next one here left mpv to move on into it
             # unfollowed, and the window stayed on the song before for the
             # whole of the next one, its last frame included.
@@ -1973,24 +1890,8 @@ class AudioPlayer(QObject):
             self.videoChanged.emit()
             return
         key = entry.get("key", "")
-        # A song that is kept may have its picture on disk already, in which
-        # case there is no address to find and nothing to pull. Asked through
-        # a hook rather than reached for, because what counts as kept is the
-        # window's business and not the player's.
-        kept = self.local_video(key) if self.local_video else ""
-        known = "" if kept else self._video_addresses.get(key)
-        trace.mark("picture_for", key=key, way="kept" if kept else "known" if known
-                   else "looking")
-        if kept:
-            # A file on disk has its first frame in a moment rather than in the
-            # seconds an address and a stream take, so the artwork over it is
-            # not faded away, it simply goes. A fade is there to cover a wait.
-            self._video_instant = True
-            self._video_stage = STAGE_KEPT
-            self._engine.add_video(kept)
-            self.videoChanged.emit()
-            return
-        self._video_instant = False
+        known = self._video_addresses.get(key)
+        trace.mark("picture_for", key=key, way="known" if known else "looking")
         if known:
             self._video_stage = STAGE_OPENING
             self._engine.add_video(known)
@@ -2117,7 +2018,7 @@ class AudioPlayer(QObject):
             return
         self._stage_seen = (stage, key)
         trace.mark("stage", stage=stage.replace(" ", "_") or "-", key=key)
-        if stage in (STAGE_OPENING, STAGE_KEPT, STAGE_LOOKING) and self._video_wanted:
+        if stage in (STAGE_OPENING, STAGE_LOOKING) and self._video_wanted:
             wait = STUCK_LOOKING_S if stage == STAGE_LOOKING else STUCK_OPENING_S
             self._stuck_timer.start(wait * 1000)
         else:
@@ -2131,7 +2032,7 @@ class AudioPlayer(QObject):
         with what the player says about the picture at this moment.
         """
         stage = self._video_stage
-        if (stage not in (STAGE_OPENING, STAGE_KEPT, STAGE_LOOKING)
+        if (stage not in (STAGE_OPENING, STAGE_LOOKING)
                 or not self._video_wanted or self._video_showing):
             return
         state = {}
@@ -2193,14 +2094,6 @@ class AudioPlayer(QObject):
     # never going to have one, whose reason the note above carries instead.
     videoStage = Property(str, _get_video_stage, notify=videoChanged)
 
-    def _get_video_instant(self) -> bool:
-        return self._video_instant
-
-    # Whether this song's picture came off the disk. The page uses it to drop
-    # the fade, which is there to cover the wait for a stream's first frame and
-    # has nothing to cover when there was no wait.
-    videoInstant = Property(bool, _get_video_instant, notify=videoChanged)
-
     @Slot()
     def stop(self) -> None:
         trace.mark("music_stop")
@@ -2256,8 +2149,7 @@ class AudioPlayer(QObject):
         # a short session easily: it spends seconds asking for an
         # address nobody is waiting for any more.
         self._stop_video_resolver()
-        held = [self._resolver, *self._next_resolvers, *self._next_video_resolvers,
-                *self._fact_resolvers]
+        held = [self._resolver, *self._next_resolvers, *self._next_video_resolvers]
         for resolver in held:
             if resolver is not None and resolver.isRunning():
                 resolver.cancel()

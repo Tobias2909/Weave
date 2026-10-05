@@ -90,9 +90,7 @@ Item {
                             text: "Songs thrown together by hand, for tonight or for later. "
                                   + "Put one in from a song's right click menu, or keep the "
                                   + "whole queue from beside its Clear. Favorites is the first "
-                                  + "box and always stays. A box ticked Keep on disk has its "
-                                  + "songs written to disk as they play, so they start at once "
-                                  + "the next time. Make a playlist copies a box into a new "
+                                  + "box and always stays. Make a playlist copies a box into a new "
                                   + "playlist on your YouTube account, and a playlist can be "
                                   + "copied into a new box. The one copied from stays as it is."
                             color: Theme.colors.textMuted
@@ -166,41 +164,13 @@ Item {
 
                                 Label {
                                     id: boxCount
-                                    anchors.right: keepLabel.left
+                                    anchors.right: makeButton.left
                                     anchors.rightMargin: 14
                                     anchors.verticalCenter: parent.verticalCenter
                                     text: boxRow.modelData.count === 1
                                           ? "1 song" : boxRow.modelData.count + " songs"
                                     color: Theme.colors.textMuted
                                     font.pixelSize: 11
-                                }
-
-                                Label {
-                                    id: keepLabel
-                                    anchors.right: keepBox.left
-                                    anchors.rightMargin: 2
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    text: "Keep on disk"
-                                    color: keepBox.checked ? Theme.colors.accent
-                                                           : Theme.colors.textMuted
-                                    font.pixelSize: 11
-                                }
-
-                                CheckBox {
-                                    id: keepBox
-                                    objectName: "musicBoxKeep"
-                                    anchors.right: makeButton.left
-                                    anchors.rightMargin: 10
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    checked: boxRow.modelData.keep
-                                    onToggled: App.setMusicBoxKeep(boxRow.modelData.id, checked)
-
-                                    HintBubble {
-                                        parent: keepBox
-                                        shown: keepBox.hovered
-                                        words: "Write its songs to disk as they play, so the "
-                                               + "next play starts at once"
-                                    }
                                 }
 
                                 FlatButton {
@@ -401,17 +371,17 @@ Item {
                     }
                 }
 
-                // ---- what is kept and what is told ---------------------------
+                // ---- the pictures and what is told ----------------------------
                 Rectangle {
                     width: body.width
-                    height: keeping.height + 28
+                    height: listening.height + 28
                     radius: 6
                     color: Theme.colors.surface
                     border.width: 1
                     border.color: Theme.colors.border
 
                     Column {
-                        id: keeping
+                        id: listening
                         x: 14
                         y: 14
                         width: parent.width - 28
@@ -424,7 +394,7 @@ Item {
                             font.weight: Font.DemiBold
                         }
 
-                        SettingsHeading { text: "Music videos on disk"; rule: false }
+                        SettingsHeading { text: "Music videos"; rule: false }
 
                         Label {
                             width: parent.width
@@ -480,94 +450,6 @@ Item {
                                         }
                                     }
                                 }
-                            }
-                        }
-
-                        Label {
-                            width: parent.width
-                            text: "A song in a box kept on disk has its video written to "
-                                  + "disk the first time you watch it, so every play after "
-                                  + "that starts at once and pulls nothing. Only songs in a "
-                                  + "box ticked Keep on disk above, and only while a page is "
-                                  + "open to show a picture. The one played longest ago goes "
-                                  + "first when the room runs out."
-                            color: Theme.colors.textMuted
-                            font.pixelSize: 11
-                            wrapMode: Text.Wrap
-                        }
-
-                        Row {
-                            spacing: 8
-
-                            Label {
-                                width: view.wordWidth
-                                height: 28
-                                text: "Kept"
-                                color: Theme.colors.textMuted
-                                font.pixelSize: 12
-                                verticalAlignment: Text.AlignVCenter
-                            }
-
-                            Label {
-                                objectName: "videosKept"
-                                height: 28
-                                text: App.videosKeptText
-                                color: Theme.colors.text
-                                font.pixelSize: 12
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                        }
-
-                        Row {
-                            spacing: 8
-
-                            Label {
-                                width: view.wordWidth
-                                height: 28
-                                text: "Ceiling"
-                                color: Theme.colors.textMuted
-                                font.pixelSize: 12
-                                verticalAlignment: Text.AlignVCenter
-                            }
-
-                            FlatButton {
-                                id: keepCeilingButton
-                                objectName: "videoKeepCeiling"
-                                // Written on the Python side, the same way
-                                // every other sentence in this window is, so
-                                // the button and the line above it cannot
-                                // disagree about what a gigabyte is.
-                                text: App.videoKeepCeilingText + "  \u25be"
-                                onClicked: keepCeilingMenu.popup(keepCeilingButton, 0,
-                                                                 keepCeilingButton.height + 2)
-
-                                ThemedMenu {
-                                    id: keepCeilingMenu
-                                    objectName: "videoKeepCeilingMenu"
-                                    implicitWidth: 160
-
-                                    Repeater {
-                                        model: App.videoKeepChoices
-
-                                        ThemedMenuItem {
-                                            required property var modelData
-
-                                            text: modelData.mb === App.videoKeepCeiling
-                                                  ? modelData.label + "   \u2713"
-                                                  : modelData.label
-                                            onTriggered: {
-                                                App.setVideoKeepCeiling(modelData.mb)
-                                                keepCeilingMenu.dismiss()
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            FlatButton {
-                                objectName: "forgetKeptVideos"
-                                text: "Drop the kept videos"
-                                onClicked: App.forgetKeptVideos()
                             }
                         }
 

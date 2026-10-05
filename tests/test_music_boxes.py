@@ -68,16 +68,6 @@ class TheBoxes(unittest.TestCase):
         self.assertTrue(self.db.rename_music_box(a, "Evening"))
         self.assertEqual(self.db.music_box(a)["name"], "Evening")
 
-    def test_kept_on_disk_is_every_song_in_a_box_marked_for_it(self):
-        kept = self.db.create_music_box("Kept")
-        loose = self.db.create_music_box("Loose")
-        self.db.put_in_music_box(kept, song("aaaaaaaaaaa"))
-        self.db.put_in_music_box(loose, song("bbbbbbbbbbb"))
-        self.db.set_music_box_keep(kept, True)
-        self.db.set_music_favorite("ccccccccccc", True, "A favourite", None, None)
-        self.assertEqual(self.db.kept_music_ids(True), {"aaaaaaaaaaa", "ccccccccccc"})
-        self.assertEqual(self.db.kept_music_ids(False), {"aaaaaaaaaaa"})
-
 
 class Quiet:
     def emit(self, *_a):
@@ -108,15 +98,12 @@ def make_bridge(test, shelves=None, audio=None):
     bridge._set_notice = lambda *a, **k: bridge.notices.append(a[0])
     bridge._set_status = lambda *a, **k: None
     bridge._name_favourite_makers = lambda: None
-    bridge._prune_kept = lambda: None
-    bridge._keep_this_song = lambda: None
     bridge._music_tab = -1
     bridge._companion_cache = {}
     bridge._companion_known = {}
     bridge.queued = []
     bridge._queue_track = lambda track, play_next: bridge.queued.append((track, play_next))
-    for name in ("favoritesChanged", "musicBoxesChanged", "musicChanged", "videosKeptChanged",
-                 "musicTabChanged"):
+    for name in ("favoritesChanged", "musicBoxesChanged", "musicChanged", "musicTabChanged"):
         setattr(bridge, name, Quiet())
     return bridge
 
@@ -228,17 +215,11 @@ class TheBridge(unittest.TestCase):
         self.assertEqual([(r["key"], r["title"], r["duration"]) for r in rows],
                          [("yt:aaaaaaaaaaa", "One", "3:20")])
 
-    def test_kept_on_disk_follows_the_boxes_and_the_favourites_switch(self):
-        bridge = make_bridge(self, SHELVES)
-        Bridge.putSongInBox(bridge, "shelf", 0, 0, FAVORITES_BOX)
-        self.assertTrue(Bridge._is_kept_song(bridge, "aaaaaaaaaaa"), "favourites are kept by default")
-        Bridge.setMusicBoxKeep(bridge, FAVORITES_BOX, False)
-        self.assertFalse(Bridge._is_kept_song(bridge, "aaaaaaaaaaa"))
-        box = Bridge.createMusicBox(bridge, "Mix")
-        Bridge.putSongInBox(bridge, "shelf", 0, 0, box)
-        self.assertFalse(Bridge._is_kept_song(bridge, "aaaaaaaaaaa"), "a new box is not kept")
-        Bridge.setMusicBoxKeep(bridge, box, True)
-        self.assertTrue(Bridge._is_kept_song(bridge, "aaaaaaaaaaa"))
+    def test_a_box_says_nothing_about_disk(self):
+        bridge = make_bridge(self)
+        Bridge.createMusicBox(bridge, "Mix")
+        for box in Bridge._get_music_boxes(bridge):
+            self.assertNotIn("keep", box)
 
 
 class TheTabs(unittest.TestCase):
@@ -383,6 +364,49 @@ class TheOrder(unittest.TestCase):
             self.assertEqual(sorted(row[0] for row in again.conn.execute(
                 "SELECT favorite_place FROM music_history")), [0, 1, 2])
             again.close()
+
+
+class NothingOnDisk(unittest.TestCase):
+    """Songs were once written to disk. Nothing is now, and what was is let go."""
+
+    def test_an_older_database_forgets_what_it_kept(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "old.db"
+            db = Database(path)
+            db.set_state("favourites_keep", "1")
+            db.set_state("kept_video_ceiling_mb", "10240")
+            db.set_state("music_audio_only", "1")
+            with db.conn as conn:
+                conn.execute("UPDATE meta SET value='52' WHERE key='schema_version'")
+            db.close()
+            again = Database(path)
+            self.assertIsNone(again.get_state("favourites_keep"))
+            self.assertIsNone(again.get_state("kept_video_ceiling_mb"))
+            self.assertEqual(again.get_state("music_audio_only"), "1", "the rest stays")
+            again.close()
+
+    def test_the_old_folder_goes_once(self):
+        from weave import paths
+
+        with tempfile.TemporaryDirectory() as folder:
+            old = Path(folder) / "moving"
+            (old / "43").mkdir(parents=True)
+            (old / "43" / "song.webm").write_bytes(b"x" * 64)
+            self.assertTrue(paths.forget_old_songs(old))
+            self.assertFalse(old.exists())
+            self.assertFalse(paths.forget_old_songs(old), "nothing to do the next time")
+
+    def test_the_folder_is_not_made_again(self):
+        from weave import paths
+
+        with tempfile.TemporaryDirectory() as folder:
+            cache = Path(folder) / "cache"
+            with mock.patch.multiple(paths, CONFIG_DIR=Path(folder) / "config",
+                                     THEMES_DIR=Path(folder) / "config" / "themes",
+                                     STATE_DIR=Path(folder) / "state",
+                                     IMAGE_CACHE=cache / "images"):
+                paths.ensure_dirs()
+            self.assertEqual(sorted(p.name for p in cache.iterdir()), ["images"])
 
 
 class TheShelves(unittest.TestCase):

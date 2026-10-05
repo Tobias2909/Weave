@@ -1383,11 +1383,9 @@ Item {
                     opacity: Audio.videoShowing ? 0 : 1
                     visible: opacity > 0
                     // A fade is there to cover the couple of seconds a
-                    // stream takes to put up its first frame. A picture
-                    // kept on disk has one in a moment, so there is
-                    // nothing to cover and the artwork simply goes.
+                    // stream takes to put up its first frame.
                     Behavior on opacity {
-                        NumberAnimation { duration: Audio.videoInstant ? 0 : 320
+                        NumberAnimation { duration: 320
                                           easing.type: Easing.InOutQuad }
                     }
 

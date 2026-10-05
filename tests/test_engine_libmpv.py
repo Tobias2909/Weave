@@ -559,7 +559,8 @@ class ThePlayerStarting(unittest.TestCase):
 
 @unittest.skipUnless(available(), "libmpv is not here")
 class ANewPlayerMovingOnByItself(unittest.TestCase):
-    """Two songs kept on disk, played by a player that does not exist yet.
+    """Two songs whose addresses are known, played by a player that does not
+    exist yet.
 
     Both are handed over at once, before the new player has said anything, and
     the first thing it says is that it is idle. That was taken to mean nothing
@@ -572,16 +573,18 @@ class ANewPlayerMovingOnByItself(unittest.TestCase):
         from PySide6.QtCore import QCoreApplication
 
         app = QCoreApplication.instance() or QCoreApplication([])
-        kept = {"yt:aaaaaaaaaaa": TONE.format(hz=220, seconds=1),
-                "yt:bbbbbbbbbbb": TONE.format(hz=440, seconds=30)}
+        known = {"yt:aaaaaaaaaaa": TONE.format(hz=220, seconds=1),
+                 "yt:bbbbbbbbbbb": TONE.format(hz=440, seconds=30)}
         songs = [{"key": key, "title": key,
-                  "url": f"https://www.youtube.com/watch?v={key[3:]}"} for key in kept]
+                  "url": f"https://www.youtube.com/watch?v={key[3:]}"} for key in known]
         # Nothing is meant to be heard, and it has to be said before the
         # player exists, because the player starting inside the first load is
         # the whole of the case.
         with mock.patch.dict(OPTIONS, ao="null"):
             one = AudioPlayer(Config(raw={}))
-            one.local_audio = lambda key: kept.get(key, "")
+            # Both addresses known already, so both are handed over at once.
+            for key, address in known.items():
+                one._addresses.put(key, address)
             try:
                 one.play_items(songs)
                 if not one._engine.running():

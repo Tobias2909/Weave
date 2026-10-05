@@ -86,6 +86,8 @@ def _save_geometry(window, db: Database) -> None:
 
 def run(argv: list[str], on_ready: Callable | None = None) -> int:
     paths.ensure_dirs()
+    if paths.forget_old_songs():
+        trace.mark("old_songs_forgotten")
     cfg = config.load()
     db = Database(paths.DB_FILE)
 

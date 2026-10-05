@@ -11,7 +11,6 @@ window could never be found again.
 
 from __future__ import annotations
 
-import json
 import sqlite3
 import threading
 import time
@@ -20,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 52
+SCHEMA_VERSION = 53
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -149,7 +148,7 @@ CREATE TABLE IF NOT EXISTS music_boxes (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     name       TEXT NOT NULL UNIQUE,
     position   INTEGER NOT NULL DEFAULT 0,
-    keep       INTEGER NOT NULL DEFAULT 0,   -- its songs are written to disk
+    keep       INTEGER NOT NULL DEFAULT 0,   -- unused: no song is written to disk any more
     created_at INTEGER NOT NULL DEFAULT 0
 );
 
@@ -622,10 +621,8 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # which ones they are; each is found the next time its picture is asked
     # for, which costs one request apiece and then never again.
     ("videos", "unavailable_at", "INTEGER"),
-    # Where the songs inside a track begin, as the last look up said, in JSON.
-    # A kept song is played from disk with nothing asked of anybody, and this
-    # is what gives it its songs on the bar while there is nobody to ask.
-    # NULL means never looked up, an empty list means looked up and none.
+    # Where the songs inside a track begin, for a song once played from disk.
+    # Unused since no song is written to disk any more.
     ("music_history", "chapters", "TEXT"),
     # Where a favourite stands among the others, smallest first. A new one
     # goes in front of them all, which is where the newest has always been,
@@ -674,6 +671,12 @@ class Database:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
             row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             was = int(row["value"]) if row else 0
+            if was and was < 53:
+                # Songs were once written to disk, and these said which and how
+                # much. Nothing is written any more, so nothing is left to say.
+                conn.execute(
+                    "DELETE FROM meta WHERE key IN "
+                    "('state.favourites_keep', 'state.kept_video_ceiling_mb')")
             if was and was < 52:
                 # Every copy from before there was a choice handed its videos
                 # to mpv, and goes on doing that until somebody says otherwise.
@@ -2680,30 +2683,6 @@ class Database:
                 "UPDATE music_history SET artist_id=? WHERE ext_id=? "
                 "AND (artist_id IS NULL OR artist_id = '')", (artist_id, ext_id))
 
-    def song_chapters(self, ext_id: str) -> list[dict] | None:
-        """The chapters last seen for a song, or None when never looked up."""
-        row = self.conn.execute(
-            "SELECT chapters FROM music_history WHERE ext_id=?", (ext_id,)).fetchone()
-        if not row or row["chapters"] is None:
-            return None
-        try:
-            found = json.loads(row["chapters"])
-        except ValueError:
-            return None
-        return found if isinstance(found, list) else None
-
-    def set_song_chapters(self, ext_id: str, chapters: Sequence[dict]) -> None:
-        """Note what a look up said, written only where it differs.
-
-        Only onto a song that has a row already, which every song played has,
-        so this never makes a song appear in the history by itself.
-        """
-        said = json.dumps(list(chapters), sort_keys=True)
-        with self.conn as conn:
-            conn.execute(
-                "UPDATE music_history SET chapters=? "
-                "WHERE ext_id=? AND chapters IS NOT ?", (said, ext_id, said))
-
     def is_music_favorite(self, ext_id: str) -> bool:
         row = self.conn.execute(
             "SELECT favorite FROM music_history WHERE ext_id=?", (ext_id,)).fetchone()
@@ -2745,13 +2724,13 @@ class Database:
     def music_boxes(self) -> list[dict]:
         """Every box but the favourites, in their order, with how many songs."""
         return [dict(row) for row in self.conn.execute(
-            "SELECT b.id, b.name, b.position, b.keep, "
+            "SELECT b.id, b.name, b.position, "
             "       (SELECT COUNT(*) FROM music_box_items i WHERE i.box_id = b.id) AS count "
             "FROM music_boxes b ORDER BY b.position, b.id")]
 
     def music_box(self, box_id: int) -> dict | None:
         found = self.conn.execute(
-            "SELECT id, name, position, keep FROM music_boxes WHERE id=?", (box_id,)).fetchone()
+            "SELECT id, name, position FROM music_boxes WHERE id=?", (box_id,)).fetchone()
         return dict(found) if found else None
 
     def create_music_box(self, name: str) -> int | None:
@@ -2798,10 +2777,6 @@ class Database:
             conn.executemany("UPDATE music_boxes SET position=? WHERE id=?",
                              [(place, one) for place, one in enumerate(order)])
         return True
-
-    def set_music_box_keep(self, box_id: int, keep: bool) -> None:
-        with self.conn as conn:
-            conn.execute("UPDATE music_boxes SET keep=? WHERE id=?", (1 if keep else 0, box_id))
 
     def put_in_music_box(self, box_id: int, song: dict) -> bool:
         """A song on the end of a box. False when it is in there already, or
@@ -2864,17 +2839,6 @@ class Database:
     def music_boxes_holding(self, ext_id: str) -> list[int]:
         return [int(row[0]) for row in self.conn.execute(
             "SELECT box_id FROM music_box_items WHERE ext_id=?", (ext_id,))]
-
-    def kept_music_ids(self, favourites_too: bool) -> set[str]:
-        """Every song in a box that is kept on disk, the favourites among them
-        when they are."""
-        kept = {row[0] for row in self.conn.execute(
-            "SELECT DISTINCT i.ext_id FROM music_box_items i "
-            "JOIN music_boxes b ON b.id = i.box_id WHERE b.keep = 1")}
-        if favourites_too:
-            kept |= {row[0] for row in self.conn.execute(
-                "SELECT ext_id FROM music_history WHERE favorite = 1")}
-        return kept
 
     def music_history(self, limit: int = 400) -> list[sqlite3.Row]:
         """Shaped like a feed row, so the same grid draws it.

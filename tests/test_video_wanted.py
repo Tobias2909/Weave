@@ -14,7 +14,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_audio import FakeEngine, FakeResolver  # noqa: E402
 
 from weave.audio import (
-    STAGE_KEPT,
     STAGE_LOOKING,
     STAGE_OPENING,
     STAGE_SHOWING,
@@ -339,58 +338,6 @@ class TheSongAfterThisOne(unittest.TestCase):
         self.assertEqual(self.player._next_video_resolvers, [])
 
 
-class KeptOnDisk(unittest.TestCase):
-    """A song he keeps has its halves on disk, and the player asks for them
-    before it looks for an address."""
-
-    def setUp(self):
-        self.player = player()
-        self.player._queue = [song("yt:a"), song("yt:b")]
-        self.player._rebuild_order()
-        self.player._at = 0
-        self.player._idle = False
-
-    def test_the_sound_is_played_from_the_file(self):
-        self.player.local_audio = lambda key: ("/tmp/kept/a.m4a" if key == "yt:a" else "")
-        self.player._start_current()
-        self.assertEqual(self.player._engine.only("load"),
-                         [("load", "/tmp/kept/a.m4a", None)])
-
-    def test_and_nothing_is_resolved_for_it(self):
-        self.player.local_audio = lambda key: "/tmp/kept/a.m4a"
-        self.player._start_current()
-        self.assertFalse(self.player.loading)
-
-    def test_the_song_after_it_is_queued_from_its_file_too(self):
-        self.player.local_audio = lambda key: f"/tmp/kept/{key[-1]}.m4a"
-        self.player._prepare_next()
-        self.assertEqual(self.player._engine.only("append"),
-                         [("append", "/tmp/kept/b.m4a")])
-
-    def test_a_broadcast_is_never_read_from_a_file(self):
-        """It has no file and no end."""
-        self.player._queue = [song("yt:live", live=True)]
-        self.player._rebuild_order()
-        self.player._at = 0
-        asked = []
-        self.player.local_audio = lambda key: asked.append(key) or "/tmp/kept/live.m4a"
-        self.player._start_current()
-        self.assertEqual(asked, [])
-        self.assertEqual(self.player._engine.only("load"), [])
-
-    def test_the_picture_is_taken_from_the_file_and_without_a_fade(self):
-        self.player.local_video = lambda key: "/tmp/kept/a.webm"
-        self.player.setVideoWanted(True)
-        self.assertEqual(self.player._engine.only("add_video"),
-                         [("add_video", "/tmp/kept/a.webm")])
-        self.assertTrue(self.player.videoInstant)
-
-    def test_one_that_has_to_be_found_keeps_its_fade(self):
-        self.player.local_video = lambda key: ""
-        self.player.setVideoWanted(True)
-        self.assertFalse(self.player.videoInstant)
-
-
 class WhatIsBeingWaitedOn(unittest.TestCase):
     """The line under the button that fills the screen.
 
@@ -425,13 +372,6 @@ class WhatIsBeingWaitedOn(unittest.TestCase):
         one._video_addresses.put("yt:a", "https://example.invalid/v")
         one.setVideoWanted(True)
         self.assertEqual(one.videoStage, STAGE_OPENING)
-
-    def test_one_kept_on_disk_says_which_it_is(self) -> None:
-        one = player()
-        one.play_items([song()])
-        one.local_video = lambda key: "/somewhere/kept.webm"
-        one.setVideoWanted(True)
-        self.assertEqual(one.videoStage, STAGE_KEPT)
 
     def test_and_showing_it_once_a_frame_exists(self) -> None:
         one = player()

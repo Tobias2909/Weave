@@ -614,7 +614,7 @@ Item {
                         Label {
                             width: parent.width
                             text: "The music page has settings of its own: its shelves, your "
-                                  + "boxes of songs, which of them are kept on disk, and what "
+                                  + "boxes of songs, how tall its videos are, and what "
                                   + "is told to YouTube Music. They open from the \u22ef beside "
                                   + "Music in the sidebar, or from here."
                             color: Theme.colors.textMuted

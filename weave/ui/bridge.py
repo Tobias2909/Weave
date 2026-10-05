@@ -30,7 +30,7 @@ from .. import imagecache
 from .. import palette, themes, trace
 from .. import audio
 from .. import browsers, cookies, ids
-from .. import paths, tokens, songcache
+from .. import paths, tokens
 from ..config import Config
 from ..db import GROUP_SHOWS, GROUP_SHOWS_ALL, GROUP_SHOWS_STREAMS, Database
 from ..imagecache import SECONDS_PER_DAY, plain_source, qml_source, square_source
@@ -73,7 +73,6 @@ from ..poller import (
     SearchFetcher,
     ArtistMusic,
     SongSide,
-    SongKeeper,
     SourceDetails,
     StreamCheck,
     SubsImporter,
@@ -310,7 +309,6 @@ class Bridge(QObject):
     checksChanged = Signal()
     cacheChanged = Signal()
     hiddenChanged = Signal()
-    videosKeptChanged = Signal()
     videoQualityChanged = Signal()
     cookiesChanged = Signal()
     startingChanged = Signal()
@@ -607,13 +605,6 @@ class Bridge(QObject):
         self._heard_waiting: list[str] = []
         self._pending_members: tuple[str, str] | None = None
         self._members_cleared = ""
-        # One keeper for each half of a song, the picture and the sound.
-        self._keepers: dict = {}
-        # What is still to be written, by half, in the order it was asked
-        # for. One download of each half runs at a time, and anything asked
-        # for while one is running used to be dropped on the floor rather
-        # than made to wait, so three favourites in a row kept the first.
-        self._to_keep: dict = {}
         # The press waiting on that question, as the key, the address and the
         # title. Held rather than asked for again, because the view can have
         # moved on by the time the answer arrives and the press was about the
@@ -1713,208 +1704,6 @@ class Bridge(QObject):
         """
         if self._db.mark_unavailable(ext_id):
             self._loss_timer.start()
-
-    # ---- the videos he keeps ---------------------------------------------
-
-    def _video_height(self) -> int:
-        return self._audio.video_height() if self._audio else audio.VIDEO_HEIGHT
-
-    def _kept_file(self, key: str, mark) -> str:
-        """One half of a song, kept on disk, or nothing.
-
-        Asked by the player every time it is about to look for an address, so
-        it is a directory lookup and nothing more. Touching the file is what
-        makes the one played longest ago go first when room is needed.
-        """
-        if not key:
-            return ""
-        found = songcache.held(paths.MOVING_CACHE, key, mark)
-        if found is None:
-            return ""
-        songcache.touch(found)
-        return str(found)
-
-    def _kept_video(self, key: str) -> str:
-        return self._kept_file(key, self._video_height())
-
-    def _kept_audio(self, key: str) -> str:
-        return self._kept_file(key, songcache.SOUND)
-
-    def _keep_this_song(self) -> None:
-        """Write the song playing to disk, if it is one he keeps.
-
-        Only a favourite, because that is a short list somebody curated and
-        this is the only thing that makes the cost bounded. Both halves of it,
-        since keeping one and streaming the other leaves the wait in place,
-        and the sound is the cheaper by a factor of nine and the half that has
-        to arrive before anything can be heard at all. The picture only while
-        a page is open to show one, which is the rule the whole picture side
-        follows.
-
-        Asked at three moments, and it needs all three to be the rule it
-        says it is: when a song starts, when one is made a favourite while it
-        is playing, and when the page that shows a picture is opened during
-        one. With only the first, hearting a song at half way kept nothing
-        until it came round again, and opening the page mid song kept the
-        sound and never the picture.
-        """
-        if self._audio is None:
-            return
-        track = self._audio.track or {}
-        key = str(track.get("key") or "")
-        url = str(track.get("url") or "")
-        if not key or not url or not key.startswith("yt:"):
-            return
-        if not self._is_kept_song(key.split(":", 1)[1]):
-            return
-        self._keep_half(key, url, songcache.SOUND)
-        if self._audio.videoWanted:
-            self._keep_half(key, url, self._video_height())
-
-    def _keep_half(self, key: str, url: str, mark) -> None:
-        """One download at a time for each half, and the rest wait their turn.
-
-        They were dropped rather than made to wait, and nothing ever asked
-        again, so a favourite that began while another was still being written
-        was simply never kept. A download is tens of seconds and a song is
-        minutes, so this only showed when two favourites came close together,
-        which is why it read as random.
-        """
-        if songcache.held(paths.MOVING_CACHE, key, mark) is not None:
-            self._stop_waiting(key, mark)
-            return
-        held = self._keepers.get(mark)
-        if held is not None and held.isRunning():
-            waiting = self._to_keep.setdefault(mark, [])
-            if not any(one[0] == key for one in waiting) and held.key != key:
-                waiting.append((key, url))
-            return
-        self._stop_waiting(key, mark)
-        keeper = SongKeeper(self._cfg, key, url, paths.MOVING_CACHE, mark, self)
-        keeper.kept.connect(self._on_song_kept)
-        keeper.failed.connect(self._on_song_not_kept)
-        # Before the launch, so this runs before the reaper does. The reaper
-        # forgets a worker by identity, so the one started here survives it.
-        keeper.finished.connect(self._keep_the_next_one,
-                                Qt.ConnectionType.QueuedConnection)
-        self._keepers[mark] = keeper
-        if not self._launch(keeper):
-            self._keepers.pop(mark, None)
-
-    def _stop_waiting(self, key: str, mark) -> None:
-        """Take a song out of the waiting list for one half."""
-        waiting = self._to_keep.get(mark)
-        if waiting:
-            self._to_keep[mark] = [one for one in waiting if one[0] != key]
-
-    def _keep_the_next_one(self) -> None:
-        """A download has ended, so whatever was waiting behind it goes now.
-
-        Whichever way it ended. A failure that stopped the list would be the
-        same fault in a different place.
-        """
-        keeper = self.sender()
-        mark = getattr(keeper, "mark", None)
-        if mark is None:
-            return
-        waiting = self._to_keep.get(mark) or []
-        while waiting:
-            key, url = waiting.pop(0)
-            if songcache.held(paths.MOVING_CACHE, key, mark) is not None:
-                continue
-            if not self._is_kept_song(key.split(":", 1)[1]):
-                # It left every box kept on disk while it waited, and the pruning would
-                # take the file away again the moment it landed.
-                continue
-            self._keep_half(key, url, mark)
-            return
-
-    def _on_song_kept(self, key: str, half: str, path: str) -> None:
-        self._set_status(f"kept the {half} for {key}")
-        self._prune_kept()
-        self.videosKeptChanged.emit()
-
-    def _on_song_not_kept(self, key: str, why: str) -> None:
-        # Nothing is on screen about this. It is work nobody asked for and
-        # nobody is waiting on, and the song played perfectly well without it.
-        self._set_status(f"could not keep {key}, {why}")
-
-    def _favourites_kept(self) -> bool:
-        """Whether the favourites are written to disk. On unless switched off,
-        which is what they always were."""
-        return self._db.get_state("favourites_keep") != "0"
-
-    def _is_kept_song(self, ext_id: str) -> bool:
-        """Whether a song is in a box whose songs are written to disk."""
-        return ext_id in self._db.kept_music_ids(self._favourites_kept())
-
-    def _prune_kept(self) -> None:
-        """Bring what is kept under its ceiling, and drop what is in no box
-        kept on disk any more, which is the only reason any of it was written
-        down."""
-        height = self._video_height()
-        wanted = set()
-        for ext_id in self._db.kept_music_ids(self._favourites_kept()):
-            key = f"yt:{ext_id}"
-            for mark in (height, songcache.SOUND):
-                found = songcache.held(paths.MOVING_CACHE, key, mark)
-                if found is not None:
-                    wanted.add(found)
-        songcache.prune(paths.MOVING_CACHE, self._video_ceiling_mb() * 1024 * 1024, wanted)
-
-    def _video_ceiling_mb(self) -> int:
-        return self._db.get_int("kept_video_ceiling_mb", songcache.DEFAULT_CEILING_MB)
-
-    @staticmethod
-    def _ceiling_words(megabytes: int) -> str:
-        """A ceiling as it is written on a button.
-
-        Whole gigabytes where it divides, since the steps are powers of 1024
-        and a ceiling somebody chose as ten should not read back as nine and
-        three quarters.
-        """
-        megabytes = int(megabytes)
-        if megabytes >= 1024 and megabytes % 1024 == 0:
-            return f"{megabytes // 1024} GB"
-        if megabytes >= 1024:
-            return f"{megabytes / 1024:.1f} GB"
-        return f"{megabytes} MB"
-
-    def _get_videos_kept_text(self) -> str:
-        held = songcache.held_bytes(paths.MOVING_CACHE)
-        files = len(songcache.contents(paths.MOVING_CACHE))
-        ceiling = self._ceiling_words(self._video_ceiling_mb())
-        if not files:
-            return f"nothing kept yet, of a {ceiling} ceiling"
-        return (f"{files} kept, {held / (1024 * 1024):.0f} MB of a {ceiling} ceiling")
-
-    videosKeptText = Property(str, _get_videos_kept_text, notify=videosKeptChanged)
-    videoKeepCeiling = Property(int, _video_ceiling_mb, notify=videosKeptChanged)
-    def _get_video_keep_choices(self) -> list:
-        return [{"mb": step, "label": self._ceiling_words(step)}
-                for step in songcache.CEILING_STEPS_MB]
-
-    videoKeepCeilingText = Property(
-        str, lambda self: Bridge._ceiling_words(self._video_ceiling_mb()),
-        notify=videosKeptChanged)
-
-    videoKeepChoices = Property("QVariantList", _get_video_keep_choices,
-                                notify=videosKeptChanged)
-
-    @Slot(int)
-    def setVideoKeepCeiling(self, megabytes: int) -> None:
-        self._db.set_state("kept_video_ceiling_mb", str(int(megabytes)))
-        self._prune_kept()
-        self.videosKeptChanged.emit()
-
-    @Slot()
-    def forgetKeptVideos(self) -> None:
-        gone, freed = songcache.forget_all(paths.MOVING_CACHE)
-        if gone:
-            self._set_notice(f"Dropped {gone} kept "
-                             f"{'video' if gone == 1 else 'videos'}, "
-                             f"{freed / (1024 * 1024):.0f} MB.", clear_after_s=6)
-        self.videosKeptChanged.emit()
 
     # ---- the current view ------------------------------------------------
 
@@ -5795,16 +5584,6 @@ class Bridge(QObject):
         audio.failed.connect(self._on_audio_failed)
         audio.gone.connect(self._on_song_gone)
         audio.heard.connect(self._on_song_heard)
-        # Where a song's picture is kept, and which songs are worth keeping
-        # one for. The player asks the first and the window answers both.
-        audio.local_video = self._kept_video
-        audio.local_audio = self._kept_audio
-        audio.trackChanged.connect(self._keep_this_song)
-        # And opening the page during a song, which is the other way the
-        # picture becomes worth keeping. The rule is that a picture is kept
-        # while something is open to show one, and asking only at the track
-        # change made that true only when the page happened to be open then.
-        audio.videoChanged.connect(self._keep_this_song)
         # The music gives way when the video has really started to play, not
         # when mpv is handed it. Resolving takes seconds, a broadcast longer,
         # and stopping at the hand over left the room silent for all of them.
@@ -6063,14 +5842,6 @@ class Bridge(QObject):
         self.musicBoxesChanged.emit()
         self.musicTabChanged.emit()
         self.musicChanged.emit()
-        # Making the song playing a favourite is the moment to write it down.
-        # Only a track change asked before, so a song hearted half way through
-        # was kept no sooner than the next time it came round, which is most
-        # of why this read as arbitrary.
-        if wanted and self._audio is not None:
-            playing = str((self._audio.track or {}).get("key") or "")
-            if playing == key:
-                self._keep_this_song()
         # Giving back the last one empties the section, and the whole page of
         # it with that. The window falls back to the sections on its own, so
         # the record of where it is follows rather than pointing at a page
@@ -6444,10 +6215,9 @@ class Bridge(QObject):
 
     def _get_music_boxes(self) -> list:
         boxes = [{"id": FAVORITES_BOX, "name": FAVORITES,
-                  "count": self._db.music_favorite_count(),
-                  "keep": self._favourites_kept(), "fixed": True}]
+                  "count": self._db.music_favorite_count(), "fixed": True}]
         boxes.extend({"id": int(row["id"]), "name": row["name"], "count": int(row["count"]),
-                      "keep": bool(row["keep"]), "fixed": False}
+                      "fixed": False}
                      for row in self._db.music_boxes())
         return boxes
 
@@ -6648,29 +6418,12 @@ class Bridge(QObject):
         if self._music_tab == box_id:
             self._music_tab = -1
             self.musicTabChanged.emit()
-        self._prune_kept()
         self.musicBoxesChanged.emit()
 
     @Slot(int, int)
     def moveMusicBoxTo(self, box_id: int, target_id: int) -> None:
         if self._db.move_music_box_to(box_id, target_id):
             self.musicBoxesChanged.emit()
-
-    @Slot(int, bool)
-    def setMusicBoxKeep(self, box_id: int, keep: bool) -> None:
-        """Whether a box's songs are written to disk. Switched on, the song
-        playing is written now if it is in the box, and the rest as they are
-        played. Switched off, what only this box kept is let go."""
-        if box_id == FAVORITES_BOX:
-            self._db.set_state("favourites_keep", "1" if keep else "0")
-        else:
-            self._db.set_music_box_keep(box_id, keep)
-        if keep:
-            self._keep_this_song()
-        else:
-            self._prune_kept()
-            self.videosKeptChanged.emit()
-        self.musicBoxesChanged.emit()
 
     @Slot(str, int, int, result="QVariantList")
     def songBoxes(self, where: str, first: int, second: int) -> list:
@@ -6730,13 +6483,9 @@ class Bridge(QObject):
         if box_id in self._db.music_boxes_holding(song["ext_id"]):
             self._db.remove_from_music_box(box_id, song["ext_id"])
             self._set_notice(f"Taken out of {name}", clear_after_s=4)
-            self._prune_kept()
         else:
             self._db.put_in_music_box(box_id, song)
             self._set_notice(f"Put in {name}", clear_after_s=4)
-            playing = str(((self._audio.track if self._audio else None) or {}).get("key") or "")
-            if playing == song["key"]:
-                self._keep_this_song()
         self.musicBoxesChanged.emit()
         if self._music_tab == box_id:
             self.musicTabChanged.emit()
