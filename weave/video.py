@@ -81,6 +81,20 @@ CORNER_WIDTH_LEAST = 144
 # said which screen it is on, this does.
 FALLBACK_HEIGHT = 1080
 
+# How the pictures under the ceiling are ranked for a video, ahead of yt-dlp's
+# own order: the tallest, then the smoothest, then YouTube's Premium quality,
+# which yt-dlp ranks as the better source of the same height and which only a
+# Premium account's cookies are offered, then vp9 over any other codec, at a
+# third of the bytes of avc1 for the same height. The height decides first, so
+# Premium only wins against pictures as tall as itself. MEASURED 2026-10-05
+# with a Premium account, four videos at three ceilings: 1080p Premium taken
+# in vp9 (356) and in av01 (721) alike, and vp9 wherever there is no Premium.
+WATCH_SORT = "res,fps,hdr:12,source,vcodec:vp9"
+
+# What yt-dlp's note on a format says when it is YouTube's Premium quality, a
+# higher bitrate at the same height.
+PREMIUM = "Premium"
+
 # The speeds the player's menu offers.
 SPEEDS = (0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0)
 
@@ -139,10 +153,14 @@ STORYBOARD_WIDTH = 320
 # one, and that is what keeps the line short: every way of every language of
 # YouTube's own captions came to 588 KB for one video, MEASURED, and the last
 # of each to about a tenth of that.
+#
+# The note on the picture fetched says whether it is in Premium quality, and
+# the notes in the list which heights are offered in it.
 EXTRA_PRINTS = (
     "--print", "weave-height:%(height)s",
-    "--print", ("weave-formats:%(formats.:.{format_id,height,vcodec,width,rows,columns,"
-                "fps,fragments})j"),
+    "--print", "weave-note:%(requested_formats.0.format_note,format_note)s",
+    "--print", ("weave-formats:%(formats.:.{format_id,format_note,height,vcodec,width,rows,"
+                "columns,fps,fragments})j"),
     "--print", "weave-captions:%(subtitles.:.-1)j",
     "--print", "weave-auto:%(automatic_captions.:.-1)j",
 )
@@ -159,16 +177,29 @@ def watch_format(height: int, live: bool) -> str:
     """What to ask yt-dlp for, capped at a height.
 
     A video is offered as a picture and a sound apart at every useful size, and
-    joined only at the small ones, so the pair is asked for first, vp9 first
-    because it is a third of the bytes of avc1 at the same height. A broadcast
-    is only ever offered joined.
+    joined only at the small ones, so the pair is asked for first, and
+    WATCH_SORT says which of the pictures under the cap. A broadcast is only
+    ever offered joined.
     """
     height = int(height)
     if live:
         return f"best[height<={height}]/best"
-    return (f"bestvideo[height<={height}][vcodec^=vp9]+bestaudio/"
-            f"bestvideo[height<={height}]+bestaudio/"
+    return (f"bestvideo[height<={height}]+bestaudio/"
             f"best[height<={height}]/best")
+
+
+def premium_heights(formats: list[dict]) -> tuple[int, ...]:
+    """The heights the video's picture is offered at in Premium quality,
+    tallest first. Only a Premium account's cookies are offered any."""
+    heights = {int(one["height"]) for one in formats
+               if PREMIUM in str(one.get("format_note") or "")
+               and isinstance(one.get("height"), (int, float)) and one["height"] > 0
+               and one.get("vcodec") != "none"}
+    return tuple(sorted(heights, reverse=True))
+
+
+def quality_label(height: int, premium: bool = False) -> str:
+    return f"{height}p {PREMIUM}" if premium else f"{height}p"
 
 
 @dataclass(frozen=True)
@@ -259,9 +290,10 @@ def captions_of(uploaded: list[dict], automatic: list[dict]) -> tuple[dict, ...]
 
 
 def parse_extras(text: str) -> dict:
-    """What the tagged lines of one resolve said: the height fetched, the
-    heights offered, the storyboard and the captions. Each is an extra the
-    video plays without, so anything missing is simply left out."""
+    """What the tagged lines of one resolve said: the height fetched and
+    whether in Premium quality, the heights offered and those in Premium, the
+    storyboard and the captions. Each is an extra the video plays without, so
+    anything missing is simply left out."""
     tagged: dict[str, str] = {}
     for line in text.splitlines():
         tag, sep, rest = line.strip().partition(":")
@@ -272,8 +304,13 @@ def parse_extras(text: str) -> dict:
         out["height"] = int(float(tagged.get("weave-height", "")))
     except ValueError:
         pass
+    if PREMIUM in tagged.get("weave-note", ""):
+        out["premium"] = True
     formats = _tagged_list(tagged.get("weave-formats"))
     out["heights"] = list(offered_heights(formats))
+    premium = premium_heights(formats)
+    if premium:
+        out["premium_heights"] = list(premium)
     board = storyboard_of(formats)
     if board is not None:
         out["storyboard"] = board
@@ -368,6 +405,7 @@ def resolve_watch(cfg: Config, url: str, height: int, live: bool,
     """
     command = prepare(["yt-dlp", *cookie_args(cfg),
                        "-f", watch_format(height, live),
+                       *([] if live else ["-S", WATCH_SORT]),
                        "--get-url", "--print", "%(chapters)j",
                        "--print", FACT_SPEC, *EXTRA_PRINTS, url])
     result = run_process(command, cancel=cancel, timeout=180)
@@ -527,9 +565,11 @@ class VideoPlayer(QObject):
         self._screen_height = 0
         self._speed = 1.0
         # Per video, what its resolve said besides the addresses, and per
-        # video and ceiling, the height it came back at.
+        # video and ceiling, the height it came back at and whether that was in
+        # Premium quality.
         self._extras: dict[str, dict] = {}
         self._fetched: dict[str, int] = {}
+        self._premium: set[str] = set()
         # The ceiling the one playing was fetched under, which a new pick is
         # weighed against.
         self._under = 0
@@ -719,28 +759,49 @@ class VideoPlayer(QObject):
     def _auto_height(self) -> int:
         return ceiling_for(self._screen_height) if self._screen_height else FALLBACK_HEIGHT
 
+    def _playing(self) -> tuple[int, bool]:
+        """The height the one playing was fetched at, or 0 before that is
+        known, and whether it is in Premium quality."""
+        fetched = f"{self._current().get('key') or ''}@{self._under}"
+        return int(self._fetched.get(fetched) or 0), fetched in self._premium
+
     def _playing_height(self) -> int:
-        key = self._current().get("key") or ""
-        return int(self._fetched.get(f"{key}@{self._under}") or 0)
+        return self._playing()[0]
 
     def _get_qualities(self) -> list:
-        """The menu of heights: Auto first, saying what the screen makes it,
-        then every height this video is offered at, or the usual steps for one
-        not fetched yet. The one picked is chosen, the one fetched is playing."""
-        offered = self._known().get("heights") or [
-            step for step in reversed(VIDEO_HEIGHT_STEPS) if step >= 480]
-        playing = self._playing_height()
-        out = [{"height": 0, "label": f"Auto ({self._auto_height()}p)",
-                "chosen": self._quality == 0, "playing": False}]
-        out += [{"height": height, "label": f"{height}p", "chosen": self._quality == height,
-                 "playing": height == playing}
+        """The menu of heights: Auto first, then every height this video is
+        offered at, or the usual steps for one not fetched yet. The one picked
+        is chosen, and Auto says in brackets what it plays, the way YouTube's
+        own menu does. A height picked that this video does not have is listed
+        anyway, to carry its tick, and the height it came back at instead is
+        the one marked as playing."""
+        known = self._known()
+        offered = list(known.get("heights") or [
+            step for step in reversed(VIDEO_HEIGHT_STEPS) if step >= 480])
+        premium = set(known.get("premium_heights") or ())
+        if self._quality and self._quality not in offered:
+            offered = sorted([*offered, self._quality], reverse=True)
+        playing, in_premium = self._playing()
+        auto = "Auto"
+        if not self._quality and playing:
+            auto = f"Auto ({quality_label(playing, in_premium)})"
+        out = [{"height": 0, "label": auto, "chosen": self._quality == 0, "playing": False}]
+        out += [{"height": height, "label": quality_label(height, height in premium),
+                 "chosen": self._quality == height,
+                 "playing": bool(self._quality) and height == playing != self._quality}
                 for height in offered]
         return out
 
     def _get_quality_text(self) -> str:
-        if self._quality:
-            return f"{self._quality}p"
-        return f"Auto ({self._auto_height()}p)"
+        """The button: what is picked, and what it plays once that is known,
+        in brackets where the two differ."""
+        height, premium = self._playing()
+        playing = quality_label(height, premium) if height else ""
+        if not self._quality:
+            return f"Auto ({playing})" if playing else "Auto"
+        if not height or height == self._quality:
+            return playing or quality_label(self._quality)
+        return f"{quality_label(self._quality)} ({playing})"
 
     def _tracks(self) -> list:
         return list(self._known().get("captions") or [])
@@ -997,15 +1058,15 @@ class VideoPlayer(QObject):
             self._here = None
             self._drop_notice()
             self._ask_segments(entry)
+        key = entry.get("key", "")
+        height = self._height()
+        self._under = height
         self._finding = True
         if not again:
             self.trackChanged.emit()
         self.stateChanged.emit()
         self.progressChanged.emit()
         self.extrasChanged.emit()
-        key = entry.get("key", "")
-        height = self._height()
-        self._under = height
         cached = self._addresses.get(f"{key}@{height}")
         if cached:
             picture, _, sound = cached.partition(" ")
@@ -1029,8 +1090,13 @@ class VideoPlayer(QObject):
         if extras:
             extras = dict(extras)
             asked = extras.pop("asked", None)
+            premium = bool(extras.pop("premium", False))
             if asked and extras.get("height"):
                 self._fetched[f"{key}@{asked}"] = int(extras["height"])
+                if premium:
+                    self._premium.add(f"{key}@{asked}")
+                else:
+                    self._premium.discard(f"{key}@{asked}")
             self._extras[key] = extras
         if facts:
             self._facts[key] = dict(facts)
@@ -1405,12 +1471,14 @@ class VideoPlayer(QObject):
         height = max(0, int(height))
         if height == self._quality:
             return
-        before = self._height()
         self._quality = height
         if self._db is not None:
             self._db.set_state(QUALITY_STATE, str(height) if height else "auto")
         self.extrasChanged.emit()
-        if self._height() != before and self._would_change():
+        # Weighed against the ceiling the one playing was fetched under, not
+        # the one in force before the pick: Auto's moves with the screen the
+        # window is on, and nothing is fetched again when it does.
+        if self._height() != self._under and self._would_change():
             self._fetch_again()
 
     def _would_change(self) -> bool:

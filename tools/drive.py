@@ -3297,7 +3297,10 @@ class Smoke:
                           "url": "file:///walk/en.vtt"}],
             "storyboard": {"sheets": [f"file://{sheet}"], "width": 320, "height": 180,
                            "columns": 3, "rows": 3, "fps": 0.03}}
-        video._fetched[f"{key}@{video._under}"] = 1440
+        # Fetched under a ceiling of 1440 and come back at it, whatever the
+        # screen of the walk makes Auto.
+        video._under = 1440
+        video._fetched[f"{key}@1440"] = 1440
         for signal in (video.stateChanged, video.videoChanged, video.progressChanged,
                        video.extrasChanged):
             signal.emit()
@@ -3329,7 +3332,9 @@ class Smoke:
                 pick = next((item for text, item in entries(menu)
                              if text.strip() == "German"), None)
             else:
-                pick = next((item for text, item in entries(menu) if text.strip() == "720p"),
+                # The height it already plays at, so nothing is fetched again
+                # in a walk that has no network to fetch it from.
+                pick = next((item for text, item in entries(menu) if text.strip() == "1440p"),
                             None)
             if pick is not None:
                 pick.click()
@@ -3337,14 +3342,13 @@ class Smoke:
         self.check("a press on each opens its menu, with what this video offers",
                    [one[1] for one in opened] == [True, True, True]
                    and opened[1][2] == ["Off   ✓", "German", "English (auto)"]
-                   and opened[2][2] == [f"Auto ({video.autoHeight}p)   ✓", "1440p  ·  playing",
-                                        "720p"],
+                   and opened[2][2] == ["Auto (1440p)   ✓", "1440p", "720p"],
                    "; ".join(f"{name} {up} {labels}" for name, up, labels in opened))
         self.check("and what is picked in them takes hold",
-                   video.speed == 1.5 and video.captionShowing and video.quality == 720
-                   and read(quality, "text") == "720p" and bool(read(captions, "on")),
+                   video.speed == 1.5 and video.captionShowing and video.quality == 1440
+                   and read(quality, "text") == "1440p" and bool(read(captions, "on")),
                    f"speed {video.speed}, caption {video.captionShowing}, "
-                   f"quality {video.quality}")
+                   f"quality {video.quality} '{read(quality, 'text')}'")
         menus_closed = not any(read(find(window, name), "opened") for name in
                                ("watchSpeedMenu", "watchCaptionMenu", "watchQualityMenu"))
 

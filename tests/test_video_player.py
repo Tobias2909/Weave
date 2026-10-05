@@ -6,6 +6,7 @@ the picture really does was measured in a real window before this was written.
 """
 
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 from PySide6.QtCore import QCoreApplication, QEventLoop, QObject, QTimer, Signal
@@ -17,7 +18,8 @@ from weave.engine_libmpv import CURRENT
 from weave.sources.sponsorblock import Segment
 from weave.video import (CAPTION_LANGUAGE_STATE, CAPTIONS_STATE, CORNER_WIDTH_DEFAULT,
                          CORNER_WIDTH_LEAST, QUALITY_STATE, RESUME_FROM_S, SPONSOR_STATE,
-                         VideoPlayer, ceiling_for, choose_caption, parse_extras, watch_format)
+                         WATCH_SORT, VideoPlayer, ceiling_for, choose_caption, parse_extras,
+                         resolve_watch, watch_format)
 
 _app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -334,6 +336,19 @@ class WhatRidesAlong(unittest.TestCase):
                          [("en-GB", "English (United Kingdom)", False), ("de", "German", False),
                           ("en", "English", True)])
 
+    def test_premium_quality_fetched_and_offered(self):
+        found = parse_extras(
+            "weave-height:1080\nweave-note:1080p60 Premium\n"
+            'weave-formats:[{"format_id": "303", "format_note": "1080p60", "height": 1080,'
+            ' "vcodec": "vp9"}, {"format_id": "721", "format_note": "1080p60 Premium",'
+            ' "height": 1080, "vcodec": "av01.0.09M.08"}, {"format_id": "302",'
+            ' "format_note": "720p60", "height": 720, "vcodec": "vp9"}]')
+        self.assertIs(found["premium"], True)
+        self.assertEqual((found["heights"], found["premium_heights"]), ([1080, 720], [1080]))
+        plain = parse_extras(RESOLVED)
+        self.assertNotIn("premium", plain)
+        self.assertNotIn("premium_heights", plain)
+
     def test_a_video_with_none_of_it_plays_without_it(self):
         found = parse_extras("https://picture.example/a\nNA\n{}\nweave-height:NA\n"
                              "weave-formats:NA\nweave-captions:NA\nweave-auto:NA")
@@ -523,21 +538,61 @@ class TheMenusOnThePicture(_Base):
         self.assertEqual(len(self.engine.only("load")), loads)
         self.assertEqual(self.player._height(), 1080, "but it holds for the next video")
 
-    def test_auto_says_what_the_screen_makes_it_and_a_pick_is_kept(self):
+    def test_a_pick_is_weighed_against_what_the_one_playing_was_fetched_under(self):
+        self.playing_with({"heights": [1440, 1080, 720]})
+        self.player._fetched["yt:a@1440"] = 1440
+        self.player.setScreenHeight(1080)
+        finds = len(self.finding)
+        self.player.setQuality(1080)
+        self.assertEqual(len(self.finding), finds + 1,
+                         "the window moved to a smaller screen while it played at 1440p")
+        self.assertEqual(self.player.qualityText, "1080p")
+
+    def test_the_screen_makes_autos_ceiling_and_a_pick_is_kept(self):
         self.player.setScreenHeight(1600)
-        self.assertEqual(self.player.qualityText, "Auto (1440p)")
+        self.assertEqual(self.player.autoHeight, 1440)
+        self.assertEqual(self.player.qualityText, "Auto", "nothing playing yet to name")
         self.player.setQuality(1080)
         again = VideoPlayer(Config(raw={}), self.db, engine=FakeEngine())
         self.assertEqual(again.quality, 1080)
         self.player.setQuality(0)
         self.assertEqual(self.db.get_state(QUALITY_STATE), "auto")
 
-    def test_the_menu_lists_the_videos_own_heights_and_which_plays(self):
+    def menu(self):
+        return [(one["label"], one["chosen"], one["playing"]) for one in self.player.qualities]
+
+    def test_the_menu_lists_the_videos_own_heights_and_auto_says_what_it_plays(self):
         self.playing_with({"heights": [1440, 720]})
         self.player._fetched["yt:a@1440"] = 1440
-        menu = [(one["label"], one["chosen"], one["playing"]) for one in self.player.qualities]
-        self.assertEqual(menu, [("Auto (1440p)", True, False), ("1440p", False, True),
-                                ("720p", False, False)])
+        self.assertEqual(self.menu(), [("Auto (1440p)", True, False), ("1440p", False, False),
+                                       ("720p", False, False)])
+        self.assertEqual(self.player.qualityText, "Auto (1440p)")
+
+    def test_auto_under_a_taller_screen_names_the_height_the_video_tops_out_at(self):
+        self.playing_with({"heights": [1080, 720]})
+        self.player._fetched["yt:a@1440"] = 1080
+        self.assertEqual(self.player.qualityText, "Auto (1080p)")
+        self.assertEqual(self.menu()[0], ("Auto (1080p)", True, False))
+
+    def test_premium_quality_is_named_on_the_button_and_its_row(self):
+        self.playing_with({"heights": [1080, 720]})
+        self.player._on_found("yt:a", "https://picture", "https://sound", [], {},
+                              {"asked": 1440, "height": 1080, "premium": True,
+                               "heights": [1080, 720], "premium_heights": [1080]})
+        self.assertEqual(self.player.qualityText, "Auto (1080p Premium)")
+        self.assertEqual(self.menu(), [("Auto (1080p Premium)", True, False),
+                                       ("1080p Premium", False, False), ("720p", False, False)])
+        self.player.setQuality(1080)
+        self.assertEqual(self.player.qualityText, "1080p Premium")
+        self.assertEqual(self.menu()[1], ("1080p Premium", True, False))
+
+    def test_a_pick_the_video_does_not_have_keeps_its_tick_and_says_what_plays(self):
+        self.playing_with({"heights": [1080, 720]})
+        self.player._fetched["yt:a@1440"] = 1080
+        self.player.setQuality(1440)
+        self.assertEqual(self.player.qualityText, "1440p (1080p)")
+        self.assertEqual(self.menu(), [("Auto", False, False), ("1440p", True, False),
+                                       ("1080p", False, True), ("720p", False, False)])
 
     def test_a_caption_picked_shows_and_the_next_video_has_it_too(self):
         self.playing_with({"captions": [caption("en", auto=True), caption("de")]})
@@ -690,10 +745,29 @@ class HowBig(unittest.TestCase):
         self.assertEqual(ceiling_for(2160), 2160)
         self.assertEqual(ceiling_for(200), 360)
 
-    def test_picture_and_sound_apart_and_vp9_first(self):
-        asked = watch_format(1440, live=False)
-        self.assertTrue(asked.startswith("bestvideo[height<=1440][vcodec^=vp9]+bestaudio/"))
-        self.assertIn("best[height<=1440]", asked)
+    def test_picture_and_sound_apart_under_the_cap(self):
+        self.assertEqual(watch_format(1440, live=False),
+                         "bestvideo[height<=1440]+bestaudio/best[height<=1440]/best")
+
+    def test_height_then_premium_then_vp9(self):
+        order = [field.split(":")[0] for field in WATCH_SORT.split(",")]
+        self.assertEqual(order[0], "res")
+        self.assertLess(order.index("source"), order.index("vcodec"),
+                        "Premium is the better source, and wins over the codec")
+        self.assertIn("vcodec:vp9", WATCH_SORT.split(","))
+
+    def test_a_video_is_ranked_by_the_sort_and_a_broadcast_is_not(self):
+        asked = []
+
+        def run(command, cancel=None, timeout=None):
+            asked.append(command)
+            return SimpleNamespace(stdout="https://picture\nhttps://sound\n", stderr="")
+
+        with mock.patch("weave.video.run_process", run):
+            resolve_watch(Config(raw={}), "https://www.youtube.com/watch?v=a", 1440, False)
+            resolve_watch(Config(raw={}), "https://www.youtube.com/watch?v=a", 1440, True)
+        self.assertEqual([("-S" in one) for one in asked], [True, False])
+        self.assertEqual(asked[0][asked[0].index("-S") + 1], WATCH_SORT)
 
     def test_a_broadcast_is_only_offered_joined(self):
         self.assertEqual(watch_format(1080, live=True), "best[height<=1080]/best")

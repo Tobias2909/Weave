@@ -150,7 +150,7 @@ Item {
                                     required property int modelData
                                     objectName: "videoQuality_" + modelData
                                     text: modelData ? modelData + "p"
-                                                    : "Auto (" + Video.autoHeight + "p)"
+                                                    : "Auto (up to " + Video.autoHeight + "p)"
                                     accent: Video.quality === modelData
                                     onClicked: Video.setQuality(modelData)
                                 }
@@ -161,7 +161,9 @@ Item {
                             visible: App.videosInWeave
                             width: parent.width
                             text: "Auto follows the screen the window is on. A height picked here "
-                                  + "or in the player stays until Auto is picked again."
+                                  + "or in the player stays until Auto is picked again. A "
+                                  + "YouTube Premium account gets Premium quality wherever a "
+                                  + "video has it."
                             color: Theme.colors.textMuted
                             font.pixelSize: 11
                             wrapMode: Text.Wrap

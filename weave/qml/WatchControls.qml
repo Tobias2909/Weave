@@ -576,7 +576,7 @@ Item {
             PictureMenu {
                 id: qualityMenu
                 objectName: "watchQualityMenu"
-                implicitWidth: 170
+                implicitWidth: 240
 
                 Repeater {
                     model: Video.qualities
