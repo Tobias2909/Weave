@@ -88,6 +88,12 @@ OVER_STATE = "video_chat_over"
 # the screen left clear on its right: the shape of the panel this replaces.
 OVER_DEFAULT = (4 / 6, 0.02, 1 / 6, 1 / 4)
 SMALLEST_OVER = (0.08, 0.12)
+# The panel locked where it is, by a right click on its head, and how dark the
+# black behind it is, set by the wheel over its head in tenths. Both kept, the
+# way the mpv chat overlay keeps them.
+OVER_LOCKED_STATE = "video_chat_over_locked"
+BACKDROP_STATE = "video_chat_backdrop"
+BACKDROP_DEFAULT = 0.6
 
 # A YouTube call that fails is tried again after this, doubling each time.
 RETRY_S = 5.0
@@ -565,7 +571,14 @@ class ChatRoom(QObject):
             numbers = ()
         if len(numbers) == 4:
             self._over = self._fitted(*numbers)
-        picked = db.get_state(REPLAY_COLUMN_STATE, "chat") if db is not None else "chat"
+        self._locked = (db.get_state(OVER_LOCKED_STATE, "0") == "1") if db is not None else False
+        self._backdrop = BACKDROP_DEFAULT
+        said = db.get_state(BACKDROP_STATE, "") if db is not None else ""
+        try:
+            self._backdrop = self._tenths(float(said))
+        except ValueError:
+            pass
+        picked =db.get_state(REPLAY_COLUMN_STATE, "chat") if db is not None else "chat"
         self._replay_column = picked if picked in ("queue", "chat") else "chat"
 
     # ---- what QML reads ---------------------------------------------------
@@ -628,6 +641,34 @@ class ChatRoom(QObject):
         self._over = fitted
         if self._db is not None:
             self._db.set_state(OVER_STATE, ",".join(f"{one:.4f}" for one in fitted))
+        self.fullModeChanged.emit()
+
+    overLocked = Property(bool, lambda self: self._locked, notify=fullModeChanged)
+    overBackdrop = Property(float, lambda self: self._backdrop, notify=fullModeChanged)
+
+    @Slot()
+    def toggleOverLocked(self) -> None:
+        """Locked, the panel has nothing to carry or size it by and stays put.
+        The wheel still scrolls it and still sets its backdrop."""
+        self._locked = not self._locked
+        if self._db is not None:
+            self._db.set_state(OVER_LOCKED_STATE, "1" if self._locked else "0")
+        self.fullModeChanged.emit()
+
+    @staticmethod
+    def _tenths(share: float) -> float:
+        return round(max(0.0, min(1.0, share)) * 10) / 10
+
+    @Slot(int)
+    def stepOverBackdrop(self, darker: int) -> None:
+        """A tenth darker for each step up, a tenth lighter for each down,
+        from no black at all to all of it."""
+        backdrop = self._tenths(self._backdrop + 0.1 * darker)
+        if backdrop == self._backdrop:
+            return
+        self._backdrop = backdrop
+        if self._db is not None:
+            self._db.set_state(BACKDROP_STATE, f"{backdrop:.1f}")
         self.fullModeChanged.emit()
 
     # ---- following the video ------------------------------------------------

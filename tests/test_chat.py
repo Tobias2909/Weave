@@ -735,6 +735,47 @@ class WhereItShows(unittest.TestCase):
         self.assertEqual(width, chat.SMALLEST_OVER[0])
         self.assertAlmostEqual(x, 1.0 - width)
 
+    def test_a_right_click_locks_the_panel_and_it_stays_locked(self):
+        from tests.support import scratch_db
+
+        db = scratch_db(self)
+        room = self.make(db)
+        self.assertFalse(room.overLocked)
+        room.toggleOverLocked()
+        self.assertTrue(room.overLocked)
+        self.assertTrue(self.make(db).overLocked, "kept between runs")
+        room.toggleOverLocked()
+        self.assertFalse(self.make(db).overLocked)
+
+    def test_the_wheel_sets_the_backdrop_in_tenths_and_it_is_kept(self):
+        from tests.support import scratch_db
+
+        db = scratch_db(self)
+        room = self.make(db)
+        self.assertEqual(room.overBackdrop, chat.BACKDROP_DEFAULT)
+        room.stepOverBackdrop(1)
+        self.assertEqual(room.overBackdrop, 0.7)
+        room.stepOverBackdrop(-3)
+        self.assertEqual(room.overBackdrop, 0.4)
+        self.assertEqual(self.make(db).overBackdrop, 0.4, "kept between runs")
+
+    def test_the_backdrop_stops_at_none_and_at_all(self):
+        room = self.make()
+        room.stepOverBackdrop(20)
+        self.assertEqual(room.overBackdrop, 1.0)
+        room.stepOverBackdrop(-25)
+        self.assertEqual(room.overBackdrop, 0.0)
+        for _ in range(7):
+            room.stepOverBackdrop(1)
+        self.assertEqual(room.overBackdrop, 0.7, "tenths, not a float walking off")
+
+    def test_a_stored_backdrop_that_is_not_a_number_is_the_default(self):
+        from tests.support import scratch_db
+
+        db = scratch_db(self)
+        db.set_state(chat.BACKDROP_STATE, "dark")
+        self.assertEqual(self.make(db).overBackdrop, chat.BACKDROP_DEFAULT)
+
 
 class Colours(unittest.TestCase):
     def test_the_same_name_the_same_colour(self):

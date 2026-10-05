@@ -1453,6 +1453,9 @@ Item {
         big: page.cinema
         dark: page.over || page.beside
         animate: page.chatOnScreen
+        // On a backdrop thinned below a half the words get an outline back,
+        // growing as the black goes, so they still read on the picture.
+        outline: page.over ? Math.max(0, Math.min(1, (0.5 - Chat.overBackdrop) / 0.5)) : 0
     }
 
     // ---- the chat over the picture -----------------------------------------
@@ -1479,14 +1482,31 @@ Item {
         width: handled ? handW : box[2] * page.width
         height: handled ? handH : box[3] * page.height
         radius: 4
-        color: Qt.rgba(0, 0, 0, 0.6)
+        // How dark is set by the wheel over its head, in tenths.
+        color: Qt.rgba(0, 0, 0, Chat.overBackdrop)
         border.width: 1
         border.color: lit ? Theme.colors.accent : "transparent"
         Behavior on border.color { ColorAnimation { duration: 180 } }
 
         // What carries and sizes it shows while the pointer moves, and goes
         // with the controls when it is still, leaving the chat on its panel.
-        readonly property bool lit: page.chromeAwake || handled
+        // Locked by a right click on its head, it never shows: nothing to
+        // carry or size it by, until another right click there.
+        readonly property bool lit: (page.chromeAwake || handled) && !Chat.overLocked
+
+        // What the head says for a moment instead of its name: how dark the
+        // backdrop is now, or that it was locked. Shown locked or not, since
+        // it answers the wheel or the click and not the pointer moving.
+        property string note: ""
+        function say(words, seconds) {
+            note = words
+            noteTimer.interval = seconds * 1000
+            noteTimer.restart()
+        }
+        Timer {
+            id: noteTimer
+            onTriggered: overPanel.note = ""
+        }
 
         function take() {
             handX = x; handY = y; handW = width; handH = height
@@ -1504,37 +1524,77 @@ Item {
             anchors.right: parent.right
             anchors.top: parent.top
             height: 22
-            opacity: overPanel.lit ? 1 : 0
-            Behavior on opacity { NumberAnimation { duration: 180 } }
 
             Label {
+                objectName: "watchingChatOverName"
                 anchors.centerIn: parent
-                text: "\u22ee\u22ee   Chat   \u22ee\u22ee"
+                text: overPanel.note !== "" ? overPanel.note : "\u22ee\u22ee   Chat   \u22ee\u22ee"
                 color: Qt.rgba(1, 1, 1, 0.7)
                 font.pixelSize: 11
+                opacity: overPanel.lit || overPanel.note !== "" ? 1 : 0
+                Behavior on opacity { NumberAnimation { duration: 180 } }
             }
 
+            // Carries it with the left button. The right one locks it where
+            // it is, and the wheel sets how dark the black behind it is, a
+            // tenth a notch, darker upward: both the way the mpv chat overlay
+            // does it. Under the close mark as well, which takes its own click
+            // and lets the wheel through to here.
             MouseArea {
                 objectName: "watchingChatOverCarry"
                 anchors.fill: parent
-                anchors.rightMargin: 26
-                cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                cursorShape: Chat.overLocked ? Qt.ArrowCursor
+                             : (pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor)
                 property point from
                 property point started
+                property bool carrying: false
+                // A touchpad scrolls in small pieces; a step is a whole notch.
+                property real turned: 0
                 onPressed: function (mouse) {
+                    carrying = false
+                    if (mouse.button === Qt.RightButton) {
+                        Chat.toggleOverLocked()
+                        overPanel.say(Chat.overLocked ? "Chat locked" : "Chat unlocked", 1.5)
+                        return
+                    }
+                    // Locked, a press here is taken and does nothing, so it
+                    // does not reach the picture underneath either.
+                    if (Chat.overLocked)
+                        return
+                    carrying = true
                     overPanel.take()
                     from = mapToItem(page, mouse.x, mouse.y)
                     started = Qt.point(overPanel.handX, overPanel.handY)
                 }
                 onPositionChanged: function (mouse) {
+                    if (!carrying)
+                        return
                     var here = mapToItem(page, mouse.x, mouse.y)
                     overPanel.handX = Math.max(0, Math.min(page.width - overPanel.handW,
                                                            started.x + here.x - from.x))
                     overPanel.handY = Math.max(0, Math.min(page.height - overPanel.handH,
                                                            started.y + here.y - from.y))
                 }
-                onReleased: overPanel.letGo()
-                onCanceled: overPanel.letGo()
+                onReleased: {
+                    if (carrying)
+                        overPanel.letGo()
+                    carrying = false
+                }
+                onCanceled: {
+                    if (carrying)
+                        overPanel.letGo()
+                    carrying = false
+                }
+                onWheel: function (wheel) {
+                    turned += wheel.angleDelta.y
+                    var steps = turned > 0 ? Math.floor(turned / 120) : Math.ceil(turned / 120)
+                    if (steps === 0)
+                        return
+                    turned -= steps * 120
+                    Chat.stepOverBackdrop(steps)
+                    overPanel.say("Backdrop " + Math.round(Chat.overBackdrop * 100) + " %", 1.2)
+                }
             }
 
             Label {
@@ -1542,9 +1602,12 @@ Item {
                 anchors.right: parent.right
                 anchors.rightMargin: 6
                 anchors.verticalCenter: parent.verticalCenter
+                visible: !Chat.overLocked
                 text: "\u2715"
                 color: closeHover.hovered ? "#ffffff" : Qt.rgba(1, 1, 1, 0.7)
                 font.pixelSize: 12
+                opacity: overPanel.lit ? 1 : 0
+                Behavior on opacity { NumberAnimation { duration: 180 } }
                 HoverHandler { id: closeHover; cursorShape: Qt.PointingHandCursor }
                 MouseArea {
                     anchors.fill: parent
@@ -1572,6 +1635,8 @@ Item {
             // bottom one.
             property int across: 1
             property int down: 1
+            // Locked, nothing sizes it.
+            enabled: !Chat.overLocked
             width: 16
             height: 16
             x: across < 0 ? -4 : overPanel.width - width + 4

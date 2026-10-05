@@ -22,6 +22,9 @@ Item {
     property bool dark: false
     // Whether moving emotes move. Not while nobody can see them.
     property bool animate: true
+    // How strongly the words are outlined, 0 for not at all, for a panel
+    // whose black has been thinned until the picture shows through.
+    property real outline: 0
 
     // Let go from outside, by a new chat or a replay that followed a seek:
     // it starts at its newest line again, following.
@@ -171,6 +174,8 @@ Item {
                         color: chatList.quiet
                         font.pixelSize: chatList.fontSize - 1
                         font.italic: true
+                        style: chatList.outline > 0 ? Text.Outline : Text.Normal
+                        styleColor: Qt.rgba(0, 0, 0, chatList.outline)
                         wrapMode: Text.Wrap
                         topPadding: 3
                         bottomPadding: 3
@@ -193,6 +198,8 @@ Item {
                             color: chatList.quiet
                             font.pixelSize: chatList.fontSize - 3
                             font.letterSpacing: 0.4
+                            style: chatList.outline > 0 ? Text.Outline : Text.Normal
+                            styleColor: Qt.rgba(0, 0, 0, chatList.outline)
                         }
                         Label {
                             id: nameWords
@@ -202,6 +209,8 @@ Item {
                             color: chatList.nameColour(line.colour)
                             font.pixelSize: chatList.fontSize
                             font.weight: Font.DemiBold
+                            style: chatList.outline > 0 ? Text.Outline : Text.Normal
+                            styleColor: Qt.rgba(0, 0, 0, chatList.outline)
                         }
                         Label {
                             visible: line.amount !== ""
@@ -209,6 +218,8 @@ Item {
                             color: chatList.ink
                             font.pixelSize: chatList.fontSize
                             font.weight: Font.Bold
+                            style: chatList.outline > 0 ? Text.Outline : Text.Normal
+                            styleColor: Qt.rgba(0, 0, 0, chatList.outline)
                         }
                         // A Super Chat's words go under its name and amount.
                         Item {
@@ -247,6 +258,8 @@ Item {
                     color: line.action ? chatList.nameColour(line.colour) : chatList.ink
                     font.pixelSize: chatList.fontSize
                     font.italic: line.action
+                    style: chatList.outline > 0 ? Text.Outline : Text.Normal
+                    styleColor: Qt.rgba(0, 0, 0, chatList.outline)
                 }
             }
             Component {
