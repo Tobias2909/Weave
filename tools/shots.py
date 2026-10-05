@@ -49,9 +49,18 @@ from PySide6.QtCore import (  # noqa: E402
     QMetaObject,
     QObject,
     QPointF,
+    QRectF,
+    Qt,
     QTimer,
 )
-from PySide6.QtGui import QBrush, QColor, QImage, QLinearGradient, QPainter  # noqa: E402
+from PySide6.QtGui import (  # noqa: E402
+    QBrush,
+    QColor,
+    QImage,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+)
 from PySide6.QtQml import QQmlProperty  # noqa: E402
 
 from weave import paths  # noqa: E402
@@ -783,21 +792,147 @@ def shot_themes(bridge, window) -> None:
 # taken here, nine of them in the readme. Only ones that
 # ship: a theme somebody wrote for themselves is not in anybody else's copy,
 # and the shot would come out in whatever the fallback is.
+# What the chat beside the broadcast says, invented, with the emote the
+# channel would offer and a subscription Twitch announces among the lines.
+CHAT = [
+    ("Mossling", "#2E8B57", "the new smelting column is so clean"),
+    ("orbit_cat", "#1E90FF", "how many furnaces is that now"),
+    ("quietkeys", "#B22222", "forty eight, and it is still not enough"),
+    ("Tallow", "#DAA520", "quietHi quietHi"),
+    ("ferrous_fern", "#9ACD32", "belts belts belts"),
+    ("Kestrel", "#8A2BE2", "first time catching this live, the build is huge"),
+    ("Mossling", "#2E8B57", "did the trains ever get fixed"),
+    ("lantern_moth", "#FF7F50", "quietHi"),
+    ("orbit_cat", "#1E90FF", "the copper line looks starved again"),
+    ("Brindle", "#5F9EA0", "this is my falling asleep stream and I mean that kindly"),
+    ("Tallow", "#DAA520", "same honestly"),
+    ("ferrous_fern", "#9ACD32", "ratio check on the gears?"),
+    ("quietkeys", "#B22222", "two to one, the left side catches up after the split"),
+    ("Kestrel", "#8A2BE2", "quietHi from the night shift"),
+    ("lantern_moth", "#FF7F50", "how long has this map been going"),
+    ("Mossling", "#2E8B57", "about a month of evenings I think"),
+    ("Brindle", "#5F9EA0", "the lamps along the rail are a nice touch"),
+    ("orbit_cat", "#1E90FF", "quietHi quietHi quietHi"),
+    ("ferrous_fern", "#9ACD32", "oil next or still holding off"),
+    ("quietkeys", "#B22222", "holding off, the science comes first tonight"),
+    ("Tallow", "#DAA520", "respect"),
+    ("lantern_moth", "#FF7F50", "the music on this one is perfect for work"),
+    ("Kestrel", "#8A2BE2", "quietHi"),
+    ("Brindle", "#5F9EA0", "anyone else watching on a second screen"),
+    ("Mossling", "#2E8B57", "always"),
+    ("orbit_cat", "#1E90FF", "that roundabout is cursed and I love it"),
+    ("ferrous_fern", "#9ACD32", "the cursed roundabout stays"),
+    ("Tallow", "#DAA520", "quietHi quietHi"),
+]
+
+
+def shot_watching(bridge, window) -> None:
+    """A broadcast on its page in the window, its chat in the column beside
+    it. No video is decoded in a screenshot, so the picture is the stream's
+    own, which is what the page shows until the first frame. Nothing reads
+    the chat here: its lines are handed over the way its reader hands them."""
+    from weave import chat as chat_module
+    from weave.sources import twitchchat
+
+    chat_module.ChatRoom._start_reader = lambda self, *_a: None
+    login, name, title, game, _viewers = LIVE[0]
+    bridge.setVideosInWeave(True)
+    video = bridge._video
+    video._queue = [{"key": f"twitch:{login}", "title": title, "channel": name,
+                     "channelId": "", "channelKey": f"twitch:{login}",
+                     "thumbnail": qml_source(thumb(f"watching-{login}", 30, 1280, 720)),
+                     "url": f"https://www.twitch.tv/{login}", "live": True, "login": login}]
+    video._at = 0
+    video._idle = False
+    video._paused = False
+    video._finding = False
+    video._showing = False
+    for signal in (video.queueChanged, video.trackChanged, video.stateChanged,
+                   video.videoChanged, video.progressChanged, video.extrasChanged):
+        signal.emit()
+    bridge.showWatching()
+    settle(1.0)
+    chat = bridge._chat
+    emote = "https://pictures.invalid/emote-quiethi.png"
+    cache(emote, _avatar(41))
+    chat._emotes[emote] = (str(path_for(paths.IMAGE_CACHE, emote)), False, 1.0)
+    chat._extra = {"quietHi": twitchchat.Emote("quietHi", emote)}
+    tags = "color={colour};display-name={who};user-id={user};id=shot{n}"
+    for number, (who, colour, text) in enumerate(CHAT):
+        chat._take(twitchchat.parse_line(
+            f"@{tags.format(colour=colour, who=who, user=sum(map(ord, who)), n=number)} "
+            f":{who.lower()}!{who.lower()}@{who.lower()}.tmi.twitch.tv PRIVMSG #{login} "
+            f":{text}"))
+        if number == 9:
+            chat._take(twitchchat.parse_line(
+                r"@id=shotsub;msg-id=sub;system-msg=Kestrel\ssubscribed\sfor\s6\smonths!;"
+                f"user-id=12 :tmi.twitch.tv USERNOTICE #{login}"))
+    chat._release()
+    settle(1.2)
+    # The controls over the picture, as a pointer passing over it shows them.
+    page = find(window, "watchPage")
+    if page is not None:
+        page.setProperty("pointerOverPicture", True)
+        QMetaObject.invokeMethod(page, "stirControls")
+    settle(0.3)
+
+
 SHOTS = {
     "feed": ("Aurora", shot_feed, HEIGHT),
+    "watching": ("Weave Dark", shot_watching, HEIGHT),
     "panel": ("Ultraviolet", shot_panel, HEIGHT),
-    "music": ("Bloom", shot_music, 1080),
+    "music": ("Bloom", shot_music, HEIGHT),
     "channel": ("Sunset Drive", shot_channel, HEIGHT),
     "playlists": ("Mint Fade", shot_playlists, HEIGHT),
     "playlist": ("Linen", shot_playlist, HEIGHT),
     "suggestions": ("Deep Sea", shot_suggestions, HEIGHT),
     "search": ("Violet Glow", shot_search, HEIGHT),
     "history": ("Paper Dark", shot_history, HEIGHT),
-    "themes": ("Frost", shot_themes, 1080),
+    "themes": ("Frost", shot_themes, HEIGHT),
     "nowplaying": ("Nitro Pop", shot_nowplaying, HEIGHT),
     "companion": ("Blossom", shot_companion, HEIGHT),
     "box": ("Paper", shot_box, 760),
 }
+
+
+# The one picture the README shows: six of the others, each in another theme,
+# three across and two down, so it shows the range without a page of them.
+COLLAGE = ("feed", "watching", "nowplaying", "channel", "music", "themes")
+COLLAGE_TILE = 800
+COLLAGE_GAP = 18
+COLLAGE_RADIUS = 14
+
+
+def collage(out: Path) -> Path:
+    """The six, scaled to one width and set on a clear ground with rounded
+    corners, so the picture sits on a light page and a dark one alike."""
+    tile_h = round(COLLAGE_TILE * HEIGHT / WIDTH)
+    width = 3 * COLLAGE_TILE + 2 * COLLAGE_GAP
+    height = 2 * tile_h + COLLAGE_GAP
+    sheet = QImage(width, height, QImage.Format.Format_ARGB32_Premultiplied)
+    sheet.fill(QColor(0, 0, 0, 0))
+    painter = QPainter(sheet)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+    for index, name in enumerate(COLLAGE):
+        shot = QImage(str(out / f"{name}.png"))
+        if shot.isNull():
+            raise FileNotFoundError(out / f"{name}.png")
+        shot = shot.scaled(COLLAGE_TILE, tile_h, Qt.AspectRatioMode.IgnoreAspectRatio,
+                           Qt.TransformationMode.SmoothTransformation)
+        x = (index % 3) * (COLLAGE_TILE + COLLAGE_GAP)
+        y = (index // 3) * (tile_h + COLLAGE_GAP)
+        frame = QPainterPath()
+        frame.addRoundedRect(QRectF(x, y, COLLAGE_TILE, tile_h), COLLAGE_RADIUS,
+                             COLLAGE_RADIUS)
+        painter.save()
+        painter.setClipPath(frame)
+        painter.drawImage(x, y, shot)
+        painter.restore()
+    painter.end()
+    target = out / "overview.png"
+    sheet.save(str(target))
+    return target
 
 
 def take(name: str, out: Path) -> bool:
@@ -838,6 +973,8 @@ def main() -> int:
     parser.add_argument("--out", default="docs/shots", help="where to write them")
     parser.add_argument("--only", nargs="*", choices=sorted(SHOTS), help="a subset")
     parser.add_argument("--one", choices=sorted(SHOTS), help="take this one here")
+    parser.add_argument("--collage", action="store_true",
+                        help="only put the README's picture together from those taken")
     args = parser.parse_args()
 
     out = Path(args.out).resolve()
@@ -848,6 +985,9 @@ def main() -> int:
     if args.one:
         stub_network()
         return 0 if take(args.one, out) else 1
+    if args.collage:
+        print(f"wrote {collage(out)}")
+        return 0
 
     failed = []
     for name in (args.only or list(SHOTS)):
@@ -861,6 +1001,8 @@ def main() -> int:
             print(f"wrote {out / (name + '.png')}  ({SHOTS[name][0]})")
     for name in failed:
         print(f"FAILED {name}", file=sys.stderr)
+    if not failed and set(COLLAGE) <= set(args.only or SHOTS):
+        print(f"wrote {collage(out)}")
     return 1 if failed else 0
 
 

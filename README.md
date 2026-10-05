@@ -4,227 +4,62 @@
 [![release](https://img.shields.io/github/v/release/Tobias2909/Weave)](https://github.com/Tobias2909/Weave/releases/latest)
 
 A personal YouTube and Twitch client for Linux. Weave shows what the channels
-you track have posted, sorted into groups you make yourself, and hands playback
-to `mpv` instead of embedding a player of its own. Music plays inside the
-window, from a bar at the foot of it, and a page of its own shows the song.
+you follow have posted, sorted into groups you make yourself, and plays it in
+its own window or in your `mpv`. Music has a player of its own.
 
-Your channels, your groups, your window. Nothing recommends anything in the
-feed, nothing autoplays, and there is no endless scroll of things you never
-asked for. Everything Weave knows sits in one SQLite file in your own home
-directory, and it writes nothing to your account unless you ask it to, by
-switching on the note that tells YouTube Music which songs you heard or by
-turning a box of songs into a playlist.
+Nothing recommends anything in the feed, nothing autoplays, and everything
+Weave knows sits in one SQLite file in your home directory.
 
 https://github.com/user-attachments/assets/cc89faf0-0ee0-4dc1-bbb0-d89526c3ddd2
 
-## What it does
+## Features
 
-* A feed built from each channel's own RSS, which needs no login and carries
-  exact publish times with exact view and like counts
-* Lengths are filled in behind the feed, since RSS carries none, so a library
-  read in from a long backlog fills its gaps over the following hours
-* One command imports every channel you already subscribe to, names and pictures
-  included, and any channel can be tracked without subscribing to it
-* **Groups** hold whole channels, **boxes** hold individual videos, both made and
-  named by you, both mixing YouTube and Twitch
-* A live bar across the top, Twitch and YouTube in one row ordered by how many
-  are watching, on its own faster timer
-* Left click plays in `mpv`, and Weave watches that `mpv` over its IPC socket to
-  learn what was watched, so hide watched means something without a second
-  history to keep, and a line under a card shows where you stopped
-* Shorts stay out of the feed, because Weave asks each channel for its long form
-  tab, and reads the Shorts tab of a channel that has none so its rows are still
-  known for what they are
-* An announced premiere is badged with when it starts and is refused by the
-  player rather than handed over to fail
-* Members only videos live in a feed of their own, read by a button on that
-  channel's page, badged wherever they appear and never poured into the feed
-* Search everything stored as you type, or press enter to search YouTube itself,
-  narrowed by sort order, upload date and length. While you type, the words go to
-  YouTube after each pause, the way its own search box sends them, and what it
-  suggests opens under the box, asked anonymously or as your account
-* What YouTube suggests, the history it keeps and your own playlists, each in its
-  own place and never poured into the feed
-* A track that is really a whole record has its songs marked on the player bar,
-  and the line under the title names the one playing. Hovering names the song
-  under the pointer, and a press with the right button lands on the start of one
-* A detail panel that follows what `mpv` is playing, with views, likes, an
-  estimated dislike count and the top comment threads
-* A companion page beside whatever `mpv` is playing, with what YouTube
-  recommends for that video and the queue `mpv` holds, which you fill, order and
-  clear from the window
-* A music area with its own player bar, a queue you can reorder, favourites,
-  boxes of songs, the listening it remembers, and media keys through MPRIS
-* Themes are files, fourteen come with it, and there is an editor with a colour
-  wheel that derives a whole palette from two dots
-* A channel page in three parts, the videos, the streams it has made and the
-  playlists, and a playlist you keep sits in the sidebar under your own
-* A report written to one file from the How things are page, holding the checks,
-  the versions, the counts and every request of the last day, and no channel
-  names, no titles and nothing secret
-* Its own window frame, mouse back and forward buttons, and a remembered shape
+* A feed of the YouTube and Twitch channels you follow, taken from your own
+  subscriptions, with Shorts left out
+* **Groups** sort whole channels and **boxes** keep single videos, both made and
+  named by you
+* Videos play in the window with a queue, chapters, captions, live chat and
+  SponsorBlock, and keep playing in a corner while you browse. Your own `mpv`
+  can play them instead
+* YouTube Premium quality whenever your account has it
+* A live bar with everyone streaming right now, Twitch and YouTube in one row
+* A music player with the shelves of YouTube Music, a queue, favourites, boxes
+  of songs, lyrics that follow the song and media keys
+* What YouTube recommends, your history and your playlists, each in its own
+  place and never mixed into the feed
+* Search what is stored as you type, or YouTube itself with return
+* A panel beside the feed with views, likes, an estimated dislike count and the
+  top comments
+* Fourteen themes, and an editor that builds a whole theme from two dots on a
+  colour wheel
 
-## What is playing
+## Screenshots
 
-![The detail panel beside the feed](docs/shots/panel.png)
+![Six of Weave's pages, each in another of its themes](docs/shots/overview.png)
 
-*Ultraviolet. The panel mirrors `mpv` rather than the grid, so it follows an
-`mpv` side track change too. Views and likes are already stored and appear at
-once, while the dislike estimate and the comments are fetched only for a video
-somebody is actually looking at.*
-
-Closing the panel closes it until the next video starts, and closing `mpv`
-closes it as well, since there is then nothing to mirror. A Twitch stream shows
-what a stream has instead, who is on, what they are playing, how many are
-watching and how long it has been going.
-
-![The companion page beside a video mpv is playing](docs/shots/companion.png)
-
-*Blossom. What YouTube recommends beside the video `mpv` is playing, and the
-playlist `mpv` holds in the column on the right, the one playing marked.*
-
-The **Companion** page in the sidebar follows the same video from further
-away. It shows what YouTube recommends beside it, a mix first and then the
-chips YouTube offers itself, with the queue `mpv` holds in a column next to
-them. A recommended video pressed goes on the end of that queue, and its menu
-plays it next or now instead. The queue is put in order by dragging, emptied of
-everything but the video playing with one press, or kept as a box of songs.
-The page asks YouTube only while it is open, and keeps each answer for the rest
-of the session.
-
-## A channel on its own
-
-![A channel page with its banner](docs/shots/channel.png)
-
-*Sunset Drive. Clicking a channel name opens everything stored from it, watched
-ones dimmed rather than hidden, since asking for a channel means asking for all
-of it.*
-
-A channel that streams gets a half of its own for the recordings, since the
-videos tab and the streams tab are separate lists at the source and past streams
-used to appear nowhere. A recording is badged as one wherever it turns up.
-
-## The playlists a channel has made
-
-![A channel's playlists, drawn as stacks of videos](docs/shots/playlists.png)
-
-*Mint Fade. A playlist is drawn as the stack of videos it is. The pictures come
-with the listing, so a page of them costs the one request that read the tab
-rather than a request each.*
-
-Opening one reads what is in it. Keeping a playlist puts it in a section of
-its own in the sidebar, under your own, since it belongs to somebody else.
-
-## Music
-
-![The music area with the player bar](docs/shots/music.png)
-
-*Bloom. The shelves YouTube Music itself opens on, favourites, saved
-addresses for a round the clock stream, and a bar that survives switching views.*
-
-A song is a stream at both ends. `yt-dlp` resolves an address and the player
-reads it, at the same quality the rest of your setup gets, and Weave holds only
-the track playing and the one after it. The next address is resolved as the
-current track starts, so a changeover is a millisecond and going back a track
-costs nothing.
-
-![A box of songs on its own tab of the music page](docs/shots/box.png)
-
-*Paper. A box of songs on a tab of its own, next to the shelves and the
-favourites.*
-
-Songs go in boxes of your own as well, each box a tab on the music page beside
-the shelves. A song goes in from its right click menu, a video card can put its
-video in one, and the whole queue can be kept as a box. The songs on a tab are
-put in order by dragging, and **Watch in mpv** on one of them hands `mpv` the
-whole box as a playlist, starting from that song. The shelves themselves can be
-hidden or put in another order in the music settings, behind the dots on
-**Music**.
-
-Favourites, and any box ticked **Keep on disk**, are the exception, and their
-songs are kept on disk. Favourites are a short list you mark yourself and play
-over and over, and streaming one means paying for the address and the wait
-every time. Both halves are kept, the sound and the picture, written the first
-time the song is played rather than fetched ahead of it. There is a ceiling in
-the music settings, and a song that leaves every kept box drops what was kept
-for it.
-
-![The Now playing page on its lyrics tab](docs/shots/nowplaying.png)
-
-*Nitro Pop. The lyrics tab following the song, the line being sung over the next
-one, with the queue beside it. This song has no video, so its artwork stands
-where the picture would be.*
-
-The page behind the chevron on the bar shows the song itself, the video where
-there is one and the artwork where there is not, with the queue beside it. Its
-tabs show the words, the comments, and what YouTube recommends beside the
-video, and a recommended video pressed goes on the end of the queue. Where the
-music service has the words timed, the lyrics tab leaves the picture where it
-is and follows the song under it, the line being sung with the next one smaller
-below. A music video borrows the words of its song and follows them only when
-the two are the same length, since a video with an intro of its own would run
-ahead of them. On the other tabs the picture waits small in a corner. Nothing
-is fetched and nothing decoded for that page while it is closed.
-
-Starting a video pauses the music, fading out over about a second rather than
-cutting off mid note. There is a switch in the bar if you disagree. Repeat has
-three settings rather than two, off, the whole queue, and the one track.
-
-## Your playlists
-
-![A playlist, with the count of entries that are gone](docs/shots/playlist.png)
-
-*Linen, one of the four light ones. A playlist keeps the order somebody gave
-it, and entries that have gone private are counted at the foot of the list
-rather than quietly making it shorter.*
-
-Nothing is read at launch. The menu beside **Playlists** reads the list, which
-carries no contents, and opening one reads that playlist. Each playlist can be
-hidden on its own and dragged into the order you want, and any one can be
-turned round, shown and played from its last video to its first. Clicking a
-video hands `mpv` the whole playlist starting there. A playlist can also be
-marked as music, after which a press on one of its videos goes to the player bar
-instead.
-
-## Themes
-
-![The settings page with the theme editor](docs/shots/themes.png)
-
-*Frost, another of them. Every theme in the list is a file in the same format
-as one you write, and the window repaints as you save it.*
-
-Move two or three dots on the wheel and all sixteen colour roles follow, with
-text moved until it clears a contrast ratio. Save it and it lands in
-`~/.config/weave/themes` as ordinary TOML, ready to hand to somebody else.
-
-```sh
-python -m weave themes
-python -m weave themes use Frost
-python -m weave themes export Frost
-```
-
-## Requirements
-
-Everything here is in the Arch official repositories, and in the package manager
-of most other distributions.
-
-| Needed for | Package |
-|---|---|
-| The application | `python`, `pyside6`, `python-requests`, `python-platformdirs` |
-| Playback | `mpv` |
-| Adding a channel, and anything beyond RSS | `yt-dlp` and `yt-dlp-ejs`, plus `deno` for the challenges it has to solve. `nodejs` or `bun` also work and Weave names them for yt-dlp, which reaches for `deno` on its own |
-| Twitch playback | `streamlink` |
-| The music area | `python-ytmusicapi` 1.12.2 or newer |
-
-`yt-dlp-ejs` is the script that answers YouTube's challenge, and it has to live
-in the same place as the `yt-dlp` that reads it. Where your distribution does
-not package it, `python3 -m pip install --user yt-dlp-ejs` puts it where
-`yt-dlp` will look. Without it everything signed in fails while the plain feed
-keeps working. `weave doctor` says which pieces are missing, in those words.
+*The feed, a stream with its chat, a song with its lyrics, a channel, the music
+shelves and the theme editor, each in another of the fourteen themes.*
 
 ## Install
 
-Run it straight from a clone.
+Weave needs `python`, `pyside6`, `python-requests`, `python-platformdirs`,
+`mpv`, `yt-dlp` with `yt-dlp-ejs` and `deno`, `streamlink` for Twitch and
+`python-ytmusicapi` for the music. All of them are in the Arch repositories and
+in most other distributions. Where `yt-dlp-ejs` is not packaged,
+`python3 -m pip install --user yt-dlp-ejs` puts it where `yt-dlp` looks.
+
+```sh
+pipx install --system-site-packages "weave[music] @ git+https://github.com/Tobias2909/Weave"
+weave-app desktop install
+weave-app
+```
+
+The second line puts Weave in your application menu. Weave signs in through a
+browser you already use YouTube in, and Twitch is connected with one button. The
+first start walks you through both and imports your subscriptions, and
+`weave-app doctor` says which part is missing when nothing arrives.
+
+Or run it straight from a clone.
 
 ```sh
 git clone https://github.com/Tobias2909/Weave.git
@@ -232,158 +67,13 @@ cd Weave
 python -m weave
 ```
 
-Or install it as a normal program.
-
-```sh
-pipx install --system-site-packages "weave[music] @ git+https://github.com/Tobias2909/Weave"
-weave-app
-```
-
-The music extra pins the library the music area needs, and the system site
-packages flag lets the large Qt package come from your distribution rather than
-being downloaded again. TeX Live ships a program called weave as well, which is
-why this one also installs as `weave-app`.
-
-Weave draws its own window frame, so a panel takes the name and the icon from a
-desktop entry. This writes that entry and the icons into your own share tree.
-
-```sh
-python -m weave desktop install
-```
-
-## Use
-
-Everything is done in the window. The first start opens a few pages that walk
-you through it, and the **Getting started** button on the settings page opens
-them again whenever you want. **Import subscriptions** sits on that page and
-tracks every channel in your subscription list. One at a time goes through the
-plus beside **Channels**, which takes a handle, a channel id, a channel address
-or a `twitch.tv` address.
-
-The plus beside **Channels** makes a group, the plus beside **Boxes** makes a
-box, and either can be renamed, moved or deleted by right clicking its row.
-Right click a card for the same sort of menu, which plays it, opens its channel,
-marks it watched or puts it in a box. Deleting a group keeps its channels and
-deleting a box keeps its videos.
-
-For Twitch, press **Connect Twitch** in the live bar and approve the page it
-opens, which already has the code filled in. Every channel you follow is tracked
-from that moment.
-
-There is a command behind most of it as well, and it can list itself.
-
-```sh
-python -m weave --help
-```
-
-## How playback works
-
-A video you press goes to `mpv`. Weave hands it a URL, decodes nothing itself
-and reads that instance over its JSON IPC socket to learn what was watched,
-either at the end of a file or once 85 percent of it has been seen.
-
-Music is the other half and works the other way. It plays through libmpv inside
-Weave's own process, which is what lets the page draw the video of a song in
-the window rather than opening a second one somewhere else.
-
-When `mpv-ff2mpv-single.sh` is on your path Weave calls it, because that wrapper
-already canonicalizes URLs, resolves Twitch through `streamlink`, expands
-playlists and reuses one instance. Without it Weave falls back to plain `mpv`
-and everything still works. Nothing is added to your `mpv` configuration, no Lua
-script and no config edit. That wrapper comes from the setup Weave was built
-beside, at [`Tobias2909/mpv-config`](https://github.com/Tobias2909/mpv-config),
-and Weave needs none of it.
-
-## How often it asks
-
-Weave takes a small round every minute rather than a large one every quarter of
-an hour, because what the feed endpoint objects to is a burst rather than a day
-of requests. Each channel carries its own interval, from a quarter of an hour
-for one that posted this week down to once a day for one silent for a year, and
-most are not asked on that schedule at all. Every quarter of an hour one call
-reads your subscriptions feed, and any channel it names with something new is
-asked in the same minute. Underneath sits a ceiling per endpoint, counted in the
-database so restarting cannot forget it.
-
-```sh
-python -m weave budget
-python -m weave schedule
-```
-
-## When nothing is arriving
-
-Every way this can fail looks the same from outside, so one place asks each part
-whether it is working and prints the answer. It checks the tools, the browser
-profile and whether it still holds a login, the database, the schedule, the
-picture cache, Twitch, and the feed endpoint itself. Only the last two make a
-request. **How things are** in the sidebar is the same list in the window.
-
-```sh
-python -m weave doctor
-python -m weave doctor --offline
-```
-
-## Configuration and where things live
-
-Copy `config.example.toml` to `~/.config/weave/config.toml` and edit it. Every
-value in that file is already the default, so an empty config is valid and a
-missing one is fine.
-
-| What | Where |
-|---|---|
-| Config | `~/.config/weave/config.toml` |
-| Themes | `~/.config/weave/themes/` |
-| Database | `~/.local/state/weave/weave.db` |
-| Pictures | `~/.cache/weave/images/` |
-
-Cookies are only needed for the parts that go beyond RSS, and Weave reads them
-the way `yt-dlp` does, from a browser profile. Settings lists the Firefox family
-profiles found on this machine and says which of them is signed in, so a fork
-such as Zen or Floorp can be chosen.
-
-## Tests
-
-The tests are plain `unittest`, so they need nothing installed. The window is
-tested too, walked through every view, menu and popup with every request failing
-at once, since a clean boot proves almost nothing about an interface.
-
-```sh
-python -m unittest discover -s tests -t .
-ruff check .
-python tools/drive.py smoke --offline
-python tools/shots.py --out docs/shots
-```
-
-The last one takes the pictures in this file. Every name, title, number and
-thumbnail in them is invented, so a picture of the application never carries
-anybody's account.
-
 ## Not an official anything
 
-Weave is one person's own program, not made by, endorsed by or connected to
-YouTube, Google or Twitch in any way.
-
-It reads your account and writes nothing to it on its own, no likes, no
-subscriptions, no comments, no playlist edits. Two things write, and only when
-you ask. The first stays off until you switch it on in Settings. It adds each
-song you listen to for at least 30 seconds to your YouTube Music history, with
-the same note its own player sends, so the history and the suggestions on your
-phone follow what you heard in Weave. The second is a button in the music
-settings that makes a new playlist on your account out of a box of songs, and
-it never changes a playlist that is already there. Reading a
-public feed and playing a video outside their player is the line every external
-client sits on, and the same line your `mpv` and `yt-dlp` setup already sits on.
-
-## SponsorBlock
-
-A video played in Weave's own window can skip, or mark with a button, the parts
-other viewers have marked, such as a sponsor read or an intro. It is off until
-you switch it on in Settings. The segments come from
-[SponsorBlock](https://sponsor.ajay.app), whose database and API are shared
-under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/).
-Weave ships none of that data and asks for it as the video starts, sending only
-the first four characters of a hash of the video's id, so SponsorBlock never
-learns which video it was.
+Weave is one person's own program and is not made by, endorsed by or connected
+to YouTube, Google or Twitch. It reads your account and writes nothing to it
+unless you ask. Skipping sponsors uses data from
+[SponsorBlock](https://sponsor.ajay.app), shared under
+[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/).
 
 ## License
 
