@@ -1005,6 +1005,18 @@ Item {
                         tookPause = false
                         page.fullscreenToggled()
                     }
+                    // Held down, the video runs twice as fast until it is let
+                    // go, and a hold is no press, so it neither pauses nor
+                    // plays. Where there is no faster, a broadcast or a video
+                    // not playing yet, the hold is let be a press after all.
+                    pressAndHoldInterval: 400
+                    onPressAndHold: function (mouse) {
+                        if (mouse.button !== Qt.LeftButton || page.corner || page.small
+                                || !Video.holdFast(true))
+                            mouse.accepted = false
+                    }
+                    onReleased: Video.holdFast(false)
+                    onCanceled: Video.holdFast(false)
                     WheelHandler {
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                         property real carried: 0
@@ -1014,6 +1026,12 @@ Item {
                             while (carried <= -120) { carried += 120; Video.nudgeVolume(-1) }
                         }
                     }
+                }
+
+                // Says the picture is held, and how fast it runs for it.
+                FastMark {
+                    objectName: "watchingFast"
+                    visible: Video.holdingFast && !page.corner
                 }
 
                 // Pressed in the corner, it takes the page back to the video.

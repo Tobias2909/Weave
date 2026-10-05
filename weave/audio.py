@@ -134,6 +134,10 @@ ADDRESS_MARGIN_S = 600.0
 # enough that a handful of turns lands where it was aimed.
 SEEK_NOTCH_S = 5.0
 
+# How fast a picture held down plays, the music's and the window's video's
+# alike, until it is let go: what YouTube's own player does on a hold.
+HOLD_SPEED = 2.0
+
 REPEAT_OFF, REPEAT_ALL, REPEAT_ONE = 0, 1, 2
 
 # What is being done about the picture, said plainly, for the line under the
@@ -725,6 +729,10 @@ class AudioPlayer(QObject):
         # come back once the video stops. Anything done to the music by hand in
         # between means it is no longer the video's to give back.
         self._paused_for_video = False
+        # While the picture is held down: faster, and whether it was paused
+        # before, to be paused again once it is let go.
+        self._held_fast = False
+        self._held_from_pause = False
 
     # ---- what QML reads --------------------------------------------------
 
@@ -901,6 +909,7 @@ class AudioPlayer(QObject):
     seconds = Property(float, _get_seconds, notify=progressChanged)
     length = Property(int, _get_length, notify=progressChanged)
     isLive = Property(bool, _get_is_live, notify=trackChanged)
+    holdingFast = Property(bool, lambda self: self._held_fast, notify=stateChanged)
     # Bound to progress rather than to the track, because the length arrives
     # from mpv after the track does and the marks cannot be placed without it.
     chapters = Property("QVariantList", _get_chapters, notify=progressChanged)
@@ -1510,6 +1519,30 @@ class AudioPlayer(QObject):
         self._recover_at = 0.0
 
     # ---- controls --------------------------------------------------------
+
+    @Slot(bool, result=bool)
+    def holdFast(self, held: bool) -> bool:
+        """Twice as fast for as long as the picture is held down, then back to
+        the usual pace, and paused again if it was. A broadcast plays at its
+        own pace and is left alone. Says whether the hold took."""
+        held = bool(held)
+        if held == self._held_fast:
+            return held
+        if held:
+            if not self._queue or self._idle or self._get_is_live():
+                return False
+            self._held_fast = True
+            self._held_from_pause = self._paused
+            self._engine.set_speed(HOLD_SPEED)
+            if self._paused:
+                self.toggle()
+        else:
+            self._held_fast = False
+            self._engine.set_speed(1.0)
+            if self._held_from_pause and self._get_playing():
+                self.toggle()
+        self.stateChanged.emit()
+        return True
 
     @Slot()
     def toggle(self) -> None:

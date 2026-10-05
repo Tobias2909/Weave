@@ -30,8 +30,8 @@ from PySide6.QtCore import Property, QObject, QThread, QTimer, Signal, Slot
 
 from . import format as fmt
 from . import net, trace
-from .audio import (FACT_SPEC, VIDEO_HEIGHT_STEPS, AddressCache, _why, nothing_to_play,
-                    parse_chapters, parse_facts, reads_as_gone)
+from .audio import (FACT_SPEC, HOLD_SPEED, VIDEO_HEIGHT_STEPS, AddressCache, _why,
+                    nothing_to_play, parse_chapters, parse_facts, reads_as_gone)
 from .budget import SPONSORBLOCK, Budget
 from .config import Config
 from .cookies import args as cookie_args
@@ -564,6 +564,10 @@ class VideoPlayer(QObject):
         self._saved_at = 0.0
         self._screen_height = 0
         self._speed = 1.0
+        # While the picture is held down: faster, and whether it was paused
+        # before, to be paused again once it is let go.
+        self._held_fast = False
+        self._held_from_pause = False
         # Per video, what its resolve said besides the addresses, and per
         # video and ceiling, the height it came back at and whether that was in
         # Premium quality.
@@ -852,6 +856,7 @@ class VideoPlayer(QObject):
     loading = Property(bool, _get_loading, notify=stateChanged)
     hasQueue = Property(bool, _get_has_queue, notify=queueChanged)
     isLive = Property(bool, _get_is_live, notify=trackChanged)
+    holdingFast = Property(bool, lambda self: self._held_fast, notify=stateChanged)
     position = Property(float, _get_position, notify=progressChanged)
     seconds = Property(float, _get_seconds, notify=progressChanged)
     length = Property(int, _get_length, notify=progressChanged)
@@ -1131,7 +1136,8 @@ class VideoPlayer(QObject):
         self._engine.set_pause(paused)
         # A broadcast plays at its own pace, whatever the last video was
         # played at: faster, it would run into its present and stall there.
-        self._engine.set_speed(1.0 if entry.get("live") else self._speed)
+        self._engine.set_speed(1.0 if entry.get("live")
+                               else HOLD_SPEED if self._held_fast else self._speed)
         self._forget_live()
         if entry.get("live"):
             self._live_watch.start()
@@ -1289,6 +1295,31 @@ class VideoPlayer(QObject):
             self._start_current()
             return
         self.setPaused(not self._paused)
+
+    @Slot(bool, result=bool)
+    def holdFast(self, held: bool) -> bool:
+        """Twice as fast for as long as the picture is held down, then back to
+        the speed picked, and paused again if it was. A broadcast plays at its
+        own pace, and a video still on its way or come to its end has nothing
+        to hurry, so those are left alone. Says whether the hold took."""
+        held = bool(held)
+        if held == self._held_fast:
+            return held
+        if held:
+            if not self._current() or self._get_is_live() or self._ended or self._finding:
+                return False
+            self._held_fast = True
+            self._held_from_pause = self._paused
+            self._engine.set_speed(HOLD_SPEED)
+            if self._paused:
+                self.setPaused(False)
+        else:
+            self._held_fast = False
+            self._engine.set_speed(self._speed)
+            if self._held_from_pause and not self._paused:
+                self.setPaused(True)
+        self.stateChanged.emit()
+        return True
 
     @Slot(bool)
     def setPaused(self, paused: bool) -> None:

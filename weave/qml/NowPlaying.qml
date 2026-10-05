@@ -1447,6 +1447,18 @@ Item {
                         if (!page.small)
                             page.fullscreenToggled()
                     }
+                    // Held down with the left button, it plays twice as fast
+                    // until it is let go, the way the window's video does, and
+                    // a hold is no press. Where there is no faster, the hold
+                    // is let be a press after all.
+                    pressAndHoldInterval: 400
+                    onPressAndHold: function (mouse) {
+                        if (mouse.button !== Qt.LeftButton || page.small
+                                || !Audio.holdFast(true))
+                            mouse.accepted = false
+                    }
+                    onReleased: Audio.holdFast(false)
+                    onCanceled: Audio.holdFast(false)
 
                     Timer {
                         id: pressWait
@@ -1473,6 +1485,12 @@ Item {
                         }
                     }
                 }
+                // Says the picture is held, and how fast it runs for it.
+                FastMark {
+                    objectName: "nowPlayingFast"
+                    visible: Audio.holdingFast && !page.small
+                }
+
                 // Pressed in the corner, it takes the page back to the video.
                 Rectangle {
                     objectName: "nowPlayingBackToVideo"

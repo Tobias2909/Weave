@@ -558,6 +558,40 @@ class TheMenusOnThePicture(_Base):
         self.player.setQuality(0)
         self.assertEqual(self.db.get_state(QUALITY_STATE), "auto")
 
+    def held(self, live=False):
+        self.playing_with({})
+        self.player._current()["live"] = live
+        self.player._finding = False
+        self.player._showing = True
+        self.player._paused = False
+
+    def test_held_down_it_plays_twice_as_fast_and_the_speed_picked_after(self):
+        self.held()
+        self.player.setSpeed(1.5)
+        self.assertTrue(self.player.holdFast(True))
+        self.assertEqual(self.engine.only("speed")[-1], ("speed", 2.0))
+        self.assertTrue(self.player.holdingFast)
+        self.player.holdFast(False)
+        self.assertEqual(self.engine.only("speed")[-1], ("speed", 1.5))
+        self.assertEqual(self.player.speed, 1.5, "the speed picked is untouched")
+        self.assertTrue(self.player.playing)
+
+    def test_held_while_paused_it_plays_and_is_paused_again_after(self):
+        self.held()
+        self.player.setPaused(True)
+        self.player.holdFast(True)
+        self.assertEqual(self.engine.only("pause")[-1], ("pause", False))
+        self.player.holdFast(False)
+        self.assertEqual(self.engine.only("pause")[-1], ("pause", True))
+
+    def test_a_broadcast_or_a_video_still_on_its_way_is_not_hurried(self):
+        self.held(live=True)
+        self.assertFalse(self.player.holdFast(True))
+        self.held()
+        self.player._finding = True
+        self.assertFalse(self.player.holdFast(True))
+        self.assertNotIn(("speed", 2.0), self.engine.only("speed"))
+
     def test_a_turn_of_the_wheel_over_the_bar_moves_five_seconds(self):
         self.playing_with({})
         self.player._dur, self.player._pos = 600.0, 100.0

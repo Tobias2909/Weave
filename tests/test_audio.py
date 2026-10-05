@@ -106,6 +106,9 @@ class FakeEngine(QObject):
     def set_pause(self, paused):
         self._note("pause", paused)
 
+    def set_speed(self, speed):
+        self._note("speed", speed)
+
     def seek(self, seconds):
         self._note("seek", round(seconds, 3))
 
@@ -892,6 +895,39 @@ class Hearing(_Base):
         self.player._paused = False
         self.play_to(35)
         self.assertEqual(self.said, ["yt:aaa", "yt:bbb"])
+
+
+class HeldDown(_Base):
+    """The picture held down plays twice as fast until it is let go."""
+
+    def setUp(self):
+        super().setUp()
+        self.queue("aaa")
+        self.cache("aaa")
+        self.player._start_current()
+        self.player._idle = False
+        self.player._paused = False
+
+    def test_twice_as_fast_while_held_and_back_after(self):
+        self.assertTrue(self.player.holdFast(True))
+        self.assertTrue(self.player.holdingFast)
+        self.assertEqual(self.engine.only("speed")[-1], ("speed", 2.0))
+        self.player.holdFast(False)
+        self.assertFalse(self.player.holdingFast)
+        self.assertEqual(self.engine.only("speed")[-1], ("speed", 1.0))
+        self.assertTrue(self.player.playing, "a hold neither pauses nor plays")
+
+    def test_held_while_paused_it_plays_and_is_paused_again_after(self):
+        self.player._paused = True
+        self.player.holdFast(True)
+        self.assertEqual(self.engine.only("pause")[-1], ("pause", False))
+        self.player.holdFast(False)
+        self.assertTrue(self.player._pause_after_fade, "fades out and pauses again")
+
+    def test_a_broadcast_is_not_hurried(self):
+        self.player._queue[0]["live"] = True
+        self.assertFalse(self.player.holdFast(True))
+        self.assertEqual(self.engine.only("speed"), [])
 
 
 class Addresses(unittest.TestCase):
