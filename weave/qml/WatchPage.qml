@@ -240,14 +240,7 @@ Item {
             choose("video")
     }
 
-    // The screen the window is on decides how big a picture is worth fetching,
-    // counted in its real pixels so a scaled screen counts what it really has.
-    readonly property int screenPixels: Math.round(Screen.height * Screen.devicePixelRatio)
-    onScreenPixelsChanged: Video.setScreenHeight(screenPixels)
-    Component.onCompleted: {
-        Video.setScreenHeight(screenPixels)
-        Chat.setShown(page.chatOnScreen)
-    }
+    Component.onCompleted: Chat.setShown(page.chatOnScreen)
 
     property bool sideNear: false
     readonly property bool sideAwake: page.cinema && page.sideNear && page.chatMode === "full"

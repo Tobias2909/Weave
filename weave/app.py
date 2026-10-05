@@ -25,7 +25,7 @@ from PySide6.QtQuickControls2 import QQuickStyle
 from . import awake, config, desktop, imagecache, mpris, paths, trace
 from .audio import AudioPlayer
 from .chat import ChatRoom
-from .video import VideoPlayer
+from .video import ScreenWatch, VideoPlayer
 from .db import Database
 from .engine_libmpv import OPTIONS as PLAYER_OPTIONS
 from .player.mpv import Player
@@ -183,6 +183,8 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
     # context property re-evaluates the bindings that read it.
     context.setContextProperty("EffectsAvailable", _effects_available())
     _restore_geometry(window, db)
+    # How big a picture Auto fetches follows the screen the window is on.
+    ScreenWatch(window, video, parent=app)
     # The media keys reach a player over MPRIS. Installed once the window
     # exists, so the panel can raise it. A machine with no session bus gets
     # no adapter and everything else still runs.

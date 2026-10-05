@@ -26,7 +26,8 @@ import time
 from dataclasses import dataclass, field
 from urllib.parse import parse_qs, urlparse
 
-from PySide6.QtCore import Property, QObject, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import Property, QEvent, QObject, QThread, QTimer, Signal, Slot
+from PySide6.QtGui import QGuiApplication, QWindow
 
 from . import format as fmt
 from . import net, trace
@@ -171,6 +172,47 @@ def ceiling_for(screen_height: int) -> int:
     fetched bigger than anything can show it."""
     fitting = [step for step in VIDEO_HEIGHT_STEPS if step <= int(screen_height)]
     return fitting[-1] if fitting else VIDEO_HEIGHT_STEPS[0]
+
+
+class ScreenWatch(QObject):
+    """Tells the player how tall the screen the window is on is, counted in
+    the pixels the window is really drawn in.
+
+    The screen's own ratio cannot say. Wayland gives a screen's scale in whole
+    numbers, so a 1080 line screen scaled to 125 % calls itself 864 lines at a
+    ratio of 2: 1728 lines, and Auto fetched 1440p for it. The window is told
+    the fraction itself. MEASURED in a nested KWin at 125 % and 150 %: the
+    screen said 2.0 both times, the window 1.25 and 1.5, and 1080 each time.
+
+    The window moving to another screen is told before its new ratio is, so
+    the ratio changing is measured again on its own."""
+
+    def __init__(self, window: QWindow, player: VideoPlayer, parent=None) -> None:
+        super().__init__(parent)
+        self._window = window
+        self._player = player
+        window.installEventFilter(self)
+        window.screenChanged.connect(self.measure)
+        app = QGuiApplication.instance()
+        for screen in app.screens():
+            screen.geometryChanged.connect(self.measure)
+        app.screenAdded.connect(lambda screen: screen.geometryChanged.connect(self.measure))
+        self.measure()
+
+    def eventFilter(self, watched, event) -> bool:
+        if event.type() == QEvent.Type.DevicePixelRatioChange:
+            self.measure()
+        return False
+
+    def measure(self, *_ignored) -> None:
+        screen = self._window.screen()
+        if screen is None:
+            return
+        ratio = self._window.devicePixelRatio()
+        pixels = round(screen.size().height() * ratio)
+        trace.mark("screen_height", pixels=pixels, screen=screen.name(), ratio=ratio,
+                   screen_ratio=screen.devicePixelRatio())
+        self._player.setScreenHeight(pixels)
 
 
 def watch_format(height: int, live: bool) -> str:
@@ -1035,8 +1077,9 @@ class VideoPlayer(QObject):
 
     @Slot(int)
     def setScreenHeight(self, pixels: int) -> None:
-        """How tall the screen the window is on is, in its real pixels. Auto
-        never fetches the picture taller than that."""
+        """How tall the screen the window is on is, in its real pixels, as
+        ScreenWatch measures it. Auto never fetches the picture taller than
+        that."""
         pixels = int(pixels)
         if pixels > 0 and pixels != self._screen_height:
             self._screen_height = pixels
