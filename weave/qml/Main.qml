@@ -1515,7 +1515,39 @@ ApplicationWindow {
             onCardMenuRequested: (key) => root.askAboutQueueEntry(key)
             onQueueMenuRequested: (key) => root.askAboutQueueEntry(key)
             onTileMenuRequested: (index, key) => root.askAboutTile("watch", index, key)
+            cornerHolder: videoCorner
         }
+    }
+
+    // Where the picture of the video playing waits while the rest of the
+    // window is browsed: small in the bottom right of the middle, over every
+    // view and page and beside the panel, above the bar. The page lends its
+    // own picture to it rather than a second one being made.
+    Item {
+        id: videoCorner
+        objectName: "videoCorner"
+        // Over the pages, which are at 3, and under the bar, which is at 4.
+        z: 3.5
+        readonly property bool wanted: Video.hasQueue && !Video.ended
+                                       && App.viewKind !== "watching" && !root.cinema
+        visible: wanted
+        // As wide as it was last made, by its edges, and smaller where the
+        // middle has no room for that, down to a size still worth watching.
+        // Always the shape of a picture.
+        readonly property real room: (detailPanel.visible ? detailPanel.x : parent.width)
+                                     - (sidebar.x + sidebar.width) - 46
+        readonly property real tallRoom: (miniPlayer.visible ? miniPlayer.y : parent.height)
+                                         - watchSlot.y - 32
+        function fit(wanted) {
+            return Math.round(Math.max(144, Math.min(wanted, room, tallRoom * 16 / 9)))
+        }
+        width: fit(Video.cornerWidth)
+        height: Math.round(width * 9 / 16)
+        anchors.right: detailPanel.visible ? detailPanel.left : parent.right
+        anchors.bottom: miniPlayer.visible ? miniPlayer.top : parent.bottom
+        // Clear of the scroll bar of the view beside the panel.
+        anchors.rightMargin: 30
+        anchors.bottomMargin: 16
     }
 
     // The keys of a player, on the page a video plays on. Not while something

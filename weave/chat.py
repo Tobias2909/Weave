@@ -662,8 +662,10 @@ class ChatRoom(QObject):
         """Where the video is. A jump is a seek, which a replay follows."""
         seconds = float(seconds)
         last, self._position = self._position, seconds
-        if self._kind != "replay" or self._reader is None:
+        if self._kind != "replay":
             return
+        # Followed while the chat is away as well, so a seek made meanwhile
+        # does not leave it showing what was said around the old moment.
         if seconds < last - REPLAY_BACK_S or seconds > last + REPLAY_JUMP_S:
             self._replay_from(seconds)
 
@@ -680,6 +682,27 @@ class ChatRoom(QObject):
         self._unseen = 0
         self._held = False
         self.changed.emit()
+
+    def _begin_replay(self) -> None:
+        """The replay coming on screen. Back from being away with what it
+        held still there, it keeps that and reads on, as a broadcast's chat
+        does; only a first look, or one after a seek, starts it afresh."""
+        if not (self._model.count or self._pending):
+            self._replay_from(self._position)
+            self._set_status("Reading the chat replay")
+            return
+        # An answer to the reader that was let go may still come, and is not
+        # wanted now.
+        self._round += 1
+        self._asking = False
+        if self._position > self._fetched_to + REPLAY_JUMP_S:
+            # The video went on well past what was read while the chat was
+            # away. It reads on from a little before the video rather than
+            # through everything said in between, and from no earlier than
+            # where it had read to, so nothing comes twice.
+            self._fetched_to = max(self._fetched_to, self._position - REPLAY_HISTORY_S)
+            self._replay_ticket = ""
+            self._replay_done = False
 
     def _ask_replay(self) -> None:
         """Ask for more of the replay once the video nears the end of what
@@ -729,8 +752,7 @@ class ChatRoom(QObject):
             self._set_status("Joining the chat")
         elif self._kind == "replay":
             reader = _ReplayReader(self._db, self._cfg, self._source, self._inbox, self)
-            self._replay_from(self._position)
-            self._set_status("Reading the chat replay")
+            self._begin_replay()
         else:
             reader = _YouTubeReader(self._db, self._cfg, self._source, self._inbox, self)
             self._set_status("Reading the chat")

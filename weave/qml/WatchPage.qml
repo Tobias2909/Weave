@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Effects
 import QtQuick.Layouts
 import Weave 1.0
 
@@ -17,6 +18,7 @@ Item {
     readonly property bool wanted: App.viewKind === "watching"
     property bool everShown: false
     onWantedChanged: {
+        Qt.callLater(page.placeCorner)
         if (wanted)
             everShown = true
         // The surface builds its render context on a paint and has no reason
@@ -61,9 +63,34 @@ Item {
     onSlidingChanged: {
         if (!sliding && wanted)
             watchSurface.update()
+        Qt.callLater(page.placeCorner)
     }
 
     property bool cinema: false
+    // Where the picture goes while the rest of the window is browsed, lent
+    // by the window, and whether it is there. The page's own picture moves
+    // there rather than a second one being made: a second surface would ask
+    // the player for a second render context, which it refuses. It goes once
+    // the page has slid away, with the page, and comes back before the page
+    // slides in again.
+    property Item cornerHolder: null
+    property bool corner: false
+    // Rounding the picture in the corner takes a shader, which the software
+    // scene graph cannot run; there it stays square rather than vanishing.
+    readonly property bool effects: (typeof EffectsAvailable === "undefined") ? true
+                                                                            : EffectsAvailable
+    onCornerChanged: watchSurface.update()
+    // Settled a moment later rather than bound, so the slide has begun by
+    // the time it is asked and the picture is not moved there and back.
+    function placeCorner() {
+        page.corner = page.cornerHolder !== null && page.cornerHolder.wanted
+                      && !page.wanted && !page.sliding
+    }
+    onCornerHolderChanged: Qt.callLater(page.placeCorner)
+    Connections {
+        target: page.cornerHolder
+        function onWantedChanged() { Qt.callLater(page.placeCorner) }
+    }
     property bool chromeAwake: true
     property real barRoom: 0
     property real groundX: 0
@@ -76,6 +103,76 @@ Item {
     signal queueMenuRequested(string key)
     // A right press on a tile of the Recommended tab.
     signal tileMenuRequested(int index, string key)
+
+    // An edge of the picture in the corner of the window, which carries it
+    // bigger or smaller and keeps it the shape of a picture. The hand's way is
+    // read on the window rather than on the picture, which is scaled under it
+    // as it goes.
+    component CornerGrip: MouseArea {
+        id: grip
+        property Item box: null
+        // "left", "top" or "corner", the two at once.
+        property string edge: "left"
+        property real fromWidth: 0
+        property point fromAt: Qt.point(0, 0)
+        visible: page.corner
+        hoverEnabled: true
+        preventStealing: true
+        cursorShape: edge === "left" ? Qt.SizeHorCursor
+                     : edge === "top" ? Qt.SizeVerCursor : Qt.SizeFDiagCursor
+        onPressed: function (mouse) {
+            fromWidth = grip.box.width
+            fromAt = grip.mapToItem(null, mouse.x, mouse.y)
+            grip.box.growTo = fromWidth
+        }
+        onPositionChanged: function (mouse) {
+            if (!pressed)
+                return
+            var at = grip.mapToItem(null, mouse.x, mouse.y)
+            var across = fromAt.x - at.x
+            var up = (fromAt.y - at.y) * 16 / 9
+            var grow = edge === "left" ? across : edge === "top" ? up : Math.max(across, up)
+            grip.box.growTo = page.cornerHolder.fit(fromWidth + grow)
+        }
+        onReleased: {
+            if (grip.box.growTo > 0)
+                Video.setCornerWidth(Math.round(grip.box.growTo))
+            grip.box.growTo = 0
+        }
+        onCanceled: grip.box.growTo = 0
+    }
+
+    // A button on the picture in the corner of the window: a mark on a dark
+    // ground that lightens under the pointer.
+    component CornerButton: Rectangle {
+        id: cornerButton
+        property string text: ""
+        property string hint: ""
+        property int fontSize: 13
+        property color ground: "transparent"
+        signal pressed()
+        width: 26
+        height: 26
+        radius: 4
+        color: cornerPress.containsMouse ? Qt.rgba(1, 1, 1, 0.22) : ground
+
+        Label {
+            anchors.centerIn: parent
+            text: cornerButton.text
+            color: "#ffffff"
+            font.pixelSize: cornerButton.fontSize
+        }
+        MouseArea {
+            id: cornerPress
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: cornerButton.pressed()
+        }
+        ToolTip.visible: cornerPress.containsMouse && cornerButton.hint !== ""
+        ToolTip.text: cornerButton.hint
+        ToolTip.delay: 450
+    }
 
     // Which tab the middle shows; the queue beside it is the same on all of
     // them. A Twitch stream has only its picture. A stream on YouTube has no
@@ -170,7 +267,7 @@ Item {
                                                           && !page.controlsRest))
     // Captions rise over the controls while they are up, rather than being
     // read through the bar, and settle back as the controls go.
-    property real captionLift: page.controlsUp && !page.small
+    property real captionLift: page.controlsUp && !page.small && !page.corner
                                ? controls.reach / Math.max(1, frame.height) : 0
     Behavior on captionLift {
         NumberAnimation { duration: 180; easing.type: Easing.InOutQuad }
@@ -755,6 +852,7 @@ Item {
             Item {
                 id: frame
                 objectName: "watchingFrame"
+                parent: page.corner ? page.cornerHolder : stage
                 z: 3
                 readonly property real bigX: videoPart.x + middle.x
                 readonly property real bigY: videoPart.y + middle.y
@@ -773,13 +871,37 @@ Item {
                     }
                 }
                 readonly property bool shrunk: glide === 1 && !glideStep.running
-                x: bigX + (smallX - bigX) * glide
-                y: bigY + (smallY - bigY) * glide
-                width: shrunk ? miniSlot.width : bigW
-                height: shrunk ? miniSlot.height : bigH
-                transformOrigin: Item.TopLeft
-                scale: shrunk ? 1 : 1 + (miniSlot.width / Math.max(1, bigW) - 1) * glide
+                x: page.corner ? 0 : bigX + (smallX - bigX) * glide
+                y: page.corner ? 0 : bigY + (smallY - bigY) * glide
+                width: page.corner ? page.cornerHolder.width : (shrunk ? miniSlot.width : bigW)
+                height: page.corner ? page.cornerHolder.height : (shrunk ? miniSlot.height : bigH)
+                // In the corner it is made bigger or smaller from its free
+                // edges, so it grows away from the corner it is held in, and
+                // while the hand is on an edge it is only scaled: its real size
+                // is set once, on letting go.
+                property real growTo: 0
+                transformOrigin: page.corner ? Item.BottomRight : Item.TopLeft
+                scale: page.corner ? (growTo > 0 ? growTo / Math.max(1, width) : 1)
+                       : (shrunk ? 1 : 1 + (miniSlot.width / Math.max(1, bigW) - 1) * glide)
                 clip: true
+                // Rounded in the corner of the window, masked as a picture is
+                // elsewhere, since a radius and a clip leave the corners square.
+                layer.enabled: page.corner && page.effects
+                layer.effect: MultiEffect {
+                    maskEnabled: true
+                    maskSource: cornerMask
+                    maskThresholdMin: 0.5
+                    maskSpreadAtMin: 1.0
+                }
+
+                Rectangle {
+                    id: cornerMask
+                    anchors.fill: parent
+                    radius: 10
+                    antialiasing: true
+                    visible: false
+                    layer.enabled: page.corner && page.effects
+                }
 
                 Rectangle {
                     anchors.fill: parent
@@ -793,7 +915,7 @@ Item {
                     anchors.fill: parent
                     // Never hidden, and drawing for as long as any of it can be
                     // seen. The music page's rule, for the music page's reason.
-                    drawing: page.wanted || page.sliding
+                    drawing: page.wanted || page.sliding || page.corner
                 }
 
                 // The video's own picture until its first frame, so the press
@@ -826,19 +948,27 @@ Item {
                     id: pictureHover
                     objectName: "watchingPictureHover"
                     cursorShape: page.cinema && !page.chromeAwake ? Qt.BlankCursor
-                                 : (page.small ? Qt.PointingHandCursor : Qt.ArrowCursor)
+                                 : (page.small || page.corner ? Qt.PointingHandCursor
+                                                              : Qt.ArrowCursor)
                     onHoveredChanged: {
                         page.pointerOverPicture = hovered
                         if (hovered)
                             page.stirControls()
                     }
-                    onPointChanged: if (hovered) page.stirControls()
+                    onPointChanged: {
+                        if (!hovered)
+                            return
+                        page.stirControls()
+                        if (page.corner)
+                            cornerLinger.restart()
+                    }
                 }
 
                 // A left press pauses and plays, and two fill the screen. The
                 // right button does nothing here, though it is taken so that
                 // nothing under the picture gets it. Small in the corner of
-                // another tab, a press is the way back to the video.
+                // another tab, a press is the way back to the video, and in
+                // the corner of the window the way back to its page.
                 MouseArea {
                     objectName: "watchingSurface"
                     anchors.fill: parent
@@ -853,6 +983,10 @@ Item {
                         onBig = false
                         if (mouse.button !== Qt.LeftButton)
                             return
+                        if (page.corner) {
+                            App.showWatching()
+                            return
+                        }
                         if (page.small) {
                             page.choose("video")
                             return
@@ -885,7 +1019,7 @@ Item {
                 // Pressed in the corner, it takes the page back to the video.
                 Rectangle {
                     objectName: "watchingBackToVideo"
-                    visible: frame.shrunk
+                    visible: frame.shrunk && !page.corner
                     anchors.left: parent.left
                     anchors.bottom: parent.bottom
                     anchors.margins: 6
@@ -920,7 +1054,7 @@ Item {
                     anchors.bottom: parent.bottom
                     big: page.cinema
                     cinema: page.cinema
-                    opacity: page.controlsUp && !page.small ? 1 : 0
+                    opacity: page.controlsUp && !page.small && !page.corner ? 1 : 0
                     visible: opacity > 0
                     Behavior on opacity {
                         NumberAnimation { duration: 180; easing.type: Easing.InOutQuad }
@@ -942,7 +1076,7 @@ Item {
                     // of that name, so the pill never went away.
                     readonly property string pillText: segmentPill.skipped
                                                        ? Video.skipNotice : Video.segmentButton
-                    visible: segmentPill.pillText !== "" && !page.small
+                    visible: segmentPill.pillText !== "" && !page.small && !page.corner
                     anchors.right: parent.right
                     anchors.rightMargin: page.cinema ? 28 : 18
                     y: parent.height - height - (page.controlsUp ? controls.reach + 10 : 18)
@@ -992,6 +1126,150 @@ Item {
                         cursorShape: Qt.PointingHandCursor
                         onClicked: segmentPill.skipped ? Video.undoSkip() : Video.skipSegment()
                     }
+                }
+
+                // In the corner of the window: at rest the picture and how far
+                // it has played, and over it, while the pointer is there, what
+                // it is, the way back, the cross, a pause and the time.
+                Rectangle {
+                    objectName: "watchCornerEdge"
+                    visible: page.corner
+                    anchors.fill: parent
+                    radius: 10
+                    color: "transparent"
+                    border.width: 1
+                    border.color: Qt.rgba(1, 1, 1, 0.16)
+                }
+                Rectangle {
+                    objectName: "watchCornerProgress"
+                    visible: page.corner && !Video.isLive && Video.length > 0
+                    anchors.left: parent.left
+                    anchors.bottom: parent.bottom
+                    width: parent.width * Video.position
+                    height: 3
+                    color: Theme.colors.accent
+                }
+                // Up for a moment after a press on the corner as well, so a
+                // second press finds the same buttons. Qt can drop the hover
+                // under a pointer that has not moved when what is drawn under
+                // it changes, and the press then went to the picture and
+                // opened the page.
+                Timer {
+                    id: cornerLinger
+                    interval: 1500
+                }
+                Item {
+                    id: cornerChrome
+                    objectName: "watchCornerChrome"
+                    anchors.fill: parent
+                    visible: opacity > 0
+                    opacity: page.corner && (pictureHover.hovered || cornerLinger.running) ? 1 : 0
+                    Behavior on opacity {
+                        NumberAnimation { duration: 160; easing.type: Easing.InOutQuad }
+                    }
+
+                    Rectangle {
+                        anchors.fill: parent
+                        gradient: Gradient {
+                            GradientStop { position: 0.0; color: Qt.rgba(0, 0, 0, 0.72) }
+                            GradientStop { position: 0.3; color: Qt.rgba(0, 0, 0, 0.12) }
+                            GradientStop { position: 0.7; color: Qt.rgba(0, 0, 0, 0.12) }
+                            GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, 0.72) }
+                        }
+                    }
+
+                    Label {
+                        objectName: "watchCornerTitle"
+                        anchors.left: parent.left
+                        anchors.right: cornerButtons.left
+                        anchors.top: parent.top
+                        anchors.margins: 9
+                        text: Video.track.title || ""
+                        elide: Text.ElideRight
+                        color: "#ffffff"
+                        font.pixelSize: 12
+                        font.weight: Font.DemiBold
+                    }
+
+                    Row {
+                        id: cornerButtons
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: 4
+                        spacing: 2
+
+                        CornerButton {
+                            objectName: "watchCornerBack"
+                            text: "\u2922"
+                            hint: "Back to the video"
+                            onPressed: App.showWatching()
+                        }
+                        CornerButton {
+                            objectName: "watchCornerStop"
+                            text: "\u2715"
+                            hint: "Stop, and empty the queue"
+                            onPressed: App.stopWatching()
+                        }
+                    }
+
+                    CornerButton {
+                        objectName: "watchCornerPause"
+                        anchors.centerIn: parent
+                        width: 46
+                        height: 46
+                        radius: 23
+                        fontSize: 17
+                        ground: Qt.rgba(0, 0, 0, 0.5)
+                        text: Video.playing ? "\u275a\u275a" : "\u25b6"
+                        hint: Video.playing ? "Pause" : "Play"
+                        onPressed: {
+                            cornerLinger.restart()
+                            Video.toggle()
+                        }
+                    }
+
+                    Label {
+                        objectName: "watchCornerTime"
+                        anchors.left: parent.left
+                        anchors.bottom: parent.bottom
+                        anchors.margins: 9
+                        text: Video.isLive ? "LIVE"
+                              : controls.clock(Video.seconds) + " / " + controls.clock(Video.length)
+                        color: Video.isLive ? "#ff5b5b" : "#ffffff"
+                        font.pixelSize: 11
+                        font.weight: Video.isLive ? Font.Bold : Font.Normal
+                    }
+                }
+
+                // The free edges of the picture in the corner, the left and the
+                // top and the corner between them, carry it bigger or smaller.
+                // The top stops short of the buttons in its corner.
+                CornerGrip {
+                    objectName: "watchCornerGripLeft"
+                    box: frame
+                    edge: "left"
+                    x: 0
+                    y: 14
+                    width: 6
+                    height: parent.height - 14
+                }
+                CornerGrip {
+                    objectName: "watchCornerGripTop"
+                    box: frame
+                    edge: "top"
+                    x: 14
+                    y: 0
+                    width: parent.width - 14 - 66
+                    height: 6
+                }
+                CornerGrip {
+                    objectName: "watchCornerGripCorner"
+                    box: frame
+                    edge: "corner"
+                    x: 0
+                    y: 0
+                    width: 14
+                    height: 14
                 }
             }
         }

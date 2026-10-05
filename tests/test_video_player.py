@@ -15,9 +15,9 @@ from tests import test_audio as music
 from weave.config import Config
 from weave.engine_libmpv import CURRENT
 from weave.sources.sponsorblock import Segment
-from weave.video import (CAPTION_LANGUAGE_STATE, CAPTIONS_STATE, QUALITY_STATE, RESUME_FROM_S,
-                         SPONSOR_STATE, VideoPlayer, ceiling_for, choose_caption, parse_extras,
-                         watch_format)
+from weave.video import (CAPTION_LANGUAGE_STATE, CAPTIONS_STATE, CORNER_WIDTH_DEFAULT,
+                         CORNER_WIDTH_LEAST, QUALITY_STATE, RESUME_FROM_S, SPONSOR_STATE,
+                         VideoPlayer, ceiling_for, choose_caption, parse_extras, watch_format)
 
 _app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -264,6 +264,15 @@ class TheControls(_Base):
         self.assertEqual(self.db.get_int("video_volume", 0), 35)
         again = VideoPlayer(Config(raw={}), self.db, engine=FakeEngine())
         self.assertEqual(again.volume, 35)
+
+    def test_the_size_of_the_corner_is_kept(self):
+        self.assertEqual(self.player.cornerWidth, CORNER_WIDTH_DEFAULT)
+        self.player.setCornerWidth(520)
+        self.player.setCornerWidth(20)
+        self.assertEqual(self.player.cornerWidth, CORNER_WIDTH_LEAST, "never a speck")
+        self.player.setCornerWidth(520)
+        again = VideoPlayer(Config(raw={}), self.db, engine=FakeEngine())
+        self.assertEqual(again.cornerWidth, 520)
 
     def test_mute_gives_the_level_back(self):
         self.player.setVolume(40)
@@ -640,6 +649,8 @@ class SponsorBlock(_Base):
         marks = self.player.segments
         self.assertEqual([(one["at"], one["to"]) for one in marks][1], (0.2, 0.3))
         self.assertEqual(marks[1]["colour"], "#00d400")
+        self.assertEqual((marks[1]["start"], marks[1]["end"]), (60.0, 90.0),
+                         "in seconds too, for a right press to land on")
         self.assertEqual(self.player.segmentAt(0.25), "Sponsor")
         self.assertEqual(self.player.segmentAt(0.5), "")
 

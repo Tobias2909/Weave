@@ -2057,11 +2057,6 @@ class Bridge(QObject):
                 self._view_playlist, showing):
             return
         left_search = self._view_kind == SEARCH and kind != SEARCH
-        if (self._view_kind == WATCHING and kind != WATCHING and self._video is not None
-                and self._video.playing):
-            # Until the picture can follow you round the window in a corner,
-            # leaving its page pauses it, so nothing plays that cannot be seen.
-            self._video.setPaused(True)
         self._view_kind = kind
         self._view_id = view_id
         self._view_channel = channel_key
@@ -2264,7 +2259,13 @@ class Bridge(QObject):
         entries: list[tuple[str, int]] = [(ALL, -1)]
         entries.extend((GROUP, int(row["id"])) for row in self._db.groups())
         entries.extend((BOX, int(row["id"])) for row in self._db.boxes())
-        entries.append((COMPANION, -1))
+        # As the sidebar draws them: the way back to the video in the window
+        # while one is queued there, and the companion only while videos go
+        # to mpv.
+        if self._video is not None and self._video.hasQueue:
+            entries.append((WATCHING, -1))
+        if not self._get_videos_in_weave():
+            entries.append((COMPANION, -1))
         entries.append((RECOMMENDED, -1))
         entries.append((HISTORY, -1))
         entries.append((MUSIC, -1))

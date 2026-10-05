@@ -2776,12 +2776,50 @@ class Smoke:
         settle(0.4)
         self.check("closing it walks back", read(bridge, "viewKind") != "watching",
                    read(bridge, "viewKind"))
-        bridge.showWatching()
+        # Left, the picture waits in the corner of the window: the page's own
+        # picture moved there rather than a second one made.
         settle(0.4)
+        frame = find(window, "watchingFrame")
+        corner = find(window, "videoCorner")
+        chrome = find(window, "watchCornerChrome")
+        self.check("left, its picture waits in the corner of the window, bare at rest",
+                   bool(read(corner, "visible")) and frame.parentItem() == corner
+                   and (read(frame, "width"), read(frame, "height")) == (384.0, 216.0)
+                   and read(chrome, "opacity") == 0,
+                   f"corner {read(corner, 'visible')}, in it {frame.parentItem() == corner}, "
+                   f"{read(frame, 'width')}x{read(frame, 'height')}")
+        grips = [find(window, f"watchCornerGrip{edge}") for edge in ("Left", "Top", "Corner")]
+        video = bridge._video
+        video.setCornerWidth(500)
+        settle(0.3)
+        grown = (read(corner, "width"), read(corner, "height"))
+        video.setCornerWidth(384)
+        settle(0.3)
+        self.check("its free edges make it bigger or smaller, the shape of a picture",
+                   all(grip is not None and bool(read(grip, "visible")) for grip in grips)
+                   and grown == (500.0, 281.0) and read(corner, "width") == 384.0,
+                   f"grips {[grip is not None for grip in grips]}, at 500 {grown}")
+        bridge.showWatching()
+        settle(0.6)
+        self.check("and comes back to its page with it",
+                   frame.parentItem() == find(window, "watchingStage")
+                   and not bool(read(corner, "visible")),
+                   f"corner {read(corner, 'visible')}")
+        # The wheel over the sidebar knows the way back to the video is there,
+        # and that the companion is not.
+        bridge.stepSelection(1)
+        settle(0.4)
+        below = read(bridge, "viewKind")
+        bridge.stepSelection(-1)
+        settle(0.6)
+        self.check("the wheel over the sidebar steps off Now watching and back onto it",
+                   below == "recommended" and read(bridge, "viewKind") == "watching",
+                   f"below it {below}, back {read(bridge, 'viewKind')}")
         bridge.stopWatching()
         settle(0.4)
-        self.check("the cross stops it and the queue goes",
-                   not bridge._video.hasQueue and read(bridge, "viewKind") != "watching")
+        self.check("the cross stops it and the queue goes, and the corner with it",
+                   not bridge._video.hasQueue and read(bridge, "viewKind") != "watching"
+                   and not bool(read(corner, "visible")))
         # A box plays one card at a press, and all of it from the bar.
         box_id = bridge.createBox("Walk box")
         for other in plain[:3]:

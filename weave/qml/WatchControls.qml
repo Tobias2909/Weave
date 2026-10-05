@@ -181,7 +181,8 @@ Item {
 
         // A left press or a drag goes there. A right press goes to the
         // chapter start nearest the pointer, back or forward, the way the
-        // player this replaces does it.
+        // player this replaces does it, or to the start or the end of a part
+        // SponsorBlock marked, whichever of them all is nearest.
         //
         // One area for both, so a press is never argued over by two handlers.
         // Dragging shows where it will land and goes there on letting go, so a
@@ -198,7 +199,13 @@ Item {
             function alongAt(x) { return Math.max(0, Math.min(1, x / Math.max(1, width))) }
             onPressed: function (mouse) {
                 if (mouse.button === Qt.RightButton) {
-                    var marks = Video.chapters
+                    var marks = Video.chapters.map(function (one) {
+                        return { at: one.at, seconds: one.start }
+                    })
+                    Video.segments.forEach(function (one) {
+                        marks.push({ at: one.at, seconds: one.start })
+                        marks.push({ at: one.to, seconds: one.end })
+                    })
                     if (!marks.length)
                         return
                     var here = alongAt(mouse.x)
@@ -206,7 +213,7 @@ Item {
                     for (var i = 1; i < marks.length; i++)
                         if (Math.abs(marks[i].at - here) < Math.abs(best.at - here))
                             best = marks[i]
-                    Video.seekTo(best.start)
+                    Video.seekTo(best.seconds)
                     return
                 }
                 along = alongAt(mouse.x)

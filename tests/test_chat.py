@@ -543,12 +543,24 @@ class TheReplay(_Room):
         super().setUp()
         self.reader = FakeReplayReader(self.room)
 
-        def start():
-            self.room._reader = self.reader
-            self.room._replay_from(self.room._position)
-        with mock.patch.object(chat.ChatRoom, "_start_reader", side_effect=start):
+        with mock.patch.object(chat.ChatRoom, "_start_reader", side_effect=self.start):
             self.room.setPosition(60.0)
             self.room.follow({"key": "yt:abcdefghijk", "live": False, "chat_replay": True})
+            self.room.setShown(True)
+
+    def start(self):
+        self.room._reader = self.reader
+        self.room._begin_replay()
+
+    def away_and_back(self, *positions):
+        """The chat off screen while the video plays on through these
+        moments, a few seconds apart as playing gives them, then back."""
+        self.room.setShown(False)
+        for seconds in positions:
+            self.room.setPosition(seconds)
+            self.room._release(self.room._position)
+        self.reader = FakeReplayReader(self.room)
+        with mock.patch.object(chat.ChatRoom, "_start_reader", side_effect=self.start):
             self.room.setShown(True)
 
     def said(self, key):
@@ -609,6 +621,38 @@ class TheReplay(_Room):
         self.clock.now += 1
         self.room._ask_replay()
         self.assertEqual(self.reader.wanted[-1][1], int((600 - chat.REPLAY_HISTORY_S) * 1000))
+
+    def test_back_on_screen_it_keeps_what_came_and_reads_on(self):
+        self.clock.now += 1
+        self.answer(("a", 55.0), ("b", 61.0), ticket="t2")
+        self.play_to(62.0)
+        was = self.room._round
+        self.away_and_back(64.0, 66.0)
+        self.assertEqual(self.shown(), ["a", "b"], "nothing read again, nothing lost")
+        self.assertEqual(self.room._round, was + 1, "an answer to the reader let go is dropped")
+        self.room._ask_replay()
+        self.assertEqual(self.reader.wanted, [(was + 1, 61000, "t2")])
+
+    def test_far_past_what_was_read_it_reads_on_from_a_little_before_the_video(self):
+        self.clock.now += 1
+        self.answer(("a", 55.0), ("b", 61.0), ticket="t2")
+        self.play_to(62.0)
+        self.away_and_back(*range(65, 201, 5))
+        self.assertEqual(self.shown(), ["a", "b"])
+        self.room._ask_replay()
+        self.assertEqual(self.reader.wanted,
+                         [(self.room._round, int((200 - chat.REPLAY_HISTORY_S) * 1000), "")])
+
+    def test_a_seek_while_it_is_away_starts_it_afresh_there(self):
+        self.clock.now += 1
+        self.answer(("a", 55.0), ("b", 61.0), ticket="t2")
+        self.play_to(62.0)
+        self.away_and_back(600.0)
+        self.assertEqual(self.shown(), [])
+        self.clock.now += 1
+        self.room._ask_replay()
+        self.assertEqual(self.reader.wanted,
+                         [(self.room._round, int((600 - chat.REPLAY_HISTORY_S) * 1000), "")])
 
     def test_the_end_of_the_replay_asks_no_more(self):
         self.clock.now += 1

@@ -72,6 +72,10 @@ SAVE_EVERY_S = 15.0
 SEEK_STEP_S = 5.0
 VOLUME_STEP = 5
 VOLUME_DEFAULT = 70
+# How wide the picture waits in the corner of the window, until it is made
+# bigger or smaller by hand, and the least it can be.
+CORNER_WIDTH_DEFAULT = 384
+CORNER_WIDTH_LEAST = 144
 
 # When no ceiling has been picked, the screen decides, and before the window has
 # said which screen it is on, this does.
@@ -486,6 +490,7 @@ class VideoPlayer(QObject):
     bufferChanged = Signal()
     # How far behind its present a broadcast is.
     behindChanged = Signal()
+    cornerChanged = Signal()
     # A video has begun to play. The music gives way to it here.
     started = Signal(str)
     # Nothing is playing any more and nothing is about to: the queue ran out or
@@ -562,6 +567,9 @@ class VideoPlayer(QObject):
         self._unmuted = 0
         stored = db.get_int("video_volume", VOLUME_DEFAULT) if db else VOLUME_DEFAULT
         self._volume = max(0, min(100, int(stored)))
+        wide = (db.get_int("video_corner_width", CORNER_WIDTH_DEFAULT) if db
+                else CORNER_WIDTH_DEFAULT)
+        self._corner_width = max(CORNER_WIDTH_LEAST, int(wide))
         self._engine.set_volume(self._volume)
 
         self._engine.positionChanged.connect(self._on_position)
@@ -758,6 +766,7 @@ class VideoPlayer(QObject):
         if self._dur <= 0:
             return []
         return [{"at": max(0.0, one.start / self._dur), "to": min(1.0, one.end / self._dur),
+                 "start": max(0.0, one.start), "end": min(self._dur, one.end),
                  "colour": sponsorblock.BY_KEY[one.category].colour,
                  "label": sponsorblock.BY_KEY[one.category].label}
                 for one in self._usable()]
@@ -811,6 +820,7 @@ class VideoPlayer(QObject):
     sponsorOn = Property(bool, lambda self: self._sponsor_on, notify=sponsorChanged)
     buffered = Property("QVariantList", _get_buffered, notify=bufferChanged)
     behindLive = Property(int, _get_behind, notify=behindChanged)
+    cornerWidth = Property(int, lambda self: self._corner_width, notify=cornerChanged)
     sponsorCategories = Property("QVariantList", _get_sponsor_categories,
                                  notify=sponsorChanged)
 
@@ -1353,6 +1363,18 @@ class VideoPlayer(QObject):
         if self._db is not None:
             self._db.set_state("video_volume", str(self._volume))
         self.stateChanged.emit()
+
+    @Slot(int)
+    def setCornerWidth(self, width: int) -> None:
+        """How wide the picture in the corner of the window was made, kept
+        for the next time."""
+        width = max(CORNER_WIDTH_LEAST, int(width))
+        if width == self._corner_width:
+            return
+        self._corner_width = width
+        if self._db is not None:
+            self._db.set_state("video_corner_width", str(width))
+        self.cornerChanged.emit()
 
     @Slot(int)
     def nudgeVolume(self, steps: int) -> None:
