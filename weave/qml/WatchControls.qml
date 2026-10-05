@@ -122,6 +122,20 @@ Item {
             color: Qt.rgba(1, 1, 1, 0.26)
             Behavior on height { NumberAnimation { duration: 90 } }
 
+            // What is fetched already, lighter than the rest, the way every
+            // player draws it.
+            Repeater {
+                model: Video.buffered
+                Rectangle {
+                    objectName: "watchBuffered"
+                    required property var modelData
+                    x: track.width * modelData.at
+                    width: track.width * (modelData.to - modelData.at)
+                    height: track.height
+                    color: Qt.rgba(1, 1, 1, 0.42)
+                }
+            }
+
             Rectangle {
                 width: parent.width * (barPress.dragging ? barPress.along : Video.position)
                 height: parent.height
@@ -389,13 +403,24 @@ Item {
             }
         }
 
+        // Red at the broadcast's present, grey behind it, and then a way back.
         Rectangle {
+            objectName: "watchLiveMark"
             visible: controls.live
             anchors.verticalCenter: parent.verticalCenter
             width: liveWord.implicitWidth + 14
             height: controls.big ? 24 : 20
             radius: 4
-            color: "#e0283a"
+            color: Video.behindLive > 0 ? Qt.rgba(1, 1, 1, 0.3) : "#e0283a"
+            HoverHandler {
+                enabled: Video.behindLive > 0
+                cursorShape: Qt.PointingHandCursor
+            }
+            TapHandler {
+                enabled: Video.behindLive > 0
+                gesturePolicy: TapHandler.ReleaseWithinBounds
+                onTapped: Video.goLive()
+            }
             Label {
                 id: liveWord
                 anchors.centerIn: parent
@@ -407,6 +432,32 @@ Item {
             }
         }
 
+        Label {
+            objectName: "watchWatching"
+            visible: controls.live && text !== ""
+            anchors.verticalCenter: parent.verticalCenter
+            leftPadding: 4
+            text: App.watchDetail.watchingExact ? App.watchDetail.watchingExact + " watching" : ""
+            color: "#f2f2f2"
+            font.pixelSize: controls.big ? 15 : 13
+        }
+        Label {
+            objectName: "watchBehind"
+            visible: controls.live && Video.behindLive > 0
+            anchors.verticalCenter: parent.verticalCenter
+            leftPadding: 6
+            rightPadding: 4
+            text: "·   " + controls.clock(Video.behindLive) + " behind"
+            color: Qt.rgba(1, 1, 1, 0.72)
+            font.pixelSize: controls.big ? 15 : 13
+        }
+        ControlButton {
+            objectName: "watchGoLive"
+            visible: controls.live && Video.behindLive > 0
+            text: "Back to live"
+            hint: "Skip to what is on air now"
+            onPressed: Video.goLive()
+        }
         Label {
             objectName: "watchClock"
             visible: !controls.live
@@ -535,6 +586,16 @@ Item {
                     }
                 }
             }
+        }
+
+        // How the chat shows while the picture fills the screen, one press
+        // to the next of the three.
+        ControlButton {
+            objectName: "watchChatMode"
+            visible: controls.cinema && Chat.available
+            text: "Chat: " + ({ "full": "Off", "beside": "Beside", "over": "Over" })[Chat.fullMode]
+            hint: "Where the chat shows (F10)"
+            onPressed: Chat.cycleFullMode()
         }
 
         ControlButton {

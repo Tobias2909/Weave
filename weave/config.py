@@ -122,6 +122,19 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         # quarter of an hour would be four; this is room for flicking through
         # a queue and a stop for anything running away.
         "sponsorblock": 60,
+        # A YouTube broadcast's chat beside it in the window: one answer every
+        # ten seconds or so while the chat is on screen, MEASURED, which is
+        # ninety in a window. Room for YouTube asking more often than that,
+        # and a stop for anything running away.
+        "chat": 240,
+        # A past broadcast's chat played back beside it: one answer for every
+        # forty to a hundred lines, which is minutes of a quiet chat and two or
+        # three seconds of a busy one, MEASURED, so about 360 in a window for a
+        # busy one at its own speed. The pace the watch page itself asks at.
+        "chat_replay": 900,
+        # The extra emotes of a Twitch chat, from three services: their global
+        # sets and the channel's, six answers for a channel opened.
+        "emotes": 60,
     },
     "watched": {"threshold": 0.85},
     "twitch": {
@@ -295,7 +308,7 @@ class Config:
     @property
     def budget_limits(self) -> dict[str, int]:
         keys = ("feeds", "browse", "player", "shorts", "oembed", "dislikes", "twitch",
-                "suggest", "companion", "sponsorblock")
+                "suggest", "companion", "sponsorblock", "chat", "chat_replay", "emotes")
         return {key: max(0, int(self.get("budget", key))) for key in keys}
 
     @property

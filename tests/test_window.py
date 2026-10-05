@@ -71,8 +71,10 @@ class TheWindow(unittest.TestCase):
         env["QT_QUICK_BACKEND"] = "software"
         env.pop("QT_QUICK_CONTROLS_STYLE", None)
 
+        # The walk is two minutes alone and longer beside the rest of the
+        # suite; a walk that hangs is cut off by its own watchdog well before.
         done = subprocess.run([sys.executable, str(DRIVER), "smoke", "--offline", "--json"],
-                              cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+                              cwd=ROOT, env=env, capture_output=True, text=True, timeout=300)
         lines = [line for line in done.stdout.splitlines() if line.startswith("{")]
         self.assertTrue(lines, f"no report came back\n{done.stdout}\n{done.stderr}")
         report = json.loads(lines[-1])

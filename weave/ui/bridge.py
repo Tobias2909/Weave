@@ -461,6 +461,7 @@ class Bridge(QObject):
         # The videos played in the window, given after construction like the
         # music. None until then, which is also what a harness has.
         self._video = None
+        self._chat = None
         # A card whose next press goes the other way: "Play in mpv" in the
         # window's mode, "Play in Weave" in mpv's. Held by key, because a live
         # press is answered only after a question to YouTube.
@@ -1295,6 +1296,10 @@ class Bridge(QObject):
             "watched": bool(row["watched"]),
             "isLive": row["live_status"] == "is_live",
             "isUpcoming": row["live_status"] == "is_upcoming",
+            "watchingText": fmt.count_text(row.get("live_viewers"))
+                            if row["live_status"] == "is_live" else "",
+            "watchingCount": int(row.get("live_viewers") or 0)
+                             if row["live_status"] == "is_live" else 0,
             # The panel is where somebody deciding whether to be there looks,
             # so it says the hour rather than how long there is to wait.
             "startsText": fmt.start_time_text(self._extra(row, "scheduled_at")),
@@ -1349,9 +1354,11 @@ class Bridge(QObject):
             "channelAvatar": qml_source(row.get("avatar_url")),
             "thumbnail": qml_source(row.get("thumbnail_url")),
             "ageText": f"live since {fmt.age_text(since)}" if since else "",
+            "liveSince": since or 0,
             "durationText": "",
             "viewsText": "",
             "watchingText": fmt.count_text(row.get("viewers")),
+            "watchingCount": int(row.get("viewers") or 0),
             "gameText": row.get("game") or "",
             "likesText": "",
             "dislikesText": "",
@@ -1502,7 +1509,27 @@ class Bridge(QObject):
             return {}
         key = (self._video.track or {}).get("key") or ""
         detail = dict(self._detail_for(key)) if key else {}
-        return self._with_facts(detail, self._video.trackFacts)
+        facts = self._video.trackFacts
+        detail = self._with_facts(detail, facts)
+        if self._video.isLive:
+            self._with_air(detail, facts, key)
+        return detail
+
+    def _with_air(self, detail: dict, facts: dict, key: str) -> None:
+        """A broadcast's own facts: how many are watching it and since when it
+        has been on air, from the round that keeps the live bar if it knows
+        this one, and from the resolve that started it if not. The page counts
+        the time on air on from the moment itself."""
+        if not detail.get("watchingText") and facts.get("watching"):
+            detail["watchingText"] = fmt.count_text(facts["watching"])
+        # Exactly, as the player says it over the picture.
+        count = detail.get("watchingCount") or facts.get("watching")
+        if count:
+            detail["watchingExact"] = f"{int(count):,}"
+        if not detail.get("liveSince") and facts.get("aired_at"):
+            detail["liveSince"] = int(facts["aired_at"])
+        if key.startswith("twitch:") and not detail.get("gameText") and facts.get("category"):
+            detail["gameText"] = str(facts["category"])
 
     watchDetail = Property("QVariantMap", _get_watch_detail, notify=watchChanged)
     nowWords = Property("QVariantMap", _get_now_words, notify=nowChanged)
@@ -4757,6 +4784,33 @@ class Bridge(QObject):
         video.factsChanged.connect(self.watchChanged.emit)
         video.trackChanged.connect(self._on_watch_track)
         video.queueChanged.connect(self._on_video_queue_changed)
+        # A broadcast's viewers are counted again by the round that keeps the
+        # live bar, and the page says the new count.
+        self.liveChanged.connect(self._on_live_for_watch)
+
+    def _on_live_for_watch(self) -> None:
+        if self._video is not None and self._video.isLive:
+            self.watchChanged.emit()
+
+    def attach_chat(self, chat) -> None:
+        """The chat beside a broadcast in the window, which follows whatever
+        the window plays: a past broadcast's as soon as its resolve has said
+        the chat was kept, and where the video is, for its replay."""
+        self._chat = chat
+        if self._video is not None:
+            self._video.trackChanged.connect(self._follow_chat)
+            self._video.extrasChanged.connect(self._follow_chat)
+            self._video.progressChanged.connect(self._chat_position)
+
+    def _follow_chat(self) -> None:
+        if self._chat is not None and self._video is not None:
+            entry = dict(self._video.track or {})
+            entry["chat_replay"] = self._video.has_chat_replay()
+            self._chat.follow(entry)
+
+    def _chat_position(self) -> None:
+        if self._chat is not None and self._video is not None:
+            self._chat.setPosition(self._video.seconds)
 
     def _get_videos_in_weave(self) -> bool:
         return self._videos_in() == IN_WEAVE
@@ -8053,6 +8107,9 @@ class Bridge(QObject):
             thread.cancel()
         for thread in alive:
             thread.wait(timeout_ms)
+        chat = getattr(self, "_chat", None)
+        if chat is not None:
+            chat.shutdown()
         if self._video is not None:
             self._video.shutdown()
         if self._audio is not None:

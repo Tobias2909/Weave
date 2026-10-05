@@ -40,6 +40,9 @@ TWITCH = "twitch"      # api.twitch.tv
 SUGGEST = "suggest"    # suggestions for words being typed, YouTube and its music
 COMPANION = "companion"  # youtubei next: what YouTube puts beside the video mpv plays
 SPONSORBLOCK = "sponsorblock"  # sponsor.ajay.app: the parts of a video its viewers marked
+CHAT = "chat"          # youtubei live_chat: a broadcast's chat, beside it in the window
+CHAT_REPLAY = "chat_replay"  # youtubei live_chat replay: a past broadcast's chat, played back
+EMOTES = "emotes"      # 7tv.io, betterttv.net, frankerfacez.com: a Twitch chat's extra emotes
 
 
 # What a ceiling leaves to the work nobody is waiting for. The rest is kept

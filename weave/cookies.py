@@ -166,3 +166,51 @@ def profile_path(cfg: Config) -> str | None:
 
 def args(cfg: Config) -> list[str]:
     return ["--cookies-from-browser", browser_spec(cfg)]
+
+
+# How long the Twitch login read out of the browser is trusted. Reading it
+# copies the browser's cookie database, which is not free, and a stream
+# switched to another quality asks again a second later.
+TWITCH_KEPT_S = 600
+_twitch: tuple[float, str, str] | None = None
+
+
+class _Quiet:
+    def debug(self, *args, **kwargs) -> None:
+        pass
+
+    info = warning = error = debug
+
+
+def twitch_token(cfg: Config) -> str:
+    """The browser's Twitch login, or nothing when it holds none.
+
+    The value of Twitch's own `auth-token` cookie, which is what the site
+    sends as its OAuth header. yt-dlp finds it in the jar it is handed by
+    itself; streamlink has to be given it. Nothing here fails over it: a
+    stream plays signed out just the same.
+    """
+    global _twitch
+    import time
+
+    source = resolve(cfg)
+    where = str(source.path) if source.path is not None else ""
+    with _lock:
+        if (_twitch is not None and _twitch[1] == where
+                and time.monotonic() - _twitch[0] < TWITCH_KEPT_S):
+            return _twitch[2]
+    found = ""
+    try:
+        from yt_dlp.cookies import extract_cookies_from_browser
+
+        family = source.spec.split(":", 1)[0] or DEFAULT_FAMILY
+        jar = extract_cookies_from_browser(family, where or None, _Quiet())
+        found = next((cookie.value for cookie in jar
+                      if cookie.name == "auth-token" and "twitch.tv" in (cookie.domain or "")
+                      and cookie.value), "")
+    except Exception:
+        # A jar that cannot be read is no login, and nothing worse.
+        found = ""
+    with _lock:
+        _twitch = (time.monotonic(), where, found)
+    return found

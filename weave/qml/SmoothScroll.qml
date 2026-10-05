@@ -19,6 +19,12 @@ Item {
     property int duration: 160
 
     readonly property string axis: horizontal ? "contentX" : "contentY"
+    readonly property bool gliding: glide.running
+
+    // A glide set off by the wheel, and whether it ends at the far end.
+    signal glideStarted(bool toEnd)
+
+    function stop() { glide.stop() }
 
     NumberAnimation {
         id: glide
@@ -48,14 +54,18 @@ Item {
             // rather than at zero, so the ends have to be worked out from the
             // margins and not assumed. Clamping at zero left a view with a
             // margin above it unable to reach its own top, which is where the
-            // row of buttons over a group lives. With no margins these are
+            // row of buttons over a group lives. A list that lost rows from
+            // its top starts at its origin rather than at zero, which a chat
+            // does all the time. With no margins and no origin these are
             // exactly zero and the span, which is what this used to say.
-            var lower = -(control.horizontal ? control.flickable.leftMargin
-                                             : control.flickable.topMargin)
+            var origin = control.horizontal ? control.flickable.originX
+                                            : control.flickable.originY
+            var lower = origin - (control.horizontal ? control.flickable.leftMargin
+                                                     : control.flickable.topMargin)
             var reach = control.horizontal
-                        ? control.flickable.contentWidth + control.flickable.rightMargin
+                        ? origin + control.flickable.contentWidth + control.flickable.rightMargin
                           - control.flickable.width
-                        : control.flickable.contentHeight + control.flickable.bottomMargin
+                        : origin + control.flickable.contentHeight + control.flickable.bottomMargin
                           - control.flickable.height
             var upper = Math.max(lower, reach)
             var here = control.horizontal ? control.flickable.contentX
@@ -70,6 +80,7 @@ Item {
             glide.from = here
             glide.to = to
             glide.start()
+            control.glideStarted(to === upper)
         }
     }
 }

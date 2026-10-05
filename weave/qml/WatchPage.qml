@@ -89,6 +89,41 @@ Item {
     // video stays in sight while the rest of the page is about it.
     readonly property bool small: tab !== "video" && !cinema
 
+    // How long a broadcast has been on air, counted on from the moment it
+    // started while the page is open.
+    property real now: Date.now()
+    Timer {
+        running: page.wanted && Video.isLive
+        interval: 1000
+        repeat: true
+        triggeredOnStart: true
+        onTriggered: page.now = Date.now()
+    }
+    function onAir(since) {
+        var seconds = Math.max(0, Math.floor(page.now / 1000 - since))
+        var h = Math.floor(seconds / 3600)
+        var m = Math.floor((seconds % 3600) / 60)
+        var s = seconds % 60
+        return "on air " + h + ":" + (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s
+    }
+
+    // ---- the chat ---------------------------------------------------------
+    //
+    // Beside the picture in the column the queue is in, switched between the
+    // two at its top. With the screen filled, how it shows is the chat's own
+    // choice, kept between runs: not at all, in a column beside a smaller
+    // picture, or in a panel over the picture that can be moved and sized.
+    readonly property bool chatHere: Chat.available
+    readonly property string chatMode: chatHere ? Chat.fullMode : "full"
+    readonly property bool beside: page.cinema && page.chatMode === "beside"
+    readonly property bool over: page.cinema && page.chatMode === "over"
+    readonly property bool chatOnScreen: page.wanted && page.chatHere
+        && (page.cinema ? page.chatMode !== "full" : Chat.column === "chat")
+    // Told once the change has settled: starting to read changes what the
+    // chat says about itself, which this is worked out from.
+    onChatOnScreenChanged: Qt.callLater(page.tellChat)
+    function tellChat() { Chat.setShown(page.chatOnScreen) }
+
     // Asked every time the tab is opened, the way the music page does.
     function choose(name) {
         page.tab = name
@@ -112,10 +147,13 @@ Item {
     // counted in its real pixels so a scaled screen counts what it really has.
     readonly property int screenPixels: Math.round(Screen.height * Screen.devicePixelRatio)
     onScreenPixelsChanged: Video.setScreenHeight(screenPixels)
-    Component.onCompleted: Video.setScreenHeight(screenPixels)
+    Component.onCompleted: {
+        Video.setScreenHeight(screenPixels)
+        Chat.setShown(page.chatOnScreen)
+    }
 
     property bool sideNear: false
-    readonly property bool sideAwake: page.cinema && page.sideNear
+    readonly property bool sideAwake: page.cinema && page.sideNear && page.chatMode === "full"
     readonly property bool roomForColumn: width >= 1100
     readonly property int queueWidth: roomForColumn
         ? Math.max(420, Math.min(500, Math.round(width * 0.27))) : 300
@@ -165,7 +203,9 @@ Item {
         id: pageRow
         anchors.fill: parent
         anchors.margins: page.cinema ? 0 : 16
-        spacing: 16
+        // Filling the screen there is no gap: the chat's black column meets
+        // the black around the picture.
+        spacing: page.cinema ? 0 : 16
 
         // ---- the middle: the picture and what is known about it ------------
         Item {
@@ -338,9 +378,14 @@ Item {
                                         var bits = []
                                         var d = App.watchDetail
                                         if (Video.isLive) {
-                                            bits.push("Live")
-                                            if (d.viewersText)
-                                                bits.push(d.viewersText + " watching")
+                                            if (d.watchingExact)
+                                                bits.push(d.watchingExact + " watching")
+                                            if (d.liveSince)
+                                                bits.push(page.onAir(d.liveSince))
+                                            if (d.gameText)
+                                                bits.push(d.gameText)
+                                            if (bits.length === 0)
+                                                bits.push("Live")
                                         } else {
                                             if (d.viewsText)
                                                 bits.push(d.viewsText + " views")
@@ -955,10 +1000,21 @@ Item {
         Item {
             id: sideCell
             objectName: "watchingSideCell"
-            Layout.preferredWidth: page.cinema ? 0 : page.queueWidth
+            Layout.preferredWidth: page.cinema ? (page.beside ? Math.round(page.width / 6) : 0)
+                                               : page.queueWidth
             Layout.maximumWidth: Layout.preferredWidth
             Layout.fillHeight: true
-            visible: !page.cinema
+            visible: !page.cinema || page.beside
+
+            // The chat's column beside a picture filling the screen, black
+            // like the screen around the picture, whatever the theme.
+            Rectangle {
+                id: besideHolder
+                objectName: "watchingChatBeside"
+                anchors.fill: parent
+                visible: page.beside
+                color: "#000000"
+            }
         }
     }
 
@@ -972,6 +1028,10 @@ Item {
         border.width: 1
         border.color: Theme.colors.border
 
+        // What the column shows. Filling the screen, the column at the edge
+        // is the queue alone; the chat has places of its own there.
+        readonly property bool showsChat: page.chatHere && Chat.column === "chat" && !page.cinema
+
         RowLayout {
             id: queueHead
             anchors.left: parent.left
@@ -981,6 +1041,7 @@ Item {
             spacing: 8
 
             Label {
+                visible: !page.chatHere || page.cinema
                 text: ("Queue" + (Video.queue.length > 0 ? "  ·  " + Video.queue.length : ""))
                       .toUpperCase()
                 color: Theme.colors.textMuted
@@ -989,19 +1050,50 @@ Item {
                 font.weight: Font.DemiBold
             }
 
+            // A broadcast has a chat as well as a queue, and the column shows
+            // one or the other.
+            FlatButton {
+                objectName: "watchingShowQueue"
+                visible: page.chatHere && !page.cinema
+                text: "Queue" + (Video.queue.length > 0 ? "  ·  " + Video.queue.length : "")
+                accent: !side.showsChat
+                onClicked: Chat.setColumn("queue")
+            }
+            FlatButton {
+                objectName: "watchingShowChat"
+                visible: page.chatHere && !page.cinema
+                text: "Chat"
+                accent: side.showsChat
+                onClicked: Chat.setColumn("chat")
+            }
+
             Item { Layout.fillWidth: true }
 
             FlatButton {
                 objectName: "watchingQueueClear"
-                visible: Video.queue.length > 1
+                visible: Video.queue.length > 1 && !side.showsChat
                 text: "Clear"
                 hint: "Take everything out of the queue except the video playing"
                 onClicked: Video.clearQueue()
             }
         }
 
+        // Where the chat sits in the column.
+        Item {
+            id: chatHolder
+            objectName: "watchingChatHolder"
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: queueHead.bottom
+            anchors.bottom: parent.bottom
+            anchors.margins: 8
+            anchors.topMargin: 10
+            visible: side.showsChat
+        }
+
         QueueList {
             objectName: "watchingQueue"
+            visible: !side.showsChat
             player: Video
             anchors.left: parent.left
             anchors.right: parent.right
@@ -1051,5 +1143,193 @@ Item {
             sideWatch.everHere = false
             page.sideNear = false
         }
+    }
+
+    // ---- the chat, wherever it is shown ------------------------------------
+    //
+    // One list, moved between its places rather than made again in each, so
+    // it keeps what it holds and where it was scrolled to.
+    ChatList {
+        id: chatView
+        parent: page.over ? overBody : (page.beside ? besideHolder : chatHolder)
+        anchors.fill: parent
+        anchors.margins: page.beside ? 10 : 0
+        big: page.cinema
+        dark: page.over || page.beside
+        animate: page.chatOnScreen
+    }
+
+    // ---- the chat over the picture -----------------------------------------
+    //
+    // A panel inside the filled screen, never a window of its own. Carried by
+    // its top, sized by its corners, and kept in shares of the screen, so a
+    // screen of another size puts it in the same place.
+    Rectangle {
+        id: overPanel
+        objectName: "watchingChatOver"
+        z: 5
+        visible: page.over
+        readonly property var box: Chat.overBox
+        // While the hand holds it, the hand's numbers; the chat's own when let go.
+        property bool handled: false
+        property real handX: 0
+        property real handY: 0
+        property real handW: 0
+        property real handH: 0
+        readonly property real leastW: page.width * 0.08
+        readonly property real leastH: page.height * 0.12
+        x: handled ? handX : box[0] * page.width
+        y: handled ? handY : box[1] * page.height
+        width: handled ? handW : box[2] * page.width
+        height: handled ? handH : box[3] * page.height
+        radius: 4
+        color: Qt.rgba(0, 0, 0, 0.6)
+        border.width: 1
+        border.color: lit ? Theme.colors.accent : "transparent"
+        Behavior on border.color { ColorAnimation { duration: 180 } }
+
+        // What carries and sizes it shows while the pointer moves, and goes
+        // with the controls when it is still, leaving the chat on its panel.
+        readonly property bool lit: page.chromeAwake || handled
+
+        function take() {
+            handX = x; handY = y; handW = width; handH = height
+            handled = true
+        }
+        function letGo() {
+            Chat.setOverBox(handX / page.width, handY / page.height,
+                            handW / page.width, handH / page.height)
+            handled = false
+        }
+
+        Item {
+            id: overHead
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            height: 22
+            opacity: overPanel.lit ? 1 : 0
+            Behavior on opacity { NumberAnimation { duration: 180 } }
+
+            Label {
+                anchors.centerIn: parent
+                text: "\u22ee\u22ee   Chat   \u22ee\u22ee"
+                color: Qt.rgba(1, 1, 1, 0.7)
+                font.pixelSize: 11
+            }
+
+            MouseArea {
+                objectName: "watchingChatOverCarry"
+                anchors.fill: parent
+                anchors.rightMargin: 26
+                cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                property point from
+                property point started
+                onPressed: function (mouse) {
+                    overPanel.take()
+                    from = mapToItem(page, mouse.x, mouse.y)
+                    started = Qt.point(overPanel.handX, overPanel.handY)
+                }
+                onPositionChanged: function (mouse) {
+                    var here = mapToItem(page, mouse.x, mouse.y)
+                    overPanel.handX = Math.max(0, Math.min(page.width - overPanel.handW,
+                                                           started.x + here.x - from.x))
+                    overPanel.handY = Math.max(0, Math.min(page.height - overPanel.handH,
+                                                           started.y + here.y - from.y))
+                }
+                onReleased: overPanel.letGo()
+                onCanceled: overPanel.letGo()
+            }
+
+            Label {
+                objectName: "watchingChatOverClose"
+                anchors.right: parent.right
+                anchors.rightMargin: 6
+                anchors.verticalCenter: parent.verticalCenter
+                text: "\u2715"
+                color: closeHover.hovered ? "#ffffff" : Qt.rgba(1, 1, 1, 0.7)
+                font.pixelSize: 12
+                HoverHandler { id: closeHover; cursorShape: Qt.PointingHandCursor }
+                MouseArea {
+                    anchors.fill: parent
+                    anchors.margins: -5
+                    onClicked: Chat.setFullMode("full")
+                }
+            }
+        }
+
+        Item {
+            id: overBody
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: overHead.bottom
+            anchors.bottom: parent.bottom
+            anchors.leftMargin: 8
+            anchors.rightMargin: 4
+            anchors.bottomMargin: 6
+        }
+
+        // A corner, which sizes the panel from the other one.
+        component Grip: MouseArea {
+            id: grip
+            // Which corner: -1 for the left or top edge, 1 for the right or
+            // bottom one.
+            property int across: 1
+            property int down: 1
+            width: 16
+            height: 16
+            x: across < 0 ? -4 : overPanel.width - width + 4
+            y: down < 0 ? -4 : overPanel.height - height + 4
+            cursorShape: across * down > 0 ? Qt.SizeFDiagCursor : Qt.SizeBDiagCursor
+            property point from
+            property rect started
+            onPressed: function (mouse) {
+                overPanel.take()
+                from = mapToItem(page, mouse.x, mouse.y)
+                started = Qt.rect(overPanel.handX, overPanel.handY, overPanel.handW,
+                                  overPanel.handH)
+            }
+            onPositionChanged: function (mouse) {
+                var here = mapToItem(page, mouse.x, mouse.y)
+                var dx = here.x - from.x
+                var dy = here.y - from.y
+                if (across > 0) {
+                    overPanel.handW = Math.max(overPanel.leastW,
+                                               Math.min(page.width - started.x, started.width + dx))
+                } else {
+                    var left = Math.max(0, Math.min(started.x + started.width - overPanel.leastW,
+                                                    started.x + dx))
+                    overPanel.handX = left
+                    overPanel.handW = started.x + started.width - left
+                }
+                if (down > 0) {
+                    overPanel.handH = Math.max(overPanel.leastH,
+                                               Math.min(page.height - started.y, started.height + dy))
+                } else {
+                    var top = Math.max(0, Math.min(started.y + started.height - overPanel.leastH,
+                                                   started.y + dy))
+                    overPanel.handY = top
+                    overPanel.handH = started.y + started.height - top
+                }
+            }
+            onReleased: overPanel.letGo()
+            onCanceled: overPanel.letGo()
+
+            Rectangle {
+                width: 8
+                height: 8
+                x: grip.across < 0 ? 4 : grip.width - width - 4
+                y: grip.down < 0 ? 4 : grip.height - height - 4
+                color: Theme.colors.accent
+                opacity: grip.containsMouse || grip.pressed ? 1 : (overPanel.lit ? 0.6 : 0)
+                Behavior on opacity { NumberAnimation { duration: 180 } }
+            }
+            hoverEnabled: true
+        }
+
+        Grip { objectName: "watchingChatOverGrip"; across: -1; down: -1 }
+        Grip { across: 1; down: -1 }
+        Grip { across: -1; down: 1 }
+        Grip { across: 1; down: 1 }
     }
 }

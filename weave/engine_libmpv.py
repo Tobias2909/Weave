@@ -497,6 +497,27 @@ class LibmpvEngine(QObject):
         except Exception:
             pass
 
+    def cached_ranges(self) -> list[tuple[float, float]]:
+        """What of the file playing is fetched and can be played at once, as
+        spans in seconds of it.
+
+        The player's own account covers its main file alone, and a video is
+        loaded with the picture as that file and its sound riding along, so
+        these are the picture's spans, the larger of the two and the one that
+        runs out first. A broadcast's last span ends at the newest moment the
+        player holds of it.
+        """
+        if self._mpv is None:
+            return []
+        try:
+            state = self._mpv.demuxer_cache_state or {}
+            spans = [(float(one["start"]), float(one["end"]))
+                     for one in state.get("seekable-ranges") or []]
+        except Exception:
+            # Asked between files, or of a file that has none yet.
+            return []
+        return [(start, end) for start, end in spans if end > start]
+
     def position(self) -> float:
         """Where the player is, asked rather than waited for."""
         if self._mpv is None:

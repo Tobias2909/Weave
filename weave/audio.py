@@ -172,7 +172,8 @@ class Resolved:
 FACT_FIELDS = ("view_count", "like_count", "comment_count", "channel",
                "channel_id", "channel_follower_count", "timestamp",
                "upload_date", "track", "artists", "album", "release_year",
-               "categories", "description")
+               "categories", "description", "concurrent_view_count",
+               "release_timestamp")
 FACT_SPEC = "%(.{" + ",".join(FACT_FIELDS) + "})j"
 
 
@@ -217,6 +218,9 @@ def _facts_from(found: dict) -> dict:
     number("comment_count", "comments")
     number("channel_follower_count", "followers")
     number("release_year", "year")
+    # A broadcast's: how many are watching it now, and when it went on air.
+    number("concurrent_view_count", "watching")
+    number("release_timestamp", "aired_at")
     words("channel", "channel")
     # Not to show. It is how the picture of whoever made this is found among
     # the channels already known, which is where a song that is only a song

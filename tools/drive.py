@@ -333,6 +333,14 @@ def go_offline() -> None:
     process.run = no_process
     ytmusic.client = no_music
 
+    # A Twitch chat is a socket of its own rather than a request.
+    from weave.sources import twitchchat
+
+    def no_socket():
+        raise OSError("offline")
+
+    twitchchat._connect = no_socket
+
     # Pressing a card hands the address to the configured player, and on a
     # machine that has one that is a real player. Its socket lives in the
     # scratch runtime dir, so it never reaches one already running: it starts
@@ -2795,8 +2803,235 @@ class Smoke:
         settle(0.4)
         bridge.deleteBox(box_id)
         settle(0.3)
+        self.chat_beside_a_broadcast(bridge, window)
         bridge.setVideosInWeave(was)
         settle(0.3)
+
+    def chat_beside_a_broadcast(self, bridge, window) -> None:
+        """A broadcast's chat in the column beside it, switched with the
+        queue, and its places while the picture fills the screen. Offline the
+        chat reads nothing, so lines are handed to it the way its reader would
+        hand them."""
+        from weave import chat as walk_chat
+        from weave.sources import twitchchat
+
+        step("the chat beside a broadcast")
+        chat = bridge._chat
+        bridge._play_items([{"key": "twitch:walkstream", "title": "A walk on air",
+                             "channel": "Walker", "channelId": "", "channelKey": "",
+                             "thumbnail": "", "url": "https://www.twitch.tv/walkstream",
+                             "live": True, "login": "walkstream"}])
+        settle(0.6)
+        root = window.contentItem()
+        switch = [find(window, name) for name in ("watchingShowQueue", "watchingShowChat")]
+        holder = find(window, "watchingChatHolder")
+        self.check("a broadcast opens its column on the chat, with the queue a press away",
+                   chat.available and chat.column == "chat"
+                   and all(one is not None and read(one, "visible") for one in switch)
+                   and bool(read(switch[1], "accent")) and bool(read(holder, "visible"))
+                   and not read(find(window, "watchingQueue"), "visible"),
+                   f"available {chat.available}, column {chat.column}")
+        self.check("and the chat is read while it is on screen", chat._shown)
+        chat._emotes["https://walk.invalid/emote"] = (artwork_file(), False, 1.0)
+        chat._extra = {"WalkEmote": twitchchat.Emote("WalkEmote", "https://walk.invalid/emote")}
+        tags = "badges=moderator/1;color=#1E90FF;display-name=Walker;user-id=7;id=w{n}"
+        for number in range(3):
+            chat._take(twitchchat.parse_line(
+                f"@{tags.format(n=number)} :walker!walker@walker.tmi.twitch.tv PRIVMSG "
+                f"#walkstream :hello WalkEmote number {number}"))
+        chat._take(twitchchat.parse_line(
+            r"@id=w9;msg-id=sub;system-msg=Walker\ssubscribed!;user-id=7 "
+            ":tmi.twitch.tv USERNOTICE #walkstream"))
+        chat._release()
+        settle(0.5)
+        lines = items_named_like(root, "chatLine")
+        names = [read(one, "text") for one in items_named_like(root, "chatAuthor")]
+        emotes = items_named_like(root, "chatEmote")
+        notices = [read(one, "text") for one in items_named_like(root, "chatNotice")
+                   if read(one, "visible")]
+        self.check("its lines are drawn: the name, the emote, the notice",
+                   len(lines) == 4 and names.count("Walker") >= 3 and len(emotes) == 3
+                   and str(read(emotes[0], "source").toString()).startswith("file:")
+                   and notices == ["\u2605  Walker subscribed!"],
+                   f"{len(lines)} lines, names {names}, {len(emotes)} emotes, notices {notices}")
+        chat._take(twitchchat.Cleared("7"))
+        settle(0.3)
+        left = [row["kind"] for row in chat.model.rows]
+        self.check("a ban takes that person's lines away, and leaves what Twitch said",
+                   len(items_named_like(root, "chatLine")) == 1 and left == ["notice"],
+                   f"left {left}")
+        view = find(window, "chatView")
+        # The wheel glides, three rows a notch, rather than jumping.
+        glide = [child for child in window.findChildren(QObject)
+                 if read(child, "flickable") == view]
+        unit = read(find(window, "chatList"), "unit")
+        self.check("the wheel glides through the chat, three rows a notch",
+                   bool(glide) and read(glide[0], "step") == 3 * unit,
+                   f"step {read(glide[0], 'step') if glide else 'none'} for rows of {unit}")
+        # A young chat, shorter than its column but longer than a small place
+        # and the lines built beyond it, squeezed into that place and back:
+        # the margin that sits it at the bottom changed the lines the view
+        # holds, which changed the margin, a loop Qt cut short with a warning
+        # and a margin left from before.
+        was = (window.width(), window.height())
+        window.resize(1977, 1227)
+        settle(0.4)
+        tall = " ".join(["the quick brown fox jumps over a lazy dog"] * 5)
+        for number in range(80):
+            if read(view, "contentHeight") >= 820:
+                break
+            chat._take(twitchchat.parse_line(
+                f"@badges=;color=#1E90FF;display-name=Walker;user-id=8;id=y{number} "
+                ":walker!walker@walker.tmi.twitch.tv PRIVMSG #walkstream :"
+                + (tall if number < 6 else "hi")))
+            chat._release()
+            settle(0.1)
+        young = read(view, "contentHeight")
+        for size in ((1400, 520), (1977, 1227)):
+            window.resize(*size)
+            settle(0.5)
+        margin = max(0.0, read(view, "height") - read(view, "contentHeight") - 4)
+        self.check("a young chat squeezed and back still sits at the bottom, by its newest line",
+                   young >= 820 and read(view, "height") > young
+                   and abs(read(view, "topMargin") - margin) < 1 and read(view, "atYEnd") is True,
+                   f"{young:.0f} tall in {read(view, 'height'):.0f}, margin "
+                   f"{read(view, 'topMargin'):.0f} for {margin:.0f}")
+        window.resize(*was)
+        settle(0.4)
+        plain = "@badges=;color=#1E90FF;display-name=Walker;user-id=7;id=f{n}"
+        for number in range(walk_chat.KEEP + 10):
+            chat._take(twitchchat.parse_line(
+                f"@{plain.format(n=number)} :walker!walker@walker.tmi.twitch.tv PRIVMSG "
+                f"#walkstream :line {number}"))
+        chat._release()
+        settle(0.5)
+        chat._take(twitchchat.parse_line(
+            f"@{plain.format(n='last')} :walker!walker@walker.tmi.twitch.tv PRIVMSG "
+            "#walkstream :the newest line"))
+        chat._release()
+        settle(0.5)
+        self.check("a full chat keeps following its newest line, one in and one out",
+                   chat.model.count == walk_chat.KEEP and read(view, "atYEnd") is True
+                   and bool(read(view, "pinned")),
+                   f"{chat.model.count} lines, at the end {read(view, 'atYEnd')}")
+        video = bridge._video
+        video._behind = 42.0
+        video.behindChanged.emit()
+        settle(0.3)
+        behind = find(window, "watchBehind")
+        back = find(window, "watchGoLive")
+        mark = find(window, "watchLiveMark")
+        self.check("a broadcast behind its present says by how much, with a way back",
+                   read(behind, "visible") is True and read(behind, "text") == "·   0:42 behind"
+                   and read(back, "visible") is True
+                   and str(read(mark, "color").name()) != "#e0283a",
+                   f"{read(behind, 'text')}, button {read(back, 'visible')}")
+        video._behind = 0.0
+        video.behindChanged.emit()
+        call(switch[0], "clicked")
+        settle(0.3)
+        self.check("the queue is a press away, and the chat is not read behind it",
+                   chat.column == "queue" and read(find(window, "watchingQueue"), "visible")
+                   and not read(holder, "visible") and not chat._shown)
+        call(switch[1], "clicked")
+        settle(0.3)
+        for name, colour in (("Darkname", "#000000"), ("Bluename", "#0000FF")):
+            chat._take(twitchchat.parse_line(
+                f"@badges=;color={colour};display-name={name};user-id=8;id=d{name} "
+                f":dark!dark@dark.tmi.twitch.tv PRIVMSG #walkstream :can you read me"))
+        chat._release()
+        was_mode = chat.fullMode
+        chat.setFullMode("beside")
+        call(window, "enterCinema")
+        settle(0.6)
+        beside = find(window, "watchingChatBeside")
+        mode_button = find(window, "watchChatMode")
+        self.check("filling the screen, the chat can sit in a black column beside the picture",
+                   read(window, "cinema") is True and bool(read(beside, "visible"))
+                   and str(read(beside, "color").name()) == "#000000"
+                   and chat._shown and read(mode_button, "text") == "Chat: Beside",
+                   f"beside {read(beside, 'visible')}, shown {chat._shown}, "
+                   f"button {read(mode_button, 'text')}")
+
+        def brightness(item) -> float:
+            shade = read(item, "color")
+            parts = [value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
+                     for value in (shade.redF(), shade.greenF(), shade.blueF())]
+            return 0.2126 * parts[0] + 0.7152 * parts[1] + 0.0722 * parts[2]
+        dark_names = {read(one, "text"): round(brightness(one), 2)
+                      for one in items_named_like(beside, "chatAuthor")
+                      if read(one, "text") in ("Darkname", "Bluename")}
+        self.check("a name picked too dark to read on black is lifted until it reads",
+                   len(dark_names) == 2 and min(dark_names.values()) >= 0.18, str(dark_names))
+        chat.cycleFullMode()
+        settle(0.4)
+        over = find(window, "watchingChatOver")
+        box = chat.overBox
+        self.check("or over it in a panel of its own, where it was left",
+                   chat.fullMode == "over" and bool(read(over, "visible"))
+                   and abs(read(over, "x") - box[0] * read(find(window, "watchPage"), "width")) < 1,
+                   f"mode {chat.fullMode}, over {read(over, 'visible')}")
+        lit = read(over, "lit")
+        write(window, "chromeAwake", False)
+        settle(0.5)
+        self.check("whose frame goes with the controls when the pointer is still",
+                   lit is True and read(over, "lit") is False
+                   and read(over, "border.color").alpha() == 0,
+                   f"lit {lit} then {read(over, 'lit')}")
+        write(window, "chromeAwake", True)
+        chat.cycleFullMode()
+        settle(0.4)
+        self.check("or not at all",
+                   chat.fullMode == "full" and not read(over, "visible")
+                   and not read(beside, "visible") and not chat._shown)
+        call(window, "leaveCinema")
+        settle(0.5)
+        chat.setFullMode(was_mode)
+        bridge.stopWatching()
+        settle(0.4)
+        self.check("stopped, the chat goes with the broadcast",
+                   not chat.available and chat.model.count == 0 and chat._reader is None)
+        self.chat_replay_beside_a_past_broadcast(bridge, window)
+
+    def chat_replay_beside_a_past_broadcast(self, bridge, window) -> None:
+        """A past broadcast whose chat YouTube kept plays it back with the
+        video. Offline the replay reads nothing, so a part of it is handed to
+        the room the way its reader would hand it."""
+        from weave.sources import youtubechat
+
+        step("the chat replay beside a past broadcast")
+        chat = bridge._chat
+        video = bridge._video
+        key = "yt:walkreplay1"
+        bridge._play_items([{"key": key, "title": "A walk that was on air",
+                             "channel": "Walker", "channelId": "", "channelKey": "",
+                             "thumbnail": "", "live": False,
+                             "url": "https://www.youtube.com/watch?v=walkreplay1"}])
+        settle(0.5)
+        self.check("an ordinary video has no chat", not chat.available)
+        video._extras[key] = {"chat_replay": True}
+        video.extrasChanged.emit()
+        settle(0.5)
+        self.check("one whose chat was kept opens its column on the replay",
+                   chat.available and chat.platform == "replay" and chat.column == "chat"
+                   and chat._shown, f"{chat.platform}, column {chat.column}")
+
+        def said(name):
+            return youtubechat.Said(name, "UCwalker", "Walker", (), (("hello", None),), 0)
+        chat._take(("replay", chat._round, youtubechat.ReplayBatch(
+            ((1000, said("r1")), (2000, said("r2")), (50000, said("r3"))), "more")))
+        chat.setPosition(5.0)
+        chat._release(chat._position)
+        settle(0.4)
+        drawn = [read(one, "text") for one in items_named_like(window.contentItem(), "chatAuthor")
+                 if read(one, "visible")]
+        self.check("its lines come as the video reaches them",
+                   [row["key"] for row in chat.model.rows] == ["r1", "r2"] and len(drawn) == 2,
+                   f"{[row['key'] for row in chat.model.rows]}, {len(drawn)} drawn")
+        chat.setPosition(600.0)
+        self.check("and a seek starts it again there", chat.model.count == 0)
+        bridge.stopWatching()
+        settle(0.4)
 
     def the_tabs_of_the_video_page(self, bridge, window, key: str) -> None:
         """Recommended and Comments beside the video playing in the window,
@@ -3147,6 +3382,18 @@ class Smoke:
                    and video._pos == 61.0 and not read(pill, "visible"),
                    f"offered {offered}, past {past_intro}, skipped {skipped}, undone {undone}, "
                    f"then at {video._pos} pill {read(pill, 'visible')}")
+        video._buffer_watch.stop()
+        video._buffered = ((0.0, 0.5),)
+        video.bufferChanged.emit()
+        settle(0.3)
+        seek_track = find(window, "watchSeekTrack")
+        fetched = items_named_like(seek_track, "watchBuffered")
+        self.check("the bar shows how much of the video is fetched, lighter than the rest",
+                   len(fetched) == 1
+                   and abs(read(fetched[0], "width") - read(seek_track, "width") / 2) < 1,
+                   f"{len(fetched)} spans")
+        video._buffered = ()
+        video.bufferChanged.emit()
         video.setSponsorBlock(False)
         video._segments.pop(key, None)
         video._idle, video._paused, video._showing, video._dur, video._pos = was

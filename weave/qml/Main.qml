@@ -1570,6 +1570,12 @@ ApplicationWindow {
         enabled: App.viewKind === "watching" && !root.typingSomewhere
         onActivated: Video.next()
     }
+    // Where the chat shows while the picture fills the screen.
+    Shortcut {
+        sequence: "F10"
+        enabled: App.viewKind === "watching" && Chat.available
+        onActivated: Chat.cycleFullMode()
+    }
 
     // Out of the page and back where you were, with the music still playing.
     // Bound to the page alone, so that everywhere else Escape still belongs to

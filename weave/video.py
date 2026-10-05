@@ -35,10 +35,12 @@ from .audio import (FACT_SPEC, VIDEO_HEIGHT_STEPS, AddressCache, _why, nothing_t
 from .budget import SPONSORBLOCK, Budget
 from .config import Config
 from .cookies import args as cookie_args
+from .cookies import twitch_token
 from .engine_libmpv import CURRENT, LibmpvEngine
 from .process import Cancelled, Timeout
 from .process import run as run_process
 from .sources import sponsorblock
+from .sources import streamlink
 from .sources.ytdlp import prepare
 
 # On top of the music's. A name of its own at the sound server, so the two can
@@ -96,6 +98,29 @@ SKIPPED_NOTICE_MS = 6000
 # A segment is left this short of its end, so the last report inside it, a
 # moment before the end, does not skip the few frames that are left.
 SEGMENT_TAIL_S = 0.3
+
+# How often the part of the video already fetched is looked at, for the
+# lighter part of the bar ahead of the played one.
+BUFFER_EVERY_MS = 500
+
+# A broadcast says how far behind it is once paused or held up this long, and
+# it is worked out this often: the wall clock since it was opened, less how much
+# of it has played since, which a pause and a wait for the network both add to.
+# MEASURED 2026-10-05 on YouTube and Twitch, paused 30 s and 40 s: exact to a
+# tenth of a second, and the player keeps fetching while paused, so what was
+# missed is held, up to its own limit of 150 MB.
+BEHIND_FROM_S = 5
+LIVE_EVERY_MS = 1000
+# More than this between two looks a second apart, while playing, is the
+# broadcast's own clock jumping, at a break stitched in, and not time lost.
+LIVE_JUMP_S = 2.5
+# Back to live is a seek this far short of the newest moment held. MEASURED: a
+# seek past the end of what the player can seek to is ignored without a word,
+# and on Twitch that end trails the newest moment fetched by about two seconds.
+# When what is held does not reach the present, within this much, the
+# broadcast is opened afresh instead, which is about three seconds.
+LIVE_EDGE_MARGIN_S = 1.0
+LIVE_REACH_SLACK_S = 2.0
 
 # The pictures the bar shows under the pointer come as sheets of frames, in
 # several sizes. Nothing wider than this is taken, which is about what the box
@@ -248,8 +273,12 @@ def parse_extras(text: str) -> dict:
     board = storyboard_of(formats)
     if board is not None:
         out["storyboard"] = board
-    out["captions"] = list(captions_of(_tagged_list(tagged.get("weave-captions")),
-                                       _tagged_list(tagged.get("weave-auto"))))
+    uploaded = _tagged_list(tagged.get("weave-captions"))
+    out["captions"] = list(captions_of(uploaded, _tagged_list(tagged.get("weave-auto"))))
+    # yt-dlp offers a past broadcast's chat as one more caption, when there is
+    # a replay of it to read.
+    if any(one.get("protocol") == "youtube_live_chat_replay" for one in uploaded):
+        out["chat_replay"] = True
     return out
 
 
@@ -285,6 +314,45 @@ class NoAddress(RuntimeError):
     pass
 
 
+# What is said when a Twitch channel turns out not to be on air, by whichever
+# of the two asked.
+OFF_AIR = "That stream is not on air any more"
+
+
+def resolve_twitch(cfg: Config, login: str, url: str, height: int,
+                   cancel: threading.Event | None = None) -> Found:
+    """A Twitch channel's stream to what the player needs, blocking.
+
+    Through streamlink where the machine has it, so its plugins and its own
+    config apply, and through yt-dlp otherwise or when streamlink cannot. Both
+    play signed in to the browser's Twitch account: yt-dlp finds the login in
+    the jar it reads anyway, streamlink is handed it.
+    """
+    if streamlink.available():
+        try:
+            answer = streamlink.ask(login, twitch_token(cfg), cancel)
+        except streamlink.Offline as exc:
+            raise NoAddress(OFF_AIR) from exc
+        except (streamlink.StreamlinkError, FileNotFoundError) as exc:
+            trace.mark("streamlink_failed", login=login, why=str(exc)[:200])
+        else:
+            chosen = streamlink.pick(answer, height)
+            facts = {name: value for name, value in (("title", answer.title),
+                                                     ("channel", answer.author),
+                                                     ("category", answer.category)) if value}
+            return Found(chosen.url, "", (), facts,
+                         {"height": chosen.height, "heights": list(answer.heights),
+                          "captions": [], "via": "streamlink"})
+    try:
+        found = resolve_watch(cfg, url, height, True, cancel)
+    except NoAddress as exc:
+        if "not currently live" in str(exc) or "offline" in str(exc).lower():
+            raise NoAddress(OFF_AIR) from exc
+        raise
+    return Found(found.picture, found.sound, (), found.facts,
+                 dict(found.extras, via="yt-dlp"))
+
+
 def resolve_watch(cfg: Config, url: str, height: int, live: bool,
                   cancel: threading.Event | None = None) -> Found:
     """One video to what the player needs, blocking. A few seconds.
@@ -317,13 +385,14 @@ class _Finder(QThread):
     gone = Signal(str)
 
     def __init__(self, cfg: Config, key: str, url: str, height: int, live: bool,
-                 parent: QObject | None = None) -> None:
+                 parent: QObject | None = None, login: str = "") -> None:
         super().__init__(parent)
         self._cfg = cfg
         self.key = key
         self._url = url
         self._height = height
         self._live = live
+        self._login = login
         self._cancel = threading.Event()
 
     def cancel(self) -> None:
@@ -331,8 +400,12 @@ class _Finder(QThread):
 
     def run(self) -> None:
         try:
-            found = resolve_watch(self._cfg, self._url, self._height, self._live,
-                                  self._cancel)
+            if self._login:
+                found = resolve_twitch(self._cfg, self._login, self._url, self._height,
+                                       self._cancel)
+            else:
+                found = resolve_watch(self._cfg, self._url, self._height, self._live,
+                                      self._cancel)
         except Cancelled:
             return
         except (FileNotFoundError, Timeout, NoAddress) as exc:
@@ -409,6 +482,10 @@ class VideoPlayer(QObject):
     # The segments on the bar, the button to skip the one playing, and the
     # word that one was skipped.
     sponsorChanged = Signal()
+    # The parts of the video fetched, drawn on the bar.
+    bufferChanged = Signal()
+    # How far behind its present a broadcast is.
+    behindChanged = Signal()
     # A video has begun to play. The music gives way to it here.
     started = Signal(str)
     # Nothing is playing any more and nothing is about to: the queue ran out or
@@ -504,6 +581,19 @@ class VideoPlayer(QObject):
         self._keeper.timeout.connect(self._keep_position)
         self._keeper.start()
 
+        # The fetched spans, as shares of the video.
+        self._buffered: tuple[tuple[float, float], ...] = ()
+        self._buffer_watch = QTimer(self)
+        self._buffer_watch.setInterval(BUFFER_EVERY_MS)
+        self._buffer_watch.timeout.connect(self._look_at_buffer)
+        # A broadcast's wall clock and position when it was opened or caught
+        # up, and how far behind it was at the last look.
+        self._live_since: tuple[float, float] | None = None
+        self._behind = 0.0
+        self._live_watch = QTimer(self)
+        self._live_watch.setInterval(LIVE_EVERY_MS)
+        self._live_watch.timeout.connect(self._look_at_live)
+
     # ---- what QML reads --------------------------------------------------
 
     @property
@@ -552,6 +642,16 @@ class VideoPlayer(QObject):
 
     def _get_showing(self) -> bool:
         return self._showing
+
+    def _get_buffered(self) -> list:
+        return [{"at": at, "to": to} for at, to in self._buffered]
+
+    def _get_behind(self) -> int:
+        return int(self._behind) if self._behind >= BEHIND_FROM_S else 0
+
+    def has_chat_replay(self) -> bool:
+        """Whether the video playing is a past broadcast whose chat was kept."""
+        return bool(self._known().get("chat_replay"))
 
     def _get_queue(self) -> list:
         """The whole queue in the shape the music's list draws: a video played
@@ -709,6 +809,8 @@ class VideoPlayer(QObject):
     segmentButton = Property(str, _get_segment_button, notify=sponsorChanged)
     skipNotice = Property(str, _get_skip_notice, notify=sponsorChanged)
     sponsorOn = Property(bool, lambda self: self._sponsor_on, notify=sponsorChanged)
+    buffered = Property("QVariantList", _get_buffered, notify=bufferChanged)
+    behindLive = Property(int, _get_behind, notify=behindChanged)
     sponsorCategories = Property("QVariantList", _get_sponsor_categories,
                                  notify=sponsorChanged)
 
@@ -839,6 +941,8 @@ class VideoPlayer(QObject):
         self._ended = False
         self._paused = True
         self._finding = False
+        self._forget_live()
+        self._look_at_buffer()
         self.queueChanged.emit()
         self.trackChanged.emit()
         self.stateChanged.emit()
@@ -898,7 +1002,7 @@ class VideoPlayer(QObject):
             self._hand_over(entry, picture, sound)
             return
         finder = _Finder(self._cfg, key, entry.get("url", ""), height,
-                         bool(entry.get("live")), self)
+                         bool(entry.get("live")), self, login=str(entry.get("login") or ""))
         finder.found.connect(self._on_found)
         finder.failed.connect(self._on_failed)
         finder.gone.connect(self._on_gone)
@@ -949,7 +1053,15 @@ class VideoPlayer(QObject):
         else:
             self._engine.load(picture, start, subtitle=self._caption_shown)
         self._engine.set_pause(paused)
-        self._engine.set_speed(self._speed)
+        # A broadcast plays at its own pace, whatever the last video was
+        # played at: faster, it would run into its present and stall there.
+        self._engine.set_speed(1.0 if entry.get("live") else self._speed)
+        self._forget_live()
+        if entry.get("live"):
+            self._live_watch.start()
+        self._buffered = ()
+        self.bufferChanged.emit()
+        self._buffer_watch.start()
         self.stateChanged.emit()
         self.extrasChanged.emit()
 
@@ -993,6 +1105,8 @@ class VideoPlayer(QObject):
     def _on_started(self, role: str) -> None:
         if role != CURRENT:
             return
+        # Whatever was reported before belonged to the file before.
+        self._live_since = None
         entry = self._current()
         if entry and self._quiet == entry.get("key"):
             self._quiet = ""
@@ -1003,6 +1117,8 @@ class VideoPlayer(QObject):
 
     def _on_position(self, seconds: float) -> None:
         self._pos = float(seconds)
+        if self._live_since is None and self._get_is_live():
+            self._live_since = (time.monotonic(), self._pos)
         self._count_watched()
         self.progressChanged.emit()
         self._check_segments()
@@ -1108,11 +1224,98 @@ class VideoPlayer(QObject):
             self._keep_position()
         self.stateChanged.emit()
 
+    # ---- a broadcast's present ---------------------------------------------
+
+    def _forget_live(self) -> None:
+        self._live_since = None
+        was = self._get_behind()
+        self._behind = 0.0
+        self._live_watch.stop()
+        if was:
+            self.behindChanged.emit()
+
+    def _behind_now(self) -> float:
+        """The wall clock since the mark less what has played since, which a
+        jump of the broadcast's own clock can make less than nothing."""
+        if self._live_since is None:
+            return 0.0
+        since, at = self._live_since
+        return (time.monotonic() - since) - (self._pos - at)
+
+    def _look_at_live(self) -> None:
+        """How far behind its present the broadcast is now."""
+        if not self._get_is_live() or self._ended:
+            self._forget_live()
+            return
+        if self._live_since is None:
+            return
+        behind = self._behind_now()
+        moving = not self._paused and not self._buffering and not self._idle
+        if moving and abs(behind - self._behind) > LIVE_JUMP_S:
+            # Playing, nothing is lost but the time passing. What jumped is the
+            # broadcast's own clock, so the mark is moved with it.
+            since, at = self._live_since
+            self._live_since = (since, at - (behind - self._behind))
+            behind = self._behind
+        was = self._get_behind()
+        self._behind = max(0.0, behind)
+        if self._get_behind() != was:
+            self.behindChanged.emit()
+
+    def _spans(self) -> list[tuple[float, float]]:
+        reader = getattr(self._engine, "cached_ranges", None)
+        return list(reader()) if reader is not None else []
+
+    @Slot()
+    def goLive(self) -> None:
+        """Back to the broadcast's present: a seek to the newest moment held
+        when what was fetched while it was paused reaches that far, else the
+        broadcast opened afresh."""
+        entry = self._current()
+        if not entry or not entry.get("live") or self._finding or self._ended:
+            return
+        behind = self._behind_now()
+        spans = self._spans()
+        newest = spans[-1][1] if spans else 0.0
+        self._paused = False
+        if (newest - LIVE_EDGE_MARGIN_S > self._pos
+                and newest - self._pos >= behind - LIVE_REACH_SLACK_S):
+            trace.mark("live_caught_up", by="seek", behind=round(behind, 1))
+            self._engine.seek(newest - LIVE_EDGE_MARGIN_S)
+            self._engine.set_pause(False)
+            self._live_since = None
+            self._behind = 0.0
+            self.behindChanged.emit()
+            self.stateChanged.emit()
+            return
+        trace.mark("live_caught_up", by="opening again", behind=round(behind, 1))
+        self._fetch_again()
+
+    # ---- what the bar shows fetched ----------------------------------------
+
+    def _look_at_buffer(self) -> None:
+        entry = self._current()
+        spans: tuple[tuple[float, float], ...] = ()
+        if entry and not entry.get("live") and self._dur > 0 and not self._idle:
+            length = self._dur
+            spans = tuple((round(max(0.0, start) / length, 3), round(min(length, end) / length, 3))
+                          for start, end in self._spans() if end > start)
+        elif not entry:
+            self._buffer_watch.stop()
+        if spans != self._buffered:
+            self._buffered = spans
+            self.bufferChanged.emit()
+
     @Slot()
     def replay(self) -> None:
         if not self._current():
             return
         self._ended = False
+        if self._get_is_live():
+            # A broadcast that ran out has nothing to go back to. Asked for
+            # again, it is either on air once more or says it is not.
+            self._start_current()
+            return
         self._engine.seek(0.0)
         self._engine.set_pause(False)
         self._paused = False

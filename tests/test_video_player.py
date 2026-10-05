@@ -74,6 +74,11 @@ class FakeEngine(QObject):
     def seek(self, seconds):
         self.calls.append(("seek", seconds))
 
+    def cached_ranges(self):
+        return list(self.spans)
+
+    spans = ()
+
     def stop(self):
         self.calls.append(("stop",))
 
@@ -325,10 +330,131 @@ class WhatRidesAlong(unittest.TestCase):
                              "weave-formats:NA\nweave-captions:NA\nweave-auto:NA")
         self.assertEqual(found, {"heights": [], "captions": []})
 
+    def test_a_past_broadcast_whose_chat_was_kept(self):
+        found = parse_extras('weave-captions:[{"url": "https://www.youtube.com/watch?v=a",'
+                             ' "video_id": "a", "ext": "json",'
+                             ' "protocol": "youtube_live_chat_replay"}]')
+        self.assertIs(found.get("chat_replay"), True)
+        self.assertEqual(found["captions"], [], "and it is no caption")
+        self.assertNotIn("chat_replay", parse_extras(RESOLVED))
+
     def test_the_tagged_lines_are_not_taken_for_chapters_or_facts(self):
         from weave.audio import parse_chapters, parse_facts
         self.assertEqual(parse_chapters(RESOLVED), ())
         self.assertEqual(parse_facts(RESOLVED), {})
+
+
+class Clock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+class ABroadcastsPresent(_Base):
+    """How far behind its present a paused broadcast is, and the way back."""
+
+    def setUp(self):
+        super().setUp()
+        self.clock = Clock()
+        patcher = mock.patch("weave.video.time.monotonic", self.clock)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.player.setSpeed(1.5)
+        self.player.play_now(video("live", live=True))
+        self.engine.idleChanged.emit(False)
+        self.engine.started.emit(CURRENT)
+        self.engine.pausedChanged.emit(False)
+        self.engine.positionChanged.emit(10.0)
+
+    def look(self, seconds, at=None):
+        self.clock.now += seconds
+        if at is not None:
+            self.engine.positionChanged.emit(at)
+        self.player._look_at_live()
+
+    def test_it_plays_at_its_own_pace_whatever_the_last_one_did(self):
+        self.assertEqual(self.engine.only("speed")[-1], ("speed", 1.0))
+        self.assertEqual(self.player.speed, 1.5, "kept for the next video")
+
+    def test_paused_it_falls_behind_by_the_time_paused(self):
+        self.look(1, at=11.0)
+        self.assertEqual(self.player.behindLive, 0)
+        self.player.setPaused(True)
+        self.look(3)
+        self.assertEqual(self.player.behindLive, 0, "a moment is not worth saying")
+        self.look(27)
+        self.assertEqual(self.player.behindLive, 30)
+        self.player.setPaused(False)
+        self.look(10, at=21.0)
+        self.assertEqual(self.player.behindLive, 30, "playing on keeps the distance")
+
+    def test_a_jump_of_its_own_clock_while_playing_is_no_time_lost(self):
+        self.player.setPaused(True)
+        self.look(20)
+        self.player.setPaused(False)
+        self.look(1, at=11.0)
+        self.assertEqual(self.player.behindLive, 20)
+        self.look(1, at=400.0)
+        self.assertEqual(self.player.behindLive, 20)
+        self.look(1, at=4.0)
+        self.assertEqual(self.player.behindLive, 20)
+        self.look(1, at=5.0)
+        self.assertEqual(self.player.behindLive, 20)
+
+    def test_back_to_live_seeks_when_what_was_fetched_reaches_it(self):
+        self.player.setPaused(True)
+        self.look(30)
+        self.engine.spans = [(0.0, 42.5)]
+        self.player.goLive()
+        self.assertEqual(self.engine.only("seek")[-1], ("seek", 41.5))
+        self.assertEqual(self.engine.only("pause")[-1], ("pause", False))
+        self.assertEqual(self.player.behindLive, 0)
+        self.assertEqual(self.finding, ["yt:live"], "nothing fetched again")
+        self.look(5, at=41.6)
+        self.look(1, at=42.6)
+        self.assertEqual(self.player.behindLive, 0)
+
+    def test_otherwise_it_is_opened_afresh_and_plays(self):
+        self.player.setPaused(True)
+        self.look(400)
+        self.engine.spans = [(0.0, 160.0)]
+        self.player.goLive()
+        self.assertEqual(self.finding, ["yt:live", "yt:live"])
+        self.assertEqual(self.engine.only("seek"), [])
+        self.assertEqual(self.engine.only("load")[-1][2], None, "from its present")
+        self.assertEqual(self.engine.only("pause")[-1], ("pause", False))
+        self.assertEqual(self.player.behindLive, 0)
+
+    def test_a_video_has_no_present(self):
+        self.player.play_now(video("a"))
+        self.engine.started.emit(CURRENT)
+        self.engine.positionChanged.emit(10.0)
+        self.look(60)
+        self.player.goLive()
+        self.assertEqual((self.player.behindLive, self.engine.only("seek")), (0, []))
+
+
+class TheFetchedPart(_Base):
+    def test_the_bar_shows_what_is_fetched_as_shares_of_the_video(self):
+        self.player.play_now(video("a"))
+        self.engine.idleChanged.emit(False)
+        self.engine.durationChanged.emit(400.0)
+        self.engine.spans = [(56.0, 486.0), (0.0, 10.0)]
+        self.player._look_at_buffer()
+        self.assertEqual(self.player.buffered, [{"at": 0.14, "to": 1.0},
+                                                {"at": 0.0, "to": 0.025}])
+        self.player.stop()
+        self.assertEqual(self.player.buffered, [])
+
+    def test_a_broadcast_has_no_bar_to_show_it_on(self):
+        self.player.play_now(video("live", live=True))
+        self.engine.idleChanged.emit(False)
+        self.engine.durationChanged.emit(60.0)
+        self.engine.spans = [(0.0, 60.0)]
+        self.player._look_at_buffer()
+        self.assertEqual(self.player.buffered, [])
 
 
 class WhichCaption(unittest.TestCase):

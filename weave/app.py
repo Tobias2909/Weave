@@ -24,6 +24,7 @@ from PySide6.QtQuickControls2 import QQuickStyle
 
 from . import config, desktop, imagecache, mpris, paths, trace
 from .audio import AudioPlayer
+from .chat import ChatRoom
 from .video import VideoPlayer
 from .db import Database
 from .engine_libmpv import OPTIONS as PLAYER_OPTIONS
@@ -121,9 +122,12 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
     # The videos played in the window rather than in mpv. A second player of
     # its own, with its own picture, beside the music's.
     video = VideoPlayer(cfg, db, parent=app)
+    # The chat beside a broadcast played there.
+    chat = ChatRoom(cfg, db, parent=app)
     bridge.attach_theme(theme)
     bridge.attach_audio(audio)
     bridge.attach_video(video)
+    bridge.attach_chat(chat)
     # Which player the video surface draws. One music player exists, and
     # the surface is built by QML rather than here, so it is told once
     # rather than handed down through the window.
@@ -150,6 +154,7 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
     context.setContextProperty("feedModel", model)
     context.setContextProperty("Audio", audio)
     context.setContextProperty("Video", video)
+    context.setContextProperty("Chat", chat)
     # Rounding a picture needs a shader, and the software scene graph cannot
     # run one. Told to QML so it can fall back to square pictures rather than
     # drawing nothing at all.
