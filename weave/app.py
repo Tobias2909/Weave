@@ -22,7 +22,7 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickWindow
 from PySide6.QtQuickControls2 import QQuickStyle
 
-from . import config, desktop, imagecache, mpris, paths, trace
+from . import awake, config, desktop, imagecache, mpris, paths, trace
 from .audio import AudioPlayer
 from .chat import ChatRoom
 from .video import VideoPlayer
@@ -184,7 +184,10 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
     # The media keys reach a player over MPRIS. Installed once the window
     # exists, so the panel can raise it. A machine with no session bus gets
     # no adapter and everything else still runs.
-    mpris.install(audio, parent=app, on_raise=window.requestActivate)
+    mpris.install(audio, parent=app, on_raise=window.requestActivate,
+                  video_player=video, on_video_stop=bridge.stopWatching)
+    # The screen stays on while a video plays in the window, the same way.
+    awake.install(video, parent=app)
 
     player.start()
 

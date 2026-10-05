@@ -11,7 +11,7 @@ import io
 import os
 import unittest
 
-from PySide6.QtCore import QCoreApplication
+from PySide6.QtCore import QCoreApplication, QObject, Signal
 from PySide6.QtDBus import QDBus, QDBusArgument, QDBusConnection, QDBusMessage, QDBusObjectPath
 
 from tests.test_audio import FakeEngine, FakeResolver, signed, track
@@ -273,6 +273,114 @@ class Announcing(_Base):
 
 
 @unittest.skipUnless(has_session_bus(), "no session bus to publish on")
+class FakeVideo(QObject):
+    """The window's video player, as far as the controls read it."""
+
+    trackChanged = Signal()
+    stateChanged = Signal()
+    queueChanged = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self.playing = False
+        self.hasQueue = False
+        self.track = {}
+        self.length = 0
+        self.seconds = 0.0
+        self.volume = 70
+        self.calls = []
+
+    def show(self, title="A walk on air", channel="Walker", playing=True):
+        self.track = {"key": "yt:walkwalkwal", "title": title, "channel": channel}
+        self.hasQueue, self.playing, self.length, self.seconds = True, playing, 600, 42.0
+        self.queueChanged.emit()
+        self.trackChanged.emit()
+        self.stateChanged.emit()
+
+    def gone(self):
+        self.track, self.hasQueue, self.playing = {}, False, False
+        self.queueChanged.emit()
+        self.stateChanged.emit()
+
+    def toggle(self):
+        self.calls.append("toggle")
+        self.playing = not self.playing
+        self.stateChanged.emit()
+
+    def next(self):
+        self.calls.append("next")
+
+    def previous(self):
+        self.calls.append("previous")
+
+    def stop(self):
+        self.calls.append("stop")
+
+    def setVolume(self, value):
+        self.calls.append(("volume", value))
+
+
+class FollowingTheVideo(_Base):
+    """One player on the panel: the window's video while it is there, the
+    music otherwise, whichever of them is playing first."""
+
+    def setUp(self):
+        super().setUp()
+        self.video = FakeVideo()
+        self.crosses = []
+        self.adapter = mpris.MprisAdapter(self.player, self.bus, video=self.video,
+                                          on_video_stop=lambda: self.crosses.append(1))
+        self.mpris = self.adapter._player
+
+    def title(self):
+        return self.mpris.Metadata.get("xesam:title")
+
+    def test_with_no_video_it_is_the_music(self):
+        self.assertEqual(self.title(), "aaa")
+
+    def test_a_video_playing_in_the_window_takes_the_controls(self):
+        self.video.show()
+        self.assertEqual(self.title(), "A walk on air")
+        self.assertEqual(self.mpris.Metadata["xesam:artist"], ["Walker"], "its channel")
+        self.assertEqual(self.mpris.Position, 42_000_000)
+        self.mpris.PlayPause()
+        self.mpris.Next()
+        self.mpris.Volume = 0.5
+        self.assertEqual(self.video.calls, ["toggle", "next", ("volume", 50)])
+        self.assertTrue(self.player.playing, "the music is left as it was")
+
+    def test_paused_it_keeps_them_until_the_music_is_played(self):
+        self.mpris.PlayPause()
+        self.player._on_fade_done()
+        self.video.show()
+        self.mpris.PlayPause()
+        self.assertEqual(self.title(), "A walk on air", "paused, still the one on the panel")
+        self.player.toggle()
+        self.assertTrue(self.player.playing)
+        self.assertEqual(self.title(), "aaa", "the music played again takes them back")
+
+    def test_with_both_paused_the_video_waiting_has_them(self):
+        self.mpris.PlayPause()
+        self.player._on_fade_done()
+        self.video.show(playing=False)
+        self.assertEqual(self.title(), "A walk on air")
+        self.mpris.Play()
+        self.assertEqual(self.video.calls, ["toggle"])
+
+    def test_stop_on_a_video_is_its_cross(self):
+        self.video.show()
+        self.mpris.Stop()
+        self.assertEqual((self.crosses, self.video.calls), ([1], []))
+
+    def test_a_video_starting_and_going_is_announced(self):
+        self.bus.sent.clear()
+        self.video.show()
+        self.assertEqual(self.bus.sent[-1].arguments()[1]["Metadata"]["xesam:title"],
+                         "A walk on air")
+        self.video.gone()
+        self.assertEqual(self.bus.sent[-1].arguments()[1]["Metadata"]["xesam:title"], "aaa")
+
+
 class OnTheRealBus(unittest.TestCase):
     """The same calls the desktop makes, over the bus it makes them on.
 

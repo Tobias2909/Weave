@@ -1,15 +1,16 @@
-"""The music player on the desktop's media controls.
+"""Whatever plays in Weave, on the desktop's media controls.
 
 A keyboard's play, next and previous keys never reach an application on their
 own. The desktop takes them and hands them to whatever is registered on MPRIS,
 which is also what the panel's media controller and playerctl read. This
-module puts Weave's music player there and nothing else: video is played by
-mpv, which is a separate program with keys of its own, and two players
-answering one key press is worse than none.
+module puts Weave there as one player: the music, or the video playing in the
+window while there is one. A video sent to mpv is not here, since mpv is a
+separate program with keys of its own, and two players answering one key
+press is worse than none.
 
-Everything here drives `audio.AudioPlayer` through the same public surface the
-interface uses, so the fades and the pause handling behave exactly as they do
-when a button is clicked.
+Everything here drives `audio.AudioPlayer` and `video.VideoPlayer` through the
+same public surface the interface uses, so the fades and the pause handling
+behave exactly as they do when a button is clicked.
 
 A missing session bus, or a name already taken by another Weave, is a reason
 to go without media keys, never a reason to fail startup, so `install` reports
@@ -86,6 +87,61 @@ def metadata(track: dict, length_s: int) -> dict:
     return found
 
 
+class _Watched:
+    """The window's video player in the shape the controls read a player in:
+    its channel where a song has its artist, its seconds where a song has
+    what has been heard, and its cross for stop, which also closes its page."""
+
+    def __init__(self, video, stop=None) -> None:
+        self._video = video
+        self._stop = stop
+
+    @property
+    def playing(self) -> bool:
+        return bool(self._video.playing)
+
+    @property
+    def track(self) -> dict:
+        found = dict(self._video.track or {})
+        if found and not found.get("artist") and found.get("channel"):
+            found["artist"] = found["channel"]
+        return found
+
+    @property
+    def length(self) -> int:
+        return int(self._video.length)
+
+    @property
+    def elapsed(self) -> float:
+        return float(self._video.seconds)
+
+    @property
+    def volume(self) -> int:
+        return int(self._video.volume)
+
+    @property
+    def hasQueue(self) -> bool:
+        return bool(self._video.hasQueue)
+
+    def setVolume(self, value: int) -> None:
+        self._video.setVolume(value)
+
+    def toggle(self) -> None:
+        self._video.toggle()
+
+    def next(self) -> None:
+        self._video.next()
+
+    def previous(self) -> None:
+        self._video.previous()
+
+    def stop(self) -> None:
+        if self._stop is not None:
+            self._stop()
+        else:
+            self._video.stop()
+
+
 @ClassInfo({"D-Bus Interface": ROOT_IFACE})
 class _Root(QDBusAbstractAdaptor):
     """What the player is, rather than what it is playing."""
@@ -132,9 +188,14 @@ class _Root(QDBusAbstractAdaptor):
 class _Player(QDBusAbstractAdaptor):
     """The controls the media keys land on."""
 
-    def __init__(self, owner: MprisAdapter, audio) -> None:
+    def __init__(self, owner: MprisAdapter) -> None:
         super().__init__(owner)
-        self._audio = audio
+        self._owner = owner
+
+    @property
+    def _audio(self):
+        # Whichever player the controls are on at this moment.
+        return self._owner.now()
 
     @Slot()
     def PlayPause(self) -> None:
@@ -215,21 +276,51 @@ class MprisAdapter(QObject):
     """
 
     def __init__(self, audio, bus: QDBusConnection, on_raise=None, on_quit=None,
-                 parent: QObject | None = None) -> None:
+                 parent: QObject | None = None, video=None, on_video_stop=None) -> None:
         super().__init__(parent)
         self._audio = audio
+        self._video = video
+        self._watched = _Watched(video, on_video_stop) if video is not None else None
         self._bus = bus
         self._on_raise = on_raise
         self._on_quit = on_quit
         self._root = _Root(self)
-        self._player = _Player(self, audio)
+        self._player = _Player(self)
         # Position is deliberately not announced. It moves every tick and the
         # interface says a reader works it out from the status instead.
-        audio.trackChanged.connect(self._publish)
-        audio.stateChanged.connect(self._publish)
+        # Which of the two last began to play, and how each stood when last
+        # looked at, to tell a start from any other change.
+        self._last = "music"
+        self._was = (False, bool(audio.playing), False)
+        audio.trackChanged.connect(self._changed)
+        audio.stateChanged.connect(self._changed)
+        if video is not None:
+            video.trackChanged.connect(self._changed)
+            video.stateChanged.connect(self._changed)
+            video.queueChanged.connect(self._changed)
         # What a reader would see right now, so the first announcement carries
         # what has actually changed rather than everything.
         self._sent = self._values()
+
+    def now(self):
+        """The player the controls are on: while a video is in the window,
+        whichever of it and the music last began to play, so a paused video
+        keeps them until the music is played again; the music otherwise."""
+        video = self._watched
+        if video is None or not video.hasQueue:
+            return self._audio
+        return video if self._last == "video" else self._audio
+
+    def _changed(self) -> None:
+        video = self._watched
+        now = (bool(video and video.playing), bool(self._audio.playing),
+               bool(video and video.hasQueue))
+        if (now[0] and not self._was[0]) or (now[2] and not self._was[2]):
+            self._last = "video"
+        if now[1] and not self._was[1]:
+            self._last = "music"
+        self._was = now
+        self._publish()
 
     # ---- what the root interface calls -----------------------------------
 
@@ -286,8 +377,9 @@ def _declined(reason: str) -> None:
 
 
 def install(audio_player, parent: QObject | None = None,
-            on_raise=None, on_quit=None) -> MprisAdapter | None:
-    """Publish the music player on the session bus.
+            on_raise=None, on_quit=None, video_player=None,
+            on_video_stop=None) -> MprisAdapter | None:
+    """Publish the players on the session bus, as one.
 
     Returns the adapter, which has to be kept alive for as long as the
     player is, or None when there is nothing to publish on. Never raises:
@@ -296,6 +388,7 @@ def install(audio_player, parent: QObject | None = None,
     `on_raise` is called for the Raise method and decides whether CanRaise is
     true at all, so leaving it out simply says the window cannot be brought
     forward. `on_quit` replaces the default, which quits the application.
+    `on_video_stop` is what Stop does to a video, its page's cross.
     """
     try:
         bus = QDBusConnection.sessionBus()
@@ -311,7 +404,8 @@ def install(audio_player, parent: QObject | None = None,
             # player under a numbered name, which would give the panel two
             # entries for one queue, so this one goes without instead.
             return _declined(f"{BUS_NAME} is already taken")
-        adapter = MprisAdapter(audio_player, bus, on_raise, on_quit, parent)
+        adapter = MprisAdapter(audio_player, bus, on_raise, on_quit, parent,
+                               video=video_player, on_video_stop=on_video_stop)
         options = QDBusConnection.RegisterOption.ExportAdaptors
         if not bus.registerObject(OBJECT_PATH, adapter, options):
             bus.unregisterService(BUS_NAME)
