@@ -369,16 +369,73 @@ class WorkerRuns(unittest.TestCase):
         self.assertIsNone(self.db.channel("yt:UC12")["lengths_at"])
 
     def test_a_channel_that_never_streamed_costs_one_call(self):
+        from weave.sources.lengths import Length
+
         self.db.add_channel("yt:UC9", "youtube", "UC9", "One")
         self.db.set_channel_streams("yt:UC9", False)
         self.db.upsert_videos([
             VideoRow("youtube", "jjjjjjjjjj1", "yt:UC9", "A video", is_short=False)])
         asked = []
-        self.patch(poller.lengths, "fetch",
-                   lambda ext_id, kind, **_k: asked.append((ext_id, kind)) or [])
+
+        def listing(ext_id, kind, **_k):
+            asked.append((ext_id, kind))
+            return [Length("jjjjjjjjjj1", 600, None)] if kind == poller.rss.VIDEOS else []
+
+        self.patch(poller.lengths, "fetch", listing)
         self.run_worker(poller.LengthFiller(self.db, self.cfg, 5))
         self.assertEqual([r for r in asked if r[0] == "UC9"],
                          [("UC9", poller.rss.VIDEOS)])
+        self.assertEqual(self.db.video("yt:jjjjjjjjjj1")["duration_s"], 600)
+
+    def test_a_no_to_streams_is_read_again_when_rows_are_left_owed(self):
+        """The no comes from one 404 on the streams feed, and the feeds answer
+        pushback with 404. Measured: a channel marked as not streaming owed
+        fifteen old streams, and its streams tab held every one of them."""
+        from weave.sources.lengths import Length
+
+        self.db.add_channel("yt:UC15", "youtube", "UC15", "One")
+        self.db.set_channel_streams("yt:UC15", False)
+        self.db.upsert_videos([
+            VideoRow("youtube", "ppppppppp11", "yt:UC15", "A video", is_short=False),
+            VideoRow("youtube", "ppppppppp12", "yt:UC15", "LIVE: a stream", is_short=False)])
+        asked = []
+
+        def listing(ext_id, kind, **_k):
+            asked.append((ext_id, kind))
+            if kind == poller.rss.VIDEOS:
+                return [Length("ppppppppp11", 600, None)]
+            return [Length("ppppppppp12", 13369, "was_live")]
+
+        self.patch(poller.lengths, "fetch", listing)
+        self.run_worker(poller.LengthFiller(self.db, self.cfg, 5))
+        self.assertEqual([r for r in asked if r[0] == "UC15"],
+                         [("UC15", poller.rss.VIDEOS), ("UC15", poller.rss.LIVE)])
+        self.assertEqual(self.db.video("yt:ppppppppp12")["duration_s"], 13369)
+        self.assertEqual(self.db.video("yt:ppppppppp12")["live_status"], "was_live")
+        # Taken back, so the poll reads its streams feed again.
+        self.assertEqual(self.db.channel("yt:UC15")["streams"], 1)
+
+    def test_a_no_the_streams_tab_agrees_with_stays_a_no(self):
+        from weave.sources.lengths import NoSuchTab
+
+        for ext_id, answer in (("UC16", NoSuchTab("no live tab")), ("UC17", [])):
+            key = f"yt:{ext_id}"
+            self.db.add_channel(key, "youtube", ext_id, "One")
+            self.db.set_channel_streams(key, False)
+            self.db.upsert_videos([
+                VideoRow("youtube", f"q{ext_id}qqqqq1", key, "Gone", is_short=False)])
+
+            def listing(_ext_id, kind, answer=answer, **_k):
+                if kind == poller.rss.LIVE and isinstance(answer, Exception):
+                    raise answer
+                return [] if kind == poller.rss.VIDEOS else answer
+
+            self.patch(poller.lengths, "fetch", listing)
+            said = self.run_worker(poller.LengthFiller(self.db, self.cfg, 5))
+            self.assertFalse(said)
+            self.assertEqual(self.db.channel(key)["streams"], 0, ext_id)
+            # Stamped, so it waits for the weekly recheck like any other gap.
+            self.assertIsNotNone(self.db.channel(key)["lengths_at"], ext_id)
 
     def test_a_channel_never_asked_about_streams_is_asked_here(self):
         """channels.streams has three states and NULL is a question, not a no.

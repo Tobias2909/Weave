@@ -1584,17 +1584,25 @@ class LengthFiller(Worker):
             # exactly half of each of those channels' rows owed, because the
             # half that was left were the streams. The answer is kept while we
             # are here, so this also settles that question for free.
-            tabs = [rss.VIDEOS] + ([rss.LIVE] if row["streams"] != 0 else [])
-            allowance = budget.allowance(BROWSE, len(tabs), background=True)
-            if allowance.granted < len(tabs):
+            #
+            # A no is read too when the videos tab leaves rows owed. It comes
+            # from one 404 on the streams feed, and the feeds answer pushback
+            # with 404. Measured on a real library: 38 channels marked as not
+            # streaming owed 172 rows between them, and the streams tab of one
+            # held all fifteen it owed, with their lengths.
+            allowance = budget.allowance(BROWSE, 2, background=True)
+            if allowance.granted < 2:
                 break
             owed = self._db.videos_without_a_length(row["key"])
             if not owed:
                 self._db.mark_lengths_read(row["key"])
                 continue
             found: list[tuple[str, int | None, str | None]] = []
+            answered: set[str] = set()
             trouble = ""
-            for kind in tabs:
+            for kind in (rss.VIDEOS, rss.LIVE):
+                if kind == rss.LIVE and row["streams"] == 0 and owed <= answered:
+                    continue
                 try:
                     budget.spend(BROWSE)
                     answer = lengths.fetch(row["ext_id"], kind, throttle=self._throttle,
@@ -1613,10 +1621,13 @@ class LengthFiller(Worker):
                     budget.spend(BROWSE, count=0, refused=1)
                     trouble = f"{type(exc).__name__}: {exc}"
                     break
-                if kind == rss.LIVE and row["streams"] is None:
+                # A stream found here takes back a no, so the poll reads the
+                # channel's streams feed again from now on.
+                if kind == rss.LIVE and (row["streams"] is None or answer):
                     self._db.set_channel_streams(row["key"], bool(answer))
                 found.extend((f"yt:{item.ext_id}", item.duration_s, item.live_status)
                              for item in answer if item.ext_id in owed)
+                answered.update(item.ext_id for item in answer if item.ext_id in owed)
             if trouble:
                 # Left unstamped, so it is tried again rather than written off
                 # on one bad answer.
