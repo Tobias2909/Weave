@@ -52,13 +52,6 @@ OPTIONS = {
     "audio_client_name": "weave-video",
     "keep_open": "yes",
     "prefetch_playlist": False,
-    # Decoded on the graphics card where that is known to work. MEASURED in a
-    # real window through the render API, 1440p VP9 at 25 fps: 11.1 % of one
-    # core in software, 3.5 % on the card, no frame dropped either way.
-    # auto-safe only takes a decoder mpv vouches for and falls back to software
-    # otherwise. Forcing vaapi through an NVIDIA card's translation layer froze
-    # the drawing for 5.6 s, and auto-safe never chose it there.
-    "hwdec": "auto-safe",
 }
 
 # A video left before this far in starts again from the beginning: that much

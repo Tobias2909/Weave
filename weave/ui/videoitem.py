@@ -176,10 +176,16 @@ class VideoSurface(QQuickFramebufferObject):
                 self._wanting.surfaceWanted.disconnect(self._nudge)
             except (RuntimeError, TypeError):
                 pass
+            try:
+                self._wanting.outputClosed.disconnect(self._tidy)
+            except (AttributeError, RuntimeError, TypeError):
+                pass
             self._wanting = None
         player = self.binding.engine
         if player is not None and hasattr(player, "surfaceWanted"):
             player.surfaceWanted.connect(self._nudge)
+            if hasattr(player, "outputClosed"):
+                player.outputClosed.connect(self._tidy)
             self._wanting = player
 
     @property
@@ -226,6 +232,18 @@ class VideoSurface(QQuickFramebufferObject):
         if self._drawing:
             trace.mark("surface_nudged")
             self.update()
+
+    @Slot()
+    def _tidy(self) -> None:
+        """Paint once after the player closed its output, drawing or not.
+
+        mpv gives back what it held for drawing the last picture on the next
+        paint, and for a picture decoded on the graphics card that paint takes
+        17-25 ms, MEASURED. Left to wait, it fell on the page opening again.
+        Asked for now, it falls while the page is away, and a surface not
+        drawing only collects, so nothing shows.
+        """
+        self.update()
 
     def _redraw(self) -> None:
         # A frame arrived. Always collected, whether or not it is painted,

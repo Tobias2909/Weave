@@ -69,6 +69,16 @@ OPTIONS = {
     # this is the setting that stops the render call limiting the caller's
     # frame rate. The surface asks not to wait as well, so the two agree.
     "video_timing_offset": 0,
+    # Pictures decoded on the graphics card where that is known to work, for
+    # the music's and the window's videos alike. MEASURED in a real window
+    # through the render API, the whole application with a 1080p60 VP9 music
+    # video showing: 21 % of one core in software, 10 % on the card; the
+    # window's 1440p VP9 at 25 fps: 11.1 % against 3.5 %, no frame dropped
+    # either way. auto-safe only takes a decoder mpv vouches for and falls
+    # back to software otherwise. Forcing vaapi through an NVIDIA card's
+    # translation layer froze the drawing for 5.6 s, and auto-safe never
+    # chose it there.
+    "hwdec": "auto-safe",
 }
 
 # A picture added this far into a song is moved to where the song is. mpv
@@ -121,6 +131,9 @@ class LibmpvEngine(QObject):
     # The player has taken a picture's address. Said from the player's own
     # thread and answered on this one, which is where the track is chosen.
     _videoTaken = Signal(str)
+    # What the player says `vid` is, asked about that address without waiting.
+    # Said from the player's own thread, empty when it gave no answer.
+    _videoKnown = Signal(str, str)
     # The picture's decoder has its first frame's shape, which means its file
     # has been read from. Said from the player's own thread.
     _decoding = Signal()
@@ -128,6 +141,10 @@ class LibmpvEngine(QObject):
     # The surface builds its render context only when it paints, and it has
     # no reason of its own to paint, so it is told.
     surfaceWanted = Signal()
+    # A picture has been taken off and the player's output for it closed.
+    # Said from the player's own thread. What the surface held for drawing it
+    # is given back on its next paint, so it is told to paint once now.
+    outputClosed = Signal()
     # The end of what is playing has been reached and the player is holding its
     # last frame there. Only ever true for a player told to keep files open at
     # their end, which the music is not.
@@ -137,6 +154,7 @@ class LibmpvEngine(QObject):
                  options: dict | None = None) -> None:
         super().__init__(parent)
         self._videoTaken.connect(self._on_video_taken)
+        self._videoKnown.connect(self._on_video_known)
         self._decoding.connect(self._from_here)
         # Whatever this player is started with on top of OPTIONS. The music
         # takes none; the videos played in the window are another player with a
@@ -694,14 +712,42 @@ class LibmpvEngine(QObject):
         if url == self._attaching:
             self._attaching = ""
         if url == self._attached:
-            self._choose_video()
+            self._ask_whether_on(url)
         else:
             # Asked for by a page that has closed since, or for a song that
             # has ended since. Left on the song, it would be fetched and
             # decoded for nobody, so it goes as soon as it has arrived.
             self._take_off(url)
 
-    def _choose_video(self) -> None:
+    def _ask_whether_on(self, url: str) -> None:
+        """Whether a picture just taken is on, asked without waiting.
+
+        Read, the question waits for the player to be free, and straight after
+        taking a picture it is starting its decoder. On the graphics card that
+        is 35 ms, MEASURED, and the window stood still for all of it as the
+        page slid in. The binding hands back answers to commands only, so it
+        is asked as one: the raw `vid`, which says `no` or a number.
+        """
+        ask = getattr(self._mpv, "command_async", None)
+        if ask is None:
+            self._choose_video()
+            return
+        try:
+            ask("expand-text", "${=vid}",
+                callback=lambda error, said, at=url: self._videoKnown.emit(
+                    at, "" if error is not None or said is None else str(said)))
+        except Exception:
+            self._choose_video()
+
+    def _on_video_known(self, url: str, said: str) -> None:
+        if url != self._attached:
+            # Taken off or replaced while the question was out, and that has
+            # dealt with it.
+            return
+        # No answer, and it is read the way every other choosing reads it.
+        self._choose_video(on=said != "no" if said else None)
+
+    def _choose_video(self, on: bool | None = None) -> None:
         """Turn the picture on, if it is wanted and there is somewhere to draw it.
 
         By the number of the track rather than by `vid=auto`. MEASURED on mpv
@@ -713,14 +759,15 @@ class LibmpvEngine(QObject):
         track chooses it whatever `vid` says.
 
         Never for a track already chosen, since choosing it again makes the
-        player lose the frame it is showing.
+        player lose the frame it is showing. `on` is the player's own answer
+        to that, when it has already been asked without waiting.
         """
         if self._mpv is None or not (self._can_render and self._want_video):
             return
         if self._attaching:
             # On its way. Its answer chooses it, or `select` already has.
             return
-        if self._video_on():
+        if self._video_on() if on is None else on:
             return
         tracks = self._video_tracks()
         if tracks:
@@ -791,10 +838,15 @@ class LibmpvEngine(QObject):
 
     def _remove_track(self, track: dict) -> None:
         trace.mark("remove_video", track=track.get("id"))
-        self._ask("video-remove", str(track.get("id")))
+        # The surface told once it has gone. On the graphics card, giving back
+        # what was held for drawing it is 17-25 ms of the render thread,
+        # MEASURED, and left for the next paint that was the page opening
+        # again, with the window waiting on it as the page slid in.
+        self._ask("video-remove", str(track.get("id")), then=self.outputClosed.emit)
 
-    def _ask(self, *args: str) -> None:
-        """A command about the picture, without waiting for it.
+    def _ask(self, *args: str, then=None) -> None:
+        """A command about the picture, without waiting for it. `then` runs
+        once the player has done it, on the player's own thread.
 
         Waited for, a change of picture track held the thread that paints the
         window until mpv had done it, and mpv was waiting for that thread to
@@ -803,10 +855,22 @@ class LibmpvEngine(QObject):
         """
         ask = getattr(self._mpv, "command_async", None)
         if ask is None:
-            self._command(*args)
+            if self._command(*args) and then is not None:
+                then()
             return
+
+        def answered(error, result) -> None:
+            _asked(error, result)
+            if error is None and then is not None:
+                try:
+                    then()
+                except RuntimeError:
+                    # Whoever was to be told has gone, the application
+                    # closing while the player was still answering.
+                    pass
+
         try:
-            ask(*args, callback=_asked)
+            ask(*args, callback=answered)
         except Exception:
             pass
 

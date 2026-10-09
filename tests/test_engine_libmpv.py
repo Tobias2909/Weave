@@ -253,8 +253,13 @@ class OnePictureAttachedPerSong(unittest.TestCase):
         self.assertEqual(one._attaching, "https://example.invalid/v")
         one._mpv.tracks.append(1)
         asked[0][1](None, None)
-        one._on_video_taken("https://example.invalid/v")
-        self.assertEqual(len(asked), 1, "the picture was opened twice")
+        # Whether it is on is asked of the player too, and it says not.
+        questions = [callback for args, callback in asked if args[0] == "expand-text"]
+        self.assertEqual(len(questions), 1)
+        questions[0](None, "no")
+        self.assertEqual([args for args, _ in asked if args[0] == "video-add"],
+                         [("video-add", "https://example.invalid/v", "select")],
+                         "the picture was opened twice")
         self.assertEqual(one._attaching, "")
         self.assertIn(("vid", 1), one._mpv.said)
 
@@ -291,6 +296,112 @@ class OnePictureAttachedPerSong(unittest.TestCase):
         one.drop_video()
         self.assertEqual(asked, [("video-remove", "1")])
         self.assertNotIn(("video-remove", "1"), one._mpv.said)
+
+
+class CountingTalker(Talker):
+    """A player that counts how often `vid` is read outright."""
+
+    def __init__(self) -> None:
+        self.reads = 0
+        self._vid = False
+        super().__init__()
+
+    @property
+    def vid(self):
+        self.reads += 1
+        return self._vid
+
+    @vid.setter
+    def vid(self, value) -> None:
+        self._vid = value
+
+
+class APictureJustTaken(unittest.TestCase):
+    """Straight after taking a picture the player starts its decoder, and a
+    read of `vid` waits for that: 35 ms on the graphics card, MEASURED, with
+    the window standing still as the page slid in. So whether the picture is
+    on is asked without waiting."""
+
+    URL = "https://example.invalid/v"
+
+    def taken(self, selected: bool = True):
+        one = engine()
+        one._mpv = CountingTalker()
+        self.asked: list = []
+        one._mpv.command_async = lambda *args, callback: self.asked.append((args, callback))
+        one.render_ready(True)
+        one.add_video(self.URL)
+        number = one._mpv.land(self.URL)
+        if selected:
+            one._mpv.vid = number
+        one._mpv.reads = 0
+        self.asked[0][1](None, None)
+        return one
+
+    def question(self):
+        found = [callback for args, callback in self.asked
+                 if args == ("expand-text", "${=vid}")]
+        self.assertEqual(len(found), 1, "whether it is on was not asked")
+        return found[0]
+
+    def test_it_is_asked_and_not_read(self) -> None:
+        one = self.taken()
+        self.question()
+        self.assertEqual(one._mpv.reads, 0, "the window waited on the player")
+
+    def test_on_already_it_is_left_alone(self) -> None:
+        # Chosen again, the player would start its decoder a second time.
+        one = self.taken()
+        self.question()(None, "1")
+        self.assertNotIn("vid", [said[0] for said in one._mpv.said])
+
+    def test_not_on_it_is_chosen(self) -> None:
+        one = self.taken(selected=False)
+        self.question()(None, "no")
+        self.assertIn(("vid", 1), one._mpv.said)
+
+    def test_taken_off_while_asking_it_is_left_off(self) -> None:
+        one = self.taken(selected=False)
+        ask = self.question()
+        one.drop_video()
+        ask(None, "no")
+        self.assertNotIn(("vid", 1), one._mpv.said)
+
+    def test_no_answer_is_read_instead(self) -> None:
+        one = self.taken()
+        self.question()(RuntimeError("player gone"), None)
+        self.assertEqual(one._mpv.reads, 1)
+        self.assertNotIn("vid", [said[0] for said in one._mpv.said])
+
+
+class TheSurfaceToldWhenAPictureGoes(unittest.TestCase):
+    """What the surface held for drawing a picture is given back on its next
+    paint, 17-25 ms of the render thread for one decoded on the graphics
+    card, MEASURED. Left alone, that paint was the page opening again."""
+
+    def removed(self):
+        one = engine()
+        one._mpv = Talker()
+        self.asked: list = []
+        one._mpv.command_async = lambda *args, callback: self.asked.append((args, callback))
+        one._mpv.land("https://example.invalid/v")
+        self.said: list = []
+        one.outputClosed.connect(lambda: self.said.append(True))
+        one.drop_video()
+        self.assertEqual([args for args, _ in self.asked], [("video-remove", "1")])
+        # Held, as the application holds it, until the player has answered.
+        self.one = one
+
+    def test_once_the_player_has_taken_it_off(self) -> None:
+        self.removed()
+        self.assertEqual(self.said, [], "told before the player had done it")
+        self.asked[0][1](None, None)
+        self.assertEqual(self.said, [True])
+
+    def test_not_when_the_player_refused(self) -> None:
+        self.removed()
+        self.asked[0][1](RuntimeError("no such track"), None)
+        self.assertEqual(self.said, [])
 
 
 class APictureNobodyWantsAnyMore(unittest.TestCase):
