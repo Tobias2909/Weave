@@ -109,20 +109,35 @@ class Talker:
         # What mpv answers for `vid`: False for none, a track id otherwise.
         self.vid = False
         # The picture tracks on the song, which the engine reads to choose one
-        # by its number. Each video-add adds one.
+        # by its number. Each video-add adds one, each video-remove takes one.
         self.tracks: list[int] = []
+        self.files: dict[int, str] = {}
+        self._numbers = 0
 
     @property
     def track_list(self) -> list:
-        return [{"id": number, "type": "video", "selected": self.vid == number}
+        return [{"id": number, "type": "video", "selected": self.vid == number,
+                 "external": True, "external-filename": self.files.get(number)}
                 for number in self.tracks]
+
+    def land(self, url: str) -> int:
+        """A picture asked for without waiting arrives on the song."""
+        self._numbers += 1
+        self.tracks.append(self._numbers)
+        self.files[self._numbers] = url
+        return self._numbers
 
     def command(self, *args) -> None:
         self.said.append(tuple(args))
         if args and args[0] == "video-add":
-            self.tracks.append(len(self.tracks) + 1)
+            number = self.land(args[1])
             # `select` turns it on, `auto` adds it and leaves it alone.
-            self.vid = self.tracks[-1] if args[-1] == "select" else self.vid
+            self.vid = number if args[-1] == "select" else self.vid
+        elif args and args[0] == "video-remove":
+            number = int(args[1])
+            self.tracks.remove(number)
+            if self.vid == number:
+                self.vid = False
 
     def __setitem__(self, name, value) -> None:
         self.said.append((name, value))
@@ -161,7 +176,7 @@ class OnePictureAttachedPerSong(unittest.TestCase):
         # again makes mpv reselect it and lose the frame.
         self.assertEqual(one._mpv.said, first, "a running picture was touched")
 
-    def test_one_switched_off_is_switched_back_on(self) -> None:
+    def test_one_taken_off_is_put_back(self) -> None:
         one = engine()
         one._mpv = Talker()
         one.render_ready(True)
@@ -169,7 +184,9 @@ class OnePictureAttachedPerSong(unittest.TestCase):
         one.drop_video()
         one._mpv.said.clear()
         one.add_video("https://example.invalid/v")
-        self.assertEqual(one._mpv.said, [("vid", 1)])
+        self.assertEqual(one._mpv.said,
+                         [("video-add", "https://example.invalid/v", "select")])
+        self.assertTrue(one._video_on())
 
     def test_a_new_song_forgets_what_was_attached(self) -> None:
         one = engine()
@@ -250,13 +267,147 @@ class OnePictureAttachedPerSong(unittest.TestCase):
         one._refused("https://example.invalid/v")
         self.assertEqual(one._attaching, "")
 
-    def test_dropping_leaves_the_track_attached(self) -> None:
+    def test_dropping_takes_the_track_off(self) -> None:
+        """Switched off and left on the song, mpv went on fetching it,
+        measured, for nobody to see."""
         one = engine()
         one._mpv = Talker()
+        one.render_ready(True)
         one.add_video("https://example.invalid/v")
         one.drop_video()
-        self.assertIn(("vid", "no"), one._mpv.said)
-        self.assertEqual(one._attached, "https://example.invalid/v")
+        self.assertIn(("video-remove", "1"), one._mpv.said)
+        self.assertEqual(one._mpv.tracks, [])
+        self.assertFalse(one._video_on())
+        self.assertEqual(one._attached, "")
+
+    def test_dropping_is_asked_without_waiting(self) -> None:
+        """Waited for, it held the thread that paints the window for 192 ms,
+        measured, and the player waited as long on its frames."""
+        one = engine()
+        one._mpv = Talker()
+        asked: list = []
+        one._mpv.command_async = lambda *args, callback: asked.append(args)
+        one._mpv.land("https://example.invalid/v")
+        one.drop_video()
+        self.assertEqual(asked, [("video-remove", "1")])
+        self.assertNotIn(("video-remove", "1"), one._mpv.said)
+
+
+class APictureNobodyWantsAnyMore(unittest.TestCase):
+    """A picture is asked for without waiting, so the page can close, or the
+    song end, between the asking and the answer. One that arrives then must
+    go, or it is fetched and decoded behind the closed page for the rest of
+    the song."""
+
+    URL = "https://example.invalid/v"
+
+    def asked_for(self):
+        one = engine()
+        one._mpv = Talker()
+        self.asked: list = []
+
+        def ask(*args, callback):
+            # An add is left on its way; a removal is done at once.
+            self.asked.append(args)
+            if args[0] == "video-remove":
+                one._mpv.command(*args)
+
+        one._mpv.command_async = ask
+        one.render_ready(True)
+        one.add_video(self.URL)
+        self.assertEqual(self.asked, [("video-add", self.URL, "select")])
+        return one
+
+    def arrives(self, one) -> None:
+        one._mpv.vid = one._mpv.land(self.URL)
+        one._on_video_taken(self.URL)
+
+    def test_one_arriving_after_the_page_closed_is_taken_off(self) -> None:
+        one = self.asked_for()
+        one.drop_video()
+        self.arrives(one)
+        self.assertEqual(one._mpv.said[-1], ("video-remove", "1"))
+        self.assertEqual(one._mpv.tracks, [])
+
+    def test_opening_again_before_it_arrived_waits_for_it(self) -> None:
+        one = self.asked_for()
+        one.drop_video()
+        one.add_video(self.URL)
+        self.assertEqual(len(self.asked), 1, "the same picture was asked for twice")
+        self.arrives(one)
+        self.assertEqual(one._mpv.tracks, [1], "the picture wanted again was taken off")
+        self.assertTrue(one._video_on())
+
+    def test_one_for_a_song_already_left_is_taken_off(self) -> None:
+        one = self.asked_for()
+        one._new_file()
+        self.arrives(one)
+        self.assertEqual(one._mpv.tracks, [])
+
+    def test_one_still_wanted_stays(self) -> None:
+        one = self.asked_for()
+        self.arrives(one)
+        self.assertEqual(one._mpv.tracks, [1])
+        self.assertNotIn("video-remove", [said[0] for said in one._mpv.said])
+
+
+class APictureAddedPartwayIn(unittest.TestCase):
+    """mpv starts a picture added to a playing song at the song's beginning
+    and reads and decodes its way up to where the song is: 106 MiB and 11.3 s
+    before a frame 3.5 minutes in, MEASURED. Chosen again once its decoder has
+    started, mpv moves it to where the song is instead."""
+
+    URL = "https://example.invalid/v"
+
+    def added_at(self, seconds: float):
+        one = engine()
+        one._mpv = Talker()
+        self.asked: list = []
+        one._mpv.command_async = lambda *args, callback: self.asked.append(args)
+        one.render_ready(True)
+        one._pos = seconds
+        one.add_video(self.URL)
+        one._mpv.vid = one._mpv.land(self.URL)
+        one._on_video_taken(self.URL)
+        return one
+
+    def test_it_is_let_go_and_chosen_again_once_decoding(self) -> None:
+        one = self.added_at(240.0)
+        one._on_dec_params("video-dec-params", {"w": 1920})
+        one._from_here()
+        self.assertEqual(self.asked[-2:], [("set", "vid", "no"), ("set", "vid", "1")])
+
+    def test_only_once(self) -> None:
+        one = self.added_at(240.0)
+        one._from_here()
+        one._from_here()
+        self.assertEqual([a for a in self.asked if a[0] == "set"],
+                         [("set", "vid", "no"), ("set", "vid", "1")])
+
+    def test_near_the_beginning_it_is_left_where_it_starts(self) -> None:
+        one = self.added_at(2.0)
+        one._from_here()
+        self.assertEqual([a for a in self.asked if a[0] == "set"], [])
+
+    def test_not_one_already_showing(self) -> None:
+        # Let go then, the frame on screen would go and the artwork come back.
+        one = self.added_at(240.0)
+        one._had_frame = True
+        one._from_here()
+        self.assertEqual([a for a in self.asked if a[0] == "set"], [])
+
+    def test_not_one_taken_off_since(self) -> None:
+        one = self.added_at(240.0)
+        one.drop_video()
+        one._from_here()
+        self.assertEqual([a for a in self.asked if a[0] == "set"], [])
+
+    def test_a_new_song_starts_from_its_own_beginning(self) -> None:
+        # The last position reported was the song before's.
+        one = self.added_at(240.0)
+        one._new_file()
+        self.assertEqual(one._pos, 0.0)
+        self.assertEqual(one._move_up, "")
 
 
 class AFrameBelongsToItsFile(unittest.TestCase):
@@ -503,6 +654,18 @@ class APictureLeftUnchosen(unittest.TestCase):
         self.one.add_video(picture)
         self.assertTrue(self.until(self.one._video_on, 3.0),
                         "asked for again, the picture stayed unchosen")
+
+    def test_dropping_takes_it_off_the_song_and_back_on(self):
+        picture = self.unchosen_picture()
+        self.one.add_video(picture)
+        self.assertTrue(self.until(self.one._video_on, 3.0))
+        self.one.drop_video()
+        self.assertTrue(self.until(lambda: not self.one._video_tracks(), 3.0),
+                        "the picture is still on the song")
+        self.one.add_video(picture)
+        self.assertTrue(self.until(self.one._video_on, 3.0),
+                        "the picture did not come back")
+        self.assertEqual(len(self.one._video_tracks()), 1)
 
 
 class TheSurfaceIsToldToPaint(unittest.TestCase):

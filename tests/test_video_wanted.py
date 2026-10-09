@@ -13,12 +13,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_audio import FakeEngine, FakeResolver  # noqa: E402
 
+from PySide6.QtCore import QEvent
+
 from weave.audio import (
     STAGE_LOOKING,
     STAGE_OPENING,
     STAGE_SHOWING,
-    VIDEO_MAX_S,
     AudioPlayer,
+    WindowWatch,
 )
 from weave.config import Config
 from weave.engine_libmpv import CURRENT
@@ -74,41 +76,160 @@ class WhenNobodyIsLooking(unittest.TestCase):
         self.assertFalse(one.videoWanted)
         self.assertIsNone(one._video_resolver, "a picture was fetched for nobody")
 
-    def test_closing_the_page_says_nothing_to_the_player(self) -> None:
-        # The picture keeps running behind the closed page, so opening it
-        # again within the song shows the video at once rather than the
-        # artwork for the seconds a frame takes to exist again.
+    def test_closing_the_page_takes_the_picture_off(self) -> None:
+        # Kept running behind the closed page, it was fetched and decoded for
+        # nobody until the song ended, which for a long mix is hours.
         one = player()
         one.play_items([song()])
-        one._video_wanted = True
+        one.setVideoWanted(True)
         one._engine.calls.clear()
         one.setVideoWanted(False)
         self.assertFalse(one.videoWanted)
-        self.assertEqual(one._engine.calls, [], "closing the page reached for the player")
+        self.assertEqual(one._engine.calls, [("drop_video",)])
 
-    def test_the_next_song_is_where_it_actually_stops(self) -> None:
-        # Which is where the fetching and the decoding end, without a command
-        # against a song already playing.
+    def test_opening_it_again_puts_back_the_one_already_found(self) -> None:
+        # Without looking for it a second time: the address is still good.
         one = player()
-        one.play_items([song(duration_s=200)])
-        one._video_wanted = True
+        one.play_items([song()])
+        one.setVideoWanted(True)
+        one._on_video_resolved("yt:a", "https://example.invalid/v")
         one.setVideoWanted(False)
+        one._video_resolver = None
         one._engine.calls.clear()
-        one.play_items([song(key="yt:b", duration_s=200)])
-        self.assertNotIn(("add_video", "https://example.invalid/v"),
-                         one._engine.calls)
+        one.setVideoWanted(True)
+        self.assertEqual(one._engine.only("add_video"),
+                         [("add_video", "https://example.invalid/v")])
+        self.assertIsNone(one._video_resolver, "a known picture was looked for again")
+
+
+class WhileTheWindowIsNotDrawn(unittest.TestCase):
+    """Minimized, or on a screen gone dark, nothing collects the frames mpv
+    makes, and any change of picture track then stalls the player for up to
+    two hundred milliseconds. So nothing is changed on the song until the
+    window is back, and nothing new is asked for meanwhile."""
+
+    def showing(self, one: AudioPlayer, url: str = "https://example.invalid/v") -> None:
+        one.setVideoWanted(True)
+        one._on_video_resolved("yt:a", url)
+        one._engine.videoChanged.emit(True)
+
+    def test_hiding_it_changes_nothing_on_the_song(self) -> None:
+        one = player()
+        one.play_items([song()])
+        self.showing(one)
+        one._engine.calls.clear()
+        one.setWindowShown(False)
+        self.assertFalse(one.videoWanted)
+        self.assertEqual(one._engine.calls, [])
+
+    def test_back_to_the_same_song_it_carries_on(self) -> None:
+        one = player()
+        one.play_items([song()])
+        self.showing(one)
+        one.setWindowShown(False)
+        one._video_resolver = None
+        one._engine.calls.clear()
+        one.setWindowShown(True)
+        self.assertTrue(one.videoWanted)
+        self.assertEqual(one._engine.calls, [])
+        self.assertEqual(one.videoStage, STAGE_SHOWING)
+        self.assertIsNone(one._video_resolver, "a known picture was looked for again")
+
+    def test_with_the_page_closed_it_changes_nothing(self) -> None:
+        one = player()
+        one.play_items([song()])
+        one._engine.calls.clear()
+        one.setWindowShown(False)
+        one.setWindowShown(True)
+        self.assertFalse(one.videoWanted)
+        self.assertEqual(one._engine.calls, [])
+
+    def test_the_page_opened_in_a_hidden_window_waits_for_it(self) -> None:
+        one = player()
+        one.play_items([song()])
+        one.setWindowShown(False)
+        one._video_resolver = None
+        one.setVideoWanted(True)
+        self.assertFalse(one.videoWanted)
+        self.assertIsNone(one._video_resolver, "a picture was fetched for nobody")
+        one.setWindowShown(True)
+        self.assertTrue(one.videoWanted)
+        self.assertIsNotNone(one._video_resolver)
+
+    def test_the_page_closed_meanwhile_takes_it_off_once_back(self) -> None:
+        one = player()
+        one.play_items([song()])
+        self.showing(one)
+        one.setWindowShown(False)
+        one._engine.calls.clear()
+        one.setVideoWanted(False)
+        self.assertEqual(one._engine.calls, [], "the song was changed while hidden")
+        one.setWindowShown(True)
+        self.assertFalse(one.videoWanted)
+        self.assertEqual(one._engine.calls, [("drop_video",)])
+
+    def test_a_song_starting_while_hidden_gets_no_picture_until_back(self) -> None:
+        one = player()
+        one.play_items([song(), song("yt:b")])
+        one._video_addresses.put("yt:b", "https://example.invalid/b")
+        self.showing(one)
+        one.setWindowShown(False)
+        one.jumpTo(1)
+        one._engine.videoChanged.emit(False)
+        one._engine.calls.clear()
+        one._on_started(CURRENT)
+        self.assertEqual(one._engine.only("add_video"), [])
+        one.setWindowShown(True)
+        self.assertEqual(one._engine.only("add_video"),
+                         [("add_video", "https://example.invalid/b")])
+        self.assertEqual(one.videoStage, STAGE_OPENING)
+
+    def test_nothing_ahead_is_looked_for_while_hidden(self) -> None:
+        one = player()
+        one.play_items([song(), song("yt:b")])
+        one.setVideoWanted(True)
+        one._stop_next_video_resolvers()
+        one.setWindowShown(False)
+        one._prepare_next_picture()
+        self.assertEqual([r for r in one._next_video_resolvers if r.isRunning()], [])
+
+
+class TheWindowSaysSo(unittest.TestCase):
+    """Qt hears it from the compositor as an expose event, either way."""
+
+    class Window:
+        def __init__(self) -> None:
+            self.exposed = True
+            self.filters = []
+
+        def installEventFilter(self, watcher) -> None:
+            self.filters.append(watcher)
+
+        def isExposed(self) -> bool:
+            return self.exposed
+
+    def test_minimized_and_back(self) -> None:
+        one = player()
+        window = self.Window()
+        watch = WindowWatch(window, one)
+        self.assertEqual(window.filters, [watch])
+        window.exposed = False
+        self.assertFalse(watch.eventFilter(window, QEvent(QEvent.Type.Expose)))
+        self.assertFalse(one._window_shown)
+        window.exposed = True
+        watch.eventFilter(window, QEvent(QEvent.Type.Expose))
+        self.assertTrue(one._window_shown)
+
+    def test_other_events_are_not_read_as_an_answer(self) -> None:
+        one = player()
+        window = self.Window()
+        watch = WindowWatch(window, one)
+        window.exposed = False
+        watch.eventFilter(window, QEvent(QEvent.Type.Resize))
+        self.assertTrue(one._window_shown)
 
 
 class WhatDeservesAPicture(unittest.TestCase):
-    def test_a_long_one_is_refused_and_says_why(self) -> None:
-        # An hour of pictures nobody looks at, for a mix or a talk played as
-        # music. The artwork stays and the reason is on the page.
-        one = player()
-        one.play_items([song(duration_s=VIDEO_MAX_S + 1)])
-        one.setVideoWanted(True)
-        self.assertIn("minutes", one.videoNote)
-        self.assertIsNone(one._video_resolver, "a refused picture was fetched anyway")
-
     def test_a_short_one_is_fetched(self) -> None:
         one = player()
         one.play_items([song(duration_s=200)])
@@ -116,14 +237,28 @@ class WhatDeservesAPicture(unittest.TestCase):
         self.assertEqual(one.videoNote, "")
         self.assertIsNotNone(one._video_resolver)
 
-    def test_a_broadcast_is_exempt_from_the_length_rule(self) -> None:
-        # It reports no length worth comparing, and its picture is being
-        # fetched whatever happens: a livestream is offered in no sound only
-        # shape at all.
+    def test_so_is_a_long_one(self) -> None:
+        # The picture costs something only while the page is open, so a ten
+        # hour mix has no reason to be refused one any more.
+        one = player()
+        one.play_items([song(duration_s=10 * 3600)])
+        one.setVideoWanted(True)
+        self.assertEqual(one.videoNote, "")
+        self.assertIsNotNone(one._video_resolver)
+
+    def test_and_one_whose_length_is_not_known(self) -> None:
+        one = player()
+        one.play_items([song()])
+        one._dur = 10 * 3600.0
+        one.setVideoWanted(True)
+        self.assertIsNotNone(one._video_resolver)
+
+    def test_and_a_broadcast(self) -> None:
         one = player()
         one.play_items([song(live=True, duration_s=99999)])
         one.setVideoWanted(True)
         self.assertEqual(one.videoNote, "")
+        self.assertIsNotNone(one._video_resolver)
 
 
 class OnceTheAddressIsKnown(unittest.TestCase):
@@ -301,11 +436,10 @@ class TheSongAfterThisOne(unittest.TestCase):
         self.player._prepare_next()
         self.assertEqual(self.looking_for(), [])
 
-    def test_one_that_would_be_refused_a_picture_is_not_looked_for(self):
-        """The length rule is the same one the current song is held to."""
-        self.player._queue[1] = song("yt:b", duration_s=VIDEO_MAX_S + 60)
+    def test_a_long_one_is_looked_for_like_any_other(self):
+        self.player._queue[1] = song("yt:b", duration_s=10 * 3600)
         self.player.setVideoWanted(True)
-        self.assertEqual(self.looking_for(), [])
+        self.assertEqual(self.looking_for(), ["yt:b"])
 
     def test_the_end_of_the_queue_has_nothing_after_it(self):
         self.player._at = 2
@@ -379,15 +513,6 @@ class WhatIsBeingWaitedOn(unittest.TestCase):
         one.setVideoWanted(True)
         one._on_video_frame(True)
         self.assertEqual(one.videoStage, STAGE_SHOWING)
-
-    def test_a_song_that_will_never_have_one_says_why_instead(self) -> None:
-        """A step that is not being taken is a worse thing to read than the
-        reason there will be no picture at all."""
-        one = player()
-        one.play_items([song(duration_s=VIDEO_MAX_S + 60)])
-        one.setVideoWanted(True)
-        self.assertEqual(one.videoStage, "")
-        self.assertIn("15 minutes", one.videoNote)
 
     def test_closing_the_page_leaves_nothing_being_waited_on(self) -> None:
         one = player()

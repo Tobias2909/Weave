@@ -22,6 +22,10 @@ them:
   12.1 s against 2411 kbit/s with it on, and 0.2 % of a core against 9.2 %. So a
   page nobody has opened costs exactly nothing, and turning it on costs about
   2.7 s before a frame exists, which the artwork covers.
+
+  That holds for a picture never added. One added and then switched off went on
+  being fetched, measured later, so a picture nobody is looking at is taken off
+  the song rather than switched off (`drop_video`).
 """
 
 from __future__ import annotations
@@ -67,6 +71,13 @@ OPTIONS = {
     "video_timing_offset": 0,
 }
 
+# A picture added this far into a song is moved to where the song is. mpv
+# starts a picture added to a playing song at its very beginning and catches it
+# up by reading and decoding everything before, MEASURED at 106 MiB and 11.3 s
+# before a frame for one 3.5 minutes in, which for a long mix is never. Before
+# this the beginning is close enough to be cheaper than moving.
+FROM_HERE_S = 5.0
+
 # How many rows of a playlist are worth taking off the front before giving up.
 # It holds two entries by design, so anything past a handful means something
 # else is wrong and a loop is not the place to find out about it.
@@ -110,6 +121,9 @@ class LibmpvEngine(QObject):
     # The player has taken a picture's address. Said from the player's own
     # thread and answered on this one, which is where the track is chosen.
     _videoTaken = Signal(str)
+    # The picture's decoder has its first frame's shape, which means its file
+    # has been read from. Said from the player's own thread.
+    _decoding = Signal()
     # There is something the surface could draw and nowhere yet to draw it.
     # The surface builds its render context only when it paints, and it has
     # no reason of its own to paint, so it is told.
@@ -123,6 +137,7 @@ class LibmpvEngine(QObject):
                  options: dict | None = None) -> None:
         super().__init__(parent)
         self._videoTaken.connect(self._on_video_taken)
+        self._decoding.connect(self._from_here)
         # Whatever this player is started with on top of OPTIONS. The music
         # takes none; the videos played in the window are another player with a
         # name of its own at the sound server.
@@ -146,14 +161,19 @@ class LibmpvEngine(QObject):
         self._can_render = False
         self._clock = trace.Clock()
         self._paused = True
-        # The picture attached to the entry that is playing, so that opening
-        # the page twice in one song switches the track back on rather than
-        # attaching the same file again.
+        # Where the song is, as last reported. Read here rather than asked of
+        # the player, which answers only once it is free.
+        self._pos = 0.0
+        # The picture wanted on the entry that is playing. A picture arriving
+        # from any other address is one nobody wants any more, and goes.
         self._attached = ""
         # A picture asked for and not yet answered. Choosing a track before
         # the answer found none, read that as a picture gone missing and
         # attached it a second time, so every picture was opened twice.
         self._attaching = ""
+        # A picture added partway into the song, still to be moved to where
+        # the song is once its decoder has started (`_from_here`).
+        self._move_up = ""
 
     # ---- the player itself ------------------------------------------------
 
@@ -214,6 +234,7 @@ class LibmpvEngine(QObject):
         player.observe_property("eof-reached", self._on_eof)
         # Which decoder a picture got, for the trace of one that stutters.
         player.observe_property("hwdec-current", self._on_decoder)
+        player.observe_property("video-dec-params", self._on_dec_params)
 
         @player.event_callback("start-file")
         def _started(event):
@@ -259,6 +280,10 @@ class LibmpvEngine(QObject):
         """
         self._attached = ""
         self._attaching = ""
+        self._move_up = ""
+        # The last report was about the file before, and a picture for this
+        # one would otherwise be moved to where that one had got to.
+        self._pos = 0.0
         if self._had_frame:
             self._had_frame = False
             self.videoChanged.emit(False)
@@ -570,7 +595,12 @@ class LibmpvEngine(QObject):
             # that as already done left the artwork up for the whole song
             # however often the page was closed and opened again.
             return
-        if url != self._attached:
+        if url == self._attaching:
+            # Asked for before the page closed and still on its way. Its
+            # answer turns it on now rather than taking it off again, and
+            # asking a second time would put the same picture on the song twice.
+            self._attached = url
+        elif url != self._attached:
             self._attach(url)
         self._want_video = True
         self._choose_video()
@@ -588,6 +618,7 @@ class LibmpvEngine(QObject):
         millisecond and mpv answers when it has an answer.
         """
         self._attached = url
+        self._move_up = url if self._pos > FROM_HERE_S else ""
         # `select` is what turns the picture on, and it does that whether or
         # not there is anywhere to draw it yet. With nowhere, the player says
         # `No render context set`, fails to open its output, and LEAVES THE
@@ -617,6 +648,27 @@ class LibmpvEngine(QObject):
         except Exception:
             self._refused(url)
 
+    def _from_here(self) -> None:
+        """Move a picture added partway into the song to where the song is.
+
+        mpv moves a picture to the song's place only when it is chosen again
+        after its file has been read from, and never one just added (demux.c,
+        refresh_track). Its decoder having started says the file has been
+        read from, so it is let go and chosen again then, before a frame of
+        the beginning could be shown, and without waiting either time.
+        """
+        url, self._move_up = self._move_up, ""
+        if not url or url != self._attached or not self._want_video or self._had_frame:
+            return
+        chosen = [track for track in self._video_tracks()
+                  if track.get("external-filename") == url and track.get("selected")]
+        if not chosen:
+            return
+        number = str(chosen[-1]["id"])
+        trace.mark("picture_moved_up", track=number, at=f"{self._pos:.1f}")
+        self._ask("set", "vid", "no")
+        self._ask("set", "vid", number)
+
     def _video_on(self) -> bool:
         """Whether a video track is selected in the player right now.
 
@@ -643,6 +695,11 @@ class LibmpvEngine(QObject):
             self._attaching = ""
         if url == self._attached:
             self._choose_video()
+        else:
+            # Asked for by a page that has closed since, or for a song that
+            # has ended since. Left on the song, it would be fetched and
+            # decoded for nobody, so it goes as soon as it has arrived.
+            self._take_off(url)
 
     def _choose_video(self) -> None:
         """Turn the picture on, if it is wanted and there is somewhere to draw it.
@@ -665,11 +722,7 @@ class LibmpvEngine(QObject):
             return
         if self._video_on():
             return
-        try:
-            tracks = [track for track in (self._mpv.track_list or [])
-                      if track.get("type") == "video"]
-        except Exception:
-            tracks = []
+        tracks = self._video_tracks()
         if tracks:
             number = max(int(track["id"]) for track in tracks)
             trace.mark("choose_video", track=number)
@@ -704,16 +757,68 @@ class LibmpvEngine(QObject):
         self.videoRefused.emit(url, said)
 
     def drop_video(self) -> None:
-        """Switch the picture off, leaving the sound and leaving the track
-        attached, so it can be switched back on within the same song."""
+        """Take the picture off the song, track and stream, leaving the sound.
+
+        MEASURED on a 1080p60 picture, page closed for 13 s at a time: left
+        running it cost 22 to 26 % of a core and 400 KiB/s, the same as with
+        the page open; switched off with `vid=no` it cost 6 % and went on
+        fetching at 7 to 10 MB/s; taken off it costs 3 %, as a page never
+        opened does, and fetches nothing. Opening the page again puts it back
+        from the address already known, a frame in 0.2 to 1 s.
+
+        Asked without waiting. The same call made the other way held the
+        thread that paints the window for 192 ms, measured, and mpv said its
+        frames were not being collected for exactly that long. A picture still
+        on its way is left to its answer, which takes it off as it arrives.
+        """
         if self._mpv is None:
             return
         self._want_video = False
+        self._attached = ""
         trace.mark("drop_video")
-        self._set("vid", "no")
+        for track in self._video_tracks():
+            if track.get("external"):
+                self._remove_track(track)
         if self._had_frame:
             self._had_frame = False
             self.videoChanged.emit(False)
+
+    def _take_off(self, url: str) -> None:
+        """Remove every picture on the song opened from this address."""
+        for track in self._video_tracks():
+            if track.get("external-filename") == url:
+                self._remove_track(track)
+
+    def _remove_track(self, track: dict) -> None:
+        trace.mark("remove_video", track=track.get("id"))
+        self._ask("video-remove", str(track.get("id")))
+
+    def _ask(self, *args: str) -> None:
+        """A command about the picture, without waiting for it.
+
+        Waited for, a change of picture track held the thread that paints the
+        window until mpv had done it, and mpv was waiting for that thread to
+        collect a frame: 200 ms each time, MEASURED, three closes in eight,
+        twice with the sound running dry.
+        """
+        ask = getattr(self._mpv, "command_async", None)
+        if ask is None:
+            self._command(*args)
+            return
+        try:
+            ask(*args, callback=_asked)
+        except Exception:
+            pass
+
+    def _video_tracks(self) -> list[dict]:
+        if self._mpv is None:
+            return []
+        try:
+            return [track for track in (self._mpv.track_list or [])
+                    if track.get("type") == "video"]
+        except Exception:
+            # Asked between files, which have no tracks to speak of.
+            return []
 
     def render_failed(self, why: str) -> None:
         """The surface could not be built. Kept with the player's own
@@ -793,6 +898,7 @@ class LibmpvEngine(QObject):
 
     def _on_position(self, _name, value) -> None:
         if value is not None:
+            self._pos = float(value)
             self._clock.report(float(value), self._paused)
             self.positionChanged.emit(float(value))
 
@@ -814,6 +920,10 @@ class LibmpvEngine(QObject):
         if value:
             trace.mark("decoder", player=self._options.get("audio_client_name", "weave"),
                        current=value)
+
+    def _on_dec_params(self, _name, value) -> None:
+        if value and self._move_up:
+            self._decoding.emit()
 
     def _on_eof(self, _name, value) -> None:
         self.eofChanged.emit(bool(value))
@@ -848,6 +958,13 @@ class LibmpvEngine(QObject):
             self._mpv[name] = value
         except Exception:
             pass
+
+
+def _asked(error, _result) -> None:
+    """Raised from the player's own thread. A track already gone with its
+    file is the usual reason, and there is nothing left to do about it."""
+    if error is not None:
+        trace.mark("picture_command_refused", why=str(error))
 
 
 def _subtitle_answered(error, _result) -> None:

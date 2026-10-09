@@ -23,7 +23,7 @@ from PySide6.QtQuick import QQuickWindow
 from PySide6.QtQuickControls2 import QQuickStyle
 
 from . import awake, config, desktop, imagecache, mpris, paths, trace
-from .audio import AudioPlayer
+from .audio import AudioPlayer, WindowWatch
 from .chat import ChatRoom
 from .video import ScreenWatch, VideoPlayer
 from .db import Database
@@ -185,6 +185,10 @@ def run(argv: list[str], on_ready: Callable | None = None) -> int:
     _restore_geometry(window, db)
     # How big a picture Auto fetches follows the screen the window is on.
     ScreenWatch(window, video, parent=app)
+    # And the music is told when the window is not being drawn, minimized or
+    # on a screen gone dark, so no picture is changed while nothing collects
+    # its frames.
+    WindowWatch(window, audio, parent=app)
     # The media keys reach a player over MPRIS. Installed once the window
     # exists, so the panel can raise it. A machine with no session bus gets
     # no adapter and everything else still runs.

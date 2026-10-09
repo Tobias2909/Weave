@@ -26,9 +26,13 @@ Item {
     onWantedChanged: {
         if (wanted)
             everShown = true
-        // Nothing is fetched and nothing decoded until this is true, so the
+        // Nothing is fetched and nothing decoded while this is false, so the
         // page being open is the whole cost of being able to show a picture.
-        Audio.setVideoWanted(wanted)
+        // Closing says so once the page is out of sight, not as it sets off.
+        if (wanted)
+            Audio.setVideoWanted(true)
+        else
+            Qt.callLater(page.letPictureGo)
         // And ask the surface to draw once. It builds its render context on a
         // paint, and it has no reason of its own to paint again: the only one
         // it gets is at startup, before there is a player, where it correctly
@@ -113,6 +117,16 @@ Item {
         // its own to paint again, so it is asked, exactly as it is on opening.
         if (!sliding && wanted)
             videoSurface.update()
+        letPictureGo()
+    }
+
+    // The picture comes off the song once the page has gone, and not while it
+    // is still sliding away with the picture on it. Asked again after the
+    // closing has been handled rather than at once, because whether the slide
+    // has started yet depends on which binding Qt happened to update first.
+    function letPictureGo() {
+        if (!wanted && !sliding)
+            Audio.setVideoWanted(false)
     }
 
     // Whether the window is filled by this page, and whether the bar and the

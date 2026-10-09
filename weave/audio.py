@@ -30,6 +30,7 @@ from PySide6.QtCore import (
     Property,
     QAbstractAnimation,
     QEasingCurve,
+    QEvent,
     QObject,
     QThread,
     QTimer,
@@ -78,10 +79,6 @@ def video_format(height: int = VIDEO_HEIGHT) -> str:
 def height_label(height: int) -> str:
     """A ceiling as it is offered on the settings page and reported back."""
     return f"{int(height)}p"
-
-# Past this a video is not worth fetching. A long mix or a talk played as music
-# is an hour of pictures nobody looks at, and the artwork says as much.
-VIDEO_MAX_S = 15 * 60
 
 # Long enough to hear as a fade rather than a cut, short enough not to be a
 # wait before the video starts.
@@ -657,6 +654,14 @@ class AudioPlayer(QObject):
         # is open to show it, measured at 0 KiB and 0.2 % of a core, so a
         # listener who never opens the page pays nothing for the ability to.
         self._video_wanted = False
+        # What that is made of: the page being open, and the window it is in
+        # being drawn at all. A window minimized, or on a screen that has gone
+        # dark, shows nobody anything, whatever page it has open.
+        self._page_open = False
+        self._window_shown = True
+        # A picture the window went out of sight with. Left on the song rather
+        # than taken off, and dealt with once the window is drawn again.
+        self._left_on = False
         # Sound alone, whatever is open. Remembered, because it is a way of
         # listening rather than something done to one song.
         self._audio_only = (db.get_state("music_audio_only", "0") == "1") if db else False
@@ -1146,8 +1151,7 @@ class AudioPlayer(QObject):
 
         Only while the page is open, which is the rule the whole picture side
         follows: somebody who never opens it pays nothing for the ability to.
-        One extraction per song, and only for a song that would be given a
-        picture at all.
+        One extraction per song.
         """
         if not self._video_wanted or self._audio_only:
             return
@@ -1156,8 +1160,7 @@ class AudioPlayer(QObject):
             return
         entry = self._queue[wanted]
         key = entry.get("key", "")
-        if (not key or self._video_addresses.get(key)
-                or self._refuse_video(entry)):
+        if not key or self._video_addresses.get(key):
             return
         if any(r.key == key and r.isRunning() for r in self._next_video_resolvers):
             return
@@ -1850,44 +1853,79 @@ class AudioPlayer(QObject):
 
     @Slot(bool)
     def setVideoWanted(self, wanted: bool) -> None:
-        """Whether anything is open to show a picture."""
+        """Whether the page is open to show a picture. It says so only once it
+        has finished sliding away, so the picture travels with it."""
         wanted = bool(wanted)
-        if wanted == self._video_wanted:
+        if wanted == self._page_open:
             return
-        self._video_wanted = wanted
+        self._page_open = wanted
         trace.mark("page", wanted=wanted)
+        self._want_picture()
+
+    def setWindowShown(self, shown: bool) -> None:
+        """Whether the window is being drawn at all.
+
+        A window minimized, or on a screen that has gone dark, collects none
+        of the frames mpv makes, and then any change of picture track holds
+        the player's core: it waits on mpv's output, which waits two hundred
+        milliseconds on each frame nobody takes. MEASURED with the window
+        minimized: taking the picture off answered after 100 to 250 ms, where
+        drawn it answers in 1 ms, and the music underran in 2 of 20. Every
+        underrun in an earlier run with the screen dark was a picture being
+        put on or taken off; one simply left running underran in none of 20.
+
+        So nothing is changed on the song while the window is out of sight. No
+        new picture is asked for, so the next song has none and nothing more
+        is fetched or decoded. The one running is left alone, and dealt with
+        once the window is back: the same song carries on with it as it was,
+        and anything else is put right then, where it costs nothing.
+        """
+        shown = bool(shown)
+        if shown == self._window_shown:
+            return
+        self._window_shown = shown
+        trace.mark("window", shown=shown)
+        self._want_picture()
+
+    def _want_picture(self) -> None:
+        if not self._window_shown:
+            if self._video_wanted:
+                self._video_wanted = False
+                self._left_on = True
+            return
+        wanted = self._page_open
+        if wanted == self._video_wanted and not self._left_on:
+            return
+        resumed = self._left_on and self._video_showing
+        self._left_on = False
+        self._video_wanted = wanted
         if not wanted:
-            # Nothing is said to the player. The picture keeps running behind
-            # the closed page for the rest of this song, so opening it again
-            # shows the video at once rather than the artwork for the seconds
-            # a frame takes to exist again. It lapses at the next song, which
-            # gets no picture unless the page is open, and that bounds the
-            # cost to the remainder of one song.
+            # The picture comes off the song, and wanting it again puts it
+            # back from the address already known, a frame in about a second.
+            # Kept running behind the closed page instead, it was fetched and
+            # decoded for nobody until the song ended, which for a long mix
+            # played as music is hours.
             self._stop_video_resolver()
             self._stop_next_video_resolvers()
+            self._engine.drop_video()
             self._video_note = ""
             self._video_stage = ""
             self.videoChanged.emit()
             return
-        self._start_video()
+        if not resumed:
+            # Unless the window has come back to the song it went away from,
+            # whose picture was never taken off and is showing as it was.
+            self._start_video()
         # And the one after it, since opening the page is exactly the moment
         # the next song becomes worth finding a picture for.
         self._prepare_next_picture()
 
     def _start_video(self) -> None:
-        """Find the picture for what is playing, if it deserves one."""
+        """Find the picture for what is playing."""
         entry = self._current()
         self._video_note = ""
         if not entry or not self._video_wanted or self._audio_only:
             self._video_stage = ""
-            return
-        note = self._refuse_video(entry)
-        if note:
-            # The note says why there will never be one, which is a better
-            # thing to read than a step that is not being taken.
-            self._video_stage = ""
-            self._video_note = note
-            self.videoChanged.emit()
             return
         key = entry.get("key", "")
         known = self._video_addresses.get(key)
@@ -1904,25 +1942,6 @@ class AudioPlayer(QObject):
         self._video_resolver.failed.connect(self._on_video_failed)
         self._video_resolver.start()
         self.videoChanged.emit()
-
-    def _refuse_video(self, entry: dict) -> str:
-        """Why this one gets no picture, or nothing at all.
-
-        A broadcast is exempt from the length rule: it reports no length worth
-        comparing, and its picture is already being fetched whatever happens,
-        since a livestream is offered in no sound only shape at all.
-        """
-        if entry.get("live"):
-            return ""
-        # The song's own length first, and the player's only where there is
-        # none. Across a gapless change the player is asked before it has
-        # reconfigured, so what it answers can still be the length of the song
-        # before, and a long one before a short one refused the short one a
-        # picture it should have had.
-        length = float(entry.get("duration_s") or 0) or self._dur
-        if length and length > VIDEO_MAX_S:
-            return f"no video over {VIDEO_MAX_S // 60} minutes"
-        return ""
 
     def _on_video_resolved(self, key: str, url: str) -> None:
         self._video_addresses.put(key, url)
@@ -2157,3 +2176,25 @@ class AudioPlayer(QObject):
             if resolver is not None and resolver.isRunning():
                 resolver.wait(5000)
         self._engine.quit()
+
+
+class WindowWatch(QObject):
+    """Tells the music player whether the window is being drawn at all.
+
+    Qt hears it from the compositor as an expose event, both ways: a window
+    minimized is told it is no longer exposed, and so is one whose screen
+    stops asking it for frames. MEASURED on KWin, minimized: `isExposed()`
+    False while `visibility()` still said Windowed, so the visibility cannot
+    be the thing asked.
+    """
+
+    def __init__(self, window, player: AudioPlayer, parent=None) -> None:
+        super().__init__(parent)
+        self._window = window
+        self._player = player
+        window.installEventFilter(self)
+
+    def eventFilter(self, watched, event) -> bool:
+        if event.type() == QEvent.Type.Expose:
+            self._player.setWindowShown(self._window.isExposed())
+        return False

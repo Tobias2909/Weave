@@ -811,7 +811,13 @@ class Smoke:
                    f"against {read(window_ground, 'width'):.0f}x"
                    f"{read(window_ground, 'height'):.0f}")
 
+        wanted_open = bool(audio.videoWanted)
         bridge.closeNowPlaying()
+        # The picture travels with the page, so it is let go only once the
+        # page is out of sight. Let go as the page sets off, the artwork came
+        # up over the picture halfway down.
+        settle(0.02)
+        wanted_sliding = bool(audio.videoWanted)
         # How far down the page is, asked of the transform that moves it. The
         # page itself is never moved, so where it sits says nothing.
         moves = read(window_page, "transform")
@@ -837,6 +843,10 @@ class Smoke:
         # to be one that does not redraw itself when the queue changes, which
         # the music page does through the favourites.
         settle(0.8)
+        self.check("the picture is wanted until the page has slid away, and not after",
+                   wanted_open and wanted_sliding and not audio.videoWanted,
+                   f"open {wanted_open}, sliding {wanted_sliding}, "
+                   f"away {bool(audio.videoWanted)}")
         bridge.selectGroup(-1)
         settle(0.6)
         audio._queue = []
