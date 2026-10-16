@@ -300,6 +300,16 @@ class TheChildrenHandedAVideo(unittest.TestCase):
         cfg = Config(raw={"player": {"command": f"{sys.executable} -c pass"}})
         return Player(cfg)
 
+    def test_an_address_that_reads_as_an_option_is_not_handed_over(self):
+        # On the command line mpv would take it as an option of its own, and
+        # the wrapper in front of mpv need not know the marker that ends them.
+        player = self.player()
+        said = []
+        player.failed.connect(said.append)
+        self.assertFalse(player.play("--script=elsewhere.lua"))
+        self.assertEqual(player._children, [])
+        self.assertTrue(said)
+
     def test_a_started_player_is_kept_until_it_has_exited(self):
         import time
 

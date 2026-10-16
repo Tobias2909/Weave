@@ -678,6 +678,12 @@ class Player(QObject):
         if not self._command:
             self.failed.emit(self._error or "no player configured")
             return False
+        if url.startswith("-"):
+            # Read on the command line as an option rather than as something
+            # to play. No address starts this way, and the wrapper in front of
+            # mpv need not know the marker that ends the options.
+            self.failed.emit(f"not something to play: {url}")
+            return False
         self._watcher.set_twitch_hint(twitch_login)
         self._watcher.set_live_hint(live)
         self._sweep_children()

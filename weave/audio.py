@@ -302,7 +302,7 @@ def resolve_video(cfg: Config, url: str,
     paid by every press whether or not anybody was looking.
     """
     command = prepare(["yt-dlp", *cookie_args(cfg),
-                       "-f", video_format(height), "--get-url", url])
+                       "-f", video_format(height), "--get-url", "--", url])
     result = run_process(command, cancel=cancel, timeout=180)
     for line in result.stdout.splitlines():
         if line.startswith("http"):
@@ -349,7 +349,7 @@ def nothing_to_play(cfg: Config, url: str,
                        "--ignore-no-formats-error",
                        *cookie_args(cfg),
                        "--print", "%(availability)s|%(live_status)s|%(format_id)s",
-                       url])
+                       "--", url])
     try:
         result = run_process(command, cancel=cancel, timeout=120)
     except (OSError, Timeout):
@@ -389,7 +389,7 @@ def resolve_address(cfg: Config, url: str, live: bool,
     command = prepare(["yt-dlp", *cookie_args(cfg),
                        "-f", LIVE_FORMAT if live else MUSIC_FORMAT,
                        "--get-url", "--print", "%(chapters)j",
-                       "--print", FACT_SPEC, url])
+                       "--print", FACT_SPEC, "--", url])
     result = run_process(command, cancel=cancel, timeout=180)
     for line in result.stdout.splitlines():
         if line.startswith("http"):

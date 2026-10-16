@@ -144,7 +144,7 @@ def fetch(cfg: Config, url: str, threads: int = 5,
         "--write-comments", "--write-info-json",
         *cookie_args(cfg),
         "--extractor-args", f"youtube:comment_sort=top;max_comments={spec}",
-        "-o", str(workspace / "%(id)s"), url,
+        "-o", str(workspace / "%(id)s"), "--", url,
     ]
     try:
         result = ytdlp.run(command, CommentsError, "fetching the comments", throttle, cancel,

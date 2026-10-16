@@ -81,7 +81,7 @@ def resolve(ref: ChannelRef, throttle: Throttle | None = None,
         return ResolvedChannel(ref.platform, ref.value, None)
 
     def run() -> Result:
-        return run_process(prepare([*_COMMAND, ref.url]),
+        return run_process(prepare([*_COMMAND, "--", ref.url]),
                            cancel=cancel, timeout=timeout)
 
     try:

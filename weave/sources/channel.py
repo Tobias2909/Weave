@@ -152,7 +152,7 @@ def fetch(channel_id: str, throttle: Throttle | None = None,
           cancel: threading.Event | None = None,
           timeout: float = 120.0) -> ChannelDetails:
     url = f"https://www.youtube.com/channel/{channel_id}"
-    result = ytdlp.run([*_COMMAND, url], DetailsError, "the channel lookup", throttle, cancel,
+    result = ytdlp.run([*_COMMAND, "--", url], DetailsError, "the channel lookup", throttle, cancel,
                        timeout)
     if result.returncode != 0 and not result.stdout.strip():
         raise ytdlp.blame(result, DetailsError, "the channel lookup")

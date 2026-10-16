@@ -103,6 +103,39 @@ class InTheCommand(unittest.TestCase):
                                   f"{module.__name__} builds a command without it")
 
 
+class TheAddressAtTheEnd(unittest.TestCase):
+    def test_an_address_handed_in_comes_after_the_end_of_the_options(self):
+        """yt-dlp reads anything starting with a dash as an option, so an
+        address that came from elsewhere goes after the marker that ends
+        them. Fixed text and addresses built here from an id are left as they
+        are."""
+        import ast
+
+        root = Path(__file__).resolve().parent.parent / "weave"
+        bare = []
+        for path in sorted(root.rglob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if not isinstance(node, ast.List) or len(node.elts) < 2:
+                    continue
+                first, last = node.elts[0], node.elts[-1]
+                starts = ((isinstance(first, ast.Constant) and first.value == "yt-dlp")
+                          or (isinstance(first, ast.Starred)
+                              and ast.unparse(first.value) == "_COMMAND"))
+                handed_in = (isinstance(last, ast.Attribute)
+                             or (isinstance(last, ast.Name) and not last.id.isupper()))
+                if not (starts and handed_in):
+                    continue
+                before = node.elts[-2]
+                if not (isinstance(before, ast.Constant) and before.value == "--"):
+                    bare.append(f"{path.relative_to(root.parent)}:{node.lineno}")
+        self.assertEqual(bare, [])
+
+    def test_the_marker_survives_preparing(self):
+        self.addCleanup(setattr, ytdlp, "js_runtime_args", ytdlp.js_runtime_args)
+        ytdlp.js_runtime_args = lambda: ["--js-runtimes", "node:/usr/bin/node"]
+        self.assertEqual(ytdlp.prepare(["yt-dlp", "--get-url", "--", "-x"])[-2:], ["--", "-x"])
+
+
 class TheShebang(unittest.TestCase):
     """Which python yt-dlp runs on.
 

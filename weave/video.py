@@ -442,7 +442,7 @@ def resolve_watch(cfg: Config, url: str, height: int, live: bool,
                        "-f", watch_format(height, live),
                        *([] if live else ["-S", WATCH_SORT]),
                        "--get-url", "--print", "%(chapters)j",
-                       "--print", FACT_SPEC, *EXTRA_PRINTS, url])
+                       "--print", FACT_SPEC, *EXTRA_PRINTS, "--", url])
     result = run_process(command, cancel=cancel, timeout=180)
     addresses = [line for line in result.stdout.splitlines() if line.startswith("http")]
     if not addresses:

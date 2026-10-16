@@ -2675,7 +2675,7 @@ class SourceDetails(Worker):
 
         command = prepare(
             ["yt-dlp", "--no-warnings", "--simulate", *cookie_args(self._cfg),
-             "--print", "%(title)s\t%(thumbnail)s", self._url])
+             "--print", "%(title)s\t%(thumbnail)s", "--", self._url])
         try:
             result = run_process(command, cancel=self._cancel, timeout=120)
         except Exception:
