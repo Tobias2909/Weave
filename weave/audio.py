@@ -1137,6 +1137,7 @@ class AudioPlayer(QObject):
         resolver = self._make_resolver(entry)
         resolver.resolved.connect(self._on_next_resolved)
         resolver.gone.connect(self._on_next_gone)
+        resolver.failed.connect(self._on_next_failed)
         resolver.finished.connect(self._sweep_resolvers)
         self._next_resolvers.append(resolver)
         resolver.start()
@@ -1228,6 +1229,16 @@ class AudioPlayer(QObject):
             if here is None:
                 return
             self.removeFromQueue(here)
+
+    def _on_next_failed(self, key: str, why: str) -> None:
+        """The song after this one could not be resolved ahead of time.
+
+        Nothing is said yet, since the song playing is fine. Nothing is held
+        behind it either, so when it ends that song is started the ordinary
+        way (`_carry_on`), and a failure then is a failure about the song
+        being started, said as one.
+        """
+        trace.mark("next_failed", key=key, why=why[:120])
 
     def _sweep_resolvers(self) -> None:
         self._next_resolvers = [r for r in self._next_resolvers if r.isRunning()]
@@ -1385,9 +1396,28 @@ class AudioPlayer(QObject):
             # mpv either moves on to what it was handed or goes idle, and
             # both arrive as their own events.
             self._forget_recovery()
+            self._carry_on()
         elif reason == "error":
             if not self._recover():
                 self.failed.emit("the track could not be played")
+
+    def _carry_on(self) -> None:
+        """Start the next song here when mpv was handed nothing to move on to.
+
+        Looking ahead hands it over minutes early, and that is how a queue
+        goes on. When the look ahead has not answered by the end of the song,
+        because it failed or is still asking, mpv simply goes idle, and the
+        listening stopped on a song that has one after it. It is started the
+        ordinary way instead, which asks for its address now.
+        """
+        if self._appended is not None or self._engine.holds_next():
+            return
+        following = self._next_index()
+        if following is None:
+            return
+        trace.mark("carry_on", at=self._at, following=following)
+        self._at = following
+        self._start_current()
 
     def _on_stalled_too_long(self) -> None:
         if not self._current() or not self._buffering or self._pos != self._stall_at:

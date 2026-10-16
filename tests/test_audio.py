@@ -508,6 +508,50 @@ class MpvMovingOn(_Base):
         self.assertEqual(self.player.elapsed, 0)
 
 
+class NothingHeldBehindTheSong(_Base):
+    """The look ahead had not answered by the end of the song, because it
+    failed or was still asking. mpv goes idle with nothing to move on to, and
+    the listening used to stop there on a song that has one after it."""
+
+    def setUp(self):
+        super().setUp()
+        self.queue("aaa", "bbb", "ccc")
+        # Only the song playing has an address, so nothing is held behind it.
+        self.cache("aaa")
+        self.player._start_current()
+        self.assertIsNone(self.player._appended)
+
+    def test_the_next_song_is_started_when_this_one_ends(self):
+        self.engine.ended.emit("eof")
+        self.assertEqual(self.player._at, 1)
+        self.assertTrue(self.player.loading, "the next song's address was not asked for")
+        self.player._on_resolved("yt:bbb", signed("bbb"))
+        self.assertEqual(self.engine.only("load")[-1], ("load", signed("bbb"), None))
+
+    def test_a_look_ahead_that_failed_says_nothing_about_the_song_playing(self):
+        reported = []
+        self.player.failed.connect(reported.append)
+        self.player._next_resolvers[-1].failed.emit("yt:bbb", "HTTP Error 403")
+        self.assertEqual(reported, [])
+        self.assertEqual(self.player._at, 0)
+
+    def test_the_end_of_the_queue_still_goes_quiet(self):
+        self.player._at = 2
+        self.engine.ended.emit("eof")
+        self.assertEqual(self.player._at, 2)
+
+    def test_a_song_handed_over_in_time_is_left_to_mpv(self):
+        self.player._on_next_resolved("yt:bbb", signed("bbb"))
+        self.assertEqual(self.player._appended, 1)
+        self.engine.ended.emit("eof")
+        self.assertEqual(self.player._at, 0, "the window moved on before mpv did")
+        self.assertEqual(self.engine.only("load"), [("load", signed("aaa"), None)])
+
+    def test_a_song_stopped_by_hand_does_not_carry_on(self):
+        self.engine.ended.emit("stop")
+        self.assertEqual(self.player._at, 0)
+
+
 class ATrackThatFollowsItself(_Base):
     """A queue of one, repeating, which is the case that lost the bar.
 
