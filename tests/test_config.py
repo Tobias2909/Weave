@@ -6,6 +6,7 @@ Now the line is left out, the default applies, and the doctor lists it.
 """
 
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -113,6 +114,21 @@ class LoadingAFile(unittest.TestCase):
         for name in dir(Config):
             if isinstance(getattr(Config, name), property):
                 getattr(cfg, name)
+
+    def test_the_shipped_example_shows_every_setting_at_its_default(self):
+        # Its first lines say so, and a setting left out of it is one nobody
+        # finds. Four had gone missing from it.
+        def flat(table, above=""):
+            found = {}
+            for key, value in table.items():
+                if isinstance(value, dict):
+                    found.update(flat(value, f"{above}{key}."))
+                else:
+                    found[f"{above}{key}"] = value
+            return found
+
+        example = tomllib.loads((ROOT / "config.example.toml").read_text())
+        self.assertEqual(flat(example), flat(DEFAULTS))
 
 
 class WhatTheDoctorSays(unittest.TestCase):

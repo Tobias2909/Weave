@@ -15,7 +15,7 @@ browser_profile = "auto"
 # and the cookies alone do not say which is in use. Auto follows whichever the
 # browser is using, which is whichever was last used there and is almost always
 # the right one. If your music library looks like somebody else's, run
-# `weave music identity` and put the number here.
+# `weave music` and put the number it names here.
 music_identity = "auto"
 
 [player]
@@ -26,6 +26,9 @@ command = "auto"
 # mpv JSON IPC socket. "auto" resolves to $XDG_RUNTIME_DIR/mpv-ff2mpv.sock,
 # which is the socket the wrapper creates.
 ipc_socket = "auto"
+# Where mpv writes the place each video stopped at, which is how a card knows
+# how far into it you got. "auto" is mpv's own, $XDG_STATE_HOME/mpv/watch_later.
+watch_later_dir = "auto"
 
 [poll]
 # A small round, often, rather than a large round rarely. The feed endpoint
@@ -87,10 +90,13 @@ window_s = 900
 feeds = 300
 browse = 40
 player = 60
+shorts = 120
+oembed = 120
 dislikes = 60
 twitch = 120
 suggest = 600
 companion = 20
+sponsorblock = 60
 chat = 240
 chat_replay = 900
 emotes = 60
