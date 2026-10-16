@@ -4101,6 +4101,54 @@ class Smoke:
                    all(abs(float(read(card, "y"))) < 1 for card in cards()),
                    ", ".join(f"{read(card, 'y')}" for card in cards()[:4]))
 
+        # A stream that is always on and never wanted, kept out by its channel.
+        heading = find(window, "liveHeading")
+        hidden_button = find(window, "liveHiddenButton")
+        self.check("nothing is hidden to begin with",
+                   not read(hidden_button, "visible"), str(read(hidden_button, "visible")))
+        bridge.hideStream("twitch:allstreamer00")
+        settle(0.5)
+        self.check("a hidden stream leaves the bar",
+                   len(cards()) == 13 and read(heading, "text").endswith("13"),
+                   f"{len(cards())} cards, {read(heading, 'text')}")
+        self.check("and a button says one is hidden",
+                   read(hidden_button, "visible") is True
+                   and read(hidden_button, "text").endswith("1"),
+                   f"{read(hidden_button, 'visible')} {read(hidden_button, 'text')}")
+
+        bridge.setLiveShowHidden(True)
+        settle(0.5)
+        tucked = [card for card in cards() if read(card, "isHidden")]
+        self.check("pressed, it comes back after all the others, faded",
+                   len(cards()) == 14 and len(tucked) == 1
+                   and int(read(tucked[0], "index")) == 13
+                   and float(read(tucked[0], "opacity")) < 1,
+                   f"{len(cards())} cards, {len(tucked)} hidden, "
+                   + (f"at {read(tucked[0], 'index')} opacity {read(tucked[0], 'opacity')}"
+                      if tucked else ""))
+        self.check("and the heading still counts only the others",
+                   read(heading, "text").endswith("13"), read(heading, "text"))
+
+        menu = find(window, "streamMenu")
+        write(live, "menuKey", "twitch:allstreamer00")
+        write(live, "menuHidden", True)
+        call(menu, "open")
+        settle(0.3)
+        entry = find(window, "streamHideEntry")
+        self.check("its menu offers to show it again",
+                   read(entry, "text") == "Show this stream again", read(entry, "text"))
+        call(menu, "close")
+        settle(0.3)
+
+        bridge.showStream("twitch:allstreamer00")
+        settle(0.5)
+        self.check("shown again, it is back in its place",
+                   len(cards()) == 14 and not any(read(card, "isHidden") for card in cards())
+                   and not read(hidden_button, "visible"),
+                   f"{len(cards())} cards, button {read(hidden_button, 'visible')}")
+        bridge.setLiveShowHidden(False)
+        settle(0.3)
+
         db = Database(paths.DB_FILE)
         db.replace_live("twitch", [])
         db.close()

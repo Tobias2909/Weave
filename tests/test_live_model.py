@@ -21,10 +21,11 @@ from weave.ui.live_model import LiveModel
 _app = QCoreApplication.instance() or QCoreApplication([])
 
 
-def row(key: str, viewers: int = 100, picture: str = "") -> dict:
+def row(key: str, viewers: int = 100, picture: str = "", hidden: bool = False) -> dict:
     return {"id": key, "channelKey": key, "platform": "twitch", "login": key,
             "name": key, "title": "A stream", "game": "", "viewers": viewers,
-            "viewersText": str(viewers), "thumbnail": picture, "avatar": ""}
+            "viewersText": str(viewers), "thumbnail": picture, "avatar": "",
+            "isHidden": hidden}
 
 
 class Heard:
@@ -96,6 +97,28 @@ class ACheck(unittest.TestCase):
         self.assertEqual(ids(self.model), ["a", "b"])
 
 
+class CountingTheHidden(unittest.TestCase):
+    def setUp(self):
+        self.model = LiveModel()
+        self.heard = Heard(self.model)
+
+    def test_the_streams_seen_leave_out_the_hidden_ones_drawn(self):
+        self.model.show([row("a"), row("b"), row("c", hidden=True)], hidden=1)
+        self.assertEqual((self.model.count, self.model.seenCount, self.model.hiddenCount),
+                         (3, 2, 1))
+
+    def test_hidden_ones_not_drawn_are_still_counted(self):
+        self.model.show([row("a"), row("b")], hidden=2)
+        self.assertEqual((self.model.count, self.model.seenCount, self.model.hiddenCount),
+                         (2, 2, 2))
+
+    def test_a_change_in_how_many_are_hidden_is_said(self):
+        self.model.show([row("a")], hidden=0)
+        self.heard.said.clear()
+        self.model.show([row("a")], hidden=1)
+        self.assertEqual(self.heard.said, ["count"])
+
+
 class TheRowsForTheBar(unittest.TestCase):
     """Only a Twitch frame is marked to be asked for again."""
 
@@ -118,6 +141,8 @@ class TheRowsForTheBar(unittest.TestCase):
         self.bridge._db = self.db
         self.bridge._live_collapsed = False
         self.bridge._live_frames_at = 0.0
+        self.bridge._live_show_hidden = False
+        self.bridge._live_model = LiveModel()
 
     def rows(self) -> dict[str, dict]:
         return {entry["platform"]: entry for entry in Bridge._live_rows(self.bridge)}
@@ -148,6 +173,59 @@ class TheRowsForTheBar(unittest.TestCase):
     def test_every_stream_has_an_id_of_its_own(self):
         rows = Bridge._live_rows(self.bridge)
         self.assertEqual(len({entry["id"] for entry in rows}), len(rows))
+
+
+class HidingAStream(unittest.TestCase):
+    """Kept out of the bar by its channel, and let back in."""
+
+    def setUp(self):
+        # The same bridge and database, with two more streams below it.
+        TheRowsForTheBar.setUp(self)
+        for index in range(2):
+            key = f"twitch:busier{index}"
+            self.db.add_channel(key, "twitch", f"busier{index}", f"Busier {index}", None)
+        self.db.replace_live("twitch", [{
+            "channel_key": key, "login": login, "display_name": login, "title": "A stream",
+            "game": "", "viewers": viewers, "started_at": 1,
+            "thumbnail_url": "https://pictures.invalid/frame.jpg"}
+            for key, login, viewers in (("twitch:someone", "someone", 5000),
+                                        ("twitch:busier0", "busier0", 900),
+                                        ("twitch:busier1", "busier1", 800))])
+
+    def keys(self) -> list[str]:
+        Bridge._refresh_live(self.bridge)
+        return [entry["channelKey"] for entry in self.bridge._live_model.rows()]
+
+    def test_a_hidden_channel_leaves_the_bar(self):
+        Bridge._refresh_live(self.bridge)
+        Bridge.hideStream(self.bridge, "twitch:someone")
+        self.assertNotIn("twitch:someone", self.keys())
+        self.assertEqual(self.bridge._live_model.hiddenCount, 1)
+        self.assertEqual(self.db.hidden_streams(), {"twitch:someone"})
+
+    def test_asked_for_it_comes_after_all_the_others_marked(self):
+        Bridge.hideStream(self.bridge, "twitch:someone")
+        Bridge.setLiveShowHidden(self.bridge, True)
+        self.assertEqual(self.keys()[-1], "twitch:someone")
+        last = self.bridge._live_model.rows()[-1]
+        self.assertTrue(last["isHidden"])
+        self.assertEqual(self.bridge._live_model.seenCount, 3)
+
+    def test_and_shown_again_it_is_back_in_its_place(self):
+        Bridge.hideStream(self.bridge, "twitch:someone")
+        Bridge.showStream(self.bridge, "twitch:someone")
+        self.assertEqual(self.keys()[0], "twitch:someone")
+        self.assertEqual(self.db.hidden_streams(), set())
+        self.assertEqual(self.bridge._live_model.hiddenCount, 0)
+
+    def test_on_youtube_it_is_the_channel_that_is_hidden(self):
+        Bridge.hideStream(self.bridge, "yt:UCsomebodyelse0000000000")
+        self.assertNotIn("yt:UCsomebodyelse0000000000", self.keys())
+
+    def test_hiding_is_kept(self):
+        Bridge.hideStream(self.bridge, "twitch:busier1")
+        self.assertFalse(self.db.unhide_stream("twitch:nobody"))
+        self.assertTrue(self.db.unhide_stream("twitch:busier1"))
 
 
 if __name__ == "__main__":

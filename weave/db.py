@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 53
+SCHEMA_VERSION = 54
 
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
@@ -349,6 +349,17 @@ CREATE TABLE IF NOT EXISTS hidden_videos (
     title         TEXT NOT NULL DEFAULT '',
     thumbnail_url TEXT,
     hidden_at     INTEGER NOT NULL
+);
+
+-- Channels kept out of the live bar, a stream that is always on and never
+-- wanted. By channel rather than by broadcast: a Twitch stream is its channel,
+-- and a YouTube stream running day and night comes back as a new video after
+-- any break. Only the bar reads it; the feed and the channel's own page show
+-- the stream as they always did. The name is kept for saying what is hidden.
+CREATE TABLE IF NOT EXISTS hidden_streams (
+    channel_key TEXT PRIMARY KEY,
+    name        TEXT NOT NULL DEFAULT '',
+    hidden_at   INTEGER NOT NULL
 );
 
 -- Where a video played in the window was left, so it starts there again next
@@ -3837,6 +3848,27 @@ class Database:
     def is_hidden(self, video_key: str) -> bool:
         return self.conn.execute(
             "SELECT 1 FROM hidden_videos WHERE video_key=?", (video_key,)).fetchone() is not None
+
+    def hide_stream(self, channel_key: str, name: str = "") -> None:
+        """Keep a channel's streams out of the live bar."""
+        with self.conn as conn:
+            conn.execute(
+                "INSERT INTO hidden_streams(channel_key, name, hidden_at) VALUES(?,?,?) "
+                "ON CONFLICT(channel_key) DO UPDATE SET name=excluded.name, "
+                "  hidden_at=excluded.hidden_at",
+                (channel_key, name or "", int(time.time())))
+
+    def unhide_stream(self, channel_key: str) -> bool:
+        """Let a channel's streams back into the bar. Answers whether it was
+        kept out at all."""
+        with self.conn as conn:
+            before = conn.total_changes
+            conn.execute("DELETE FROM hidden_streams WHERE channel_key=?", (channel_key,))
+            return conn.total_changes > before
+
+    def hidden_streams(self) -> set[str]:
+        return {row["channel_key"] for row in
+                self.conn.execute("SELECT channel_key FROM hidden_streams")}
 
     def hidden_videos(self, limit: int = 500) -> list[dict]:
         """What is out of sight, newest first.

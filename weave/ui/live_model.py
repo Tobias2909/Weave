@@ -20,7 +20,7 @@ from PySide6.QtCore import (QAbstractListModel, QByteArray, QModelIndex, Propert
 
 ROLES = (
     "id", "channelKey", "platform", "login", "name", "title", "game", "viewers",
-    "viewersText", "thumbnail", "avatar",
+    "viewersText", "thumbnail", "avatar", "isHidden",
 )
 
 
@@ -30,6 +30,7 @@ class LiveModel(QAbstractListModel):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._rows: list[dict] = []
+        self._hidden = 0
         self._role_ids = {
             Qt.ItemDataRole.UserRole + index: name for index, name in enumerate(ROLES)
         }
@@ -49,15 +50,28 @@ class LiveModel(QAbstractListModel):
     def _get_count(self) -> int:
         return len(self._rows)
 
+    def _get_seen(self) -> int:
+        return sum(1 for row in self._rows if not row.get("isHidden"))
+
+    def _get_hidden(self) -> int:
+        return self._hidden
+
+    # Every card drawn, the ones of them that are not hidden, and how many
+    # hidden streams are live now, drawn or not. One signal for all three,
+    # since one change of rows can move any of them.
     count = Property(int, _get_count, notify=countChanged)
+    seenCount = Property(int, _get_seen, notify=countChanged)
+    hiddenCount = Property(int, _get_hidden, notify=countChanged)
 
     def rows(self) -> list[dict]:
         return list(self._rows)
 
-    def show(self, rows: list[dict]) -> None:
+    def show(self, rows: list[dict], hidden: int = 0) -> None:
         """Make the rows these, in this order, by changing as little as there
-        is to change. Rows are told apart by their id."""
-        before = len(self._rows)
+        is to change. Rows are told apart by their id. `hidden` is how many
+        hidden streams are live, whether or not they are among the rows."""
+        before = (len(self._rows), self._get_seen(), self._hidden)
+        self._hidden = hidden
         wanted = {row["id"] for row in rows}
         for index in reversed(range(len(self._rows))):
             if self._rows[index]["id"] not in wanted:
@@ -88,5 +102,5 @@ class LiveModel(QAbstractListModel):
             del self._rows[len(rows):]
             self.endRemoveRows()
 
-        if len(self._rows) != before:
+        if (len(self._rows), self._get_seen(), self._hidden) != before:
             self.countChanged.emit()

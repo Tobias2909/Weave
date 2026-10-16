@@ -8,8 +8,15 @@ Rectangle {
     id: bar
     objectName: "liveBar"
 
+    // Every card drawn, which takes in the hidden ones while they are asked
+    // for. The bar itself is there for the others: hidden streams alone are
+    // nothing to unroll for, which is what hiding them was for.
     readonly property int count: App.liveModel.count
-    readonly property bool hasStreams: count > 0
+    readonly property bool hasStreams: App.liveModel.seenCount > 0
+
+    // The stream the menu was opened on.
+    property string menuKey: ""
+    property bool menuHidden: false
 
     // Nothing is shown until the first check has answered. Twitch takes a
     // few seconds and YouTube is instant, so revealing on the first thing to
@@ -105,7 +112,7 @@ Rectangle {
             // The bar is only up when there is something live or when Twitch
             // wants a login, so there is no third thing left to say.
             text: bar.hasStreams
-                  ? "Live now  ·  " + bar.count
+                  ? "Live now  ·  " + App.liveModel.seenCount
                   : "Twitch is not connected"
             color: Theme.colors.textMuted
             font.pixelSize: 11
@@ -129,6 +136,15 @@ Rectangle {
             text: "Connect Twitch"
             accent: true
             onClicked: App.connectTwitch()
+        }
+
+        // There while a hidden stream is live, and lit while they are shown.
+        FlatButton {
+            objectName: "liveHiddenButton"
+            visible: App.liveModel.hiddenCount > 0 && bar.hasStreams && bar.expanded
+            text: "Hidden  ·  " + App.liveModel.hiddenCount
+            accent: App.liveShowHidden
+            onClicked: App.setLiveShowHidden(!App.liveShowHidden)
         }
 
         FlatButton {
@@ -225,6 +241,7 @@ Rectangle {
                 required property string viewersText
                 required property string thumbnail
                 required property string avatar
+                required property bool isHidden
 
                 // Its place in one row, and its place among all of them. The
                 // thumbnail fills the card's height and the text beside it is
@@ -253,8 +270,20 @@ Rectangle {
                               ? mark
                               : Qt.rgba(mark.r, mark.g, mark.b, 0.35)
 
+                // A hidden one, drawn because they were asked for, is faded
+                // and says so on its picture.
+                opacity: isHidden ? 0.45 : 1
+
                 HoverHandler { id: cardHover }
                 TapHandler { onTapped: App.playLive(streamCard.channelKey) }
+                TapHandler {
+                    acceptedButtons: Qt.RightButton
+                    onTapped: {
+                        bar.menuKey = streamCard.channelKey
+                        bar.menuHidden = streamCard.isHidden
+                        streamMenu.popup()
+                    }
+                }
 
                 Item {
                     id: picture
@@ -355,6 +384,27 @@ Rectangle {
                         onFinished: {
                             picture.settled = streamCard.thumbnail
                             nextFrame.opacity = 0
+                        }
+                    }
+
+                    Rectangle {
+                        objectName: "streamHiddenMark"
+                        visible: streamCard.isHidden
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: 4
+                        width: hiddenWord.implicitWidth + 10
+                        height: hiddenWord.implicitHeight + 4
+                        radius: 4
+                        color: Qt.rgba(0, 0, 0, 0.7)
+
+                        Label {
+                            id: hiddenWord
+                            anchors.centerIn: parent
+                            text: "Hidden"
+                            color: "white"
+                            font.pixelSize: 10
+                            font.weight: Font.DemiBold
                         }
                     }
 
@@ -460,6 +510,28 @@ Rectangle {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // A stream always on and never wanted is kept out of the bar for good, by
+    // its channel, and one kept out is let back in from the same place. The
+    // key is copied before the menu goes, since the cards change under it.
+    ThemedMenu {
+        id: streamMenu
+        objectName: "streamMenu"
+
+        ThemedMenuItem {
+            objectName: "streamHideEntry"
+            text: bar.menuHidden ? "Show this stream again" : "Hide this stream"
+            onTriggered: {
+                var key = bar.menuKey
+                var hidden = bar.menuHidden
+                streamMenu.dismiss()
+                if (hidden)
+                    App.showStream(key)
+                else
+                    App.hideStream(key)
             }
         }
     }

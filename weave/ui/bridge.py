@@ -409,6 +409,9 @@ class Bridge(QObject):
         # When the bar last asked for fresh frames. Held still while the bar
         # is rolled up, so a bar nobody can see fetches no pictures.
         self._live_frames_at = time.time()
+        # Hidden streams drawn as well, faded, after the others. A look for the
+        # moment rather than a setting, so it is not kept.
+        self._live_show_hidden = False
         self.liveChanged.connect(self._refresh_live)
         self._twitch: TwitchLogin | None = None
         self._twitch_status = ""
@@ -1199,6 +1202,7 @@ class Bridge(QObject):
     def _live_rows(self) -> list[dict]:
         if not self._live_collapsed:
             self._live_frames_at = time.time()
+        hidden = self._db.hidden_streams()
         rows = []
         seen = set()
         for row in self._db.live_now():
@@ -1226,11 +1230,19 @@ class Bridge(QObject):
                 "viewersText": fmt.count_text(row.get("viewers") or None),
                 "thumbnail": picture,
                 "avatar": qml_source(row.get("avatar_url")),
+                "isHidden": row["channel_key"] in hidden,
             })
         return rows
 
     def _refresh_live(self) -> None:
-        self._live_model.show(self._live_rows())
+        rows = self._live_rows()
+        tucked = [row for row in rows if row["isHidden"]]
+        # Hidden ones after all the others when they are asked for, so they
+        # never push a wanted stream along and are easy to find to bring back.
+        shown = [row for row in rows if not row["isHidden"]]
+        if self._live_show_hidden:
+            shown += tucked
+        self._live_model.show(shown, hidden=len(tucked))
 
     def _get_twitch_status(self) -> str:
         return self._twitch_status
@@ -1258,6 +1270,7 @@ class Bridge(QObject):
     liveCollapsed = Property(bool, _get_live_collapsed, notify=liveChanged)
     # Every card at once rather than one row of them, kept like the folding.
     liveAll = Property(bool, lambda self: self._live_all, notify=liveChanged)
+    liveShowHidden = Property(bool, lambda self: self._live_show_hidden, notify=liveChanged)
     liveChecking = Property(bool, _get_live_checking, notify=liveChanged)
 
     def _get_live_ready(self) -> bool:
@@ -7573,6 +7586,27 @@ class Bridge(QObject):
         self._live_all = value
         self._db.set_state("live_all", "1" if value else "0")
         self.liveChanged.emit()
+
+    @Slot(bool)
+    def setLiveShowHidden(self, value: bool) -> None:
+        if value == self._live_show_hidden:
+            return
+        self._live_show_hidden = value
+        self.liveChanged.emit()
+
+    @Slot(str)
+    def hideStream(self, channel_key: str) -> None:
+        """Keep a channel's streams out of the live bar, for good."""
+        row = next((entry for entry in self._live_model.rows()
+                    if entry["channelKey"] == channel_key), None)
+        self._db.hide_stream(channel_key, row["name"] if row else "")
+        self.liveChanged.emit()
+
+    @Slot(str)
+    def showStream(self, channel_key: str) -> None:
+        """Let a hidden channel's streams back into the bar."""
+        if self._db.unhide_stream(channel_key):
+            self.liveChanged.emit()
 
     @Slot(str)
     def playLive(self, channel_key: str) -> None:
