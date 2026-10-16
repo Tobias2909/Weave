@@ -211,10 +211,13 @@ INSTALL_RUNTIME = "install deno, or node"
 #
 # and with cookies and a warm cache the error instead reads "The page needs
 # to be reloaded". Two different errors, one cause, so the warnings are what
-# this looks for and the errors are only the last resort.
+# this looks for. Of the two errors only the second is a mark of its own. The
+# first also ends any run that asked for a format the video does not have, a
+# live stream without the one the music asks for among them, and it was
+# blamed on the challenge there. When the challenge is the cause, the warnings
+# come before it and are found first.
 CHALLENGE_MARKS = ("challenge solving failed", "signature solving failed",
-                   "challenge solver", "js challenge", "needs to be reloaded",
-                   "requested format is not available")
+                   "challenge solver", "js challenge", "needs to be reloaded")
 
 
 def challenge_trouble(stderr: str) -> str:

@@ -316,12 +316,24 @@ class WhatTheFailureSays(unittest.TestCase):
         would cut the advice too once it grew. The quote is what gives way."""
         ytdlp.solver = lambda: (False, "yt-dlp-ejs is not installed")
         long_line = "ERROR: [youtube] abc: Requested format is not available. " + "x" * 400
-        said = ytdlp.explain(long_line, long_line)
+        stderr = "WARNING: [youtube] abc: n challenge solving failed\n" + long_line
+        said = ytdlp.explain(long_line, stderr)
         self.assertTrue(said.startswith(ytdlp.challenge_advice()), said[:80])
         self.assertIn(". yt-dlp said ", said)
         # Both halves whole: all of the advice, and a real quote after it.
         self.assertEqual(len(said),
                          len(ytdlp.challenge_advice()) + len(". yt-dlp said ") + ytdlp.QUOTED)
+
+    def test_a_format_that_is_not_there_is_not_the_challenge(self):
+        # The same error ends a run that asked for a format the video does
+        # not have, a live stream without the one the music asks for among
+        # them. Without the warnings in front of it, that is all it is, and
+        # yt-dlp's own words are kept rather than blamed on the challenge.
+        ytdlp.solver = lambda: (True, "yt-dlp-ejs 0.8.0")
+        line = ("ERROR: [youtube] abc: Requested format is not available. Use "
+                "--list-formats for a list of available formats")
+        self.assertEqual(ytdlp.challenge_trouble(line), "")
+        self.assertEqual(ytdlp.explain(line, line), line.removeprefix("ERROR:").strip())
 
     def test_one_sentence_serves_both_callers(self):
         """It was written twice with two different caps, and the shorter one
