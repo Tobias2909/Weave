@@ -43,8 +43,8 @@ shelves and the theme editor, each in another of the fourteen themes.*
 ## Install
 
 Weave needs `python`, `pyside6`, `python-requests`, `python-platformdirs`,
-`mpv`, `yt-dlp` with `yt-dlp-ejs` and `deno`, `streamlink` for Twitch and
-`python-ytmusicapi` for the music. All of them are in the Arch repositories and
+`mpv` with `python-mpv`, `yt-dlp` with `yt-dlp-ejs` and `deno`, `streamlink`
+for Twitch and `python-ytmusicapi` for the music. All of them are in the Arch repositories and
 in most other distributions. Where `yt-dlp-ejs` is not packaged,
 `python3 -m pip install --user yt-dlp-ejs` puts it where `yt-dlp` looks.
 
