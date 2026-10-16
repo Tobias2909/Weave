@@ -1266,13 +1266,22 @@ class Smoke:
                    source_of(find(window, "nowPlayingArt")))
 
         # The play button on the middle of the bar, wherever the words and the
-        # settings either side of it end.
+        # settings either side of it end. A window too narrow for that pushes
+        # the buttons left until they keep their distance from the settings,
+        # and how narrow that is depends on the font the machine draws the
+        # settings' words in: a runner's wider font took three pixels more.
         from PySide6.QtCore import QPointF
         play = find(window, "playButton")
+        transport = find(window, "musicTransport")
+        settings = find(window, "musicSettings")
         middle = play.mapToScene(QPointF(float(read(play, "width")) / 2, 0)).x()
-        self.check("the play button sits on the middle of the music bar",
-                   abs(middle - float(read(window, "width")) / 2) < 1.5,
-                   f"{middle:.1f} of {float(read(window, 'width')) / 2:.1f}")
+        half = float(read(window, "width")) / 2
+        gap = (settings.mapToScene(QPointF(0, 0)).x()
+               - transport.mapToScene(QPointF(float(read(transport, "width")), 0)).x())
+        self.check("the play button sits on the middle of the music bar, "
+                   "or as near it as the settings leave room for",
+                   abs(middle - half) < 1.5 if gap > 25 else (abs(gap - 24) < 1 and middle < half),
+                   f"{middle:.1f} of {half:.1f}, {gap:.0f} px clear of the settings")
 
         # What was painted, rather than what a binding says. A picture that is
         # bound and never drawn is the fault being guarded against.
