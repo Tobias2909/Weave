@@ -43,6 +43,7 @@ Flickable {
 
         Label {
             objectName: "channelMusicBy"
+            textFormat: Text.PlainText
             visible: App.channelMusicBy !== ""
             text: "Released as " + App.channelMusicBy
             color: Theme.colors.textMuted
@@ -52,6 +53,7 @@ Flickable {
 
         Label {
             objectName: "channelMusicNote"
+            textFormat: Text.PlainText
             visible: groups.count === 0
             text: App.channelMusicBusy ? "Looking for the music"
                                        : "No music for this channel"
@@ -65,6 +67,7 @@ Flickable {
         // finished while it is still working, and then changes under the hand.
         Label {
             objectName: "channelMusicRefreshing"
+            textFormat: Text.PlainText
             visible: App.channelMusicBusy && groups.count > 0
             text: "Checking for new records"
             color: Theme.colors.textMuted
@@ -107,6 +110,7 @@ Flickable {
 
                         Label {
                             objectName: "groupTitle"
+                            textFormat: Text.PlainText
                             text: groupBlock.modelData.title
                             color: Theme.colors.text
                             font.pixelSize: 14
@@ -116,6 +120,7 @@ Flickable {
 
                         Label {
                             objectName: "groupNote"
+                            textFormat: Text.PlainText
                             text: {
                                 var parts = []
                                 if (groupBlock.modelData.kind === "album")

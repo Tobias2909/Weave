@@ -19,6 +19,7 @@ Button {
     padding: 10
 
     contentItem: Label {
+        textFormat: Text.PlainText
         text: tab.text
         font.pixelSize: 13
         font.weight: tab.selected ? Font.DemiBold : Font.Normal

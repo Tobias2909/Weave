@@ -28,6 +28,7 @@ Item {
     }
 
     Label {
+        textFormat: Text.PlainText
         anchors.left: parent.left
         anchors.bottom: parent.bottom
         text: heading.text.toUpperCase()

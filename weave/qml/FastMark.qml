@@ -17,6 +17,7 @@ Rectangle {
 
     Label {
         id: words
+        textFormat: Text.PlainText
         anchors.centerIn: parent
         text: "2\u00d7  \u25b8\u25b8"
         color: "#f2f2f2"

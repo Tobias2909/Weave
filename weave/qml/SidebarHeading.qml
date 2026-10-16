@@ -17,6 +17,7 @@ Item {
     height: implicitHeight
 
     Label {
+        textFormat: Text.PlainText
         anchors.left: parent.left
         anchors.leftMargin: 14
         anchors.verticalCenter: parent.verticalCenter
@@ -29,6 +30,7 @@ Item {
 
     Label {
         id: actionLabel
+        textFormat: Text.PlainText
         visible: heading.actionText !== ""
         anchors.right: parent.right
         anchors.rightMargin: 12

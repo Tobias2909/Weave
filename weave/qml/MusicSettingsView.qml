@@ -33,6 +33,7 @@ Item {
             Layout.fillWidth: true
 
             Label {
+                textFormat: Text.PlainText
                 text: "Music settings"
                 color: Theme.colors.text
                 font.pixelSize: 18
@@ -79,6 +80,7 @@ Item {
                         spacing: 10
 
                         Label {
+                            textFormat: Text.PlainText
                             text: "Boxes"
                             color: Theme.colors.text
                             font.pixelSize: 15
@@ -86,6 +88,7 @@ Item {
                         }
 
                         Label {
+                            textFormat: Text.PlainText
                             width: parent.width
                             text: "Songs thrown together by hand, for tonight or for later. "
                                   + "Put one in from a song's right click menu, or keep the "
@@ -149,6 +152,7 @@ Item {
 
                                 Label {
                                     id: boxName
+                                    textFormat: Text.PlainText
                                     anchors.left: parent.left
                                     anchors.leftMargin: 24
                                     anchors.right: boxCount.left
@@ -164,6 +168,7 @@ Item {
 
                                 Label {
                                     id: boxCount
+                                    textFormat: Text.PlainText
                                     anchors.right: makeButton.left
                                     anchors.rightMargin: 14
                                     anchors.verticalCenter: parent.verticalCenter
@@ -253,6 +258,7 @@ Item {
                         spacing: 10
 
                         Label {
+                            textFormat: Text.PlainText
                             text: "Shelves"
                             color: Theme.colors.text
                             font.pixelSize: 15
@@ -260,6 +266,7 @@ Item {
                         }
 
                         Label {
+                            textFormat: Text.PlainText
                             width: parent.width
                             text: "What the music page shows, top to bottom. Untick one to put "
                                   + "it out of sight, and drag one by its row to change the order. "
@@ -270,6 +277,7 @@ Item {
                         }
 
                         Label {
+                            textFormat: Text.PlainText
                             visible: shelfList.count === 0
                             width: parent.width
                             text: "The shelves have not been read yet. Open the music page once "
@@ -339,6 +347,7 @@ Item {
                                 }
 
                                 Label {
+                                    textFormat: Text.PlainText
                                     anchors.left: showBox.right
                                     anchors.leftMargin: 4
                                     anchors.right: shelfCount.left
@@ -353,6 +362,7 @@ Item {
 
                                 Label {
                                     id: shelfCount
+                                    textFormat: Text.PlainText
                                     anchors.right: parent.right
                                     anchors.verticalCenter: parent.verticalCenter
                                     text: shelfRow.modelData.count === 1
@@ -388,6 +398,7 @@ Item {
                         spacing: 10
 
                         Label {
+                            textFormat: Text.PlainText
                             text: "Videos and listening"
                             color: Theme.colors.text
                             font.pixelSize: 15
@@ -397,6 +408,7 @@ Item {
                         SettingsHeading { text: "Music videos"; rule: false }
 
                         Label {
+                            textFormat: Text.PlainText
                             width: parent.width
                             text: "The music player fetches a picture only while the Now "
                                   + "playing page is open, and never for anything over a "
@@ -412,6 +424,7 @@ Item {
                             spacing: 8
 
                             Label {
+                                textFormat: Text.PlainText
                                 width: view.wordWidth
                                 height: 28
                                 text: "Quality"
@@ -460,6 +473,7 @@ Item {
                             spacing: 8
 
                             Label {
+                                textFormat: Text.PlainText
                                 width: view.wordWidth
                                 height: 28
                                 text: "Your listening"
@@ -482,6 +496,7 @@ Item {
                         // is a press of its own above.
                         Label {
                             objectName: "reportListensWords"
+                            textFormat: Text.PlainText
                             width: parent.width
                             text: "Off, Weave writes nothing to your account. On, a song you "
                                   + "listen to for 30 seconds is added to your YouTube Music "

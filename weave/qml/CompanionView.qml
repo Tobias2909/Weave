@@ -44,6 +44,7 @@ Item {
                 spacing: 8
 
                 Label {
+                    textFormat: Text.PlainText
                     visible: App.companionNow !== ""
                     text: "Recommended for"
                     color: Theme.colors.text
@@ -52,6 +53,7 @@ Item {
 
                 Label {
                     objectName: "companionNow"
+                    textFormat: Text.PlainText
                     Layout.fillWidth: true
                     text: App.companionNow !== "" ? App.companionNow : "Companion"
                     color: Theme.colors.text
@@ -96,6 +98,7 @@ Item {
 
                         Label {
                             id: chipWords
+                            textFormat: Text.PlainText
                             anchors.centerIn: parent
                             text: chip.modelData.label
                             color: Theme.colors.text
@@ -123,6 +126,7 @@ Item {
 
                 Label {
                     id: noteWords
+                    textFormat: Text.PlainText
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
@@ -201,6 +205,7 @@ Item {
                 spacing: 8
 
                 Label {
+                    textFormat: Text.PlainText
                     text: ("Queue in mpv" + (App.companionQueue.length > 0
                                              ? "  ·  " + App.companionQueue.length : ""))
                           .toUpperCase()
@@ -214,6 +219,7 @@ Item {
 
                 Label {
                     objectName: "companionLoops"
+                    textFormat: Text.PlainText
                     visible: App.companionLooping
                     text: "Goes round (F9)"
                     color: Theme.colors.textMuted
@@ -341,6 +347,7 @@ Item {
 
                         Label {
                             id: queueDuration
+                            textFormat: Text.PlainText
                             anchors.centerIn: parent
                             text: queueRow.modelData.duration
                             color: "#ffffff"
@@ -357,6 +364,7 @@ Item {
                         spacing: 3
 
                         Label {
+                            textFormat: Text.PlainText
                             visible: queueRow.modelData.playing
                             text: "▶  PLAYING"
                             color: Theme.colors.accent
@@ -366,6 +374,7 @@ Item {
                         }
 
                         Label {
+                            textFormat: Text.PlainText
                             width: parent.width
                             text: queueRow.modelData.title
                             color: Theme.colors.text
@@ -378,6 +387,7 @@ Item {
 
                         Label {
                             id: queueChannel
+                            textFormat: Text.PlainText
                             readonly property bool leads: queueRow.modelData.channelId !== ""
                             width: parent.width
                             visible: queueRow.modelData.channel !== ""
@@ -403,6 +413,7 @@ Item {
 
                     Label {
                         objectName: "companionQueueRemove"
+                        textFormat: Text.PlainText
                         visible: rowHover.hovered
                         anchors.right: parent.right
                         anchors.rightMargin: 10
@@ -432,6 +443,7 @@ Item {
             }
 
             Label {
+                textFormat: Text.PlainText
                 visible: App.companionQueue.length === 0
                 anchors.left: parent.left
                 anchors.right: parent.right

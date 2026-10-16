@@ -57,6 +57,7 @@ Item {
                   : (hover.hovered ? Qt.rgba(1, 1, 1, 0.16) : "transparent")
         Label {
             id: label
+            textFormat: Text.PlainText
             anchors.centerIn: parent
             text: button.text
             color: "#f2f2f2"
@@ -446,6 +447,7 @@ Item {
             }
             Label {
                 id: liveWord
+                textFormat: Text.PlainText
                 anchors.centerIn: parent
                 text: "LIVE"
                 color: "white"
@@ -457,6 +459,7 @@ Item {
 
         Label {
             objectName: "watchWatching"
+            textFormat: Text.PlainText
             visible: controls.live && text !== ""
             anchors.verticalCenter: parent.verticalCenter
             leftPadding: 4
@@ -466,6 +469,7 @@ Item {
         }
         Label {
             objectName: "watchBehind"
+            textFormat: Text.PlainText
             visible: controls.live && Video.behindLive > 0
             anchors.verticalCenter: parent.verticalCenter
             leftPadding: 6
@@ -483,6 +487,7 @@ Item {
         }
         Label {
             objectName: "watchClock"
+            textFormat: Text.PlainText
             visible: !controls.live
             anchors.verticalCenter: parent.verticalCenter
             leftPadding: 4
@@ -492,6 +497,7 @@ Item {
         }
         Label {
             objectName: "watchChapterNow"
+            textFormat: Text.PlainText
             visible: !controls.live && Video.currentChapter !== ""
             anchors.verticalCenter: parent.verticalCenter
             leftPadding: 10

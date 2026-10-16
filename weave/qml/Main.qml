@@ -533,6 +533,7 @@ ApplicationWindow {
                 // and the order is unchanged.
                 Label {
                     objectName: "wordmark"
+                    textFormat: Text.PlainText
                     // First to go. The name is decoration, and the task
                     // switcher says it anyway.
                     visible: root.width >= 975
@@ -640,6 +641,7 @@ ApplicationWindow {
                 Label {
                     id: statusLine
                     objectName: "status"
+                    textFormat: Text.PlainText
                     // Second to go, and the one thing here allowed to be
                     // narrower than its text, so it is down to a sliver of a
                     // line by the time it goes at all.
@@ -688,6 +690,7 @@ ApplicationWindow {
                     checked: App.hideWatched
                     onToggled: App.setHideWatched(checked)
                     contentItem: Label {
+                        textFormat: Text.PlainText
                         text: parent.text
                         color: Theme.colors.textMuted
                         font.pixelSize: 12
@@ -765,6 +768,7 @@ ApplicationWindow {
         z: 3
 
         Label {
+            textFormat: Text.PlainText
             anchors.fill: parent
             anchors.leftMargin: 14
             anchors.rightMargin: 12
@@ -928,6 +932,7 @@ ApplicationWindow {
 
                 Label {
                     objectName: "updateHeadline"
+                    textFormat: Text.PlainText
                     width: parent.width
                     text: "A new version is available"
                     color: Theme.colors.accent
@@ -936,6 +941,7 @@ ApplicationWindow {
                 }
 
                 Label {
+                    textFormat: Text.PlainText
                     width: parent.width
                     text: App.updateVersion + ", this one is " + App.version
                     color: Theme.colors.textMuted
@@ -1040,6 +1046,7 @@ ApplicationWindow {
                 }
 
                 Label {
+                    textFormat: Text.PlainText
                     visible: App.groups.length <= 1
                     width: sidebarColumn.width - 28
                     x: 14
@@ -1076,6 +1083,7 @@ ApplicationWindow {
                 }
 
                 Label {
+                    textFormat: Text.PlainText
                     visible: App.boxes.length === 0
                     width: sidebarColumn.width - 28
                     x: 14
@@ -1179,6 +1187,7 @@ ApplicationWindow {
                 }
 
                 Label {
+                    textFormat: Text.PlainText
                     visible: App.playlists.length === 0
                     width: sidebarColumn.width - 28
                     x: 14
@@ -1867,6 +1876,7 @@ ApplicationWindow {
 
             Label {
                 objectName: "playlistHeaderTitle"
+                textFormat: Text.PlainText
                 anchors.left: backToChannel.right
                 anchors.leftMargin: 12
                 anchors.right: reverseThis.left
@@ -1930,6 +1940,7 @@ ApplicationWindow {
 
             Label {
                 objectName: "recommendedState"
+                textFormat: Text.PlainText
                 visible: App.pageReading === ""
                 anchors.left: parent.left
                 anchors.right: askAgain.left
@@ -2216,6 +2227,7 @@ ApplicationWindow {
                 visible: App.playlistSkippedText.length > 0
 
                 Label {
+                    textFormat: Text.PlainText
                     anchors.centerIn: parent
                     horizontalAlignment: Text.AlignHCenter
                     color: Theme.colors.textMuted
@@ -2327,6 +2339,7 @@ ApplicationWindow {
             readonly property var lines: App.emptyHint.split("\n")
 
             Label {
+                textFormat: Text.PlainText
                 width: parent.width
                 horizontalAlignment: Text.AlignHCenter
                 text: emptyHere.lines.length > 0 ? emptyHere.lines[0] : ""
@@ -2337,6 +2350,7 @@ ApplicationWindow {
             }
 
             Label {
+                textFormat: Text.PlainText
                 width: parent.width
                 visible: text !== ""
                 horizontalAlignment: Text.AlignHCenter
@@ -2510,6 +2524,7 @@ ApplicationWindow {
                         height: cardLength.implicitHeight + 3
                         Label {
                             id: cardLength
+                            textFormat: Text.PlainText
                             anchors.centerIn: parent
                             text: linkCard.card.durationText || ""
                             color: "white"
@@ -2543,6 +2558,7 @@ ApplicationWindow {
 
                     Label {
                         objectName: "linkPreviewTitle"
+                        textFormat: Text.PlainText
                         width: parent.width
                         text: linkCard.card.title || ""
                         color: Theme.colors.text
@@ -2554,6 +2570,7 @@ ApplicationWindow {
                     }
 
                     Label {
+                        textFormat: Text.PlainText
                         width: parent.width
                         visible: text !== ""
                         text: linkCard.card.channel || ""
@@ -2573,6 +2590,7 @@ ApplicationWindow {
                     }
 
                     Label {
+                        textFormat: Text.PlainText
                         width: parent.width
                         visible: text !== ""
                         text: linkCard.card.loading ? "Looking it up"
@@ -2586,6 +2604,7 @@ ApplicationWindow {
 
                     Label {
                         objectName: "linkPreviewStart"
+                        textFormat: Text.PlainText
                         visible: text !== ""
                         text: linkCard.card.startText ? "The link starts at " + linkCard.card.startText
                                                       : ""
@@ -2734,6 +2753,7 @@ ApplicationWindow {
 
             Label {
                 id: noticeText
+                textFormat: Text.PlainText
                 anchors.verticalCenter: parent.verticalCenter
                 text: App.notice
                 color: Theme.colors.text
@@ -3300,6 +3320,7 @@ ApplicationWindow {
             spacing: 10
 
             Label {
+                textFormat: Text.PlainText
                 text: "Which playlists to show"
                 color: Theme.colors.text
                 font.pixelSize: 14
@@ -3388,6 +3409,7 @@ ApplicationWindow {
                     }
 
                     Label {
+                        textFormat: Text.PlainText
                         anchors.left: box.right
                         anchors.leftMargin: 4
                         anchors.right: countLabel.left
@@ -3401,6 +3423,7 @@ ApplicationWindow {
 
                     Label {
                         id: countLabel
+                        textFormat: Text.PlainText
                         anchors.right: musicLabel.left
                         anchors.rightMargin: 10
                         anchors.verticalCenter: parent.verticalCenter
@@ -3415,6 +3438,7 @@ ApplicationWindow {
                     // which this style draws in a colour of its choosing.
                     Label {
                         id: musicLabel
+                        textFormat: Text.PlainText
                         anchors.right: musicBox.left
                         anchors.rightMargin: 2
                         anchors.verticalCenter: parent.verticalCenter
@@ -3447,6 +3471,7 @@ ApplicationWindow {
                     // the bottom and is wanted newest first, or the other way.
                     Label {
                         id: reverseLabel
+                        textFormat: Text.PlainText
                         anchors.right: reverseBox.left
                         anchors.rightMargin: 2
                         anchors.verticalCenter: parent.verticalCenter
@@ -3549,6 +3574,7 @@ ApplicationWindow {
             spacing: 10
 
             Label {
+                textFormat: Text.PlainText
                 text: "Linked playlists"
                 color: Theme.colors.text
                 font.pixelSize: 14
@@ -3556,6 +3582,7 @@ ApplicationWindow {
             }
 
             Label {
+                textFormat: Text.PlainText
                 width: parent.width
                 text: "Playlists you kept from somebody else's channel."
                 color: Theme.colors.textMuted
@@ -3607,6 +3634,7 @@ ApplicationWindow {
 
                     Label {
                         id: keptName
+                        textFormat: Text.PlainText
                         anchors.left: keptGrip.right
                         anchors.leftMargin: 4
                         anchors.right: keptCount.left
@@ -3620,6 +3648,7 @@ ApplicationWindow {
 
                     Label {
                         id: keptCount
+                        textFormat: Text.PlainText
                         anchors.right: keptMusicLabel.left
                         anchors.rightMargin: 10
                         anchors.verticalCenter: parent.verticalCenter
@@ -3630,6 +3659,7 @@ ApplicationWindow {
 
                     Label {
                         id: keptMusicLabel
+                        textFormat: Text.PlainText
                         anchors.right: keptMusicBox.left
                         anchors.rightMargin: 2
                         anchors.verticalCenter: parent.verticalCenter
@@ -3661,6 +3691,7 @@ ApplicationWindow {
                     // The same as the Reverse button above the playlist itself.
                     Label {
                         id: keptReverseLabel
+                        textFormat: Text.PlainText
                         anchors.right: keptReverseBox.left
                         anchors.rightMargin: 2
                         anchors.verticalCenter: parent.verticalCenter
@@ -3704,6 +3735,7 @@ ApplicationWindow {
             }
 
             Label {
+                textFormat: Text.PlainText
                 visible: keptChooser.all.length === 0
                 width: parent.width
                 text: "Nothing kept. A playlist on a channel page has a Keep button."
@@ -3798,6 +3830,7 @@ ApplicationWindow {
             spacing: 10
 
             Label {
+                textFormat: Text.PlainText
                 text: namePopup.aQueue ? "Keep the queue as a box"
                       : namePopup.renaming
                       ? (namePopup.aGroup ? "Rename the group" : "Rename the box")

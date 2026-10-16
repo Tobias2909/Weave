@@ -109,6 +109,7 @@ Popup {
         spacing: 10
 
         Label {
+            textFormat: Text.PlainText
             text: root.isAll ? "All"
                              : (root.groupName === "" ? "Manage the group" : root.groupName)
             color: Theme.colors.text
@@ -117,6 +118,7 @@ Popup {
         }
 
         Label {
+            textFormat: Text.PlainText
             width: parent.width
             text: root.isAll
                   ? "Every channel you follow is here. Taking one out keeps the channel and "
@@ -159,6 +161,7 @@ Popup {
         // was misspelled looked exactly like one that was accepted.
         Label {
             objectName: "manageAddAnswer"
+            textFormat: Text.PlainText
             width: parent.width
             visible: App.addMessage !== ""
             // No height binding. A wrapping label's implicit height comes
@@ -245,6 +248,7 @@ Popup {
                     spacing: 2
 
                     Label {
+                        textFormat: Text.PlainText
                         width: parent.width
                         text: memberRow.modelData.title
                         color: Theme.colors.text
@@ -253,6 +257,7 @@ Popup {
                     }
 
                     Label {
+                        textFormat: Text.PlainText
                         width: parent.width
                         // Said rather than left blank, so a row that is still
                         // waiting for its page looks like it is waiting.
@@ -294,6 +299,7 @@ Popup {
             anchors.right: parent.right
 
             Label {
+                textFormat: Text.PlainText
                 anchors.verticalCenter: parent.verticalCenter
                 text: root.filter.trim() !== ""
                       ? root.members.length + " of " + root.everyone.length

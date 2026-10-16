@@ -51,6 +51,7 @@ Rectangle {
     }
 
     Label {
+        textFormat: Text.PlainText
         anchors.left: parent.left
         anchors.leftMargin: 14
         anchors.right: countLabel.left
@@ -77,6 +78,7 @@ Rectangle {
     Label {
         id: actionLabel
         objectName: "sidebarRowAction"
+        textFormat: Text.PlainText
         visible: row.actionText !== ""
         anchors.right: parent.right
         anchors.rightMargin: 12
@@ -90,6 +92,7 @@ Rectangle {
 
     Label {
         id: countLabel
+        textFormat: Text.PlainText
         anchors.right: mark.visible ? mark.left : (actionLabel.visible ? actionLabel.left
                                                                         : parent.right)
         anchors.rightMargin: mark.visible || actionLabel.visible ? 8 : 12

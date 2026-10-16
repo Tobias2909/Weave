@@ -162,6 +162,7 @@ Item {
                 spacing: 8
 
                 Label {
+                    textFormat: Text.PlainText
                     text: "Move the dots. The first is the window, the second what "
                           + "it is accented with, the third the far end of the light."
                     color: Theme.colors.textMuted
@@ -190,6 +191,7 @@ Item {
                                 border.color: Theme.colors.border
                             }
                             Label {
+                                textFormat: Text.PlainText
                                 text: modelData.name
                                 color: Theme.colors.textMuted
                                 font.pixelSize: 11
@@ -204,6 +206,7 @@ Item {
                     checked: maker.lightWindow
                     onToggled: maker.lightWindow = checked
                     contentItem: Label {
+                        textFormat: Text.PlainText
                         text: parent.text
                         color: Theme.colors.text
                         font.pixelSize: 12

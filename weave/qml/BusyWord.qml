@@ -42,6 +42,7 @@ Rectangle {
         }
 
         Label {
+            textFormat: Text.PlainText
             anchors.verticalCenter: parent.verticalCenter
             text: busy.text
             color: Theme.colors.text

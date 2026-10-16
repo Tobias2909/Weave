@@ -52,6 +52,7 @@ Popup {
         spacing: 10
 
         Label {
+            textFormat: Text.PlainText
             text: "Make a playlist on YouTube"
             color: Theme.colors.text
             font.pixelSize: 15
@@ -59,6 +60,7 @@ Popup {
         }
 
         Label {
+            textFormat: Text.PlainText
             width: parent.width
             text: "The " + (root.songCount === 1 ? "song" : root.songCount + " songs")
                   + " in " + root.boxName + " go into a new playlist on your account, in the "
@@ -90,6 +92,7 @@ Popup {
             spacing: 10
 
             Label {
+                textFormat: Text.PlainText
                 anchors.verticalCenter: parent.verticalCenter
                 text: "Who can see it"
                 color: Theme.colors.text

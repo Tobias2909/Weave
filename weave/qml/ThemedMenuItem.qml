@@ -23,6 +23,7 @@ MenuItem {
     focusPolicy: Qt.NoFocus
 
     contentItem: Label {
+        textFormat: Text.PlainText
         text: item.text
         // Full strength at rest, like every other piece of text in the
         // window. Only what cannot be pressed is muted.
@@ -49,6 +50,7 @@ MenuItem {
 
     // Drawn only on an entry that opens a menu of its own.
     arrow: Label {
+        textFormat: Text.PlainText
         x: item.width - width - item.rightPadding
         y: (item.height - height) / 2
         visible: item.subMenu !== null

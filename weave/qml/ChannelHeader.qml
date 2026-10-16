@@ -101,6 +101,7 @@ Item {
             Label {
                 id: noteText
                 objectName: "membersNoteText"
+                textFormat: Text.PlainText
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.top: parent.top
                 anchors.topMargin: 10
@@ -161,6 +162,7 @@ Item {
                 spacing: 4
 
                 Label {
+                    textFormat: Text.PlainText
                     text: header.info.title ? header.info.title : ""
                     color: Theme.colors.text
                     font.pixelSize: 22
@@ -168,6 +170,7 @@ Item {
                 }
 
                 Label {
+                    textFormat: Text.PlainText
                     color: Theme.colors.textMuted
                     font.pixelSize: 12
                     text: {

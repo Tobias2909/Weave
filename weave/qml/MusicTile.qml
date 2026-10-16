@@ -71,6 +71,7 @@ Item {
             spacing: 1
 
             Label {
+                textFormat: Text.PlainText
                 width: parent.width
                 text: tile.title
                 color: "#ffffff"
@@ -81,6 +82,7 @@ Item {
             }
             Label {
                 id: subtitleLabel
+                textFormat: Text.PlainText
                 width: parent.width
                 visible: tile.subtitle !== ""
                 text: tile.subtitle
@@ -121,6 +123,7 @@ Item {
         radius: 10
         color: Theme.colors.badgeBackground
         Label {
+            textFormat: Text.PlainText
             anchors.centerIn: parent
             text: "✕"
             color: "#ffffff"

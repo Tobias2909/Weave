@@ -168,6 +168,7 @@ Item {
                     // A subscription, a gift, a raid: one quiet line.
                     Label {
                         objectName: "chatNotice"
+                        textFormat: Text.PlainText
                         visible: line.kind === "notice" && line.header !== ""
                         width: parent.width
                         text: "★  " + line.header
@@ -191,6 +192,7 @@ Item {
                         visible: line.author !== "" || line.pieces.length > 0
 
                         Label {
+                            textFormat: Text.PlainText
                             visible: line.roles.length > 0
                             height: nameWords.height
                             verticalAlignment: Text.AlignVCenter
@@ -204,6 +206,7 @@ Item {
                         Label {
                             id: nameWords
                             objectName: "chatAuthor"
+                            textFormat: Text.PlainText
                             visible: line.author !== ""
                             text: line.author
                             color: chatList.nameColour(line.colour)
@@ -213,6 +216,7 @@ Item {
                             styleColor: Qt.rgba(0, 0, 0, chatList.outline)
                         }
                         Label {
+                            textFormat: Text.PlainText
                             visible: line.amount !== ""
                             text: line.amount
                             color: chatList.ink
@@ -327,6 +331,7 @@ Item {
 
         Label {
             id: unseenWords
+            textFormat: Text.PlainText
             anchors.centerIn: parent
             text: Chat.unseen + " new  ↓"
             color: Theme.colors.badgeText
@@ -347,6 +352,7 @@ Item {
     // What the chat is doing when it is not simply showing lines.
     Label {
         objectName: "chatStatus"
+        textFormat: Text.PlainText
         visible: Chat.status !== ""
         // Placed by hand: two vertical anchors swapped by a condition make Qt
         // write the height, and a height written once stays.

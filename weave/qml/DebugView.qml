@@ -32,6 +32,7 @@ Item {
             spacing: 10
 
             Label {
+                textFormat: Text.PlainText
                 text: "How things are"
                 color: Theme.colors.text
                 font.pixelSize: 18
@@ -74,6 +75,7 @@ Item {
             border.color: Theme.colors.border
 
             Label {
+                textFormat: Text.PlainText
                 anchors.left: parent.left
                 anchors.leftMargin: 10
                 anchors.right: openFolder.left
@@ -137,6 +139,7 @@ Item {
                             y: 7
                             spacing: 12
                             Label {
+                                textFormat: Text.PlainText
                                 width: 190
                                 text: modelData.name
                                 color: Theme.colors.text
@@ -145,6 +148,7 @@ Item {
                                 elide: Text.ElideRight
                             }
                             Label {
+                                textFormat: Text.PlainText
                                 width: body.width - 230
                                 text: modelData.detail
                                 color: Theme.colors.textMuted
@@ -155,6 +159,7 @@ Item {
 
                         Label {
                             id: why
+                            textFormat: Text.PlainText
                             visible: modelData.fix !== "" && modelData.state !== "ok"
                             x: 14
                             anchors.top: line.bottom
@@ -169,6 +174,7 @@ Item {
                 }
 
                 Label {
+                    textFormat: Text.PlainText
                     visible: App.problems.length > 0
                     text: "What has gone wrong lately"
                     color: Theme.colors.text
@@ -179,6 +185,7 @@ Item {
                 Repeater {
                     model: App.problems
                     Label {
+                        textFormat: Text.PlainText
                         width: body.width
                         text: "•  " + modelData
                         color: Theme.colors.textMuted
@@ -188,6 +195,7 @@ Item {
                 }
 
                 Label {
+                    textFormat: Text.PlainText
                     text: "Where the requests go"
                     color: Theme.colors.text
                     font.pixelSize: 15
@@ -195,6 +203,7 @@ Item {
                 }
 
                 Label {
+                    textFormat: Text.PlainText
                     width: body.width
                     text: App.trafficWindowText
                     color: Theme.colors.textMuted
@@ -212,12 +221,14 @@ Item {
                         width: body.width
                         spacing: 12
                         Label {
+                            textFormat: Text.PlainText
                             width: 70
                             text: modelData.endpoint
                             color: Theme.colors.text
                             font.pixelSize: 12
                         }
                         Label {
+                            textFormat: Text.PlainText
                             width: 54
                             horizontalAlignment: Text.AlignRight
                             text: modelData.sent
@@ -230,24 +241,28 @@ Item {
                             font.weight: Font.DemiBold
                         }
                         Label {
+                            textFormat: Text.PlainText
                             width: 110
                             text: modelData.usualText
                             color: Theme.colors.textMuted
                             font.pixelSize: 12
                         }
                         Label {
+                            textFormat: Text.PlainText
                             width: 90
                             text: modelData.most ? "peak " + modelData.most : ""
                             color: Theme.colors.textMuted
                             font.pixelSize: 12
                         }
                         Label {
+                            textFormat: Text.PlainText
                             width: 80
                             text: modelData.limitText
                             color: Theme.colors.textMuted
                             font.pixelSize: 12
                         }
                         Label {
+                            textFormat: Text.PlainText
                             text: modelData.refused ? modelData.refused + " refused" : ""
                             color: Theme.colors.error
                             font.pixelSize: 12
@@ -256,6 +271,7 @@ Item {
                 }
 
                 Label {
+                    textFormat: Text.PlainText
                     text: "When each channel is asked"
                     color: Theme.colors.text
                     font.pixelSize: 15
@@ -263,6 +279,7 @@ Item {
                 }
 
                 Label {
+                    textFormat: Text.PlainText
                     width: body.width
                     text: "In the order the poller will take them, so the top of this list is "
                           + "what the next few minutes will do. How often a channel posts is "
@@ -281,6 +298,7 @@ Item {
                         width: body.width
                         spacing: 12
                         Label {
+                            textFormat: Text.PlainText
                             width: 240
                             text: modelData.title
                             color: Theme.colors.text
@@ -288,18 +306,21 @@ Item {
                             elide: Text.ElideRight
                         }
                         Label {
+                            textFormat: Text.PlainText
                             width: 120
                             text: modelData.tier
                             color: Theme.colors.textMuted
                             font.pixelSize: 12
                         }
                         Label {
+                            textFormat: Text.PlainText
                             width: 96
                             text: modelData.everyText
                             color: Theme.colors.textMuted
                             font.pixelSize: 12
                         }
                         Label {
+                            textFormat: Text.PlainText
                             width: 108
                             text: modelData.whyText
                             color: Theme.colors.accent
@@ -307,18 +328,21 @@ Item {
                             elide: Text.ElideRight
                         }
                         Label {
+                            textFormat: Text.PlainText
                             width: 130
                             text: "asked " + modelData.lastText
                             color: Theme.colors.textMuted
                             font.pixelSize: 12
                         }
                         Label {
+                            textFormat: Text.PlainText
                             width: 110
                             text: "next " + modelData.dueText
                             color: Theme.colors.textMuted
                             font.pixelSize: 12
                         }
                         Label {
+                            textFormat: Text.PlainText
                             text: modelData.error
                             color: Theme.colors.error
                             font.pixelSize: 11

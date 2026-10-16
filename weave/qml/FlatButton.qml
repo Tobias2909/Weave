@@ -32,6 +32,7 @@ Button {
         padding: 7
 
         contentItem: Label {
+            textFormat: Text.PlainText
             text: control.hint
             color: Theme.colors.text
             font.pixelSize: 11
@@ -46,6 +47,7 @@ Button {
     }
 
     contentItem: Label {
+        textFormat: Text.PlainText
         text: control.text
         // A transform rather than an x. The control writes the content item's
         // geometry itself, so anything set here would be overwritten.

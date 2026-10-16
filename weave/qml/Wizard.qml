@@ -103,6 +103,7 @@ Popup {
 
         Label {
             id: placeName
+            textFormat: Text.PlainText
             x: 14
             y: picture.y + picture.height + 16
             text: choice.name
@@ -112,6 +113,7 @@ Popup {
         }
 
         Label {
+            textFormat: Text.PlainText
             x: 14
             anchors.top: placeName.bottom
             anchors.topMargin: 6
@@ -158,6 +160,7 @@ Popup {
 
         Label {
             id: counter
+            textFormat: Text.PlainText
             anchors.right: closeMark.left
             anchors.rightMargin: 10
             anchors.top: parent.top
@@ -180,6 +183,7 @@ Popup {
 
             Label {
                 objectName: "wizardTitle"
+                textFormat: Text.PlainText
                 // Clear of the count and the cross beside it.
                 width: parent.width - 90
                 text: [
@@ -199,6 +203,7 @@ Popup {
 
             Label {
                 objectName: "wizardBody"
+                textFormat: Text.PlainText
                 width: parent.width
                 text: [
                     "This is your subscriptions first. "
@@ -246,6 +251,7 @@ Popup {
 
             Label {
                 objectName: "wizardFarewell"
+                textFormat: Text.PlainText
                 visible: root.step === root.last
                 width: parent.width
                 text: "That is all of it. Have fun with Weave."
@@ -299,6 +305,7 @@ Popup {
                 spacing: 8
 
                 Label {
+                    textFormat: Text.PlainText
                     anchors.verticalCenter: parent.verticalCenter
                     text: "Cookies"
                     color: Theme.colors.textMuted
@@ -353,6 +360,7 @@ Popup {
                 }
 
                 Label {
+                    textFormat: Text.PlainText
                     anchors.verticalCenter: parent.verticalCenter
                     objectName: "wizardImportState"
                     // Whatever yt-dlp said, which can be a sentence.
@@ -365,6 +373,7 @@ Popup {
             }
 
             Label {
+                textFormat: Text.PlainText
                 visible: root.step === 1
                 width: parent.width
                 // The cookie source, always, because it is what the import
@@ -452,6 +461,7 @@ Popup {
                 }
 
                 Label {
+                    textFormat: Text.PlainText
                     anchors.verticalCenter: parent.verticalCenter
                     objectName: "wizardTwitchState"
                     text: App.twitchStatus !== "" ? App.twitchStatus
@@ -500,6 +510,7 @@ Popup {
                                                                          : Theme.colors.border)
 
                         Label {
+                            textFormat: Text.PlainText
                             anchors.centerIn: parent
                             visible: hideBox.checked
                             text: "\u2713"
@@ -513,6 +524,7 @@ Popup {
                 // are a label beside it.
                 Label {
                     objectName: "wizardHideWords"
+                    textFormat: Text.PlainText
                     anchors.verticalCenter: parent.verticalCenter
                     text: "Do not show this again"
                     color: Theme.colors.textMuted

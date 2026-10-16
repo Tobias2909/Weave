@@ -85,6 +85,7 @@ Popup {
                 HoverHandler { id: rowHover }
 
                 Label {
+                    textFormat: Text.PlainText
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.leftMargin: 10

@@ -89,6 +89,7 @@ Item {
             }
 
             Label {
+                textFormat: Text.PlainText
                 width: parent.width
                 text: card.title
                 color: Theme.colors.text
@@ -104,6 +105,7 @@ Item {
                 height: 20
 
                 Label {
+                    textFormat: Text.PlainText
                     anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
                     text: card.itemsText !== "" ? card.itemsText : "not read yet"

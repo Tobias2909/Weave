@@ -177,6 +177,7 @@ Item {
         border.color: Theme.colors.accent
 
         Label {
+            textFormat: Text.PlainText
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.leftMargin: 26

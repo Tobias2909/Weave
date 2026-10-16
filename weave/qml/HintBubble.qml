@@ -16,6 +16,7 @@ ToolTip {
     padding: 7
 
     contentItem: Label {
+        textFormat: Text.PlainText
         text: bubble.words
         color: Theme.colors.text
         font.pixelSize: 11

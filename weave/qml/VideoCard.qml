@@ -170,6 +170,7 @@ Rectangle {
                         // Done rather than going on, so a mark that stands
                         // still in place of the one that turns.
                         Label {
+                            textFormat: Text.PlainText
                             visible: !card.starting && !card.noteBusy
                             anchors.verticalCenter: parent.verticalCenter
                             text: "\u2713"
@@ -180,6 +181,7 @@ Rectangle {
 
                         Label {
                             objectName: "startingWord"
+                            textFormat: Text.PlainText
                             anchors.verticalCenter: parent.verticalCenter
                             text: card.starting ? "Starting in mpv" : card.note
                             color: Theme.colors.text
@@ -215,6 +217,7 @@ Rectangle {
                 Text {
                     id: members
                     objectName: "membersWord"
+                    textFormat: Text.PlainText
                     anchors.centerIn: parent
                     text: "MEMBERS"
                     color: Theme.colors.accent
@@ -246,6 +249,7 @@ Rectangle {
                 }
 
                 Text {
+                    textFormat: Text.PlainText
                     anchors.centerIn: parent
                     text: "🎧"
                     font.pixelSize: 13
@@ -266,6 +270,7 @@ Rectangle {
                 height: badge.implicitHeight + 6
                 Text {
                     id: badge
+                    textFormat: Text.PlainText
                     anchors.centerIn: parent
                     // An announced stream cannot be played yet, so the badge
                     // says when it starts rather than a duration it does not
@@ -304,6 +309,7 @@ Rectangle {
 
                 Text {
                     id: spent
+                    textFormat: Text.PlainText
                     anchors.centerIn: parent
                     text: "STREAM"
                     color: Theme.colors.live
@@ -324,6 +330,7 @@ Rectangle {
 
             Text {
                 id: titleSizer
+                textFormat: Text.PlainText
                 visible: false
                 text: "Ag\nAg"
                 font: titleText.font
@@ -402,6 +409,7 @@ Rectangle {
                     border.color: Theme.colors.border
 
                     Label {
+                        textFormat: Text.PlainText
                         anchors.centerIn: parent
                         text: card.channelTitle === "" ? "" : card.channelTitle.charAt(0).toUpperCase()
                         color: Theme.colors.textMuted
@@ -432,6 +440,7 @@ Rectangle {
 
                     Text {
                         id: channelName
+                        textFormat: Text.PlainText
                         anchors.left: parent.left
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
@@ -451,6 +460,7 @@ Rectangle {
                 }
 
                 Text {
+                    textFormat: Text.PlainText
                     width: parent.width
                     color: Theme.colors.textMuted
                     font.pixelSize: 11

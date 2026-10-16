@@ -350,6 +350,7 @@ Item {
 
                 Label {
                     id: shelvesWords
+                    textFormat: Text.PlainText
                     anchors.centerIn: parent
                     text: "Shelves"
                     color: Theme.colors.text
@@ -385,6 +386,7 @@ Item {
                         spacing: 8
 
                         Label {
+                            textFormat: Text.PlainText
                             text: (chip.modelData.fixed ? "♥  " : "") + chip.modelData.name
                             color: Theme.colors.text
                             font.pixelSize: 12
@@ -392,6 +394,7 @@ Item {
                         }
 
                         Label {
+                            textFormat: Text.PlainText
                             text: chip.modelData.count
                             color: Theme.colors.textMuted
                             font.pixelSize: 11
@@ -422,6 +425,7 @@ Item {
 
                 Label {
                     id: newBoxWords
+                    textFormat: Text.PlainText
                     anchors.centerIn: parent
                     text: "+  New box"
                     color: Theme.colors.textMuted
@@ -476,6 +480,7 @@ Item {
 
                     Label {
                         objectName: "boxSongCount"
+                        textFormat: Text.PlainText
                         visible: App.musicTabSongs.length > 0
                         text: (App.musicTabSongs.length === 1
                                ? "1 song" : App.musicTabSongs.length + " songs").toUpperCase()
@@ -504,6 +509,7 @@ Item {
 
                 Label {
                     objectName: "boxEmpty"
+                    textFormat: Text.PlainText
                     visible: App.musicTabSongs.length === 0
                     Layout.fillWidth: true
                     Layout.topMargin: 20
@@ -604,6 +610,7 @@ Item {
                             spacing: 8
 
                             Label {
+                                textFormat: Text.PlainText
                                 text: shelf.modelData.title.toUpperCase()
                                 color: Theme.colors.textMuted
                                 font.pixelSize: 10
@@ -672,6 +679,7 @@ Item {
                                     anchors.centerIn: parent
                                     spacing: 3
                                     Label {
+                                        textFormat: Text.PlainText
                                         anchors.horizontalCenter: parent.horizontalCenter
                                         text: "See all"
                                         color: Theme.colors.text
@@ -679,6 +687,7 @@ Item {
                                         font.weight: Font.DemiBold
                                     }
                                     Label {
+                                        textFormat: Text.PlainText
                                         anchors.horizontalCenter: parent.horizontalCenter
                                         text: shelf.total + " in all"
                                         color: Theme.colors.textMuted
@@ -696,6 +705,7 @@ Item {
                 }
 
                 Label {
+                    textFormat: Text.PlainText
                     Layout.fillWidth: true
                     visible: App.musicShelves.length === 0
                     text: App.musicSearching ? "Loading"
@@ -714,6 +724,7 @@ Item {
             visible: view.onShelfPage
             Layout.fillWidth: true
             Label {
+                textFormat: Text.PlainText
                 text: (view.openShelf.title ? view.openShelf.title : "").toUpperCase()
                 color: Theme.colors.textMuted
                 font.pixelSize: 10
@@ -722,6 +733,7 @@ Item {
             }
             Item { Layout.fillWidth: true }
             Label {
+                textFormat: Text.PlainText
                 text: view.openShelfItems.length + " entries"
                 color: Theme.colors.textMuted
                 font.pixelSize: 11
@@ -774,6 +786,7 @@ Item {
             visible: App.musicResults.length > 0
             Layout.fillWidth: true
             Label {
+                textFormat: Text.PlainText
                 text: App.musicLabel.toUpperCase()
                 color: Theme.colors.textMuted
                 font.pixelSize: 10
@@ -782,6 +795,7 @@ Item {
             }
             Item { Layout.fillWidth: true }
             Label {
+                textFormat: Text.PlainText
                 text: App.musicResults.length + " tracks"
                 color: Theme.colors.textMuted
                 font.pixelSize: 11
@@ -828,6 +842,7 @@ Item {
                         width: parent.width - 120
                         spacing: 2
                         Label {
+                            textFormat: Text.PlainText
                             width: parent.width
                             text: modelData.title
                             color: Theme.colors.text
@@ -835,6 +850,7 @@ Item {
                             elide: Text.ElideRight
                         }
                         Label {
+                            textFormat: Text.PlainText
                             width: parent.width
                             text: modelData.artist
                             color: Theme.colors.textMuted
@@ -845,6 +861,7 @@ Item {
                 }
 
                 Label {
+                    textFormat: Text.PlainText
                     anchors.right: parent.right
                     anchors.rightMargin: 12
                     anchors.verticalCenter: parent.verticalCenter
@@ -890,6 +907,7 @@ Item {
                 id: isLive
                 text: "live"
                 contentItem: Label {
+                    textFormat: Text.PlainText
                     text: parent.text
                     color: Theme.colors.textMuted
                     font.pixelSize: 11

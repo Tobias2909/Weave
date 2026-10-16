@@ -484,6 +484,7 @@ Item {
                                     Label {
                                         id: stageLine
                                         objectName: "nowPlayingVideoStage"
+                                        textFormat: Text.PlainText
                                         // How long the picture arriving is said
                                         // before it goes. A property so the walk
                                         // need not wait the whole of it.
@@ -533,6 +534,7 @@ Item {
                                 Label {
                                     id: artistLine
                                     objectName: "nowPlayingArtist"
+                                    textFormat: Text.PlainText
                                     // Pressed, it goes to whoever made this, on
                                     // their channel. Only where the song carries an
                                     // address for them, which a song from an
@@ -584,6 +586,7 @@ Item {
                                 Label {
                                     id: factsLine
                                     objectName: "nowPlayingFacts"
+                                    textFormat: Text.PlainText
                                     width: parent.width
                                     visible: text !== ""
                                     text: {
@@ -611,6 +614,7 @@ Item {
                                 // nobody reads at all.
                                 Label {
                                     objectName: "nowPlayingMoreFacts"
+                                    textFormat: Text.PlainText
                                     width: parent.width
                                     visible: text !== ""
                                     text: {
@@ -635,6 +639,7 @@ Item {
 
                         Label {
                             objectName: "nowPlayingVideoNote"
+                            textFormat: Text.PlainText
                             width: parent.width
                             visible: text !== "" && !Audio.videoShowing
                             text: Audio.videoNote
@@ -672,6 +677,7 @@ Item {
                             // marks on the bar are drawn from and what a seek
                             // takes, so the two can never disagree.
                             delegate: Label {
+                                textFormat: Text.PlainText
                                 required property var modelData
                                 required property int index
                                 width: chapterList.width
@@ -885,6 +891,7 @@ Item {
                         Label {
                             id: leaving
                             objectName: "nowPlayingSungLeaving"
+                            textFormat: Text.PlainText
                             width: parent.width
                             opacity: 0
                             color: Theme.colors.text
@@ -899,6 +906,7 @@ Item {
                         Label {
                             id: sungLine
                             objectName: "nowPlayingSungLine"
+                            textFormat: Text.PlainText
                             width: parent.width
                             transformOrigin: Item.Top
                             color: Theme.colors.text
@@ -913,6 +921,7 @@ Item {
                         Label {
                             id: sungNext
                             objectName: "nowPlayingSungNext"
+                            textFormat: Text.PlainText
                             y: sungLine.height + sungLines.gap
                             width: parent.width
                             color: Theme.colors.textMuted
@@ -960,6 +969,7 @@ Item {
                     // Where the words are from, as the block of them says
                     // too, at the foot of the room.
                     Label {
+                        textFormat: Text.PlainText
                         anchors.horizontalCenter: parent.horizontalCenter
                         anchors.bottom: parent.bottom
                         anchors.bottomMargin: 6
@@ -979,6 +989,7 @@ Item {
                     // A song with none is a normal answer, said plainly.
                     Label {
                         objectName: "nowPlayingSungNone"
+                        textFormat: Text.PlainText
                         anchors.horizontalCenter: parent.horizontalCenter
                         y: 8
                         visible: App.nowBusy === "" && App.nowRead.indexOf("words") >= 0
@@ -1022,6 +1033,7 @@ Item {
                         spacing: 10
 
                         Label {
+                            textFormat: Text.PlainText
                             text: page.tab === "recommended" ? "Recommended for"
                                   : (page.tab === "words" ? "Lyrics of" : "Comments on")
                             color: Theme.colors.textMuted
@@ -1039,6 +1051,7 @@ Item {
                     }
 
                     Label {
+                        textFormat: Text.PlainText
                         width: parent.width
                         text: Audio.track.title ? Audio.track.title : ""
                         color: Theme.colors.text
@@ -1048,6 +1061,7 @@ Item {
                     }
 
                     Label {
+                        textFormat: Text.PlainText
                         width: parent.width
                         visible: text !== ""
                         text: Audio.track.artist ? Audio.track.artist : ""
@@ -1086,6 +1100,7 @@ Item {
 
                                 Label {
                                     id: chipWords
+                                    textFormat: Text.PlainText
                                     anchors.centerIn: parent
                                     text: chip.modelData.label
                                     color: Theme.colors.text
@@ -1133,6 +1148,7 @@ Item {
 
                         Label {
                             id: noteWords
+                            textFormat: Text.PlainText
                             anchors.left: parent.left
                             anchors.right: parent.right
                             anchors.verticalCenter: parent.verticalCenter
@@ -1209,6 +1225,7 @@ Item {
                             spacing: 8
 
                             Label {
+                                textFormat: Text.PlainText
                                 width: parent.width
                                 // Whatever the music service returns for this
                                 // song, as it returns it.
@@ -1220,6 +1237,7 @@ Item {
                                 wrapMode: Text.Wrap
                             }
                             Label {
+                                textFormat: Text.PlainText
                                 width: parent.width
                                 visible: (App.nowWords.source || "") !== ""
                                 text: App.nowWords.source ? App.nowWords.source : ""
@@ -1228,6 +1246,7 @@ Item {
                                 wrapMode: Text.Wrap
                             }
                             Label {
+                                textFormat: Text.PlainText
                                 width: parent.width
                                 // A song with none is a normal answer. The page
                                 // says so plainly rather than sitting empty as
@@ -1273,6 +1292,7 @@ Item {
                             spacing: 12
 
                             Label {
+                                textFormat: Text.PlainText
                                 visible: App.nowComments.length === 0 && App.nowBusy === ""
                                 text: "Nothing here"
                                 color: Theme.colors.textMuted
@@ -1414,6 +1434,7 @@ Item {
                     }
 
                     Label {
+                        textFormat: Text.PlainText
                         anchors.centerIn: parent
                         visible: (Audio.track.thumbnail || "") === ""
                         text: "No picture"
@@ -1517,6 +1538,7 @@ Item {
 
                     Label {
                         id: backWords
+                        textFormat: Text.PlainText
                         anchors.centerIn: parent
                         text: "▲  Back to the video"
                         color: "#ffffff"
@@ -1569,6 +1591,7 @@ Item {
             spacing: 8
 
             Label {
+                textFormat: Text.PlainText
                 text: ("Queue" + (Audio.queue.length > 0 ? "  ·  " + Audio.queue.length : ""))
                       .toUpperCase()
                 color: Theme.colors.textMuted

@@ -40,18 +40,21 @@ Row {
         Row {
             spacing: 6
             Label {
+                textFormat: Text.PlainText
                 text: body.comment.author ? body.comment.author : ""
                 color: body.comment.byUploader ? Theme.colors.accent : Theme.colors.text
                 font.pixelSize: body.sized(11)
                 font.weight: Font.DemiBold
             }
             Label {
+                textFormat: Text.PlainText
                 visible: body.comment.pinned === true
                 text: "pinned"
                 color: Theme.colors.textMuted
                 font.pixelSize: body.sized(10)
             }
             Label {
+                textFormat: Text.PlainText
                 text: body.comment.when ? body.comment.when : ""
                 color: Theme.colors.textMuted
                 font.pixelSize: body.sized(10)
@@ -89,6 +92,7 @@ Row {
         }
 
         Label {
+            textFormat: Text.PlainText
             visible: (body.comment.likes || 0) > 0
             text: body.comment.likes + " likes"
             color: Theme.colors.textMuted

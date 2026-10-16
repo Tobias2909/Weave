@@ -95,6 +95,7 @@ Popup {
         spacing: 10
 
         Label {
+            textFormat: Text.PlainText
             text: "Hidden videos"
             color: Theme.colors.text
             font.pixelSize: 14
@@ -102,6 +103,7 @@ Popup {
         }
 
         Label {
+            textFormat: Text.PlainText
             width: parent.width
             text: "Hiding a video takes its card out of the feed, out of a group and out of "
                   + "the suggestions. It stays in any box you put it in and it keeps whatever "
@@ -136,6 +138,7 @@ Popup {
         // failed to load.
         Label {
             objectName: "hiddenNothing"
+            textFormat: Text.PlainText
             width: parent.width
             visible: root.shown.length === 0
             text: root.everyone.length === 0 ? "Nothing is hidden."
@@ -188,6 +191,7 @@ Popup {
                     spacing: 2
 
                     Label {
+                        textFormat: Text.PlainText
                         width: parent.width
                         text: hiddenRow.modelData.title
                         color: Theme.colors.text
@@ -196,6 +200,7 @@ Popup {
                     }
 
                     Label {
+                        textFormat: Text.PlainText
                         width: parent.width
                         // The channel and when it was put away, which is what
                         // the order of this list is by, so the order can be
@@ -231,6 +236,7 @@ Popup {
             anchors.right: parent.right
 
             Label {
+                textFormat: Text.PlainText
                 anchors.verticalCenter: parent.verticalCenter
                 text: root.filter.trim() !== ""
                       ? root.shown.length + " of " + root.everyone.length

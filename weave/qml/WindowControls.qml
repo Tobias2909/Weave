@@ -34,6 +34,7 @@ Row {
         padding: 0
 
         contentItem: Label {
+            textFormat: Text.PlainText
             text: button.text
             font.pixelSize: 13
             color: button.destructive && button.hovered ? Theme.colors.badgeText

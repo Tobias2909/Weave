@@ -109,6 +109,7 @@ Rectangle {
 
         Label {
             objectName: "liveHeading"
+            textFormat: Text.PlainText
             // The bar is only up when there is something live or when Twitch
             // wants a login, so there is no third thing left to say.
             text: bar.hasStreams
@@ -121,6 +122,7 @@ Rectangle {
         }
 
         Label {
+            textFormat: Text.PlainText
             visible: App.twitchStatus !== ""
             text: App.twitchStatus
             color: Theme.colors.textMuted
@@ -400,6 +402,7 @@ Rectangle {
 
                         Label {
                             id: hiddenWord
+                            textFormat: Text.PlainText
                             anchors.centerIn: parent
                             text: "Hidden"
                             color: "white"
@@ -476,6 +479,7 @@ Rectangle {
                         spacing: 6
 
                         Label {
+                            textFormat: Text.PlainText
                             width: parent.width
                             anchors.verticalCenter: parent.verticalCenter
                             text: streamCard.name
@@ -487,6 +491,7 @@ Rectangle {
                     }
 
                     Label {
+                        textFormat: Text.PlainText
                         width: parent.width
                         text: streamCard.title
                         color: Theme.colors.textMuted
@@ -497,6 +502,7 @@ Rectangle {
                     }
 
                     Label {
+                        textFormat: Text.PlainText
                         width: parent.width
                         color: Theme.colors.textMuted
                         font.pixelSize: 11

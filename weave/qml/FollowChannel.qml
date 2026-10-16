@@ -34,6 +34,7 @@ Popup {
         spacing: 10
 
         Label {
+            textFormat: Text.PlainText
             text: "Follow a channel"
             color: Theme.colors.text
             font.pixelSize: 14
@@ -41,6 +42,7 @@ Popup {
         }
 
         Label {
+            textFormat: Text.PlainText
             width: parent.width
             text: "A channel id, an @handle, a channel address or a twitch.tv link. "
                   + "It goes into All, and its videos arrive with the next refresh."
@@ -75,6 +77,7 @@ Popup {
         // this window is drawn over.
         Label {
             objectName: "followAnswer"
+            textFormat: Text.PlainText
             width: parent.width
             visible: App.addMessage !== ""
             text: App.addMessage

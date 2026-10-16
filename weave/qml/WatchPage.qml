@@ -157,6 +157,7 @@ Item {
         color: cornerPress.containsMouse ? Qt.rgba(1, 1, 1, 0.22) : ground
 
         Label {
+            textFormat: Text.PlainText
             anchors.centerIn: parent
             text: cornerButton.text
             color: "#ffffff"
@@ -403,6 +404,7 @@ Item {
                                     Label {
                                         id: watchTitle
                                         objectName: "watchingTitle"
+                                        textFormat: Text.PlainText
                                         width: parent.width - (toMpv.visible
                                                                ? toMpv.width + titleRow.spacing : 0)
                                         text: Video.track.title ? Video.track.title : ""
@@ -435,6 +437,7 @@ Item {
                                 Label {
                                     id: channelLine
                                     objectName: "watchingChannel"
+                                    textFormat: Text.PlainText
                                     readonly property string leadsTo:
                                         Video.track.channelKey ? Video.track.channelKey : ""
                                     width: parent.width
@@ -462,6 +465,7 @@ Item {
                                 Label {
                                     id: factsLine
                                     objectName: "watchingFacts"
+                                    textFormat: Text.PlainText
                                     width: parent.width
                                     visible: text !== ""
                                     text: {
@@ -610,6 +614,7 @@ Item {
                         spacing: 10
 
                         Label {
+                            textFormat: Text.PlainText
                             text: page.tab === "recommended" ? "Recommended for" : "Comments on"
                             color: Theme.colors.textMuted
                             font.pixelSize: 12
@@ -625,6 +630,7 @@ Item {
                     }
 
                     Label {
+                        textFormat: Text.PlainText
                         width: parent.width
                         text: Video.track.title ? Video.track.title : ""
                         color: Theme.colors.text
@@ -634,6 +640,7 @@ Item {
                     }
 
                     Label {
+                        textFormat: Text.PlainText
                         width: parent.width
                         visible: text !== ""
                         text: Video.track.channel ? Video.track.channel : ""
@@ -672,6 +679,7 @@ Item {
 
                                 Label {
                                     id: chipWords
+                                    textFormat: Text.PlainText
                                     anchors.centerIn: parent
                                     text: chip.modelData.label
                                     color: Theme.colors.text
@@ -716,6 +724,7 @@ Item {
 
                         Label {
                             id: noteWords
+                            textFormat: Text.PlainText
                             anchors.left: parent.left
                             anchors.right: parent.right
                             anchors.verticalCenter: parent.verticalCenter
@@ -804,6 +813,7 @@ Item {
                             spacing: 12
 
                             Label {
+                                textFormat: Text.PlainText
                                 visible: App.watchComments.length === 0 && App.watchBusy === ""
                                 text: "Nothing here"
                                 color: Theme.colors.textMuted
@@ -1041,6 +1051,7 @@ Item {
 
                     Label {
                         id: backWords
+                        textFormat: Text.PlainText
                         anchors.centerIn: parent
                         text: "▲  Back to the video"
                         color: "#ffffff"
@@ -1108,12 +1119,14 @@ Item {
 
                         Label {
                             objectName: "watchingSegmentWords"
+                            textFormat: Text.PlainText
                             text: segmentPill.pillText
                             color: "#f2f2f2"
                             font.pixelSize: page.cinema ? 15 : 13
                             font.weight: Font.DemiBold
                         }
                         Label {
+                            textFormat: Text.PlainText
                             visible: segmentPill.skipped
                             text: "\u00b7"
                             color: Qt.rgba(1, 1, 1, 0.6)
@@ -1122,6 +1135,7 @@ Item {
                         // White rather than the accent, which on some themes is
                         // too dark to read on black.
                         Label {
+                            textFormat: Text.PlainText
                             visible: segmentPill.skipped
                             text: "Undo"
                             color: "#ffffff"
@@ -1191,6 +1205,7 @@ Item {
 
                     Label {
                         objectName: "watchCornerTitle"
+                        textFormat: Text.PlainText
                         anchors.left: parent.left
                         anchors.right: cornerButtons.left
                         anchors.top: parent.top
@@ -1241,6 +1256,7 @@ Item {
 
                     Label {
                         objectName: "watchCornerTime"
+                        textFormat: Text.PlainText
                         anchors.left: parent.left
                         anchors.bottom: parent.bottom
                         anchors.margins: 9
@@ -1330,6 +1346,7 @@ Item {
             spacing: 8
 
             Label {
+                textFormat: Text.PlainText
                 visible: !page.chatHere || page.cinema
                 text: ("Queue" + (Video.queue.length > 0 ? "  ·  " + Video.queue.length : ""))
                       .toUpperCase()
@@ -1520,6 +1537,7 @@ Item {
 
             Label {
                 objectName: "watchingChatOverName"
+                textFormat: Text.PlainText
                 anchors.centerIn: parent
                 text: overPanel.note !== "" ? overPanel.note : "\u22ee\u22ee   Chat   \u22ee\u22ee"
                 color: Qt.rgba(1, 1, 1, 0.7)
@@ -1592,6 +1610,7 @@ Item {
 
             Label {
                 objectName: "watchingChatOverClose"
+                textFormat: Text.PlainText
                 anchors.right: parent.right
                 anchors.rightMargin: 6
                 anchors.verticalCenter: parent.verticalCenter

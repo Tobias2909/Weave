@@ -47,6 +47,7 @@ Popup {
         spacing: 10
 
         Label {
+            textFormat: Text.PlainText
             text: "New box from a playlist"
             color: Theme.colors.text
             font.pixelSize: 15
@@ -54,6 +55,7 @@ Popup {
         }
 
         Label {
+            textFormat: Text.PlainText
             width: parent.width
             text: "Its songs are copied into a new box of the same name. The playlist "
                   + "stays as it is."
@@ -93,6 +95,7 @@ Popup {
 
             // In the empty list itself, where there is room for it.
             Label {
+                textFormat: Text.PlainText
                 visible: root.shown.length === 0
                 x: 8
                 y: 8
@@ -119,6 +122,7 @@ Popup {
                 }
 
                 Label {
+                    textFormat: Text.PlainText
                     anchors.left: parent.left
                     anchors.leftMargin: 8
                     anchors.right: facts.left
@@ -132,6 +136,7 @@ Popup {
 
                 Label {
                     id: facts
+                    textFormat: Text.PlainText
                     anchors.right: parent.right
                     anchors.rightMargin: 8
                     anchors.verticalCenter: parent.verticalCenter

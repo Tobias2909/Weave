@@ -231,6 +231,7 @@ Item {
         transformOrigin: Item.TopLeft
 
         Text {
+            textFormat: Text.PlainText
             x: 5
             y: 1
             text: "mpv"

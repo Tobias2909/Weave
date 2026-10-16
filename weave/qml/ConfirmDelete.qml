@@ -52,6 +52,7 @@ Popup {
 
         Label {
             objectName: "confirmTitle"
+            textFormat: Text.PlainText
             width: parent.width
             text: root.isGroup ? "Delete this group?"
                   : root.isMusic ? "Delete this box of songs?" : "Delete this box?"
@@ -63,6 +64,7 @@ Popup {
 
         Label {
             objectName: "confirmName"
+            textFormat: Text.PlainText
             width: parent.width
             text: root.itemName
             color: Theme.colors.accent
@@ -71,6 +73,7 @@ Popup {
         }
 
         Label {
+            textFormat: Text.PlainText
             width: parent.width
             text: root.isMusic
                   ? (root.members.length === 0
@@ -101,6 +104,7 @@ Popup {
             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
             delegate: Label {
+                textFormat: Text.PlainText
                 required property var modelData
                 width: ListView.view.width
                 height: 24

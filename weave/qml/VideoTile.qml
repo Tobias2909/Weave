@@ -62,6 +62,7 @@ Item {
 
         Label {
             id: durationWords
+            textFormat: Text.PlainText
             anchors.centerIn: parent
             text: tile.duration
             color: "#ffffff"
@@ -82,6 +83,7 @@ Item {
 
         Label {
             id: queuedWords
+            textFormat: Text.PlainText
             anchors.centerIn: parent
             text: "In queue"
             color: "#ffffff"
@@ -112,6 +114,7 @@ Item {
             spacing: 1
 
             Label {
+                textFormat: Text.PlainText
                 width: parent.width
                 text: tile.title
                 color: "#ffffff"
@@ -124,6 +127,7 @@ Item {
             Label {
                 id: channelLabel
                 objectName: "videoTileChannel"
+                textFormat: Text.PlainText
                 width: parent.width
                 visible: tile.channel !== ""
                 text: tile.channel

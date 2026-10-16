@@ -84,6 +84,7 @@ Item {
 
             Label {
                 objectName: "playlistCount"
+                textFormat: Text.PlainText
                 height: parent.height
                 verticalAlignment: Text.AlignVCenter
                 color: Theme.colors.textMuted
@@ -155,6 +156,7 @@ Item {
     // was the only answer a channel gave while its list was on its way.
     Label {
         objectName: "playlistsWord"
+        textFormat: Text.PlainText
         anchors.centerIn: parent
         visible: root.shown.length === 0
         horizontalAlignment: Text.AlignHCenter

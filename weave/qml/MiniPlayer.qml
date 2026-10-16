@@ -156,6 +156,7 @@ Rectangle {
                 Label {
                     id: peekSong
                     objectName: "chapterPeekSong"
+                    textFormat: Text.PlainText
                     visible: peek.song !== ""
                     anchors.horizontalCenter: parent.horizontalCenter
                     text: peek.song
@@ -166,6 +167,7 @@ Rectangle {
                 Label {
                     id: peekWhen
                     objectName: "chapterPeekTime"
+                    textFormat: Text.PlainText
                     anchors.horizontalCenter: parent.horizontalCenter
                     text: peek.when
                     color: Theme.colors.textMuted
@@ -234,6 +236,7 @@ Rectangle {
                 height: 24
 
                 Label {
+                    textFormat: Text.PlainText
                     anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
                     text: "QUEUE  ·  " + Audio.queue.length
@@ -323,6 +326,7 @@ Rectangle {
             spacing: 1
 
             Label {
+                textFormat: Text.PlainText
                 Layout.fillWidth: true
                 text: Audio.track.title ? Audio.track.title : ""
                 color: Theme.colors.text
@@ -333,6 +337,7 @@ Rectangle {
             Label {
                 id: secondLine
                 objectName: "musicSecondLine"
+                textFormat: Text.PlainText
                 // The name leads to whoever made it, but only while it is a
                 // name. This line carries the chapter where a track has one,
                 // and the word "loading" before that, and neither of those is
@@ -427,6 +432,7 @@ Rectangle {
             Text {
                 id: heart
                 objectName: "favoriteHeartMark"
+                textFormat: Text.PlainText
                 anchors.centerIn: parent
                 text: "♥"
                 font.pixelSize: 17
@@ -486,6 +492,7 @@ Rectangle {
 
         Label {
             objectName: "musicClock"
+            textFormat: Text.PlainText
             visible: !Audio.isLive && Audio.length > 0
             Layout.preferredWidth: Math.ceil(clockRoom.advanceWidth)
             text: bar.clock(Audio.elapsed) + " / " + bar.clock(Audio.length)
@@ -494,6 +501,7 @@ Rectangle {
         }
         Label {
             objectName: "musicLiveWord"
+            textFormat: Text.PlainText
             // Said because the entry is a broadcast, never because a length
             // has not arrived yet. Read the other way it claimed live for the
             // second at the start of every ordinary track, and went out again

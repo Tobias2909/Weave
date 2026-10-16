@@ -80,6 +80,7 @@ Rectangle {
         height: 34
 
         Label {
+            textFormat: Text.PlainText
             text: "Now playing"
             color: Theme.colors.textMuted
             font.pixelSize: panel.sized(11)
@@ -160,6 +161,7 @@ Rectangle {
                 }
 
                 Label {
+                    textFormat: Text.PlainText
                     anchors.verticalCenter: parent.verticalCenter
                     text: App.detail.channelTitle ? App.detail.channelTitle : ""
                     color: channelHover.hovered ? Theme.colors.text : Theme.colors.textMuted
@@ -175,6 +177,7 @@ Rectangle {
             // panel and the card under the pointer said the same things in
             // two different hands.
             Label {
+                textFormat: Text.PlainText
                 width: parent.width
                 readonly property var facts: [
                     App.detail.startsText ? "Starts " + App.detail.startsText : "",
@@ -266,6 +269,7 @@ Rectangle {
                     Label {
                         id: descriptionMore
                         objectName: "detailDescriptionMore"
+                        textFormat: Text.PlainText
                         visible: descriptionWords.truncated || descriptionBox.open
                         text: descriptionBox.open ? "Show less" : "…more"
                         color: moreHover.hovered ? Theme.colors.text : Theme.colors.textMuted
@@ -285,6 +289,7 @@ Rectangle {
 
             Label {
                 objectName: "detailCommentsHeading"
+                textFormat: Text.PlainText
                 // The description arrives in the same call as the comments, so
                 // until it has, both are being waited for. More comments asked
                 // for under a description already shown are the comments alone.
@@ -299,6 +304,7 @@ Rectangle {
             }
 
             Label {
+                textFormat: Text.PlainText
                 width: parent.width
                 visible: !App.detailLoading && App.detailComments.length === 0
                 text: "No comments to show."

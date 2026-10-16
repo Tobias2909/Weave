@@ -149,6 +149,7 @@ ListView {
 
                 Label {
                     id: rowLength
+                    textFormat: Text.PlainText
                     anchors.centerIn: parent
                     text: queuedRow.modelData.duration || ""
                     color: "#ffffff"
@@ -166,6 +167,7 @@ ListView {
             spacing: queuedRow.compact ? 1 : 3
 
             Label {
+                textFormat: Text.PlainText
                 visible: queuedRow.playing && !queuedRow.compact
                 text: "▶  PLAYING"
                 color: Theme.colors.accent
@@ -175,6 +177,7 @@ ListView {
             }
 
             Label {
+                textFormat: Text.PlainText
                 width: parent.width
                 text: queuedRow.modelData.title
                 color: Theme.colors.text
@@ -188,6 +191,7 @@ ListView {
 
             Label {
                 id: queuedArtist
+                textFormat: Text.PlainText
                 // Whoever made it: an artist of the music service, or for a
                 // video queued from the recommendations its YouTube channel.
                 // Never on the small row that is playing, whose line is mostly
@@ -238,6 +242,7 @@ ListView {
         // Out of the queue, and out of nothing else.
         Label {
             objectName: "queueRowRemove"
+            textFormat: Text.PlainText
             visible: queuedHover.hovered
             anchors.right: parent.right
             anchors.rightMargin: queuedRow.compact ? 8 : 10

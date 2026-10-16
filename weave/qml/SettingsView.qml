@@ -37,6 +37,7 @@ Item {
         spacing: 10
 
         Label {
+            textFormat: Text.PlainText
             text: "Settings"
             color: Theme.colors.text
             font.pixelSize: 18
@@ -76,6 +77,7 @@ Item {
                         spacing: 10
 
                         Label {
+                            textFormat: Text.PlainText
                             text: "Videos"
                             color: Theme.colors.text
                             font.pixelSize: 15
@@ -86,6 +88,7 @@ Item {
                             spacing: 8
 
                             Label {
+                                textFormat: Text.PlainText
                                 width: view.wordWidth
                                 height: 28
                                 text: "Videos play in"
@@ -112,6 +115,7 @@ Item {
 
                         Label {
                             objectName: "videosWords"
+                            textFormat: Text.PlainText
                             width: parent.width
                             text: "In mpv hands every video and stream to your own mpv, in a window "
                                   + "of its own, with your mpv.conf, your scripts and your keys. That "
@@ -135,6 +139,7 @@ Item {
                             spacing: 8
 
                             Label {
+                                textFormat: Text.PlainText
                                 width: view.wordWidth
                                 height: 28
                                 text: "Quality"
@@ -158,6 +163,7 @@ Item {
                         }
 
                         Label {
+                            textFormat: Text.PlainText
                             visible: App.videosInWeave
                             width: parent.width
                             text: "Auto follows the screen the window is on. A height picked here "
@@ -175,6 +181,7 @@ Item {
                             spacing: 8
 
                             Label {
+                                textFormat: Text.PlainText
                                 width: view.wordWidth
                                 height: 28
                                 text: "Captions"
@@ -199,6 +206,7 @@ Item {
                         }
 
                         Label {
+                            textFormat: Text.PlainText
                             visible: App.videosInWeave
                             width: parent.width
                             text: "On shows them in the language last picked with CC on a video, "
@@ -220,6 +228,7 @@ Item {
                             spacing: 8
 
                             Label {
+                                textFormat: Text.PlainText
                                 width: view.kindWidth
                                 height: 28
                                 text: "SponsorBlock"
@@ -246,6 +255,7 @@ Item {
                         // The credit its licence asks for, and what is sent.
                         Label {
                             objectName: "sponsorWords"
+                            textFormat: Text.PlainText
                             visible: App.videosInWeave
                             width: parent.width
                             text: "Skips or marks the parts of a video other viewers have marked, "
@@ -284,6 +294,7 @@ Item {
                                         color: kindRow.modelData.colour
                                     }
                                     Label {
+                                        textFormat: Text.PlainText
                                         anchors.left: kindDot.right
                                         anchors.leftMargin: 8
                                         anchors.right: parent.right
@@ -332,6 +343,7 @@ Item {
                         spacing: 10
 
                         Label {
+                            textFormat: Text.PlainText
                             text: "Appearance"
                             color: Theme.colors.text
                             font.pixelSize: 15
@@ -339,6 +351,7 @@ Item {
                         }
 
                         Label {
+                            textFormat: Text.PlainText
                             width: parent.width
                             text: "A theme is a file. The ones that came with the application "
                                   + "and any dropped into the themes directory are all offered "
@@ -352,6 +365,7 @@ Item {
                             spacing: 8
 
                             Label {
+                                textFormat: Text.PlainText
                                 width: view.wordWidth
                                 height: 20
                                 text: "In use"
@@ -362,6 +376,7 @@ Item {
 
                             Label {
                                 objectName: "currentTheme"
+                                textFormat: Text.PlainText
                                 height: 20
                                 text: Theme.current
                                 color: Theme.colors.text
@@ -425,6 +440,7 @@ Item {
                         SettingsHeading { text: "Themes as files" }
 
                         Label {
+                            textFormat: Text.PlainText
                             width: parent.width
                             text: "A theme is a file of colours and nothing else, so one "
                                   + "can be handed to somebody or taken from them. Yours "
@@ -488,6 +504,7 @@ Item {
                         spacing: 10
 
                         Label {
+                            textFormat: Text.PlainText
                             text: "Your data"
                             color: Theme.colors.text
                             font.pixelSize: 15
@@ -513,6 +530,7 @@ Item {
                         SettingsHeading { text: "Pictures on disk" }
 
                         Label {
+                            textFormat: Text.PlainText
                             width: parent.width
                             text: "Every thumbnail, avatar and banner is kept on disk, so a view "
                                   + "you come back to does not download itself again. Dropping "
@@ -526,6 +544,7 @@ Item {
                             spacing: 8
 
                             Label {
+                                textFormat: Text.PlainText
                                 width: view.wordWidth
                                 height: 28
                                 text: "Pictures"
@@ -536,6 +555,7 @@ Item {
 
                             Label {
                                 objectName: "cacheSize"
+                                textFormat: Text.PlainText
                                 height: 28
                                 text: App.cacheText
                                 color: Theme.colors.text
@@ -548,6 +568,7 @@ Item {
                             spacing: 8
 
                             Label {
+                                textFormat: Text.PlainText
                                 width: view.wordWidth
                                 height: 28
                                 text: "Ceiling"
@@ -612,6 +633,7 @@ Item {
                         SettingsHeading { text: "Music" }
 
                         Label {
+                            textFormat: Text.PlainText
                             width: parent.width
                             text: "The music page has settings of its own: its shelves, your "
                                   + "boxes of songs, how tall its videos are, and what "
@@ -635,6 +657,7 @@ Item {
                         SettingsHeading { text: "Hidden videos" }
 
                         Label {
+                            textFormat: Text.PlainText
                             width: parent.width
                             text: "Hiding a video takes its card out of the feed, out of a "
                                   + "group and out of the suggestions. It stays in any box "
@@ -651,6 +674,7 @@ Item {
 
                             Label {
                                 objectName: "hiddenCount"
+                                textFormat: Text.PlainText
                                 height: 28
                                 text: App.hiddenCount === 0
                                       ? "Nothing is hidden"
@@ -691,6 +715,7 @@ Item {
                         spacing: 10
 
                         Label {
+                            textFormat: Text.PlainText
                             text: "Connections"
                             color: Theme.colors.text
                             font.pixelSize: 15
@@ -701,6 +726,7 @@ Item {
                             spacing: 8
 
                             Label {
+                                textFormat: Text.PlainText
                                 width: view.wordWidth
                                 height: 28
                                 text: "Twitch"
@@ -711,6 +737,7 @@ Item {
 
                             Label {
                                 objectName: "twitchState"
+                                textFormat: Text.PlainText
                                 height: 28
                                 text: App.twitchStatus !== "" ? App.twitchStatus
                                                               : (App.twitchConnected ? "connected"
@@ -733,6 +760,7 @@ Item {
                             spacing: 8
 
                             Label {
+                                textFormat: Text.PlainText
                                 width: view.wordWidth
                                 height: 28
                                 text: "Subscriptions"
@@ -749,6 +777,7 @@ Item {
                         }
 
                         Label {
+                            textFormat: Text.PlainText
                             width: parent.width
                             // Here rather than with the rest of the stored
                             // data, because which cookies the import is read
@@ -767,6 +796,7 @@ Item {
                             spacing: 8
 
                             Label {
+                                textFormat: Text.PlainText
                                 width: view.wordWidth
                                 height: 28
                                 text: "Cookies"
@@ -818,6 +848,7 @@ Item {
 
                         Label {
                             objectName: "cookieSource"
+                            textFormat: Text.PlainText
                             width: parent.width
                             text: App.cookieSource
                             color: Theme.colors.textMuted
@@ -829,6 +860,7 @@ Item {
                             spacing: 8
 
                             Label {
+                                textFormat: Text.PlainText
                                 width: view.wordWidth
                                 height: 20
                                 text: "Music identity"
@@ -839,6 +871,7 @@ Item {
 
                             Label {
                                 objectName: "musicIdentity"
+                                textFormat: Text.PlainText
                                 width: connections.width - view.wordWidth - 8
                                 height: 20
                                 text: App.musicIdentity
@@ -850,6 +883,7 @@ Item {
                         }
 
                         Label {
+                            textFormat: Text.PlainText
                             width: parent.width
                             text: "Only the parts past the plain feed need cookies, and they are "
                                   + "read from a browser profile rather than stored here. "
@@ -867,6 +901,7 @@ Item {
                             spacing: 8
 
                             Label {
+                                textFormat: Text.PlainText
                                 width: view.wordWidth
                                 height: 28
                                 text: "Search suggestions"
@@ -894,6 +929,7 @@ Item {
                         // pause in the typing along with who is typing.
                         Label {
                             objectName: "suggestWords"
+                            textFormat: Text.PlainText
                             width: parent.width
                             text: "While you type in a search box, what you have typed so far is "
                                   + "sent to YouTube after each pause, the way its own search box "
@@ -926,6 +962,7 @@ Item {
                         spacing: 10
 
                         Label {
+                            textFormat: Text.PlainText
                             text: "This copy"
                             color: Theme.colors.text
                             font.pixelSize: 15
@@ -936,6 +973,7 @@ Item {
                             spacing: 8
 
                             Label {
+                                textFormat: Text.PlainText
                                 width: view.wordWidth
                                 height: 20
                                 text: "Running"
@@ -946,6 +984,7 @@ Item {
 
                             Label {
                                 objectName: "runningVersion"
+                                textFormat: Text.PlainText
                                 height: 20
                                 text: App.version
                                 color: Theme.colors.text
@@ -958,6 +997,7 @@ Item {
                             spacing: 8
 
                             Label {
+                                textFormat: Text.PlainText
                                 width: view.wordWidth
                                 height: 28
                                 text: "Newest"
@@ -968,6 +1008,7 @@ Item {
 
                             Label {
                                 objectName: "newestVersion"
+                                textFormat: Text.PlainText
                                 height: 28
                                 // Newer, older, the same, or not asked yet.
                                 text: App.newestWords
@@ -986,6 +1027,7 @@ Item {
                         }
 
                         Label {
+                            textFormat: Text.PlainText
                             width: parent.width
                             text: "The repository is asked once a day whether a newer release has "
                                   + "been published. Nothing is downloaded and nothing is sent but "
