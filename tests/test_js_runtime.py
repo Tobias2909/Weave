@@ -213,9 +213,10 @@ class TheSolver(unittest.TestCase):
         self.assertIn("could not be read", said)
 
     def test_an_unproven_solver_still_names_the_package(self):
+        # What the probe answers when it could not tell, as above.
         ytdlp.solver.cache_clear()
         self.addCleanup(setattr, ytdlp, "solver", ytdlp.solver)
-        ytdlp.solver = lambda: (None, "not a script, so it carries its own")
+        ytdlp.solver = lambda: (False, "whether yt-dlp-ejs is installed could not be read")
         self.assertIn("pip install --user yt-dlp-ejs", ytdlp.challenge_advice())
 
     def test_a_python_without_the_package_is_a_missing_solver(self):
@@ -296,6 +297,23 @@ class WhatTheFailureSays(unittest.TestCase):
         shutil.which = lambda _name: None
         said = ytdlp.challenge_advice()
         self.assertIn("deno", said)
+
+    def test_a_yt_dlp_that_carries_its_own_is_not_told_to_install_it(self):
+        # A single file yt-dlp is not a python script, so whether it holds
+        # the solver cannot be asked, and pip cannot put one into it anyway.
+        # The doctor calls that fine, and the failure must not say otherwise.
+        ytdlp.solver = lambda: (None, "not a script, so it carries its own")
+        ytdlp.js_runtime_args = lambda: ["--js-runtimes", "node:/usr/bin/node"]
+        self.assertEqual(ytdlp.challenge_advice(), "YouTube's challenge went unanswered")
+
+    def test_but_it_is_still_told_about_a_missing_runtime(self):
+        ytdlp.solver = lambda: (None, "not a script, so it carries its own")
+        ytdlp.js_runtime_args = lambda: []
+        self.addCleanup(setattr, shutil, "which", shutil.which)
+        shutil.which = lambda _name: None
+        said = ytdlp.challenge_advice()
+        self.assertIn("deno", said)
+        self.assertNotIn("pip install", said)
 
     def test_a_machine_with_both_is_told_only_what_happened(self):
         ytdlp.solver = lambda: (True, "yt-dlp-ejs 0.8.0")

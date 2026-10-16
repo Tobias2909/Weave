@@ -238,10 +238,11 @@ def challenge_advice() -> str:
     own reads as a cookie problem and is not one.
     """
     have, _ = solver()
-    if have is not True:
-        # Not proven present is enough. yt-dlp has already said the
-        # challenge went unanswered, and the solver is the usual reason,
-        # so naming it beats staying quiet because a probe was unsure.
+    if have is False:
+        # A probe that could not tell already answers False, so an unsure
+        # answer still names the solver. None is a yt-dlp that is no python
+        # script and carries its own copy, which pip cannot reach and the
+        # doctor counts as fine, so that one goes on to the runtime.
         return f"YouTube's challenge went unanswered, {INSTALL_SOLVER}"
     if not js_runtime_args() and not shutil.which("deno"):
         return f"YouTube's challenge went unanswered with no JavaScript runtime, {INSTALL_RUNTIME}"
