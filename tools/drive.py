@@ -1265,6 +1265,15 @@ class Smoke:
                    source_of(find(window, "nowPlayingArt")) == art,
                    source_of(find(window, "nowPlayingArt")))
 
+        # The play button on the middle of the bar, wherever the words and the
+        # settings either side of it end.
+        from PySide6.QtCore import QPointF
+        play = find(window, "playButton")
+        middle = play.mapToScene(QPointF(float(read(play, "width")) / 2, 0)).x()
+        self.check("the play button sits on the middle of the music bar",
+                   abs(middle - float(read(window, "width")) / 2) < 1.5,
+                   f"{middle:.1f} of {float(read(window, 'width')) / 2:.1f}")
+
         # What was painted, rather than what a binding says. A picture that is
         # bound and never drawn is the fault being guarded against.
         if self.shot:

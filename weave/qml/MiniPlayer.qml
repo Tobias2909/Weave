@@ -288,17 +288,25 @@ Rectangle {
         }
     }
 
-    // Inset by the same amount above and below, so the row sits in the middle
-    // of the bar. Room left for the scrub track on the top side alone pushed
-    // the row down and left a band of empty bar over it. Ten clears the track
-    // at its thickest and the handle on it, and the artwork fills the forty
-    // four that are left.
+    // Three groups: what is playing on the left, the buttons that play it in
+    // the middle of the bar, and the settings on the right. Each is inset by
+    // the same amount above and below, so its row sits in the middle of the
+    // bar. Room left for the scrub track on the top side alone pushed the row
+    // down and left a band of empty bar over it. Ten clears the track at its
+    // thickest and the handle on it, and the artwork fills the forty four
+    // that are left.
+    //
+    // The words take whatever the middle leaves them, so a long title shows
+    // more of itself the wider the window.
     RowLayout {
-        anchors.fill: parent
+        id: playingPart
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
         anchors.topMargin: 10
         anchors.bottomMargin: 10
         anchors.leftMargin: 12
-        anchors.rightMargin: 12
+        width: Math.max(0, transport.x - 24 - 12)
         spacing: 12
 
         RoundedImage {
@@ -311,8 +319,7 @@ Rectangle {
         }
 
         ColumnLayout {
-            Layout.preferredWidth: 240
-            Layout.maximumWidth: 320
+            Layout.fillWidth: true
             spacing: 1
 
             Label {
@@ -370,13 +377,52 @@ Rectangle {
             }
         }
 
+    }
+
+    // The clock's room for this track, the widest its digits can come to, so
+    // the time ticking over does not move what is beside it.
+    TextMetrics {
+        id: clockRoom
+        font.pixelSize: 11
+        text: bar.clock(Audio.length).replace(/[0-9]/g, "8") + " / "
+              + bar.clock(Audio.length).replace(/[0-9]/g, "8")
+    }
+
+    // The play button on the middle of the bar, with what goes with it either
+    // side. Pushed left only when the window is too narrow for the settings
+    // on the right to keep clear of it.
+    //
+    // Where the play button sits in the row is worked out from the widths the
+    // row gives what comes before it, never read back from where the row put
+    // it. A row places its items again the moment the row itself is moved,
+    // so a place read back from the row fed the move that placed it: Qt
+    // reported a binding loop on this property.
+    RowLayout {
+        id: transport
+        objectName: "musicTransport"
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.topMargin: 10
+        anchors.bottomMargin: 10
+        spacing: 12
+        readonly property real centred: bar.width / 2
+            - (heartRoom.Layout.preferredWidth + spacing
+               + previousButton.Layout.preferredWidth + spacing
+               + playButton.Layout.preferredWidth / 2)
+        x: Math.round(Math.max(12 + 44 + 12 + 60,
+                               Math.min(centred, settingsPart.x - 24 - width)))
+
         // Kept or not. Grey until it is one of the kept ones, then red.
+        // Its room is kept when there is nothing to keep, so the buttons
+        // beside it never move.
         Item {
+            id: heartRoom
             objectName: "favoriteHeart"
             Layout.preferredWidth: 26
             Layout.preferredHeight: 26
             Layout.alignment: Qt.AlignVCenter
-            visible: (Audio.track.key || "") !== ""
+            opacity: (Audio.track.key || "") !== "" ? 1 : 0
+            enabled: opacity > 0
 
             Text {
                 id: heart
@@ -401,6 +447,7 @@ Rectangle {
         }
 
         FlatButton {
+            id: previousButton
             objectName: "previousButton"
             text: "◀◀"
             hint: "The one before"
@@ -412,6 +459,7 @@ Rectangle {
         FlatButton {
             // Fixed, because the pause and play marks are different widths and
             // everything to the right of it used to shuffle sideways.
+            id: playButton
             objectName: "playButton"
             text: Audio.playing ? "❚❚" : "▶"
             hint: Audio.playing ? "Pause" : "Play"
@@ -437,7 +485,9 @@ Rectangle {
         }
 
         Label {
+            objectName: "musicClock"
             visible: !Audio.isLive && Audio.length > 0
+            Layout.preferredWidth: Math.ceil(clockRoom.advanceWidth)
             text: bar.clock(Audio.elapsed) + " / " + bar.clock(Audio.length)
             color: Theme.colors.textMuted
             font.pixelSize: 11
@@ -455,7 +505,17 @@ Rectangle {
             font.bold: true
         }
 
-        Item { Layout.fillWidth: true }
+    }
+
+    RowLayout {
+        id: settingsPart
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.topMargin: 10
+        anchors.bottomMargin: 10
+        anchors.rightMargin: 12
+        spacing: 12
 
         // Marks rather than words, like the transport beside them. Both are
         // states rather than acts, and a word that is only lit when it is on
