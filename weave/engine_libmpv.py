@@ -278,10 +278,8 @@ class LibmpvEngine(QObject):
 
         @player.event_callback("end-file")
         def _ended(event):
-            data = getattr(event, "data", None)
-            reason = str(getattr(data, "reason", "") or "eof")
             self._roles.pop(_entry_id(event), None)
-            self.ended.emit(reason)
+            self.ended.emit(_end_reason(event))
 
     def _new_file(self) -> None:
         """What belonged to the file before goes with it.
@@ -1041,4 +1039,24 @@ def _subtitle_answered(error, _result) -> None:
 def _entry_id(event) -> int:
     data = getattr(event, "data", None)
     return int(getattr(data, "playlist_entry_id", 0) or 0)
+
+
+# Why a file ended, in mpv's own words, by the number the binding hands over.
+# The player above this is written against the words, the ones the
+# subprocess engine is told over its socket. Handed the number, MEASURED with
+# a file that would not open, an error arrived as "4", and the recovery that
+# answers one never ran: a song whose address stopped being accepted simply
+# went quiet.
+END_REASONS = {0: "eof", 2: "stop", 3: "quit", 4: "error", 5: "redirect"}
+
+
+def _end_reason(event) -> str:
+    data = getattr(event, "data", None)
+    reason = getattr(data, "reason", 0)
+    if isinstance(reason, str):
+        return reason or "eof"
+    try:
+        return END_REASONS.get(int(reason or 0), "unknown")
+    except (TypeError, ValueError):
+        return "unknown"
 

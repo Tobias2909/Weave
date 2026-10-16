@@ -8,6 +8,7 @@ is anywhere to put one.
 
 import time
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 from PySide6.QtCore import QObject
@@ -567,6 +568,37 @@ class WhetherItIsThere(unittest.TestCase):
 
 
 # A sound with no file behind it, so these need nothing but the player itself.
+class WhyAFileEnded(unittest.TestCase):
+    """The binding hands over a number and the player above reads words,
+    the ones the subprocess engine is told over its socket."""
+
+    @staticmethod
+    def reason(event) -> str:
+        from weave.engine_libmpv import _end_reason
+
+        return _end_reason(event)
+
+    def said(self, number) -> str:
+        return self.reason(SimpleNamespace(data=SimpleNamespace(reason=number)))
+
+    def test_the_numbers_become_mpv_s_own_words(self) -> None:
+        self.assertEqual([self.said(n) for n in (0, 2, 3, 4, 5)],
+                         ["eof", "stop", "quit", "error", "redirect"])
+
+    def test_an_error_is_one_the_player_above_recognises(self) -> None:
+        # What went wrong: an error arrived as "4", and the recovery that
+        # answers "error" never ran.
+        self.assertEqual(self.said(4), "error")
+
+    def test_a_number_mpv_does_not_use_is_unknown(self) -> None:
+        self.assertEqual(self.said(1), "unknown")
+        self.assertEqual(self.said(99), "unknown")
+
+    def test_no_reason_at_all_is_the_end_of_the_file(self) -> None:
+        self.assertEqual(self.reason(SimpleNamespace(data=None)), "eof")
+        self.assertEqual(self.said("stop"), "stop")
+
+
 TONE = "av://lavfi:sine=f={hz}:d={seconds}"
 
 
@@ -699,6 +731,17 @@ class TheRealPlaylist(unittest.TestCase):
             "/nowhere/there-is-no-such-picture.mp4"]))
         self.assertEqual(self.one._attached, "",
                          "a picture that would not open is still believed to be there")
+
+    def test_why_a_file_ended_is_said_in_words(self) -> None:
+        """Against the real binding, since the fault was the binding's number
+        reaching a player written against words, which no stub could show."""
+        ended: list = []
+        self.one.ended.connect(ended.append)
+        self.one.load("/nowhere/there-is-no-such-song.mp3")
+        self.assertTrue(self.until(lambda: "error" in ended), f"ended with {ended}")
+        ended.clear()
+        self.one.load(TONE.format(hz=110, seconds=0.3))
+        self.assertTrue(self.until(lambda: "eof" in ended), f"ended with {ended}")
 
 
 if __name__ == "__main__":
