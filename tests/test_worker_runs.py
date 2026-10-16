@@ -1391,9 +1391,10 @@ class WorkerRuns(unittest.TestCase):
             bridge._box_after_read = "PL1"
             bridge._companion_state = "asking"
             bridge._companion_why = ""
-            # The members button crashing has to put itself back to off, which
-            # means reaching the database and the view it is drawn on.
-            bridge._view_channel = "yt:UC1"
+            # The members button crashing has to put itself back to off, on
+            # the channel it was pressed on, whichever one is on screen by now.
+            bridge._members_channel = "yt:UC1"
+            bridge._view_channel = "yt:UC2"
             bridge._db = _MembersDb()
             for signal in ("problemsChanged", "statusChanged", "noticeChanged", "busyChanged",
                            "importChanged", "addChanged", "musicChanged", "detailChanged",

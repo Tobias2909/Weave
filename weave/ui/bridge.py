@@ -570,6 +570,9 @@ class Bridge(QObject):
         self._channel_lists: ChannelPlaylistsFetcher | None = None
         self._channel_playlists_busy = False
         self._channel_members: ChannelMembersFetcher | None = None
+        # The channel that read is about, which need not be the one on screen
+        # by the time it answers.
+        self._members_channel = ""
         self._stream_check: StreamCheck | None = None
         # A press on a card marked for members, asked about before it is
         # refused. What the press was, so the answer can carry it out, and the
@@ -3893,12 +3896,12 @@ class Bridge(QObject):
         if self._channel_members is not None and self._channel_members.isRunning():
             return
         self._set_notice("reading the members tab")
+        self._members_channel = channel_key
         self._channel_members = ChannelMembersFetcher(
             self._db, self._cfg, channel_key, found["ext_id"], self)
         self._channel_members.fetched.connect(self._on_channel_members)
         self._channel_members.absent.connect(self._on_no_membership)
-        self._channel_members.failed.connect(
-            lambda _key, message: self._on_members_failed(message))
+        self._channel_members.failed.connect(self._on_members_failed)
         self._launch(self._channel_members)
 
     @Slot()
@@ -3950,10 +3953,10 @@ class Bridge(QObject):
         self._say_about_members(channel_key, MEMBERS_NONE_YET)
         self._set_status("that channel sells no membership")
 
-    def _on_members_failed(self, message: str) -> None:
+    def _on_members_failed(self, channel_key: str, message: str) -> None:
         self._set_notice("")
-        self._db.set_members_wanted(self._view_channel, False)
-        self._say_about_members(self._view_channel,
+        self._db.set_members_wanted(channel_key, False)
+        self._say_about_members(channel_key,
                                 f"That did not work.\n{message}\nPress Members to try again.")
         self._set_status(f"could not read the members tab, {message}")
 
@@ -7902,7 +7905,7 @@ class Bridge(QObject):
         elif worker is self._channel_members:
             # The button was pressed and nothing came of it, so it goes back
             # to off rather than sitting on with an empty half behind it.
-            self._db.set_members_wanted(self._view_channel, False)
+            self._db.set_members_wanted(self._members_channel, False)
             self._set_notice("")
             self.viewChanged.emit()
         elif worker is self._stream_check:

@@ -588,6 +588,22 @@ class WhatThePressSays(unittest.TestCase):
         self.bridge._view_channel = "yt:UCbbbbbbbbbbbbbbbbbbbbbb"
         self.assertEqual(self.note(), "")
 
+    def test_a_failure_is_about_the_channel_that_failed(self):
+        # The answer can come after the page has moved on to another channel.
+        # Taken as being about the one on screen, it switched that channel's
+        # button off and left the one pressed switched on with nothing in it.
+        other = "yt:UCbbbbbbbbbbbbbbbbbbbbbb"
+        self.db.add_channel(other, "youtube", "UCbbbbbbbbbbbbbbbbbbbbbb", "Two")
+        self.db.set_members_wanted(CHANNEL, True)
+        self.db.set_members_wanted(other, True)
+        self.bridge._view_channel = other
+        self.Bridge._on_members_failed(self.bridge, CHANNEL, "no answer")
+        self.assertFalse(self.db.channel(CHANNEL)["members_wanted"])
+        self.assertTrue(self.db.channel(other)["members_wanted"])
+        self.assertEqual(self.note(), "")
+        self.bridge._view_channel = CHANNEL
+        self.assertIn("no answer", self.note())
+
     def test_the_same_answer_twice_is_still_a_fresh_one(self):
         # The words cannot say "asked again" on their own, and the card's
         # countdown restarts on this number rather than on the text, or a
