@@ -2163,12 +2163,16 @@ class AudioPlayer(QObject):
         return self._paused_for_video
 
     def shutdown(self) -> None:
-        # The picture resolver goes with the rest. Qt treats destroying
-        # a thread that is still running as fatal, and this one outlives
-        # a short session easily: it spends seconds asking for an
-        # address nobody is waiting for any more.
+        # Every resolver still running is cancelled and waited for. Qt treats
+        # destroying a thread that is still running as fatal, and the ones
+        # let go of are the likeliest to be: a picture asked for when the page
+        # closed or the song changed, cancelled and forgotten while it was
+        # still stopping its yt-dlp, took the process down at the exit when
+        # the window was closed straight after. Each was made a child of this
+        # player, which is how all of them are found.
         self._stop_video_resolver()
         held = [self._resolver, *self._next_resolvers, *self._next_video_resolvers]
+        held += [one for one in self.findChildren(QThread) if one not in held]
         for resolver in held:
             if resolver is not None and resolver.isRunning():
                 resolver.cancel()

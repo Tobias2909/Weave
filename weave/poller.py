@@ -2318,6 +2318,8 @@ class MusicHome(Worker):
         found.insert(min(1 + pinned, len(found)), self._own_playlists())
         # Kept, but after the music ones, since those are the real thing now.
         found.append(self._from_youtube())
+        if self.cancelled:
+            return
         self.shelves.emit([shelf for shelf in found if shelf["items"]])
 
     def _own_playlists(self) -> dict:
@@ -2353,7 +2355,10 @@ class MusicHome(Worker):
              *cookie_args(self._cfg),
              "--print", "%(id)s\t%(title)s\t%(channel)s", ":ytrec"])
         try:
-            result = run_process(command, timeout=120)
+            # With the cancel, so closing the window stops it. Without, the
+            # shutdown waited out its turn on this yt-dlp and then destroyed
+            # the thread still running, which Qt answers by aborting.
+            result = run_process(command, cancel=self._cancel, timeout=120)
         except Exception:
             return {"title": "From your YouTube", "items": []}
 

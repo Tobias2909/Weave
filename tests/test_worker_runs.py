@@ -115,6 +115,26 @@ class WorkerRuns(unittest.TestCase):
                 self.assertNotIn(mistake, line, f"{type(worker).__name__} reported {line}")
         return said
 
+    def test_the_music_shelves_can_be_stopped(self):
+        """Its own yt-dlp is handed the cancel like every other one. Without
+        it, the window closing waited out its turn and then destroyed the
+        thread still running, which Qt answers by aborting."""
+        from weave import cookies
+        from weave.process import Result
+
+        asked = []
+
+        def run(command, cancel=None, timeout=0):
+            asked.append(cancel)
+            return Result(0, "", "")
+
+        self.patch(poller, "run_process", run)
+        self.patch(cookies, "args", lambda _cfg: [])
+        worker = poller.MusicHome(self.cfg)
+        worker._from_youtube()
+        self.assertEqual(len(asked), 1)
+        self.assertIs(asked[0], worker._cancel)
+
     def test_companion_fetcher(self):
         from weave.sources import watchnext
 

@@ -5,10 +5,11 @@ test say what mpv reported back. What mpv really does is pinned down in
 `test_engine.py` against the real thing.
 """
 
+import time
 import unittest
 from unittest import mock
 
-from PySide6.QtCore import QCoreApplication, QEventLoop, QObject, QTimer, Signal
+from PySide6.QtCore import QCoreApplication, QEventLoop, QObject, QThread, QTimer, Signal
 
 from weave.audio import (
     ADDRESS_MARGIN_S,
@@ -24,6 +25,7 @@ from weave.audio import (
 )
 from weave.config import Config
 from weave.engine import NEXT
+from weave.process import Cancelled
 
 _app = QCoreApplication.instance() or QCoreApplication([])
 
@@ -928,6 +930,50 @@ class HeldDown(_Base):
         self.player._queue[0]["live"] = True
         self.assertFalse(self.player.holdFast(True))
         self.assertEqual(self.engine.only("speed"), [])
+
+
+class TheWindowClosing(_Base):
+    """Every resolver still stopping is waited for before the player goes.
+
+    Qt aborts the whole process when a thread that is still running is
+    destroyed. A picture's resolver cancelled and forgotten, because the page
+    closed or the window did, was still stopping its yt-dlp when the player
+    went, and the process dumped core on the way out.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.queue("aaa")
+
+        def stopping_slowly(_command, cancel=None, timeout=0):
+            # What a yt-dlp asked to stop looks like from here: it takes a
+            # moment to go.
+            cancel.wait(30)
+            time.sleep(0.3)
+            raise Cancelled("cancelled")
+
+        for name, stand_in in (("run_process", stopping_slowly),
+                               ("cookie_args", lambda _cfg: []),
+                               ("prepare", lambda command: command)):
+            patcher = mock.patch(f"weave.audio.{name}", stand_in)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.player._video_wanted = True
+
+    def still_running(self):
+        return [one for one in self.player.findChildren(QThread) if one.isRunning()]
+
+    def test_a_picture_still_being_looked_for(self):
+        self.player._start_video()
+        self.assertTrue(self.still_running(), "nothing was looked for")
+        self.player.shutdown()
+        self.assertEqual(self.still_running(), [])
+
+    def test_and_one_let_go_of_when_the_page_closed(self):
+        self.player._start_video()
+        self.player._stop_video_resolver()
+        self.player.shutdown()
+        self.assertEqual(self.still_running(), [])
 
 
 class Addresses(unittest.TestCase):
