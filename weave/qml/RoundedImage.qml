@@ -16,6 +16,8 @@ Item {
     id: root
 
     property alias source: picture.source
+    // Whether the picture has arrived, for whoever wants to wait for it.
+    readonly property alias status: picture.status
     property real radius: 6
     property bool circle: false
     property int fillMode: Image.PreserveAspectCrop

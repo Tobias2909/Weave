@@ -8,7 +8,8 @@ Rectangle {
     id: bar
     objectName: "liveBar"
 
-    readonly property bool hasStreams: App.liveStreams.length > 0
+    readonly property int count: App.liveModel.count
+    readonly property bool hasStreams: count > 0
 
     // Nothing is shown until the first check has answered. Twitch takes a
     // few seconds and YouTube is instant, so revealing on the first thing to
@@ -73,7 +74,7 @@ Rectangle {
             // The bar is only up when there is something live or when Twitch
             // wants a login, so there is no third thing left to say.
             text: bar.hasStreams
-                  ? "Live now  ·  " + App.liveStreams.length
+                  ? "Live now  ·  " + bar.count
                   : "Twitch is not connected"
             color: Theme.colors.textMuted
             font.pixelSize: 11
@@ -116,6 +117,7 @@ Rectangle {
 
     ListView {
         id: strip
+        objectName: "liveStrip"
         visible: bar.expanded && bar.hasStreams
         anchors.top: heading.bottom
         anchors.left: parent.left
@@ -127,7 +129,13 @@ Rectangle {
         orientation: ListView.Horizontal
         spacing: 8
         clip: true
-        model: App.liveStreams
+        // Changed where they stand on every check rather than handed over
+        // anew, so a card lives as long as its stream does and the strip stays
+        // where it was scrolled to. No current card, which nothing here uses
+        // and which a view would otherwise carry along and scroll back to.
+        model: App.liveModel
+        currentIndex: -1
+        keyNavigationEnabled: false
 
         // No visible bar. The wheel scrolls it and a bar across a band this
         // short is more clutter than help.
@@ -135,7 +143,14 @@ Rectangle {
 
         delegate: Rectangle {
             id: streamCard
-            required property var modelData
+            required property string channelKey
+            required property string platform
+            required property string name
+            required property string title
+            required property string game
+            required property string viewersText
+            required property string thumbnail
+            required property string avatar
 
             // Sized to what it holds. The thumbnail fills the card's height and
             // the text beside it is vertically centred, so the card has no
@@ -146,7 +161,7 @@ Rectangle {
 
             // Which platform, said with colour rather than with a badge. Kept
             // to an edge and a tinted border so a card is never washed in it.
-            readonly property color mark: modelData.platform === "twitch"
+            readonly property color mark: platform === "twitch"
                                           ? Theme.colors.twitch : Theme.colors.youtube
 
             width: pictureWidth + inset * 3 + 168
@@ -159,8 +174,7 @@ Rectangle {
                           : Qt.rgba(mark.r, mark.g, mark.b, 0.35)
 
             HoverHandler { id: cardHover }
-            TapHandler { onTapped: App.playLive(streamCard.channelKeyOf) }
-            readonly property string channelKeyOf: modelData.channelKey
+            TapHandler { onTapped: App.playLive(streamCard.channelKey) }
 
             Item {
                 id: picture
@@ -185,7 +199,7 @@ Rectangle {
                 // be, which is the same thing every other client does with it.
                 Rectangle {
                     objectName: "streamAvatarRing"
-                    visible: modelData.avatar !== ""
+                    visible: streamCard.avatar !== ""
                     anchors.left: parent.left
                     anchors.bottom: parent.bottom
                     anchors.margins: 4
@@ -200,14 +214,67 @@ Rectangle {
                         anchors.fill: parent
                         anchors.margins: 2
                         circle: true
-                        source: modelData.avatar
+                        source: streamCard.avatar
                     }
                 }
 
+                // The picture on the card, and the next one coming in over
+                // it. A Twitch frame is made again every five minutes and
+                // arrives under a new address, and a picture whose address
+                // simply changed would be empty for as long as the new one
+                // took to come. So the new one loads unseen, fades in over the
+                // old, and only then becomes the one underneath. One that
+                // cannot be had leaves the old one up.
+                property string settled: ""
+
+                function arrived() {
+                    if (nextFrame.status !== Image.Ready
+                            || picture.settled === streamCard.thumbnail)
+                        return
+                    if (picture.settled === "") {
+                        picture.settled = streamCard.thumbnail
+                        return
+                    }
+                    fadeIn.restart()
+                }
+
                 RoundedImage {
+                    objectName: "streamFrame"
                     anchors.fill: parent
                     radius: 6
-                    source: modelData.thumbnail
+                    source: picture.settled
+                }
+
+                RoundedImage {
+                    id: nextFrame
+                    objectName: "streamNextFrame"
+                    anchors.fill: parent
+                    radius: 6
+                    source: streamCard.thumbnail
+                    opacity: 0
+                    visible: opacity > 0
+                    // The address is changed before the picture is looked
+                    // for, so a picture already at hand is only Ready a
+                    // moment later, and says nothing as it becomes so.
+                    onSourceChanged: Qt.callLater(picture.arrived)
+                    onStatusChanged: picture.arrived()
+                }
+
+                NumberAnimation {
+                    id: fadeIn
+                    target: nextFrame
+                    property: "opacity"
+                    from: 0
+                    to: 1
+                    duration: 450
+                    easing.type: Easing.InOutQuad
+                    // The picture underneath takes the new one, which is
+                    // already loaded, so it is drawn at once, and the one on
+                    // top can go without a gap between them.
+                    onFinished: {
+                        picture.settled = streamCard.thumbnail
+                        nextFrame.opacity = 0
+                    }
                 }
 
                 // Handed to mpv and not yet on screen. A tile carries a
@@ -215,7 +282,7 @@ Rectangle {
                 // matches against here.
                 Rectangle {
                     id: startingWash
-                    visible: App.startingKey === streamCard.channelKeyOf
+                    visible: App.startingKey === streamCard.channelKey
                     anchors.fill: parent
                     radius: 6
                     color: Qt.rgba(0, 0, 0, 0.55)
@@ -280,7 +347,7 @@ Rectangle {
                     Label {
                         width: parent.width
                         anchors.verticalCenter: parent.verticalCenter
-                        text: modelData.name
+                        text: streamCard.name
                         color: Theme.colors.text
                         font.pixelSize: 13
                         font.weight: Font.DemiBold
@@ -290,7 +357,7 @@ Rectangle {
 
                 Label {
                     width: parent.width
-                    text: modelData.title
+                    text: streamCard.title
                     color: Theme.colors.textMuted
                     font.pixelSize: 11
                     wrapMode: Text.Wrap
@@ -305,9 +372,9 @@ Rectangle {
                     elide: Text.ElideRight
                     text: {
                         var parts = []
-                        if (modelData.game !== "") parts.push(modelData.game)
-                        if (modelData.viewersText !== "")
-                            parts.push(modelData.viewersText + " watching")
+                        if (streamCard.game !== "") parts.push(streamCard.game)
+                        if (streamCard.viewersText !== "")
+                            parts.push(streamCard.viewersText + " watching")
                         return parts.join("  ·  ")
                     }
                 }

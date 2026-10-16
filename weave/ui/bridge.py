@@ -33,7 +33,7 @@ from .. import browsers, cookies, ids
 from .. import paths, tokens
 from ..config import Config
 from ..db import GROUP_SHOWS, GROUP_SHOWS_ALL, GROUP_SHOWS_STREAMS, Database
-from ..imagecache import SECONDS_PER_DAY, plain_source, qml_source, square_source
+from ..imagecache import SECONDS_PER_DAY, live_source, plain_source, qml_source, square_source
 from ..sources import flatlist
 from ..sources import playlists as playlist_source
 from ..sources import release as release_source
@@ -82,6 +82,7 @@ from ..poller import (
     UpdateCheck,
 )
 from .feed_model import FeedModel
+from .live_model import LiveModel
 from .navigation import History, MusicList, TrackCache
 
 ALL = "all"
@@ -403,6 +404,12 @@ class Bridge(QObject):
         # Twitch takes a few seconds while YouTube is there at once, and a bar
         # that appears and then grows again a moment later looks broken.
         self._live_ready = False
+        # The cards of the live bar, changed where they stand on every check.
+        self._live_model = LiveModel(self)
+        # When the bar last asked for fresh frames. Held still while the bar
+        # is rolled up, so a bar nobody can see fetches no pictures.
+        self._live_frames_at = time.time()
+        self.liveChanged.connect(self._refresh_live)
         self._twitch: TwitchLogin | None = None
         self._twitch_status = ""
         self._twitch_needs_login = False
@@ -1188,10 +1195,26 @@ class Bridge(QObject):
     canGoBack = Property(bool, _get_can_go_back, notify=navChanged)
     canGoForward = Property(bool, _get_can_go_forward, notify=navChanged)
 
-    def _get_live(self) -> list:
+    def _live_rows(self) -> list[dict]:
+        if not self._live_collapsed:
+            self._live_frames_at = time.time()
         rows = []
+        seen = set()
         for row in self._db.live_now():
+            # A channel can be live twice on YouTube, so a broadcast is told
+            # apart by its video where it has one.
+            key = row.get("video_key") or row["channel_key"]
+            if key in seen:
+                continue
+            seen.add(key)
+            # Only a Twitch frame changes while the stream runs, so only that
+            # is asked for again. A YouTube stream keeps the picture it was
+            # given; see imagecache.LIVE_PICTURE_S.
+            picture = (live_source(row.get("thumbnail_url"), self._live_frames_at)
+                       if row["platform"] == "twitch"
+                       else qml_source(row.get("thumbnail_url")))
             rows.append({
+                "id": key,
                 "channelKey": row["channel_key"],
                 "platform": row["platform"],
                 "login": row.get("login") or "",
@@ -1200,10 +1223,13 @@ class Bridge(QObject):
                 "game": row.get("game") or "",
                 "viewers": int(row.get("viewers") or 0),
                 "viewersText": fmt.count_text(row.get("viewers") or None),
-                "thumbnail": qml_source(row.get("thumbnail_url")),
+                "thumbnail": picture,
                 "avatar": qml_source(row.get("avatar_url")),
             })
         return rows
+
+    def _refresh_live(self) -> None:
+        self._live_model.show(self._live_rows())
 
     def _get_twitch_status(self) -> str:
         return self._twitch_status
@@ -1211,7 +1237,7 @@ class Bridge(QObject):
     def _get_twitch_needs_login(self) -> bool:
         return self._twitch_needs_login
 
-    liveStreams = Property("QVariantList", _get_live, notify=liveChanged)
+    liveModel = Property(QObject, lambda self: self._live_model, constant=True)
     twitchStatus = Property(str, _get_twitch_status, notify=twitchChanged)
     twitchNeedsLogin = Property(bool, _get_twitch_needs_login, notify=twitchChanged)
     twitchConnected = Property(bool, _get_twitch_connected, notify=twitchChanged)
@@ -7539,7 +7565,7 @@ class Bridge(QObject):
 
     @Slot(str)
     def playLive(self, channel_key: str) -> None:
-        row = next((entry for entry in self._get_live()
+        row = next((entry for entry in self._live_model.rows()
                     if entry["channelKey"] == channel_key), None)
         if not row:
             return

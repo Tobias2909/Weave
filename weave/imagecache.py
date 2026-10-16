@@ -115,6 +115,25 @@ _VIDEO_ID = re.compile(r"^https://i\d?\.ytimg\.com/vi/([A-Za-z0-9_-]{11})/")
 # 2048 is above the widest thing Weave draws, which is a channel banner.
 MAX_EDGE = 2048
 
+# A Twitch stream's picture is a frame of the stream, made again every five
+# minutes under the same address for as long as it runs, and the same address
+# again the next time that channel goes live. MEASURED: Cache-Control
+# max-age=300, and all eight streams sampled showed a new frame within four
+# minutes. Kept like any other picture, a card showed the frame from whenever
+# its address was first fetched, for up to a week, which is how the opening
+# screen most streams begin on stayed up for the whole broadcast.
+#
+# So a frame is handed to the window with the five minutes it belongs to
+# behind a mark, which is cut off here before anything is asked. The next five
+# minutes are a new address to the window, which asks again, and the cache
+# keeps one copy per stream, fetched once in each five minutes.
+#
+# A YouTube stream is not marked. Its live pictures were sampled every minute
+# for a quarter of an hour on three streams and never changed, so asking again
+# would only fetch the same picture.
+LIVE_PICTURE_S = 300
+LIVE_MARK = "#live="
+
 # What the settings page offers as a ceiling, in megabytes. The default is in
 # the config, since it is a number a person may want to read there; these are
 # the sizes it can be moved to from the window. The low end is about what a
@@ -250,6 +269,25 @@ def qml_source(url: str | None) -> str:
     return f"image://{PROVIDER_ID}/{url}"
 
 
+def live_source(url: str | None, now: float | None = None) -> str:
+    """A stream's frame wrapped for the cache, marked with the five minutes
+    it belongs to, so the window asks again once they are up."""
+    wrapped = qml_source(url)
+    if not wrapped:
+        return ""
+    when = time.time() if now is None else now
+    return f"{wrapped}{LIVE_MARK}{int(when // LIVE_PICTURE_S)}"
+
+
+def _unmarked(image_id: str) -> tuple[str, int | None]:
+    """The address to fetch, and the five minutes a frame was asked for, or
+    None for any other picture."""
+    url, mark, slot = image_id.partition(LIVE_MARK)
+    if mark and slot.isdigit():
+        return url, int(slot)
+    return image_id, None
+
+
 def plain_source(value: str | None) -> str:
     """The picture address without the wrapper, whether it had one or not.
 
@@ -295,6 +333,7 @@ class _Response(QQuickImageResponse, QRunnable):
                  reporter: Reporter | None = None) -> None:
         QQuickImageResponse.__init__(self)
         QRunnable.__init__(self)
+        url, self._slot = _unmarked(url)
         self._url = url
         self._directory = directory
         self._path = path_for(directory, url)
@@ -311,6 +350,10 @@ class _Response(QQuickImageResponse, QRunnable):
         try:
             if not self._load_from_disk() and not self._gave_up_recently():
                 self._download()
+            # A stream's frame from five minutes ago beats a hole while the
+            # new one cannot be had.
+            if self._image.isNull() and self._slot is not None:
+                self._load_from_disk(any_age=True)
         except Exception as exc:
             self._remember(type(exc).__name__)
         # No error string on purpose. Qt logs one line per failed picture, and
@@ -319,9 +362,14 @@ class _Response(QQuickImageResponse, QRunnable):
 
     def _fresh(self) -> bool:
         try:
-            return time.time() - self._path.stat().st_mtime < self._ttl
+            kept_at = self._path.stat().st_mtime
         except OSError:
             return False
+        # A frame is good for the five minutes it was asked for, and one kept
+        # in any earlier five minutes is the frame being replaced.
+        if self._slot is not None:
+            return kept_at >= self._slot * LIVE_PICTURE_S
+        return time.time() - kept_at < self._ttl
 
     def _marked(self) -> tuple[str, int]:
         """What was written down last time this picture was asked for, as the
@@ -369,8 +417,8 @@ class _Response(QQuickImageResponse, QRunnable):
             if gone:
                 self._reporter.missing.emit(gone)
 
-    def _load_from_disk(self) -> bool:
-        if not self._fresh():
+    def _load_from_disk(self, any_age: bool = False) -> bool:
+        if not any_age and not self._fresh():
             return False
         image = _read(QImageReader(str(self._path)))
         if image.isNull():

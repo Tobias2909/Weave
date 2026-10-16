@@ -585,3 +585,119 @@ class WhichSizesAlwaysExist(unittest.TestCase):
         # meant to stop those being believed.
         self.assertTrue(imagecache.always_made("https://yt3.googleusercontent.com/x=s512"))
         self.assertTrue(imagecache.always_made(""))
+
+
+# A Twitch frame is made again every five minutes under the same address, so
+# the window asks for it marked with the five minutes it belongs to. The cache
+# must fetch the bare address, once in each five minutes, keep one copy, and
+# show the frame before when the new one cannot be had.
+LIVE = """
+import os, sys, tempfile, time
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+from pathlib import Path
+from PySide6.QtCore import QBuffer, QIODevice
+from PySide6.QtGui import QGuiApplication, QImage
+app = QGuiApplication([])
+from weave import imagecache
+
+image = QImage(4, 4, QImage.Format.Format_RGB32)
+image.fill(0x336699)
+sink = QBuffer()
+sink.open(QIODevice.OpenModeFlag.WriteOnly)
+image.save(sink, "PNG")
+payload = bytes(sink.data().data())
+
+asked = []
+
+
+class Found:
+    status_code = 200
+    content = payload
+
+
+class Broken:
+    status_code = 500
+    content = b""
+
+
+def answering(what):
+    def get(url, **kwargs):
+        asked.append(url)
+        return what()
+    return get
+
+
+frame = "https://pictures.invalid/previews-ttv/live_user_someone-440x248.jpg"
+now = int(time.time() // imagecache.LIVE_PICTURE_S)
+with tempfile.TemporaryDirectory() as folder:
+    root = Path(folder) / "images"
+    kept = imagecache.path_for(root, frame)
+    imagecache.requests.get = answering(Found)
+
+    imagecache._Response(f"{frame}{imagecache.LIVE_MARK}{now}", root, 3600).run()
+    print("first", len(asked), asked[-1] == frame, kept.exists())
+
+    imagecache._Response(f"{frame}{imagecache.LIVE_MARK}{now}", root, 3600).run()
+    print("again", len(asked))
+
+    earlier = now * imagecache.LIVE_PICTURE_S - 10
+    os.utime(kept, (earlier, earlier))
+    imagecache._Response(f"{frame}{imagecache.LIVE_MARK}{now}", root, 3600).run()
+    print("older", len(asked))
+
+    os.utime(kept, (earlier, earlier))
+    imagecache.requests.get = answering(Broken)
+    imagecache.RETRY_AFTER_S = 0
+    served = imagecache._Response(f"{frame}{imagecache.LIVE_MARK}{now}", root, 3600)
+    served.run()
+    print("broken", served._image.isNull())
+    print("files", sum(1 for path in root.rglob("*") if path.is_file() and path.suffix == ""))
+"""
+
+
+class AStreamFrame(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        done = subprocess.run([sys.executable, "-c", LIVE],
+                              cwd=Path(__file__).resolve().parent.parent,
+                              capture_output=True, text=True, timeout=120)
+        assert done.returncode == 0, done.stderr[-2000:]
+        cls.out = done.stdout
+        cls.said = dict(line.split(" ", 1) for line in done.stdout.splitlines() if " " in line)
+
+    def test_the_bare_address_is_fetched_and_kept(self):
+        self.assertEqual(self.said.get("first"), "1 True True", self.out)
+
+    def test_once_in_each_five_minutes(self):
+        self.assertEqual(self.said.get("again"), "1", self.out)
+
+    def test_a_frame_from_earlier_five_minutes_is_fetched_again(self):
+        self.assertEqual(self.said.get("older"), "2", self.out)
+
+    def test_the_frame_before_stays_up_when_the_new_one_cannot_be_had(self):
+        self.assertEqual(self.said.get("broken"), "False", self.out)
+
+    def test_one_copy_per_stream(self):
+        # Pictures only, not the failure log beside them.
+        self.assertEqual(self.said.get("files"), "1", self.out)
+
+
+class MarkingAFrame(unittest.TestCase):
+    url = "https://pictures.invalid/previews-ttv/live_user_someone-440x248.jpg"
+
+    def test_the_five_minutes_follow_the_clock(self):
+        step = imagecache.LIVE_PICTURE_S
+        self.assertEqual(imagecache.live_source(self.url, 10 * step + 1),
+                         imagecache.qml_source(self.url) + imagecache.LIVE_MARK + "10")
+        self.assertEqual(imagecache.live_source(self.url, 11 * step - 1),
+                         imagecache.live_source(self.url, 10 * step))
+        self.assertNotEqual(imagecache.live_source(self.url, 11 * step),
+                            imagecache.live_source(self.url, 10 * step))
+
+    def test_no_picture_stays_no_picture(self):
+        self.assertEqual(imagecache.live_source("", 0), "")
+
+    def test_the_mark_comes_off_before_anything_is_asked(self):
+        self.assertEqual(imagecache._unmarked(self.url + imagecache.LIVE_MARK + "12"),
+                         (self.url, 12))
+        self.assertEqual(imagecache._unmarked(self.url), (self.url, None))

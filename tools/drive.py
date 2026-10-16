@@ -4009,6 +4009,59 @@ class Smoke:
         bridge.liveChanged.emit()
         settle(0.4)
 
+    def every_live_card(self, bridge, window) -> None:
+        """A check leaves the cards where they are.
+
+        Every check used to hand the bar a new list, and a bar scrolled along
+        to find somebody was sent back to its start each time: 900 px to 0,
+        measured.
+        """
+        from weave import paths
+        from weave.db import Database
+
+        art = "https://pictures.invalid/live-frame.jpg"
+        db = Database(paths.DB_FILE)
+        rows = []
+        for index in range(14):
+            login = f"allstreamer{index:02d}"
+            db.add_channel(f"twitch:{login}", "twitch", login, f"All Streamer {index}", art)
+            rows.append({"channel_key": f"twitch:{login}", "login": login,
+                         "display_name": f"All Streamer {index}", "title": "A stream",
+                         "game": "A game", "viewers": 2000 - index * 10,
+                         "started_at": 1, "thumbnail_url": art})
+        db.replace_live("twitch", rows)
+        db.close()
+        bridge._live_ready = True
+        bridge._live_collapsed = False
+        bridge.liveChanged.emit()
+        settle(1.0)
+
+        live = find(window, "liveBar")
+        strip = find(window, "liveStrip")
+        write(strip, "contentX", 300.0)
+        settle(0.2)
+        db = Database(paths.DB_FILE)
+        with db.conn as conn:
+            conn.execute("UPDATE live_streams SET viewers = viewers + 7")
+        db.close()
+        bridge.liveChanged.emit()
+        settle(0.4)
+        self.check("a check leaves a scrolled bar where it was",
+                   abs(float(read(strip, "contentX")) - 300) < 1,
+                   f"contentX {read(strip, 'contentX')}")
+
+        twitch = [row["thumbnail"] for row in bridge._live_model.rows()]
+        self.check("a Twitch frame is asked for again every five minutes",
+                   twitch and all("#live=" in picture for picture in twitch),
+                   twitch[0] if twitch else "no rows")
+
+        db = Database(paths.DB_FILE)
+        db.replace_live("twitch", [])
+        db.close()
+        bridge._live_ready = False
+        bridge.liveChanged.emit()
+        settle(0.4)
+
     def following(self, bridge, window) -> None:
         """Following a channel by name, which the plus above the list offers.
 
@@ -4934,6 +4987,7 @@ class Smoke:
         self.music_favourites_anywhere(bridge, window)
         self.bar(bridge, window)
         self.live_cards(bridge, window)
+        self.every_live_card(bridge, window)
         self.following(bridge, window)
         self.boxes(bridge, window)
         self.wizard(bridge, window)
