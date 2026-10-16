@@ -4,6 +4,7 @@ The difficulty is not the colours, it is that any two can be chosen and most
 pairs make text nobody can read. So what is asserted here is mostly contrast.
 """
 
+import shutil
 import unittest
 
 from weave import palette
@@ -90,14 +91,33 @@ class WritingItOut(unittest.TestCase):
         from weave import themes
 
         made = palette.from_dots("#101216", "#7c5cff")
-        path = Path(tempfile.mkdtemp()) / "made.toml"
-        path.write_text(palette.as_toml("Made Up", made), encoding="utf-8")
-        loaded = themes.load_file(path)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "made.toml"
+            path.write_text(palette.as_toml("Made Up", made), encoding="utf-8")
+            loaded = themes.load_file(path)
         self.assertIsNotNone(loaded)
         self.assertEqual(loaded.name, "Made Up")
         self.assertEqual(loaded.colors, made["colors"])
         self.assertEqual(len(loaded.gradient["stops"]), 3)
         self.assertEqual(loaded.problems, [])
+
+    def test_any_name_reads_back_as_itself(self) -> None:
+        # The name went into the file between quotes as it was, so a quote or
+        # a backslash in it made a file that could not be read, and the theme
+        # just saved came back with no colours under the name of its file.
+        import tempfile
+        from pathlib import Path
+
+        from weave import themes
+
+        made = palette.from_dots("#101216", "#7c5cff")
+        for name in ('Say "hello"', "back\\slash", "tab\there", "Ünïcødé 🌅", "a\x7fb"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / "made.toml"
+                path.write_text(palette.as_toml(name, made), encoding="utf-8")
+                loaded = themes.load_file(path)
+                self.assertEqual(loaded.name, name)
+                self.assertEqual(loaded.problems, [])
 
     def test_a_name_cannot_decide_where_the_file_lands(self) -> None:
         from weave import themes
@@ -151,6 +171,7 @@ class KeepingAndThrowingAway(unittest.TestCase):
         from weave import themes
 
         self.home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.home, True)
         self._was = themes.user_dir
         themes.user_dir = lambda: self.home / "themes"
 
@@ -204,6 +225,8 @@ class HandingThemesAround(unittest.TestCase):
 
         self.home = Path(tempfile.mkdtemp())
         self.away = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.home, True)
+        self.addCleanup(shutil.rmtree, self.away, True)
         self._was = themes.user_dir
         themes.user_dir = lambda: self.home / "themes"
         (self.home / "themes").mkdir(parents=True, exist_ok=True)

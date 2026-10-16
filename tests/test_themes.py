@@ -104,6 +104,22 @@ class Loading(unittest.TestCase):
         self.assertEqual(got.gradient["stops"][0]["color"], "#ffffff")
         self.assertEqual(got.gradient["angle"], 40.0)
 
+    def test_colours_that_are_not_a_table_still_load(self):
+        # Written as one line rather than a table of roles, it took the whole
+        # window down before anything was drawn, and the themes command too.
+        for body in ('colors = "red"', "colors = [1, 2]", "colors = 7"):
+            with self.subTest(body=body):
+                got = self.write(f'name = "T"\n{body}\n')
+                self.assertEqual(got.colors, themes.FALLBACK)
+                self.assertTrue(got.problems)
+
+    def test_a_gradient_that_is_not_a_table_still_loads(self):
+        for body in ('gradient = "sunset"', "gradient = [1, 2]", "gradient = 7"):
+            with self.subTest(body=body):
+                got = self.write(f'name = "T"\n{body}\n')
+                self.assertIsNone(got.gradient)
+                self.assertTrue(got.problems)
+
     def test_no_gradient_at_all_is_fine(self):
         self.assertIsNone(self.write('name = "T"\n[colors]\naccent = "#ffffff"\n').gradient)
 

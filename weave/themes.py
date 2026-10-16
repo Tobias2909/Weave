@@ -70,9 +70,14 @@ def user_dir() -> Path:
     return paths.THEMES_DIR
 
 
-def _colours(raw: dict, problems: list[str]) -> dict[str, str]:
+def _colours(raw: object, problems: list[str]) -> dict[str, str]:
     colors = dict(FALLBACK)
-    for role, value in (raw or {}).items():
+    if raw is None:
+        return colors
+    if not isinstance(raw, dict):
+        problems.append("colors is not a table of roles")
+        return colors
+    for role, value in raw.items():
         if role not in ROLES:
             problems.append(f"{role} is not a colour this interface uses")
             continue
@@ -83,8 +88,11 @@ def _colours(raw: dict, problems: list[str]) -> dict[str, str]:
     return colors
 
 
-def _gradient(raw: dict | None, problems: list[str]) -> dict | None:
+def _gradient(raw: object, problems: list[str]) -> dict | None:
     if not raw:
+        return None
+    if not isinstance(raw, dict):
+        problems.append("gradient is not a table")
         return None
     stops = raw.get("stops")
     if not isinstance(stops, list) or len(stops) < 2:

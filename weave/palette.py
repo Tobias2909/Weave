@@ -198,9 +198,23 @@ def from_dots(ground: str, accent: str, second: str | None = None) -> dict:
     return {"colors": colours, "gradient": gradient}
 
 
+def _quoted(text: str) -> str:
+    """Words as a TOML string that reads back as the same words, whatever
+    quotes, backslashes or control characters they hold."""
+    kept = []
+    for ch in text:
+        if ch in '"\\':
+            kept.append("\\" + ch)
+        elif ch != "\t" and (ord(ch) < 0x20 or ord(ch) == 0x7F):
+            kept.append(f"\\u{ord(ch):04x}")
+        else:
+            kept.append(ch)
+    return '"' + "".join(kept) + '"'
+
+
 def as_toml(name: str, made: dict) -> str:
     """The theme as a file, in the shape the ones that ship are written in."""
-    lines = [f'name = "{name}"', "", "[colors]"]
+    lines = [f"name = {_quoted(name)}", "", "[colors]"]
     lines += [f'{role} = "{value}"' for role, value in made["colors"].items()]
     gradient = made.get("gradient")
     if gradient:
