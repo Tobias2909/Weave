@@ -1,0 +1,7 @@
+# What the source archive carries beyond the package itself, so the suite can
+# be run from it: the tests, the window driver the walk uses, and the example
+# config they hold to the defaults.
+include config.example.toml
+graft tests
+graft tools
+global-exclude __pycache__ *.py[cod]
