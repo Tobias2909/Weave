@@ -29,6 +29,7 @@ import hashlib
 import os
 import re
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -159,13 +160,20 @@ def _read(reader: QImageReader) -> QImage:
     return reader.read()
 
 
+# Pictures are fetched on a pool of threads, and a bad minute on the network
+# fails many at once. The log is read, added to and written back whole, so two
+# of them doing that together lost one of the two lines.
+_record_lock = threading.Lock()
+
+
 def _record(directory: Path, url: str, reason: str) -> None:
     try:
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / FAILURE_LOG
-        lines = path.read_text().splitlines() if path.exists() else []
-        lines.append(f"{int(time.time())}\t{reason}\t{url}")
-        path.write_text("\n".join(lines[-MAX_LOGGED:]) + "\n")
+        with _record_lock:
+            lines = path.read_text().splitlines() if path.exists() else []
+            lines.append(f"{int(time.time())}\t{reason}\t{url}")
+            path.write_text("\n".join(lines[-MAX_LOGGED:]) + "\n")
     except OSError:
         pass
 

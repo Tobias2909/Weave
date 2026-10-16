@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -489,6 +490,25 @@ class FailureRecord(unittest.TestCase):
         for n in range(imagecache.MAX_LOGGED + 40):
             imagecache._record(self.dir, f"https://x/{n}.jpg", "ConnectionError")
         self.assertEqual(len(imagecache.failures(self.dir)), imagecache.MAX_LOGGED)
+
+    def test_failures_at_the_same_moment_are_all_kept(self):
+        # Pictures are fetched on a pool of threads, and a bad minute on the
+        # network fails a page of them at once. Each one read the log, added
+        # its line and wrote the log back, so most lines were lost: MEASURED,
+        # 19 to 44 of 200 kept when eight threads wrote at once.
+        go = threading.Barrier(8)
+
+        def write(n):
+            go.wait()
+            for i in range(20):
+                imagecache._record(self.dir, f"https://x/{n}/{i}.jpg", "HTTP 404")
+
+        threads = [threading.Thread(target=write, args=(n,)) for n in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(len(imagecache.failures(self.dir)), 160)
 
     def test_forgetting_empties_the_log_and_the_markers(self):
         imagecache._record(self.dir, "https://x/a.jpg", "HTTP 404")
