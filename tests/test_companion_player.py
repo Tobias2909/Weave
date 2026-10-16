@@ -64,20 +64,20 @@ class TheWatcherSaysSo(unittest.TestCase):
 class ChangingItInARealPlayer(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
         self.sock = Path(self._tmp.name) / "probe.sock"
         self.mpv = subprocess.Popen(
             ["mpv", "--no-config", "--idle=yes", "--ao=null", "--vo=null", "--really-quiet",
              f"--input-ipc-server={self.sock}"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Stopped even when the rest of this fails. A tearDown is skipped then,
+        # and an idle mpv outlived the run.
+        self.addCleanup(self.mpv.wait, 5)
+        self.addCleanup(self.mpv.terminate)
         deadline = time.monotonic() + 10
         while not self.sock.exists() and time.monotonic() < deadline:
             time.sleep(0.05)
         self.player = Player(Config(raw={"player": {"ipc_socket": str(self.sock)}}))
-
-    def tearDown(self):
-        self.mpv.terminate()
-        self.mpv.wait(5)
-        self._tmp.cleanup()
 
     def say(self, command):
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
@@ -178,7 +178,6 @@ class ChangingItInARealPlayer(unittest.TestCase):
         self.sock.unlink(missing_ok=True)
         self.assertFalse(self.player.append(SONG.format(100)))
         self.assertFalse(self.player.jump(0))
-        self.mpv = subprocess.Popen(["true"])
 
 
 if __name__ == "__main__":
