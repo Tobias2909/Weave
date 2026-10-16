@@ -493,6 +493,8 @@ class Bridge(QObject):
         self._watch_detail = None
         self._results: list = []
         self._searching = False
+        # The YouTube Music search in flight, one at a time.
+        self._search: MusicSearch | None = None
         self._home: MusicHome | None = None
         # Filled the first time the cookie menu is looked at, dropped
         # when it is refreshed. Finding them reads every jar on the box.

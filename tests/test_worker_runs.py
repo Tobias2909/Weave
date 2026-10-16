@@ -856,6 +856,67 @@ class WorkerRuns(unittest.TestCase):
                 repeated = [n for n, count in collections.Counter(names).items() if count > 1]
                 self.assertEqual(repeated, [], f"{path}, class {node.name}")
 
+    def test_no_class_reads_an_attribute_nothing_set_up(self):
+        """An attribute read before anything set it raises only when it is read.
+
+        A line of the bridge's constructor went with an edit beside it, and
+        from then on every search on the music page raised AttributeError and
+        did nothing, while every test passed: the tests that reach the search
+        stand in for the step that reads it. So every underscore attribute a
+        class reads has to be set up in its constructor or a base class's, be
+        named in __slots__, or be defined on the class itself.
+        """
+        import ast
+
+        found: dict[str, list[ast.ClassDef]] = {}
+        for path in sorted(Path("weave").rglob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if isinstance(node, ast.ClassDef):
+                    found.setdefault(node.name, []).append(node)
+
+        def own(cls: ast.ClassDef) -> set[str]:
+            names: set[str] = set()
+            for node in cls.body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    names.add(node.name)
+                    if node.name != "__init__":
+                        continue
+                    names.update(sub.attr for sub in ast.walk(node)
+                                 if isinstance(sub, ast.Attribute)
+                                 and isinstance(sub.ctx, ast.Store)
+                                 and isinstance(sub.value, ast.Name) and sub.value.id == "self")
+                elif isinstance(node, ast.Assign):
+                    for target in node.targets:
+                        if not isinstance(target, ast.Name):
+                            continue
+                        names.add(target.id)
+                        if target.id == "__slots__":
+                            names.update(ast.literal_eval(node.value))
+                elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                    names.add(node.target.id)
+            return names
+
+        def known(cls: ast.ClassDef, seen: frozenset = frozenset()) -> set[str]:
+            names = own(cls)
+            for base in cls.bases:
+                name = base.id if isinstance(base, ast.Name) else getattr(base, "attr", "")
+                if name in seen:
+                    continue
+                for parent in found.get(name, []):
+                    if parent is not cls:
+                        names |= known(parent, seen | {name})
+            return names
+
+        unset = sorted(
+            f"{name}.{node.attr} (line {node.lineno})"
+            for name, classes in found.items() for cls in classes
+            for node in ast.walk(cls)
+            if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load)
+            and isinstance(node.value, ast.Name) and node.value.id == "self"
+            and node.attr.startswith("_") and not node.attr.startswith("__")
+            and node.attr not in known(cls))
+        self.assertEqual(unset, [])
+
     def test_every_worker_that_counts_requests_is_run_here(self):
         """A worker that counts requests has to be run by a test, or the next
         missing attribute reaches the app the way the last one did."""
