@@ -4010,11 +4010,12 @@ class Smoke:
         settle(0.4)
 
     def every_live_card(self, bridge, window) -> None:
-        """A check leaves the cards where they are.
+        """A check leaves the cards where they are, and Show all fits them.
 
         Every check used to hand the bar a new list, and a bar scrolled along
         to find somebody was sent back to its start each time: 900 px to 0,
-        measured.
+        measured. Show all puts every card in rows down the bar, as many rows
+        as it takes, and One row puts them back.
         """
         from weave import paths
         from weave.db import Database
@@ -4054,6 +4055,42 @@ class Smoke:
         self.check("a Twitch frame is asked for again every five minutes",
                    twitch and all("#live=" in picture for picture in twitch),
                    twitch[0] if twitch else "no rows")
+
+        def cards():
+            return [one.parent().parent()
+                    for one in items_named_like(window.contentItem(), "streamAvatarRing")]
+
+        bridge.setLiveAll(True)
+        settle(0.8)
+        per_row = int(read(live, "perRow"))
+        lines = -(-14 // per_row)
+        wanted = min(34 + lines * 82, int(read(live, "ceiling")))
+        self.check("Show all unrolls the bar to every row of cards",
+                   abs(float(read(live, "height")) - wanted) < 1,
+                   f"{read(live, 'height')} of {wanted}, {per_row} across")
+        width = float(read(strip, "width"))
+        height = float(read(strip, "height"))
+        outside = [card for card in cards()
+                   if float(read(card, "x")) + float(read(card, "width")) > width + 1
+                   or float(read(card, "y")) + float(read(card, "height")) > height + 1]
+        self.check("and every card is inside it", len(cards()) == 14 and not outside,
+                   f"{len(cards())} cards, {len(outside)} outside")
+        right = max(float(read(card, "x")) + float(read(card, "width")) for card in cards())
+        self.check("and each row reaches across the bar", abs(right - width) < 2,
+                   f"rows end at {right:.0f} of {width:.0f}")
+        self.check("from the start of it", abs(float(read(strip, "contentX"))) < 1,
+                   f"contentX {read(strip, 'contentX')}")
+        self.check("and it is remembered",
+                   Database(paths.DB_FILE).get_state("live_all", "") == "1")
+
+        bridge.setLiveAll(False)
+        settle(0.8)
+        self.check("One row rolls it back up",
+                   abs(float(read(live, "height")) - 116) < 1,
+                   f"{read(live, 'height')}")
+        self.check("with every card back in the one row",
+                   all(abs(float(read(card, "y"))) < 1 for card in cards()),
+                   ", ".join(f"{read(card, 'y')}" for card in cards()[:4]))
 
         db = Database(paths.DB_FILE)
         db.replace_live("twitch", [])

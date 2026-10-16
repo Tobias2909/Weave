@@ -743,6 +743,7 @@ class Bridge(QObject):
 
         self._hide_watched = self._db.get_state("hide_watched", "1") == "1"
         self._live_collapsed = self._db.get_state("live_collapsed", "0") == "1"
+        self._live_all = self._db.get_state("live_all", "0") == "1"
         self._panel_width = self._db.get_int("panel_width", 380)
 
         self._player.watched.connect(self._on_watched)
@@ -1255,6 +1256,8 @@ class Bridge(QObject):
         return self._live_checking
 
     liveCollapsed = Property(bool, _get_live_collapsed, notify=liveChanged)
+    # Every card at once rather than one row of them, kept like the folding.
+    liveAll = Property(bool, lambda self: self._live_all, notify=liveChanged)
     liveChecking = Property(bool, _get_live_checking, notify=liveChanged)
 
     def _get_live_ready(self) -> bool:
@@ -7561,6 +7564,14 @@ class Bridge(QObject):
             return
         self._live_collapsed = value
         self._db.set_state("live_collapsed", "1" if value else "0")
+        self.liveChanged.emit()
+
+    @Slot(bool)
+    def setLiveAll(self, value: bool) -> None:
+        if value == self._live_all:
+            return
+        self._live_all = value
+        self._db.set_state("live_all", "1" if value else "0")
         self.liveChanged.emit()
 
     @Slot(str)
