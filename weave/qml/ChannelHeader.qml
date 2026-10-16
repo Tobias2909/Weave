@@ -21,7 +21,9 @@ Item {
             id: bannerImage
             anchors.fill: parent
             source: header.info.banner ? header.info.banner : ""
-            visible: source !== ""
+            // Read off the banner itself: source is a url by now, and a url is
+            // never the same thing as an empty string.
+            visible: !!header.info.banner
             asynchronous: true
             cache: true
             fillMode: Image.PreserveAspectCrop

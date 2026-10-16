@@ -110,6 +110,7 @@ def feed_url(channel_id: str, kind: str = VIDEOS) -> str:
         return f"{_BASE}?channel_id={channel_id}"
     return f"{_BASE}?playlist_id={playlist_id(channel_id, kind)}"
 
+
 _NS = {
     "atom": "http://www.w3.org/2005/Atom",
     "yt": "http://www.youtube.com/xml/schemas/2015",

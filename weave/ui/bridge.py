@@ -1150,6 +1150,7 @@ class Bridge(QObject):
         if self._channel_looking:
             self._channel_looking = ""
             self.channelLookingChanged.emit()
+
     updateVersion = Property(str, lambda self: self._newer_version(), notify=updateChanged)
     # What is running, for the line that says a newer one exists.
     version = Property(str, lambda _self: __version__, constant=True)
@@ -1361,7 +1362,6 @@ class Bridge(QObject):
         if stored is not None:
             return stored
         return (self._detail_extra.get(row["key"]) or {}).get(name)
-        return None
 
     def _dislikes_for(self, row) -> int | None:
         if row.get("dislikes") is not None:
@@ -7481,7 +7481,7 @@ class Bridge(QObject):
             self._detail.cancel()
         self.detailChanged.emit()
 
-    def _on_now_playing(self, key: str, _title: str) -> None:
+    def _on_now_playing(self, key: str, title: str) -> None:
         """The panel follows mpv, so whatever starts playing is what it shows,
         including a track mpv moved to on its own."""
         # mpv reports the file before its window is up, so the chip stays a
@@ -7491,7 +7491,7 @@ class Bridge(QObject):
             self._set_starting(self._starting_key, clear_after_s=6)
         self._mpv_key = key
         self.openDetail(key)
-        self._companion_heard(key, _title)
+        self._companion_heard(key, title)
         pending = self._seek_on_start
         if pending and pending[0] == key:
             self._seek_on_start = None

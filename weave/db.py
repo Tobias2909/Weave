@@ -24,21 +24,6 @@ SCHEMA_VERSION = 54
 # A Short is at most three minutes. Anything longer needs no further test.
 SHORTS_CEILING_S = 180
 
-# Whether a row belongs in a list of videos. Needs `videos v` and `channels c`
-# joined.
-#
-# A row of unknown kind still shows, unless the only feed it can have come from
-# carries Shorts. Every per tab feed is one kind, so NULL from one of those is
-# a video RSS never described and it belongs in the list. The mixed channel
-# feed carries both and says which of neither, so NULL from a channel on it is
-# held back until the kind test answers, which takes a tick.
-#
-# Held back rather than hidden, and that distinction is the whole point.
-# MEASURED on a real library: eleven of the top hundred rows in All were of
-# unknown kind, every one of them from a channel on the mixed feed, and of the
-# four newest, two were Shorts and two were ordinary videos. Showing them all
-# puts Shorts in the feed and hiding them all loses real videos, so neither is
-# a rule; the kind test in sources/kind.py is what settles it, within a tick.
 # How long the per minute request log is kept. The budget itself only ever
 # reads the last window, but the usual figure on the How things are page is the
 # median of the windows in which anything was asked, so the log is the only
@@ -54,6 +39,21 @@ REQUEST_LOG_KEEP_S = 30 * 86400
 # waits.
 KIND_RETEST_S = 3600
 
+# Whether a row belongs in a list of videos. Needs `videos v` and `channels c`
+# joined.
+#
+# A row of unknown kind still shows, unless the only feed it can have come from
+# carries Shorts. Every per tab feed is one kind, so NULL from one of those is
+# a video RSS never described and it belongs in the list. The mixed channel
+# feed carries both and says which of neither, so NULL from a channel on it is
+# held back until the kind test answers, which takes a tick.
+#
+# Held back rather than hidden, and that distinction is the whole point.
+# MEASURED on a real library: eleven of the top hundred rows in All were of
+# unknown kind, every one of them from a channel on the mixed feed, and of the
+# four newest, two were Shorts and two were ordinary videos. Showing them all
+# puts Shorts in the feed and hiding them all loses real videos, so neither is
+# a rule; the kind test in sources/kind.py is what settles it, within a tick.
 NOT_A_SHORT = ("(v.is_short = 0 OR (v.is_short IS NULL "
                "AND COALESCE(c.feed_variant, '') <> 'channel'))")
 
@@ -457,8 +457,6 @@ class VideoRow:
         return f"{prefix}:{self.ext_id}"
 
 
-# Columns added after the first release. Listed rather than folded into the
-# schema above so an existing database gains them too.
 # What a group can be told to show. Named here rather than as strings in the
 # window, since the value is stored and a typo would be stored with it.
 GROUP_SHOWS_ALL = "all"
@@ -466,7 +464,8 @@ GROUP_SHOWS_VIDEOS = "videos"
 GROUP_SHOWS_STREAMS = "streams"
 GROUP_SHOWS = (GROUP_SHOWS_ALL, GROUP_SHOWS_VIDEOS, GROUP_SHOWS_STREAMS)
 
-
+# Columns added after the first release. Listed rather than folded into the
+# schema above so an existing database gains them too.
 _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("channels", "last_classified_at", "INTEGER"),
     ("channels", "banner_url", "TEXT"),
@@ -3290,7 +3289,8 @@ class Database:
         `origin` says which list is being asked for. Yours, the ones kept off
         a channel page, or everything.
         """
-        where = ["p.origin != 'temp'"] if origin == "any" else [f"p.origin = '{origin}'"]
+        where, values = ((["p.origin != 'temp'"], ()) if origin == "any"
+                         else (["p.origin = ?"], (origin,)))
         if not include_hidden:
             where.append("p.hidden = 0")
         clause = " WHERE " + " AND ".join(where)
@@ -3300,7 +3300,7 @@ class Database:
             "         AS items, "
             "       EXISTS(SELECT 1 FROM reversed_playlists r WHERE r.ext_id = p.ext_id) "
             "         AS reversed "
-            f"FROM playlists p {clause} ORDER BY p.position, p.title")]
+            f"FROM playlists p {clause} ORDER BY p.position, p.title", values)]
 
     def playlist_reversed(self, playlist_id: str) -> bool:
         """Whether a playlist is drawn and played from its end to its start."""

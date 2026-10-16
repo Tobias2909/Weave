@@ -451,7 +451,9 @@ def _schedule(db: Database, cfg: Config, report: Report) -> None:
     detail = f"{due} of {total} channels due, {cfg.channels_per_tick} asked a tick"
     if due and per_hour:
         detail += f", about {due / per_hour * 60:.0f} min to come round"
-    report.add("polling", OK if due <= total else WARN, detail)
+    # Every channel that is due is one of these, so this says how things
+    # stand rather than judging them.
+    report.add("polling", OK, detail)
 
     # Which channels the sweep covers, and whether it is fresh enough to be
     # leaned on. A covered channel is asked on its own only every few hours,
@@ -508,8 +510,6 @@ def _budget(db: Database, cfg: Config, report: Report) -> None:
     report.add("requests", worst, f"in {window} min, " + ", ".join(parts),
                "" if worst == OK else "An endpoint is pushing back or is at its ceiling. "
                                       "It clears on its own")
-
-
 
 
 def _rest(db: Database, report: Report) -> None:

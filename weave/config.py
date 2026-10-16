@@ -316,7 +316,6 @@ class Config:
         return max(0, int(self.get("poll", "sweep_limit")))
 
 
-
 def _fits(default: Any, value: Any) -> bool:
     """Whether a value from the file can stand in for the default.
 

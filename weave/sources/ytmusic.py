@@ -160,6 +160,7 @@ def configure(identity: str | None) -> None:
     _page_id_looked_for = False
     _page_id = None
 
+
 PAGE_ID_PATTERN = re.compile(r'"DELEGATED_SESSION_ID"\s*:\s*"(\d{5,40})"')
 
 
@@ -461,9 +462,7 @@ def lyrics(profile_path: str | None, browse_id: str, timed: bool = False) -> dic
     except Exception as exc:
         raise _blame("the words", exc) from exc
     text, source = _lyrics_parts(found)
-    if not isinstance(text, str):
-        return {"text": "", "source": source, "lines": []}
-    return {"text": text, "source": source, "lines": []}
+    return {"text": text if isinstance(text, str) else "", "source": source, "lines": []}
 
 
 # What the music service puts where nobody sings.

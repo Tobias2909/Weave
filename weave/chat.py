@@ -578,7 +578,7 @@ class ChatRoom(QObject):
             self._backdrop = self._tenths(float(said))
         except ValueError:
             pass
-        picked =db.get_state(REPLAY_COLUMN_STATE, "chat") if db is not None else "chat"
+        picked = db.get_state(REPLAY_COLUMN_STATE, "chat") if db is not None else "chat"
         self._replay_column = picked if picked in ("queue", "chat") else "chat"
 
     # ---- what QML reads ---------------------------------------------------

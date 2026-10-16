@@ -54,12 +54,12 @@ from .sources import dislikes as dislike_source
 from .sources import flatlist, lengths, livecheck, oembed, rss, subs, sweep, twitch
 from .sources import history as history_source
 from .sources import kind as kind_source
-from .sources.ytdlp import prepare
 from .sources import playlists as playlist_source
 from .sources import recommended as recommended_source
 from .sources import release as release_source
 from .sources import search as search_source
 from .sources import suggest as suggest_source
+from .sources.ytdlp import prepare
 
 
 def _spend(db: Database, cfg: Config, endpoint: str, count: int = 1, refused: int = 0) -> None:
@@ -2131,7 +2131,10 @@ class Suggester(Worker):
                 headers = (suggest_source.signed_in_headers(profile) if self._signed_in
                            else None)
                 fetcher = Fetcher(self._throttle, timeout=4.0, attempts=1, cancel=self._cancel)
-                found = suggest_source.youtube(fetcher, self._words, headers)
+                try:
+                    found = suggest_source.youtube(fetcher, self._words, headers)
+                finally:
+                    fetcher.close()
         except (suggest_source.SuggestError, FetchCancelled, HttpError, OSError):
             budget.spend(SUGGEST, count=0, refused=1)
             return
