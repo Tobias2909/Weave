@@ -16,10 +16,12 @@ the cards have artwork with nothing to download.
 from __future__ import annotations
 
 import argparse
+import atexit
 import hashlib
 import json
 import os
 import random
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -32,8 +34,13 @@ if str(ROOT) not in sys.path:
 
 # A scratch home, set before anything of Weave is imported, since the paths
 # module reads these once at import time. Shader effects need the hardware
-# backend even offscreen, or a masked picture is simply absent.
-HOME = Path(os.environ.get("WEAVE_SHOT_HOME") or tempfile.mkdtemp(prefix="weave-shots-"))
+# backend even offscreen, or a masked picture is simply absent. A home made
+# here goes again on the way out, since every picture is taken in a process of
+# its own and each one left a few megabytes behind.
+GIVEN = os.environ.get("WEAVE_SHOT_HOME")
+HOME = Path(GIVEN or tempfile.mkdtemp(prefix="weave-shots-"))
+if not GIVEN:
+    atexit.register(shutil.rmtree, HOME, ignore_errors=True)
 for name, part in (("XDG_CONFIG_HOME", "config"), ("XDG_STATE_HOME", "state"),
                    ("XDG_CACHE_HOME", "cache"), ("XDG_RUNTIME_DIR", "run")):
     (HOME / part).mkdir(parents=True, exist_ok=True)
