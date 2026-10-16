@@ -5739,8 +5739,8 @@ class Bridge(QObject):
         # Only a SONG is asked, which is an item with a video behind it. A
         # shelf of playlists never had an artist to name, and neither has the
         # one built from the ordinary suggestions, so asking those meant every
-        # set Weave wrote was thrown away on the next launch and the view he
-        # opened was blank for as long as a fetch takes. Measured on a real
+        # set Weave wrote was thrown away on the next launch and the page
+        # opened blank for as long as a fetch takes. Measured on a real
         # database: 23 shelves, 79 KB, and two of them with no such key, which
         # is every set there will ever be.
         for shelf in shelves:

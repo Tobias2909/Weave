@@ -1,7 +1,7 @@
 """Which shelves the music page opens on, and in what order.
 
 Two of them are worth opening on: what was played recently, and the one
-YouTube calls Forgotten favourites, which he says he reaches for often in
+YouTube calls Forgotten favourites, which is one reached for often in
 their own application. YouTube puts that one LAST, measured on a real account
 over two fetches days apart, so reading only the first few shelves never
 reached it at all and it is moved up here once it has been.
@@ -52,7 +52,7 @@ def shelf(title):
 
 
 class TheOrderTheyAreShownIn(unittest.TestCase):
-    def test_the_one_he_asked_for_comes_up_from_the_bottom(self):
+    def test_the_one_asked_for_comes_up_from_the_bottom(self):
         order = Home([shelf("Quick picks"), shelf("Listen again"),
                       shelf("Long listens"), shelf("Forgotten favorites")]).run()
         self.assertEqual(order[:3],
@@ -84,7 +84,7 @@ class TheOrderTheyAreShownIn(unittest.TestCase):
                       {"title": "Forgotten favorites", "items": []}]).run()
         self.assertNotIn("Forgotten favorites", order)
 
-    def test_nothing_at_all_still_gives_the_two_of_his_own(self):
+    def test_nothing_at_all_still_gives_the_two_weave_builds(self):
         order = Home([]).run()
         self.assertEqual(order, ["Your playlists", "From YouTube"])
 

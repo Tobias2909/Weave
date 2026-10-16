@@ -6,8 +6,8 @@ was built and it never worked: a guard meant to throw away a set written
 before songs carried the address of whoever made them asked EVERY item for
 that address, including the two shelves Weave builds itself, which never had
 one to carry. So every set it wrote was thrown away on the next launch and the
-page he opened was blank for as long as a fetch takes, which is what he
-reported.
+music page opened blank for as long as a fetch takes, which is how it was
+found.
 
 Measured on a real database: 23 shelves, 79 KB, and the one built from the
 ordinary suggestions carrying no such key on any of its 20 songs.

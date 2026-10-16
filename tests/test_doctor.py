@@ -388,7 +388,7 @@ class WhereTheRequestsGo(unittest.TestCase):
         # start and stop leaves as if they were whole windows: measured on a
         # real log, 12 of 49 slices in a day were covered end to end and the
         # median slice held 8 of its 15 minutes, so the figure read about a
-        # third low and the page said he was over it everywhere.
+        # third low and the page called every endpoint busier than usual.
         self.spell("feeds", 300, 40, 10)
         row = self.row("feeds")
         self.assertEqual(row["usual"], 160)          # 16 minutes at 10 each

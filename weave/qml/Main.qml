@@ -2060,7 +2060,7 @@ ApplicationWindow {
             // washed theme, which is twelve of the fourteen shipped, the
             // window at this height is a colour the wash decides and not that
             // one. It only showed once the grid had been scrolled and the
-            // ground came in, which is what he saw.
+            // ground came in, which is how it was found.
             //
             // Sized and placed off the window's own ground rather than off the
             // window, because inside an ApplicationWindow a child's parent is

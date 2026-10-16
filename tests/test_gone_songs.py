@@ -411,11 +411,11 @@ class WhatTheWindowSaysAboutIt(unittest.TestCase):
         Bridge._on_song_gone(bridge, gone)
         return said[-1]
 
-    def test_the_one_he_pressed_is_that_one(self):
+    def test_the_one_pressed_is_that_one(self):
         self.assertTrue(self.notice_for("yt:aaa", playing="yt:aaa")
                         .startswith("That one is private"))
 
-    def test_one_found_ahead_of_him_is_the_next_one(self):
+    def test_one_found_ahead_is_the_next_one(self):
         self.assertTrue(self.notice_for("yt:bbb", playing="yt:aaa")
                         .startswith("The next one is private"))
 
