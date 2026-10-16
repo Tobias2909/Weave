@@ -257,10 +257,6 @@ class TheirOwnSection(unittest.TestCase):
         self.assertEqual(self.mine(), ["PLmine1", "PLmine2"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class HowFarDownTheTabIsRead(unittest.TestCase):
     """A hundred was a ceiling a real channel reaches, and the box that finds
     a playlist by name looks through what was read, so a tab read in part is a
@@ -352,3 +348,7 @@ class SayingItIsReading(unittest.TestCase):
         bridge = self._bridge()
         Bridge._on_channel_playlists(bridge, CHANNEL, 0)
         self.assertIn("no playlists", bridge._status)
+
+
+if __name__ == "__main__":
+    unittest.main()

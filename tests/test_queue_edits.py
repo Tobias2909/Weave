@@ -348,10 +348,6 @@ class TheBridgeQueuesOne(unittest.TestCase):
         self.assertEqual(bridge._audio.taken, [])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class WhatThePlayerIsHoldingAsNext(unittest.TestCase):
     """The queue is a list of places, and so is the note of what the player was
     given. An edit that moves the places and leaves that note alone makes the
@@ -438,3 +434,7 @@ class ClearingTheQueue(unittest.TestCase):
         one = playing(titles="a")
         one.clearQueue()
         self.assertEqual([row["title"] for row in one._queue], ["a"])
+
+
+if __name__ == "__main__":
+    unittest.main()

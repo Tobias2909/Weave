@@ -744,11 +744,6 @@ class TheRealPlaylist(unittest.TestCase):
         self.assertTrue(self.until(lambda: "eof" in ended), f"ended with {ended}")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
-
 @unittest.skipUnless(available(), "libmpv is not here")
 class APictureLeftUnchosen(unittest.TestCase):
     """A picture on the song but not chosen, against a real player.
@@ -916,3 +911,7 @@ class ANewPlayerMovingOnByItself(unittest.TestCase):
                 self.assertIsNone(one._engine.holds_next())
             finally:
                 one.shutdown()
+
+
+if __name__ == "__main__":
+    unittest.main()

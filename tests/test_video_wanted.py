@@ -324,10 +324,6 @@ class WhetherAFrameExists(unittest.TestCase):
         self.assertFalse(one.videoShowing)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TheCommandItself(unittest.TestCase):
     """Run for real, with only the subprocess stubbed.
 
@@ -570,3 +566,6 @@ class AnAddressThePlayerWillNotTake(unittest.TestCase):
         one._video_addresses.put("yt:a", signed("yt:a"))
         self.assertIsNotNone(one._video_addresses.get("yt:a"))
 
+
+if __name__ == "__main__":
+    unittest.main()

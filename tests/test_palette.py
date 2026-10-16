@@ -127,10 +127,6 @@ class WritingItOut(unittest.TestCase):
         self.assertEqual(themes.file_name("   "), "theme")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class KeepingAndThrowingAway(unittest.TestCase):
     """A theme made here is a file like any other, and only the ones made here
     can be thrown away."""
@@ -328,3 +324,7 @@ class HandingThemesAround(unittest.TestCase):
         bridge = self.bridge()
         self.assertFalse(Bridge.exportTheme(bridge, "Nothing", str(self.away)))
         self.assertIn("Could not find", bridge.notices[-1])
+
+
+if __name__ == "__main__":
+    unittest.main()

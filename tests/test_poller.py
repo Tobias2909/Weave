@@ -440,10 +440,6 @@ class BudgetedRound(unittest.TestCase):
         self.assertEqual(len(self.db.channels_due(self.cfg.feed_tiers)), 7)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TellingAnAnnouncementFromAVideo(unittest.TestCase):
     """A stream that has not begun looks like an ordinary video in a feed.
 
@@ -865,3 +861,7 @@ class AGroupOnlyChannelStaysOutOfAll(unittest.TestCase):
         self.assertEqual(row["title"], "One")
         self.assertTrue(row["tracked"])
         self.assertFalse(row["in_all"])
+
+
+if __name__ == "__main__":
+    unittest.main()

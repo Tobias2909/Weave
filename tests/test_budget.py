@@ -129,10 +129,6 @@ class Reporting(BudgetCase):
         self.assertEqual(self.budget.report(), [(FEEDS, 5, 2, 10)])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class WhatIsLeftForAPress(unittest.TestCase):
     """A ceiling is shared. Work nobody is waiting for stops short of it, so
     there is always room for what somebody just pressed.
@@ -164,3 +160,7 @@ class WhatIsLeftForAPress(unittest.TestCase):
     def test_a_tiny_ceiling_still_lets_the_background_move(self):
         budget = Budget(self.db, {"feeds": 1}, window_s=900)
         self.assertEqual(budget.allowance("feeds", 1, background=True).granted, 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

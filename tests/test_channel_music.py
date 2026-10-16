@@ -358,10 +358,6 @@ class TheTab(unittest.TestCase):
         self.assertEqual(Bridge._get_channel_music_by(self.bridge), "The Artist")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class KeptSongsRememberWhoMadeThem(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -498,3 +494,7 @@ class TheSongsAreKept(unittest.TestCase):
         Bridge._fetch_channel_music(self.bridge)
         self.assertEqual(self.bridge._channel_music, [],
                          "another channel's songs were left on the page")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -490,10 +490,6 @@ class TheHeartFollowsTheSong(unittest.TestCase):
         self.assertEqual(told, [True], "the heart was not told a song started")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class WithNothingKept(unittest.TestCase):
     """Every path has to cope with an empty list, which is what everybody has
     until they keep their first song."""
@@ -669,3 +665,7 @@ class ThePicture(unittest.TestCase):
             "thumbnail": qml_source("https://example/b.jpg"), "live": False})
         row = self.db.music_history()[0]
         self.assertEqual(row["thumbnail_url"], "https://example/b.jpg")
+
+
+if __name__ == "__main__":
+    unittest.main()

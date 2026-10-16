@@ -85,10 +85,6 @@ class OneContextOnly(unittest.TestCase):
             self.assertTrue(hasattr(videoitem._bindings[name], "finished"))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ThePageMustAskItToDraw(unittest.TestCase):
     """The surface builds its render context on a paint, and it has no reason
     of its own to paint again. The only paint it gets for free is at startup,
@@ -119,3 +115,7 @@ class TakenDownBeforeThePlayer(unittest.TestCase):
         for held in videoitem._bindings.values():
             self.assertIsNone(held.context)
             self.assertTrue(held.finished)
+
+
+if __name__ == "__main__":
+    unittest.main()

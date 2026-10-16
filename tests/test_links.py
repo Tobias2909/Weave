@@ -132,10 +132,6 @@ class TheBrowserIsOnlyEverGivenAnAddress(unittest.TestCase):
             self.assertEqual(self.open(address), [], address)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TimesInIt(unittest.TestCase):
     """A time written in a description goes to that point, the way it does
     under a video on YouTube. Only when asked for, and only a time that can
@@ -216,3 +212,7 @@ class ATitleWithAHandle(unittest.TestCase):
         self.assertEqual(
             title_linked("Rock & roll ft. @SomeOne"),
             'Rock &amp; roll ft. <a href="https://www.youtube.com/@SomeOne">@SomeOne</a>')
+
+
+if __name__ == "__main__":
+    unittest.main()

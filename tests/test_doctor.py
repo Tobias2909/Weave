@@ -342,10 +342,6 @@ class IsTheSweepFresh(unittest.TestCase):
         self.assertEqual(worker._sweep_fresh(), doctor.sweep_fresh(self.db, self.cfg))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class WhereTheRequestsGo(unittest.TestCase):
     """The small table on How things are. A ceiling on its own does not say
     whether a number is alarming, so the usual figure is beside it.
@@ -462,3 +458,7 @@ class WhereTheRequestsGo(unittest.TestCase):
         self.spend("feeds", 1, 50)
         listed = [row["endpoint"] for row in doctor.traffic(self.db, self.cfg)]
         self.assertEqual(listed[:2], ["feeds", "player"])
+
+
+if __name__ == "__main__":
+    unittest.main()

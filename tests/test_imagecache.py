@@ -462,10 +462,6 @@ class Housekeeping(unittest.TestCase):
         self.assertEqual(removed, 1)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class FailureRecord(unittest.TestCase):
     """A picture that will not load is already visible as a gap. Saying so once
     per picture as well turns a bad minute on the network into hundreds of
@@ -701,3 +697,7 @@ class MarkingAFrame(unittest.TestCase):
         self.assertEqual(imagecache._unmarked(self.url + imagecache.LIVE_MARK + "12"),
                          (self.url, 12))
         self.assertEqual(imagecache._unmarked(self.url), (self.url, None))
+
+
+if __name__ == "__main__":
+    unittest.main()

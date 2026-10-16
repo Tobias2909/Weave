@@ -1037,10 +1037,6 @@ class AppState(DatabaseCase):
         self.assertEqual(self.db.get_state("panel_width"), "380")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ChannelsTheSweepCovers(DatabaseCase):
     """A channel the subscriptions sweep names is asked on its own only every
     few hours, because the sweep finds anything new from it first.
@@ -1114,3 +1110,7 @@ class ChannelsTheSweepCovers(DatabaseCase):
         self.assertEqual(self.db.raise_views([("yt:aaaaaaaaaaa", 5100)]), 1)
         row = self.db.conn.execute("SELECT views FROM videos WHERE key='yt:aaaaaaaaaaa'").fetchone()
         self.assertEqual(row["views"], 5100)
+
+
+if __name__ == "__main__":
+    unittest.main()

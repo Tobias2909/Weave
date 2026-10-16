@@ -461,10 +461,6 @@ class OneQueueDrawnOneWay(unittest.TestCase):
                              f"{name} carries its own copy of the queue")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ALargerPicture(unittest.TestCase):
     def test_a_music_address_is_asked_for_at_a_size_worth_drawing(self) -> None:
         from weave.sources import ytmusic
@@ -698,3 +694,7 @@ class APressIsHeardAtOnce(unittest.TestCase):
                        "url": "https://www.youtube.com/watch?v=bbbbbbbbbbb"}])
         self.assertEqual(audio.track["key"], was)
         self.assertEqual(len(audio.queue), 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

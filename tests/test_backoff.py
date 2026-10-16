@@ -218,10 +218,6 @@ class Saying(unittest.TestCase):
         self.assertIn("feeds 232/300 (79 refused)", self.lines()["requests"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class WhatARoundSaysAboutItself(unittest.TestCase):
     """The banner about the endpoint refusing is for the endpoint refusing.
 
@@ -369,3 +365,7 @@ class ARefusalEpisodeStrandsNothing(unittest.TestCase):
         self.run_round()
         self.run_round()
         self.assertEqual(self.stranded(), ["yt:UC" + "0" * 20])
+
+
+if __name__ == "__main__":
+    unittest.main()

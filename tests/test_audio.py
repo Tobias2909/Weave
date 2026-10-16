@@ -1045,10 +1045,6 @@ class Addresses(unittest.TestCase):
         self.assertIsNone(cache.get("k"))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class WhyATrackWouldNotPlay(unittest.TestCase):
     """The sentence a person is left with.
 
@@ -1120,3 +1116,7 @@ class WhyATrackWouldNotPlay(unittest.TestCase):
         code = "\n".join(line.split("#")[0]
                          for line in inspect.getsource(audio.resolve_address).splitlines())
         self.assertNotIn("--no-warnings", code)
+
+
+if __name__ == "__main__":
+    unittest.main()

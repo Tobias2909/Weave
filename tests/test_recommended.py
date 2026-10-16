@@ -62,10 +62,6 @@ class ParseLines(unittest.TestCase):
         self.assertEqual(recommended.parse_lines(""), [])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class StreamsInTheseLists(unittest.TestCase):
     """A stream is a listing like any other here.
 
@@ -153,3 +149,7 @@ class AStreamInASuggestionThatHasEnded(unittest.TestCase):
     def test_a_stream_that_is_still_on_changes_nothing(self):
         self.db.set_live_state("yt:bbbbbbbbbbb", 51, True)
         self.assertEqual(self.states()["bbbbbbbbbbb"], "is_live")
+
+
+if __name__ == "__main__":
+    unittest.main()

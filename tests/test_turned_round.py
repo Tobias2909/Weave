@@ -144,10 +144,6 @@ class PutAfterItInARealPlayer(unittest.TestCase):
         self.assertEqual(self.say(["get_property", "playlist-count"]), 1)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class PuttingOneWhereAnotherIs(unittest.TestCase):
     """A row dropped on another takes its place, whatever is hidden between."""
 
@@ -171,3 +167,7 @@ class PuttingOneWhereAnotherIs(unittest.TestCase):
         self.assertFalse(self.db.move_playlist_to("PLa", "PLa"))
         self.assertFalse(self.db.move_playlist_to("PLa", "PLz"))
         self.assertEqual(self.order(), list("abcde"))
+
+
+if __name__ == "__main__":
+    unittest.main()

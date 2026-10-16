@@ -143,10 +143,6 @@ class Discovery(unittest.TestCase):
         self.assertEqual(set(got.colors), set(themes.ROLES))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ShelfArrangement(unittest.TestCase):
     """The rule that puts the music sections in the order they were arranged.
 
@@ -218,3 +214,7 @@ class ColoursThatCarryAlpha(unittest.TestCase):
 
         colour = QColor(themes.FALLBACK["badgeBackground"])
         self.assertGreater(colour.alpha(), 64)
+
+
+if __name__ == "__main__":
+    unittest.main()

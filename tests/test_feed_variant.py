@@ -261,10 +261,6 @@ class OpeningAStrangersPage(unittest.TestCase):
         self.assertIsNone(self.db.channels()[0]["feed_variant"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TheRowsHeldBack(unittest.TestCase):
     """What a list does with a row whose kind nothing has said yet.
 
@@ -449,3 +445,7 @@ class TheKindPhase(unittest.TestCase):
         self.answer({})
         self.assertEqual(self.run_phase(), 0)
         self.assertEqual(self.db.requests_in_window(SHORTS, 900)[0], 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1543,10 +1543,6 @@ class WorkerRuns(unittest.TestCase):
         self.assertEqual(len(worker.crashed.slots), 1)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class _MembersDb:
     """Just enough database for the crashed members read to put itself back."""
 
@@ -1555,3 +1551,7 @@ class _MembersDb:
 
     def set_members_wanted(self, key, wanted):
         self.wanted.append((key, wanted))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -115,10 +115,6 @@ class TheBridgeKeepsThem(unittest.TestCase):
         self.assertEqual(bridge.reloaded, [True])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class WalkingPastAViewWithNoGrid(unittest.TestCase):
     """The wheel over the sidebar steps the selection, so a fast walk lands on
     Music, How things are and Settings in quick succession. Those draw their
@@ -178,3 +174,7 @@ class WalkingPastAViewWithNoGrid(unittest.TestCase):
         bridge = self.bridge("all")
         Bridge.reload(bridge)
         self.assertEqual([call[0] for call in bridge._model.calls], ["reload"])
+
+
+if __name__ == "__main__":
+    unittest.main()

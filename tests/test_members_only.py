@@ -726,10 +726,6 @@ class PressingIt(unittest.TestCase):
         self.assertEqual(made.launched, [], "a held membership was asked about")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class AQueueOfAPlaylist(unittest.TestCase):
     """Listening to a playlist queues the whole of it, and a members video in
     it would be reached and fail, which stops the listening at the song before
@@ -785,3 +781,7 @@ class AQueueOfAPlaylist(unittest.TestCase):
         bridge._audio.played = None
         Bridge.playAudio(bridge, "yt:ccccccccccc")
         self.assertEqual((added, bridge._audio.played), ([("yt:ccccccccccc", False)], None))
+
+
+if __name__ == "__main__":
+    unittest.main()

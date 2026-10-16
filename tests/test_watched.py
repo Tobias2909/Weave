@@ -337,10 +337,6 @@ class TheChildrenHandedAVideo(unittest.TestCase):
         self.assertTrue(said and "could not start" in said[0])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TheVideoReallyPlaying(unittest.TestCase):
     """The music gives way when the picture moves, not when mpv is handed an
     address. mpv names the file seconds before it has resolved anything, and
@@ -470,3 +466,7 @@ class AHandOverWakesTheWatcher(unittest.TestCase):
             Path.exists = real_exists
             watcher.stop()
             thread.join(2)
+
+
+if __name__ == "__main__":
+    unittest.main()
