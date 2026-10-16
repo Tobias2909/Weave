@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import configparser
 import contextlib
+import os
 import sqlite3
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -158,13 +160,18 @@ def _read_jar(path: Path) -> _Jar:
 
     The file is copied first because a running browser holds a write ahead
     lock on it, and a copy of a locked jar still carries everything committed
-    before it was taken, which is every cookie that matters here.
+    before it was taken, which is every cookie that matters here. The copy
+    holds every cookie of every site, so it is made readable by its owner
+    alone, under a name of its own so two readings never share one.
     """
-    copy = paths.CACHE_DIR / f"probe-{abs(hash(str(path)))}.sqlite"
     try:
-        copy.parent.mkdir(parents=True, exist_ok=True)
-        copy.write_bytes(path.read_bytes())
+        paths.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        handle, name = tempfile.mkstemp(prefix="probe-", suffix=".sqlite",
+                                        dir=paths.CACHE_DIR)
+        copy = Path(name)
         try:
+            with os.fdopen(handle, "wb") as out:
+                out.write(path.read_bytes())
             with contextlib.closing(sqlite3.connect(copy)) as jar:
                 rows = jar.execute(
                     "SELECT name, lastAccessed FROM moz_cookies "

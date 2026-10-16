@@ -7,11 +7,14 @@ nobody had opened, and the parts past the plain feed came back empty or with
 a FileNotFoundError from a profile path that was never there.
 """
 
+import os
 import sqlite3
+import stat
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from PySide6.QtCore import QCoreApplication, QObject
 
@@ -166,6 +169,29 @@ class Finding(unittest.TestCase):
         self.assertTrue(browsers.describe(self.root / "named").signed_in)
         # And one that is not there at all is unreadable rather than a crash.
         self.assertFalse(browsers.describe(self.root / "gone").readable)
+
+
+class TheCopy(unittest.TestCase):
+    """A jar is read from a copy, and the copy holds every cookie the browser
+    has for every site, so nobody else may read it and it does not stay."""
+
+    def test_only_its_owner_can_read_it_and_it_goes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            make_jar(root / "profile")
+            cache = root / "cache"
+            seen = []
+            real = sqlite3.connect
+
+            def connect(where, *args, **kwargs):
+                seen.append((Path(where).parent, stat.S_IMODE(os.stat(where).st_mode)))
+                return real(where, *args, **kwargs)
+
+            with mock.patch.object(browsers.paths, "CACHE_DIR", cache), \
+                    mock.patch.object(browsers.sqlite3, "connect", connect):
+                self.assertTrue(browsers.describe(root / "profile").signed_in)
+            self.assertEqual(seen, [(cache, 0o600)])
+            self.assertEqual(list(cache.iterdir()), [])
 
 
 class Choosing(unittest.TestCase):
