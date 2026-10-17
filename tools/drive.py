@@ -1587,9 +1587,11 @@ class Smoke:
         # does most often is at the top and the boxes stay at the foot.
         # Then the other place a video can play, which depends on where videos
         # play on the machine running this, after the window's queue, which is
-        # there only where videos play in the window.
-        wanted = ["Play next", "Add to queue", "Play in ", "Hide this video", "Mark as",
-                  "Put channel in a group", "Put in a box", "Put in a music box", "Share"]
+        # there only where videos play in the window. Above them all, the
+        # place videos play, drawn only where a press listens.
+        wanted = ["Play in ", "Play next", "Add to queue", "Play in ", "Hide this video",
+                  "Mark as", "Put channel in a group", "Put in a box", "Put in a music box",
+                  "Share"]
         first = labels[:len(wanted)]
         self.check("and its entries are in the order they were asked for",
                    all(want in got for want, got in zip(wanted, first)),
@@ -1598,6 +1600,8 @@ class Smoke:
                     for name in ("playNextEntry", "addToQueueEntry")]
         self.check("and it queues in the window only where videos play there",
                    queueing == [bridge.videosInWeave] * 2, str(queueing))
+        self.check("and a press plays the video here, so the menu does not offer it",
+                   read(find(window, "playHereEntry"), "visible") is False)
         menu.close()
         settle(0.2)
 
@@ -4410,6 +4414,30 @@ class Smoke:
             self.check("and says the other thing over the listening",
                        str(read(again, "text")) == "Read the listening again",
                        str(read(again, "text")))
+            # A press there listens, so the video is the menu's first entry,
+            # in the place videos play, with the other place straight under
+            # it. The same in either mode: the window's queue is left out.
+            menu = find(window, "videoMenu")
+            inner = {text for name in ("cardMusicBoxMenu", "cardVideoBoxMenu", "cardGroupMenu")
+                     for text, _ in menu_entries(find(window, name))}
+            was = bridge.videosInWeave
+            for in_weave in (True, False):
+                bridge.setVideosInWeave(in_weave)
+                menu.open()
+                settle(0.3)
+                here, other = ("Weave", "mpv") if bridge.videosInWeave else ("mpv", "Weave")
+                wanted = [f"Play in {here}"]
+                if not bridge.videosInWeave or bridge.mpvFound:
+                    wanted.append(f"Play in {other}")
+                shown = [text.strip() for text, item in menu_entries(menu)
+                         if text not in inner and read(item, "visible") is True]
+                self.check(f"and over the listening the card menu leads with the video, "
+                           f"{here} first and nothing between",
+                           shown[:len(wanted) + 1] == wanted + ["Hide this video"],
+                           ", ".join(shown[:4]))
+                menu.close()
+                settle(0.2)
+            bridge.setVideosInWeave(was)
             bridge.showMusicInHistory(False)
             settle(0.3)
             # Reading it again is said beside the button, and only over the

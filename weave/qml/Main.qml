@@ -2771,23 +2771,34 @@ ApplicationWindow {
         // Every entry dismisses the menu itself. A Menu is supposed to close
         // on its own when an item fires, and it did not here, so it is done
         // explicitly rather than left to chance.
+        // Where a press listens, in the music history and in a playlist marked
+        // as music, the video is played from here, where videos play, with the
+        // other place straight under it. The two read the same in either mode.
+        ThemedMenuItem {
+            objectName: "playHereEntry"
+            visible: App.pressIsMusic
+            text: App.videosInWeave ? "Play in Weave" : "Play in mpv"
+            onTriggered: { App.watchCard(root.menuKey); videoMenu.dismiss() }
+        }
         // Where videos play in the window, a video can wait its turn in the
         // window's queue as a song waits in the music's, and that comes first.
-        // mpv keeps its own.
+        // mpv keeps its own. Not where a press listens: the queue a press uses
+        // there is the music's, and the same words would read as that one.
         ThemedMenuItem {
             objectName: "playNextEntry"
-            visible: App.videosInWeave
+            visible: App.videosInWeave && !App.pressIsMusic
             text: "Play next"
             onTriggered: { App.queueVideo(root.menuKey, true); videoMenu.dismiss() }
         }
         ThemedMenuItem {
             objectName: "addToQueueEntry"
-            visible: App.videosInWeave
+            visible: App.videosInWeave && !App.pressIsMusic
             text: "Add to queue"
             onTriggered: { App.queueVideo(root.menuKey, false); videoMenu.dismiss() }
         }
-        // A press already plays it wherever videos play, so this is the other
-        // place, for this one video, without changing that.
+        // A press plays it wherever videos play, or the entry at the top does,
+        // so this is the other place, for this one video, without changing
+        // that.
         ThemedMenuItem {
             objectName: "playElsewhereEntry"
             // Never mpv on a machine without one.

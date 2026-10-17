@@ -4550,6 +4550,18 @@ class Bridge(QObject):
 
     @Slot(str)
     def play(self, key: str) -> None:
+        self._play_card(key, listen=True)
+
+    @Slot(str)
+    def watchCard(self, key: str) -> None:
+        """The card menu's way to the video where a press listens, in the
+        music history and in a playlist marked as music: played wherever
+        videos play, as a press plays it everywhere else."""
+        self._play_card(key, listen=False)
+
+    def _play_card(self, key: str, listen: bool) -> None:
+        """A card played. Where its cards are songs, `listen` sends it to the
+        music, the way the press means it there."""
         row = self._model.row_for_key(key)
         if not row:
             return
@@ -4569,11 +4581,11 @@ class Bridge(QObject):
             # click opens what can actually be shown right now instead.
             self.openDetail(key)
             return
-        if self._view_kind == HISTORY and self._history_music:
+        if listen and self._view_kind == HISTORY and self._history_music:
             # These are songs, and they were listened to rather than watched.
             self.playAudio(key)
             return
-        if self._view_kind == PLAYLIST and self._playing_is_music():
+        if listen and self._view_kind == PLAYLIST and self._playing_is_music():
             # A playlist marked as music is listened to rather than watched, so
             # a press means what the headphone on the card means.
             self.playAudio(key)
@@ -4720,10 +4732,11 @@ class Bridge(QObject):
 
     @Slot(str)
     def playElsewhere(self, key: str) -> None:
-        """The card menu's first entry: this one video the other way, without
-        changing where videos play."""
+        """The card menu's Play in the other place: this one video the other
+        way, without changing where videos play. A video even where a press
+        listens."""
         self._elsewhere_key = key
-        self.play(key)
+        self._play_card(key, listen=False)
         if self._elsewhere_key == key and not (
                 self._stream_check is not None and self._stream_check.isRunning()):
             # Nothing reached the hand over, so nothing is waiting for it.

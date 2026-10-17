@@ -1278,6 +1278,43 @@ class QueuedFromTheWindow(unittest.TestCase):
                          ["https://www.youtube.com/watch?v=zzzzzzzzzzz"])
         self.assertEqual(bridge._video.calls, [])
 
+    def listening(self, chosen):
+        """The music half of the history, where a press listens."""
+        from weave.ui.bridge import HISTORY
+
+        bridge = self.make(chosen, [card("a")])
+        bridge._view_kind = HISTORY
+        bridge._history_music = True
+        bridge._stream_check = None
+        bridge.listened = []
+        bridge.playAudio = bridge.listened.append
+        return bridge
+
+    def test_a_press_on_the_listening_still_listens(self):
+        bridge = self.listening("mpv")
+        bridge.play(card("a")["key"])
+        self.assertEqual(bridge.listened, [card("a")["key"]])
+        self.assertEqual((bridge._player.played, bridge._video.calls), ([], []))
+
+    def test_the_menu_plays_a_song_of_the_listening_as_a_video_in_mpv(self):
+        bridge = self.listening("mpv")
+        bridge.watchCard(card("a")["key"])
+        self.assertEqual(bridge._player.played, [card("a")["url"]])
+        self.assertEqual((bridge.listened, bridge._video.calls), ([], []))
+
+    def test_and_in_the_window_where_videos_play_there(self):
+        bridge = self.listening("weave")
+        bridge.watchCard(card("a")["key"])
+        self.assertEqual(bridge._video.calls, [("play", [card("a")["key"]])])
+        self.assertEqual((bridge.listened, bridge._player.played), ([], []))
+
+    def test_the_other_place_from_the_listening_is_a_video_too(self):
+        bridge = self.listening("mpv")
+        bridge.playElsewhere(card("a")["key"])
+        self.assertEqual(bridge._video.calls, [("play", [card("a")["key"]])],
+                         "Play in Weave listened to the song")
+        self.assertEqual((bridge.listened, bridge._player.played), ([], []))
+
 
 if __name__ == "__main__":
     unittest.main()
