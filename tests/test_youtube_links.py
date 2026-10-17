@@ -59,6 +59,7 @@ def bridge_for(case, mpv_key=""):
     made._preview = {}
     made._link_facts = None
     made._link_target = None
+    made._mpv_met = None
     made._seek_on_start = None
     made.launched = []
     made._launch = lambda worker: made.launched.append(worker) or True
@@ -235,6 +236,102 @@ class WhatTheMusicServiceSays(unittest.TestCase):
     def test_none_given_is_none_rather_than_a_fault(self):
         self.assertIsNone(self.facts({})["published_at"])
         self.assertIsNone(self.facts({"publishDate": "soon"})["published_at"])
+
+
+class AVideoMpvWasHandedElsewhere(unittest.TestCase):
+    """Something else, the browser most often, hands mpv a video nothing here
+    has met. The panel came up with its heading and nothing under it, and
+    its description and comments were never read."""
+
+    # What the panel's own read of the video brings back.
+    READ = {"views": 1234, "likes": 50, "published_at": 1256453853, "duration_s": 600,
+            "description": "Words about it.", "title": "Theirs", "channel": "Somebody",
+            "channel_id": CHANNEL, "live": False}
+
+    def make(self):
+        made = stored(bridge_for(self))
+        made._starting_key = ""
+        made._queue_on_start = None
+        made._companion_heard = lambda *_a: None
+        made._view_kind = "all"
+        made._detail = None
+        made._detail_key = ""
+        made._detail_closed = False
+        made._detail_comments = []
+        made._detail_threads = 5
+        made._detail_loading = False
+        made._detail_extra = {}
+        made._detail_dislikes = None
+        made._watch_busy = ""
+        made._watch_detail = None
+        made._watch_key = lambda: ""
+        return made
+
+    def stored_row(self, made):
+        return made._db.conn.execute(
+            "SELECT * FROM videos WHERE key=?", (f"yt:{VIDEO}",)).fetchone()
+
+    def test_it_is_read_while_the_panel_says_it_is_loading(self):
+        from weave.poller import DetailFetcher
+
+        made = self.make()
+        Bridge._on_now_playing(made, f"yt:{VIDEO}", "")
+        self.assertEqual([type(one) for one in made.launched], [DetailFetcher])
+        self.assertTrue(made._detail_loading)
+
+    def test_the_read_fills_the_panel_and_keeps_the_video(self):
+        made = self.make()
+        Bridge._on_now_playing(made, f"yt:{VIDEO}", "")
+        Bridge._on_comments(made, f"yt:{VIDEO}", [], self.READ)
+        shown = Bridge._get_detail(made)
+        self.assertEqual((shown["title"], shown["channelTitle"], shown["durationText"],
+                          shown["likesText"]), ("Theirs", "Somebody", "10:00", "50"))
+        self.assertIn("Words about it.", shown["descriptionText"])
+        self.assertFalse(made._detail_loading)
+        row = self.stored_row(made)
+        self.assertEqual((row["title"], row["channel_key"], row["duration_s"]),
+                         ("Theirs", f"yt:{CHANNEL}", 600))
+
+    def test_a_video_known_here_keeps_what_it_has(self):
+        from weave.db import VideoRow
+
+        made = self.make()
+        made._db.add_channel(f"yt:{CHANNEL}", "youtube", CHANNEL, "Followed")
+        made._db.upsert_videos([VideoRow("youtube", VIDEO, f"yt:{CHANNEL}", "Ours")])
+        Bridge._on_now_playing(made, f"yt:{VIDEO}", "")
+        Bridge._on_comments(made, f"yt:{VIDEO}", [], self.READ)
+        self.assertEqual(self.stored_row(made)["title"], "Ours")
+
+    def test_a_stream_of_twitch_is_not_read(self):
+        made = self.make()
+        Bridge._on_now_playing(made, "twitch:somebody", "")
+        self.assertEqual(made.launched, [])
+
+    def test_a_broadcast_is_shown_while_it_plays_and_never_stored(self):
+        made = self.make()
+        Bridge._on_now_playing(made, f"yt:{VIDEO}", "")
+        Bridge._on_comments(made, f"yt:{VIDEO}", [], dict(self.READ, live=True))
+        shown = Bridge._get_detail(made)
+        self.assertEqual((shown["title"], shown["channelTitle"], shown["isLive"]),
+                         ("Theirs", "Somebody", True))
+        self.assertIsNone(self.stored_row(made))
+
+    def test_a_read_after_mpv_moved_on_is_kept_and_leaves_the_panel_be(self):
+        made = self.make()
+        Bridge._on_now_playing(made, f"yt:{VIDEO}", "")
+        made._detail_key = "yt:bbbbbbbbbbb"
+        Bridge._on_comments(made, f"yt:{VIDEO}", [{"text": "first"}], self.READ)
+        self.assertEqual(made._detail_comments, [])
+        self.assertIsNotNone(self.stored_row(made))
+
+    def test_a_read_that_failed_stores_nothing(self):
+        """A broadcast that ended with no recording kept fails the read, and
+        nothing is made up for it."""
+        made = self.make()
+        Bridge._on_now_playing(made, f"yt:{VIDEO}", "")
+        Bridge._on_detail_failed(made, "comments", "not available")
+        self.assertFalse(made._detail_loading)
+        self.assertIsNone(self.stored_row(made))
 
 
 if __name__ == "__main__":

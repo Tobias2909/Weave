@@ -612,6 +612,9 @@ class Bridge(QObject):
         self._preview: dict = {}
         self._link_facts: LinkFacts | None = None
         self._link_target: LinkTarget | None = None
+        # A broadcast mpv was handed from somewhere else, the browser most
+        # often, as the panel's read described it. It is not stored.
+        self._mpv_met: dict | None = None
         self._seek_on_start: tuple[str, int, float] | None = None
         # The rest of a turned round playlist or of a box, put around the
         # pressed video once mpv reports it: what follows it, when it was
@@ -1296,7 +1299,11 @@ class Bridge(QObject):
         found = self._db.video(key)
         if found:
             return found
-        return next((row for row in self._web_results if row["key"] == key), None)
+        found = next((row for row in self._web_results if row["key"] == key), None)
+        if found:
+            return found
+        met = self._mpv_met
+        return met if met and met["key"] == key else None
 
     def _get_detail(self) -> dict:
         detail = self._detail_for(self._detail_key)
@@ -3659,7 +3666,8 @@ class Bridge(QObject):
         return preview
 
     def _keep_linked_video(self, video_id: str, facts: dict) -> None:
-        """Store a video met behind a link, as any other video is stored.
+        """Store a video met behind a link, or met in mpv when something else
+        handed it over, as any other video is stored.
 
         Pressing the same link again then finds it here and asks nothing, and
         a search of what is stored finds it too. It comes in the way a video
@@ -7415,16 +7423,20 @@ class Bridge(QObject):
         # sources that would be asked are YouTube's.
         if self._detail_key.startswith("twitch:"):
             return
-        row = self._video_for_detail(self._detail_key)
-        if not row:
+        # A video nothing here has met is read all the same, since the same
+        # call says what it is. That is one handed to mpv from somewhere
+        # else, the browser most often.
+        key = self._detail_key
+        ext_id = key.split(":", 1)[1] if key.startswith("yt:") else ""
+        if not ids.VIDEO_ID.match(ext_id):
             return
         if self._detail is not None and self._detail.isRunning():
             self._detail.cancel()
             self._detail.wait(3000)
         self._detail_loading = True
         self.detailChanged.emit()
-        self._detail = DetailFetcher(self._db, self._cfg, row["key"], row["ext_id"],
-                                     ids.watch_url(row["platform"], row["ext_id"]),
+        self._detail = DetailFetcher(self._db, self._cfg, key, ext_id,
+                                     ids.watch_url("youtube", ext_id),
                                      self._detail_threads, self)
         self._detail.votes.connect(self._on_votes)
         self._detail.comments.connect(self._on_comments)
@@ -7437,6 +7449,8 @@ class Bridge(QObject):
             self.detailChanged.emit()
 
     def _on_comments(self, key: str, threads: list, details: dict | None = None) -> None:
+        if details and details.get("title") and not self._video_for_detail(key):
+            self._keep_met_video(key, details)
         if details:
             self._keep_extra(key, dict(details))
             self._keep_details(key, details)
@@ -7451,6 +7465,25 @@ class Bridge(QObject):
             self._watch_threads = self._detail_threads
             self._watch_busy = ""
             self.watchSideChanged.emit()
+
+    def _keep_met_video(self, key: str, details: dict) -> None:
+        """A video the panel read without knowing it, kept the way a link's
+        card keeps one. A broadcast is not stored, having no length to keep,
+        so the panel is lent what was read while mpv plays it."""
+        video_id = key.split(":", 1)[1]
+        self._keep_linked_video(video_id, details)
+        if not details.get("live"):
+            return
+        channel = details.get("channel_id") or ""
+        self._mpv_met = {
+            "key": key, "platform": "youtube", "ext_id": video_id,
+            "channel_key": ids.channel_key(channel) if ids.CHANNEL_ID.match(channel) else "",
+            "title": details.get("title") or "", "channel_title": details.get("channel") or "",
+            "avatar_url": None,
+            "thumbnail_url": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+            "published_at": None, "duration_s": None, "views": None, "likes": None,
+            "dislikes": None, "watched": False, "live_status": "is_live", "scheduled_at": None,
+        }
 
     def _keep_details(self, key: str, details: dict) -> None:
         """Write what the panel learned back onto the stored row.
@@ -7484,6 +7517,7 @@ class Bridge(QObject):
         """Nothing is playing any more, so there is nothing for the panel to
         mirror. The next video brings it back."""
         self._mpv_key = ""
+        self._mpv_met = None
         self._drop_detail()
 
     def _drop_detail(self) -> None:

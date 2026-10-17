@@ -114,6 +114,23 @@ class WhatTheVideoSaysAboutItself(unittest.TestCase):
                          "Words about it.")
         self.assertEqual(parse_details({}).description, "")
 
+    def test_what_it_is_and_who_made_it_come_with_it_too(self):
+        """For a video nothing here has met, such as one the browser handed
+        to mpv, this is the only place they come from."""
+        from weave.sources.comments import parse_details
+
+        found = parse_details({"title": "Theirs", "channel": "Somebody",
+                               "uploader": "Somebody else", "channel_id": "UC" + "c" * 22,
+                               "live_status": "not_live"})
+        self.assertEqual((found.title, found.channel, found.channel_id, found.live),
+                         ("Theirs", "Somebody", "UC" + "c" * 22, False))
+        self.assertEqual(parse_details({"uploader": "Somebody else"}).channel, "Somebody else")
+        self.assertTrue(parse_details({"live_status": "is_live"}).live)
+        # A broadcast's title as written, without the time yt-dlp adds to it.
+        self.assertEqual(parse_details({"title": "On air 2026-10-17 16:21",
+                                        "fulltitle": "On air"}).title, "On air")
+        self.assertFalse(parse_details({"live_status": "was_live"}).live)
+
 
 if __name__ == "__main__":
     unittest.main()

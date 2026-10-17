@@ -78,6 +78,12 @@ class Details:
     duration_s: int | None = None
     # What was written under the video, which the same file carries whole.
     description: str = ""
+    # What the video is and who made it, for a video nothing here has met,
+    # and whether it is being broadcast right now.
+    title: str = ""
+    channel: str = ""
+    channel_id: str = ""
+    live: bool = False
 
 
 def _whole(value) -> int | None:
@@ -104,6 +110,11 @@ def parse_details(info: dict) -> Details:
         published_at=published,
         duration_s=_whole(info.get("duration")),
         description=str(info.get("description") or "").strip(),
+        # The title as written. yt-dlp adds the date and time to a broadcast's.
+        title=str(info.get("fulltitle") or info.get("title") or ""),
+        channel=str(info.get("channel") or info.get("uploader") or ""),
+        channel_id=str(info.get("channel_id") or ""),
+        live=info.get("live_status") == "is_live",
     )
 
 

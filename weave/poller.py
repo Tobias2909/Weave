@@ -2077,7 +2077,8 @@ class DetailFetcher(Worker):
         self.comments.emit(self._key, [self._as_map(thread) for thread in threads], {
             "views": details.views, "likes": details.likes,
             "published_at": details.published_at, "duration_s": details.duration_s,
-            "description": details.description,
+            "description": details.description, "title": details.title,
+            "channel": details.channel, "channel_id": details.channel_id, "live": details.live,
         })
 
     @staticmethod
@@ -2467,8 +2468,8 @@ class FavouriteMakers(Worker):
 class LinkFacts(Worker):
     """What a video behind a pressed link is, for the card that shows it.
 
-    One call to the music service, about a tenth of a second. Nothing is
-    stored: the card is a look at something, not a decision to keep it.
+    One call to the music service, about a tenth of a second. The bridge
+    stores the answer, so the same video is not asked about twice.
     """
 
     ready = Signal(str, "QVariantMap")   # video id, facts
