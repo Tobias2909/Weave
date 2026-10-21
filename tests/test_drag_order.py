@@ -116,5 +116,22 @@ class TheEdges(unittest.TestCase):
         self.assertEqual(steps["none"], 0)
 
 
+class TheHandle(unittest.TestCase):
+    def test_its_hint_is_no_popup(self):
+        # The window's usual bubble is a popup. It closed the moment a row was
+        # taken, and with a real pointer that cancelled the hold a few
+        # milliseconds in, so the page behind the window took the drag: the
+        # trace showed the row taken, cancelled after one move, then the page
+        # dragging. A synthetic pointer never showed it, so this is read off
+        # the file rather than driven.
+        source = (ROOT / "weave" / "qml" / "DragGrip.qml").read_text()
+        for popup in ("HintBubble", "ToolTip", "Popup"):
+            self.assertNotIn(popup + " {", source)
+
+    def test_the_page_behind_the_windows_holds_still(self):
+        source = (ROOT / "weave" / "qml" / "Main.qml").read_text()
+        self.assertIn("interactive: !(keptChooser.opened || playlistChooser.opened)", source)
+
+
 if __name__ == "__main__":
     unittest.main()

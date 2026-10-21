@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 
 // Six dots that say "this can be picked up", at the start of a row whose
 // order can be changed. The row itself is never moved: the list it sits in
@@ -18,6 +19,9 @@ Item {
     // otherwise.
     property Item row: parent
     readonly property bool active: dragger.active
+    // How many moves the held row was told about, for the trace. A row held
+    // while the pointer went somewhere else hears of few of them.
+    property int moves: 0
     // Where the pointer is, in the window, while the row is held. A carry
     // begins a little way from the press, so where the press was comes too.
     signal began(real sceneY, real pressSceneY)
@@ -69,17 +73,70 @@ Item {
         grabPermissions: PointerHandler.CanTakeOverFromItems
                          | PointerHandler.CanTakeOverFromHandlersOfDifferentType
         onActiveChanged: {
-            if (active)
+            if (active) {
+                grip.moves = 0
                 grip.began(centroid.scenePosition.y, centroid.scenePressPosition.y)
-            else
+            } else {
+                App.traceMark("grip_let_go", { "moves": grip.moves,
+                                               "y": Math.round(centroid.scenePosition.y) })
                 grip.ended()
+            }
         }
-        onCentroidChanged: if (active) grip.carried(centroid.scenePosition.y)
+        onCentroidChanged: if (active) { grip.moves += 1; grip.carried(centroid.scenePosition.y) }
+        // Who else took hold of the press, and when. A row let go of a few
+        // milliseconds after it was taken was taken from, and this says by
+        // which kind of thing.
+        onGrabChanged: function (transition, point) {
+            App.traceMark("grip_grab", { "transition": transition, "active": active,
+                                         "x": Math.round(point.scenePosition.x),
+                                         "y": Math.round(point.scenePosition.y) })
+        }
+        onCanceled: function (point) {
+            App.traceMark("grip_canceled", { "y": Math.round(point.scenePosition.y) })
+        }
     }
 
-    HintBubble {
-        parent: grip
-        shown: hover.hovered && !dragger.active
-        words: "Drag to change the order"
+    // The hint, drawn in the row beside the dots rather than as the window's
+    // usual bubble. That bubble is a popup of its own, and it closed the
+    // moment a row was taken; with a real pointer that closing cancelled the
+    // hold a few milliseconds in, and the page behind a window took the rest
+    // of the drag. Measured from the trace: taken, cancelled after one move,
+    // then the page dragging. A plain item coming and going does nothing to a
+    // press.
+    Rectangle {
+        id: hint
+        objectName: "dragGripHint"
+        readonly property bool wanted: hover.hovered && !dragger.active
+        parent: grip.row
+        z: 100
+        visible: wanted && hintDelay.done
+        x: visible ? grip.mapToItem(grip.row, grip.width + 4, 0).x : 0
+        y: visible ? grip.mapToItem(grip.row, 0, (grip.height - height) / 2).y : 0
+        width: hintWords.implicitWidth + 14
+        height: hintWords.implicitHeight + 10
+        radius: 6
+        color: Theme.colors.surfaceRaised
+        border.width: 1
+        border.color: Theme.colors.border
+
+        // As long as the usual bubble waits, so passing over the dots on the
+        // way somewhere else does not flash it.
+        Timer {
+            id: hintDelay
+            property bool done: false
+            interval: 450
+            running: hint.wanted && !done
+            onTriggered: done = true
+        }
+        onWantedChanged: if (!wanted) hintDelay.done = false
+
+        Label {
+            id: hintWords
+            textFormat: Text.PlainText
+            anchors.centerIn: parent
+            text: "Drag to change the order"
+            color: Theme.colors.text
+            font.pixelSize: 11
+        }
     }
 }

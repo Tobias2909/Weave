@@ -2215,6 +2215,18 @@ ApplicationWindow {
         step: channelMusicView.rowHeight * App.scrollRowsPerNotch
     }
 
+    // A page that moves while one of the windows over it is open, for the
+    // trace. Pressing a row's handle in those windows once moved the page
+    // behind them instead of the row.
+    Connections {
+        target: grid
+        enabled: keptChooser.opened || playlistChooser.opened
+        function onContentYChanged() {
+            App.traceMark("page_moves", { "y": Math.round(grid.contentY),
+                                          "dragging": grid.dragging, "moving": grid.moving })
+        }
+    }
+
     GridView {
         id: grid
         objectName: "grid"
@@ -2249,6 +2261,9 @@ ApplicationWindow {
         // either way, so the first row of a group and the first row of the
         // history start at the same height.
         topMargin: groupBarClip.visible ? groupBarClip.height : 0
+        // Never dragged while a window over it is open. A carry in one of
+        // those that lost its hold went on as a drag of this instead.
+        interactive: !(keptChooser.opened || playlistChooser.opened)
 
         // Cards grow with the window instead of snapping between sizes, so a
         // row always fills the width. Two is the fewest columns worth showing,
