@@ -1132,6 +1132,35 @@ class Bridge(QObject):
 
     pageReading = Property(str, _get_page_reading, notify=pageReadingChanged)
 
+    def _playlist_read_line(self) -> str:
+        """When the open playlist was last read, and when opening it reads it
+        again by itself, for the bar while it is not being read.
+
+        Opening one reads it again only once what is stored is older than
+        PLAYLIST_TRUST_S, so most presses read nothing, and nothing said so:
+        there was no telling a read that was about to bring new videos from
+        one that was never going to happen.
+        """
+        if self._view_kind != PLAYLIST or not self._view_playlist:
+            return ""
+        stamp = (self._db.playlist(self._view_playlist) or {}).get("items_at")
+        if not stamp:
+            return ""
+        now = int(time.time())
+        said = f"Read {fmt.age_text(int(stamp), now)}"
+        left = PLAYLIST_TRUST_S - (now - int(stamp))
+        # Past it, opening the playlist is what reads it, so there is nothing
+        # to wait for and the age alone is the news.
+        return f"{said} · again in {fmt.span_text(left)}" if left > 0 else said
+
+    playlistReadText = Property(str, _playlist_read_line, notify=pageReadingChanged)
+
+    @Slot()
+    def tickPageReading(self) -> None:
+        """Say the page reading again, so an age on screen keeps up with the
+        clock while the page stays open."""
+        self.pageReadingChanged.emit()
+
     channelLooking = Property(str, lambda self: self._channel_looking,
                               notify=channelLookingChanged)
 

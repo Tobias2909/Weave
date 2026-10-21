@@ -705,10 +705,34 @@ ApplicationWindow {
                 // A playlist being read again, beside the button that asked.
                 // Only a playlist puts words here: the suggestions and the
                 // history say it on their own row, beside their own button.
+                // A playlist off a channel says it on its own row instead,
+                // beside its Reverse and Keep.
                 BusyWord {
                     objectName: "viewActionReading"
-                    text: App.viewKind === "playlist" && root.width >= 530
-                          ? App.pageReading : ""
+                    text: App.viewKind === "playlist" && !viewBar.onPlaylist
+                          && root.width >= 530 ? App.pageReading : ""
+                }
+
+                // And while it is not being read, when it was and when opening
+                // it reads it again by itself, so a press that reads nothing
+                // says so rather than looking like one that has not got there.
+                Label {
+                    objectName: "viewActionReadAt"
+                    textFormat: Text.PlainText
+                    visible: App.viewKind === "playlist" && !viewBar.onPlaylist
+                             && root.width >= 530 && App.pageReading === "" && text !== ""
+                    text: App.playlistReadText
+                    color: Theme.colors.textMuted
+                    font.pixelSize: 12
+                }
+
+                // The age goes on with the clock while the page stays open,
+                // in whichever row it is said.
+                Timer {
+                    interval: 60000
+                    repeat: true
+                    running: App.viewKind === "playlist"
+                    onTriggered: App.tickPageReading()
                 }
 
                 FlatButton {
@@ -1879,13 +1903,45 @@ ApplicationWindow {
                 textFormat: Text.PlainText
                 anchors.left: backToChannel.right
                 anchors.leftMargin: 12
-                anchors.right: reverseThis.left
+                anchors.right: playlistReadAt.left
                 anchors.rightMargin: 10
                 anchors.verticalCenter: parent.verticalCenter
                 text: App.playlistView.title || ""
                 color: Theme.colors.text
                 font.pixelSize: 13
                 elide: Text.ElideRight
+            }
+
+            // When it was read and when opening it reads it again, or the
+            // pill while it is being read, beside what can be done to it.
+            Item {
+                id: playlistReadAt
+                anchors.right: reverseThis.left
+                anchors.rightMargin: 12
+                anchors.verticalCenter: parent.verticalCenter
+                width: playlistReading.visible ? playlistReading.width
+                                               : playlistReadWords.implicitWidth
+                height: playlistReading.height
+
+                BusyWord {
+                    id: playlistReading
+                    objectName: "playlistReading"
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: App.pageReading
+                }
+
+                Label {
+                    id: playlistReadWords
+                    objectName: "playlistReadAt"
+                    textFormat: Text.PlainText
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: App.pageReading === ""
+                    text: App.playlistReadText
+                    color: Theme.colors.textMuted
+                    font.pixelSize: 12
+                }
             }
 
             // Drawn and played from its end, whether or not it is kept.

@@ -40,6 +40,20 @@ def age_text(published_at: int | None, now: int | None = None) -> str:
     return f"{years} year{'s' if years != 1 else ''} ago"
 
 
+def span_text(seconds: int) -> str:
+    """A stretch of time ahead, in the units an age is said in: "4 hours",
+    "35 minutes". Under a minute is said as such rather than as seconds,
+    since nobody waits for those."""
+    if seconds < 60:
+        return "under a minute"
+    for limit, divisor, unit in _AGE_STEPS[1:]:
+        if seconds < limit:
+            value = seconds // divisor
+            return f"{value} {unit}{'s' if value != 1 else ''}"
+    years = seconds // 31557600
+    return f"{years} year{'s' if years != 1 else ''}"
+
+
 def upcoming_text(scheduled_at: int | None, now: int | None = None) -> str:
     """When an announced stream is due, for the card badge. A missing time
     still lets the card say "Upcoming" on its own rather than nothing."""
