@@ -107,6 +107,54 @@ class TheCommandThatAsksForThem(unittest.TestCase):
         _found, command, _calls = self.run_it()
         self.assertNotIn("--no-warnings", command)
 
+    def test_a_song_not_known_to_be_on_the_air_may_still_be(self) -> None:
+        # A broadcast kept in the music history is queued as a song. It has no
+        # sound on its own, and asking for that alone failed with "Requested
+        # format is not available", so the stream never played.
+        _found, command, _calls = self.run_it()
+        asked = command[command.index("-f") + 1]
+        self.assertEqual(asked.split("/"), [audio.MUSIC_FORMAT, audio.LIVE_FORMAT])
+
+
+class FindingOutItIsOnTheAir(unittest.TestCase):
+    def player(self) -> audio.AudioPlayer:
+        one = audio.AudioPlayer(Config(raw={}), engine=FakeEngine())
+        one._make_resolver = lambda entry: FakeResolver(entry["key"])
+        one._make_video_resolver = lambda entry: FakeVideoResolver(entry["key"])
+        return one
+
+    def test_the_resolve_says_so(self) -> None:
+        self.assertTrue(audio.parse_facts('{"live_status": "is_live"}')["live"])
+        self.assertNotIn("live", audio.parse_facts('{"live_status": "was_live"}'))
+        self.assertNotIn("live", audio.parse_facts('{"live_status": null}'))
+
+    def test_then_it_is_played_as_a_broadcast(self) -> None:
+        one = self.player()
+        one.play_items([song()])
+        said = []
+        one.trackChanged.connect(lambda: said.append("track"))
+        one.liveChanged.connect(lambda: said.append("live"))
+        one._on_resolved("yt:a", "https://example.invalid/live", [], {"live": True})
+        self.assertTrue(one.isLive)
+        self.assertEqual(one.length, 0, "a broadcast has no length to show")
+        # Not a new song, which would ask for the words and the comments again.
+        self.assertEqual(said, ["live"])
+
+    def test_and_its_address_is_not_kept(self) -> None:
+        # A broadcast's address is a window onto the air, and replaying a kept
+        # one would start wherever that window was.
+        one = self.player()
+        one.play_items([song()])
+        one._on_resolved("yt:a", "https://example.invalid/live", [], {"live": True})
+        self.assertIsNone(one._addresses.get("yt:a"))
+
+    def test_an_ordinary_song_is_left_alone(self) -> None:
+        one = self.player()
+        one.play_items([song()])
+        one._on_resolved("yt:a", "https://example.invalid/a", [], {"views": 12})
+        self.assertFalse(one.isLive)
+        self.assertEqual(one._addresses.get("yt:a"), "https://example.invalid/a")
+
 
 class WhatThePlayerKeeps(unittest.TestCase):
     def player(self) -> audio.AudioPlayer:

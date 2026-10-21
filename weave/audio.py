@@ -53,6 +53,12 @@ from .process import run as run_process
 # gets better as the picture does. This variant is the sensible middle.
 LIVE_FORMAT = "93"
 MUSIC_FORMAT = "bestaudio"
+# A song not known to be a broadcast may still be one, which a song kept in
+# the history always is, since nothing there says what it was. A broadcast has
+# no sound on its own to pick, so asking for that alone failed with "Requested
+# format is not available" and the stream never played. The broadcast's form
+# is only ever offered on a broadcast, so it changes nothing for anything else.
+SONG_FORMAT = MUSIC_FORMAT + "/" + LIVE_FORMAT
 
 # The picture, when one is asked for. Capped rather than best: a music video at
 # its largest is several times the bytes for a pane a few hundred pixels wide,
@@ -173,7 +179,7 @@ FACT_FIELDS = ("view_count", "like_count", "comment_count", "channel",
                "channel_id", "channel_follower_count", "timestamp",
                "upload_date", "track", "artists", "album", "release_year",
                "categories", "description", "concurrent_view_count",
-               "release_timestamp")
+               "release_timestamp", "live_status")
 FACT_SPEC = "%(.{" + ",".join(FACT_FIELDS) + "})j"
 
 
@@ -221,6 +227,10 @@ def _facts_from(found: dict) -> dict:
     # A broadcast's: how many are watching it now, and when it went on air.
     number("concurrent_view_count", "watching")
     number("release_timestamp", "aired_at")
+    # Said only when it is so. Whoever asked may not have known, and a song
+    # that turns out to be on the air is then treated as one.
+    if found.get("live_status") == "is_live":
+        out["live"] = True
     words("channel", "channel")
     # Not to show. It is how the picture of whoever made this is found among
     # the channels already known, which is where a song that is only a song
@@ -387,7 +397,7 @@ def resolve_address(cfg: Config, url: str, live: bool,
     # so suppressing them on this command throws away the only account of
     # the cause there is. A test fails if the flag comes back.
     command = prepare(["yt-dlp", *cookie_args(cfg),
-                       "-f", LIVE_FORMAT if live else MUSIC_FORMAT,
+                       "-f", LIVE_FORMAT if live else SONG_FORMAT,
                        "--get-url", "--print", "%(chapters)j",
                        "--print", FACT_SPEC, "--", url])
     result = run_process(command, cancel=cancel, timeout=180)
@@ -574,6 +584,9 @@ class AudioPlayer(QObject):
     # page asks for words and comments again on trackChanged, and those cost
     # requests, so facts arriving must not read as a different song.
     factsChanged = Signal()
+    # Whether the song is a broadcast, which a look up can find out after the
+    # song began. Its own signal for the same reason as the facts.
+    liveChanged = Signal()
     stateChanged = Signal()
     progressChanged = Signal()
     failed = Signal(str)
@@ -588,6 +601,7 @@ class AudioPlayer(QObject):
     def __init__(self, cfg: Config, db=None, parent: QObject | None = None,
                  engine: LibmpvEngine | None = None) -> None:
         super().__init__(parent)
+        self.trackChanged.connect(self.liveChanged)
         self._cfg = cfg
         self._db = db
         self._queue: list[dict] = []
@@ -898,7 +912,7 @@ class AudioPlayer(QObject):
     # Where in the song, to the tenth of a second it is reported in.
     seconds = Property(float, _get_seconds, notify=progressChanged)
     length = Property(int, _get_length, notify=progressChanged)
-    isLive = Property(bool, _get_is_live, notify=trackChanged)
+    isLive = Property(bool, _get_is_live, notify=liveChanged)
     holdingFast = Property(bool, lambda self: self._held_fast, notify=stateChanged)
     # Bound to progress rather than to the track, because the length arrives
     # from mpv after the track does and the marks cannot be placed without it.
@@ -1053,10 +1067,23 @@ class AudioPlayer(QObject):
         entry = self._current()
         if entry.get("key") != key:
             return                       # a later choice overtook this one
+        if self._turned_out_live(entry, facts):
+            self.liveChanged.emit()
+            self.progressChanged.emit()
         if not entry.get("live"):
             self._addresses.put(key, address)
         self._loading = False
         self._hand_over(entry, address)
+
+    @staticmethod
+    def _turned_out_live(entry: dict, facts: dict | None) -> bool:
+        """Mark an entry as a broadcast when the look up says it is one and
+        whoever queued it did not know. Its address is then never kept, and the
+        bar shows no length for it, as for any other broadcast."""
+        if entry.get("live") or not (facts or {}).get("live"):
+            return False
+        entry["live"] = True
+        return True
 
     def _hand_over(self, entry: dict, address: str) -> None:
         """Give mpv the address. A position left by a recovery goes with the
@@ -1202,7 +1229,9 @@ class AudioPlayer(QObject):
         self._learned(key, chapters, facts)
         wanted = self._next_index()
         entry = self._queue[wanted] if wanted is not None else {}
-        if not entry.get("live"):
+        if entry.get("key") == key:
+            self._turned_out_live(entry, facts)
+        if not entry.get("live") and not (facts or {}).get("live"):
             self._addresses.put(key, address)
         if entry.get("key") == key and self._appended is None and not self._idle:
             self._engine.append(address)
