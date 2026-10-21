@@ -561,6 +561,10 @@ class SettlingAFreshlyPublishedStream(unittest.TestCase):
         self.assertEqual(len(asked), poller.NEW_STREAMS_PER_CHECK)
 
 
+# A start time still to come whenever the suite runs.
+LATER = 4_000_000_000
+
+
 class LearningWhenAnAnnouncedStreamIsDue(unittest.TestCase):
     """The sweep reports the time as NA for every one of them, so the card
     could say a stream was announced and never when."""
@@ -596,12 +600,57 @@ class LearningWhenAnAnnouncedStreamIsDue(unittest.TestCase):
             "SELECT live_status, scheduled_at FROM videos WHERE key='yt:aaaaaaaaaaa'").fetchone()
 
     def test_the_time_is_stored(self):
-        self.answer(LiveState("aaaaaaaaaaa", None, False, 1788825600, True))
-        self.assertEqual(self.row()["scheduled_at"], 1788825600)
+        self.answer(LiveState("aaaaaaaaaaa", None, False, LATER, True))
+        self.assertEqual(self.row()["scheduled_at"], LATER)
 
-    def test_and_it_is_not_asked_about_again(self):
-        self.answer(LiveState("aaaaaaaaaaa", None, False, 1788825600, True))
-        self.assertEqual(self.db.upcoming_without_start(), [])
+    def test_and_it_is_not_asked_about_again_before_then(self):
+        self.answer(LiveState("aaaaaaaaaaa", None, False, LATER, True))
+        self.assertEqual(self.db.announcements_to_ask(), [])
+
+    def test_but_it_is_once_the_time_has_passed(self):
+        # Nothing else says it began, so a premiere that ran stayed "Starting
+        # soon" on its card for weeks.
+        self.answer(LiveState("aaaaaaaaaaa", None, False, LATER, True))
+        self.assertEqual([row["key"] for row in self.db.announcements_to_ask(now=LATER + 60)],
+                         ["yt:aaaaaaaaaaa"])
+
+    def test_a_premiere_that_ran_stops_being_an_announcement(self):
+        # It still answers with the time it went up, and that answer was read
+        # first, which kept it announced for good.
+        self.db.set_scheduled_at("yt:aaaaaaaaaaa", 1_700_000_000)
+        self.answer(LiveState("aaaaaaaaaaa", None, False, 1_700_000_009, False,
+                              ordinary=True))
+        self.assertEqual(self.db.announcements_to_ask(), [])
+        # An ordinary video, not the recording of a stream, so it is among the
+        # channel's videos again, which its start time had kept it out of.
+        self.assertIsNone(self.row()["live_status"])
+        self.assertIsNone(self.row()["scheduled_at"])
+        self.assertEqual([row["key"] for row in self.db.feed(channel_key="yt:UC1",
+                                                             hide_watched=False,
+                                                             streams=False)],
+                         ["yt:aaaaaaaaaaa"])
+
+    def test_the_ones_due_today_are_asked_first(self):
+        now = int(time.time())
+        self.db.set_scheduled_at("yt:aaaaaaaaaaa", now - 600)
+        self.db.upsert_videos([
+            VideoRow("youtube", f"room{i:07d}", "yt:UC1", f"Waiting room {i}",
+                     published_at=now, live_status="is_upcoming") for i in range(5)])
+        asked = self.db.announcements_to_ask(limit=1, now=now)
+        self.assertEqual([row["key"] for row in asked], ["yt:aaaaaaaaaaa"])
+
+    def test_waiting_rooms_do_not_take_every_place(self):
+        # A few that never get a time are asked about every round. Newest
+        # first, they took all three places and nothing older was ever asked.
+        now = int(time.time())
+        self.db.set_scheduled_at("yt:aaaaaaaaaaa", now - 30 * 86400)
+        self.db.upsert_videos([
+            VideoRow("youtube", f"room{i:07d}", "yt:UC1", f"Waiting room {i}",
+                     published_at=now, live_status="is_upcoming") for i in range(5)])
+        reached = any("yt:aaaaaaaaaaa" in [row["key"] for row in
+                                           self.db.announcements_to_ask(limit=3, now=now)]
+                      for _ in range(60))
+        self.assertTrue(reached, "an old announcement was never asked about")
 
     def test_one_that_has_begun_stops_being_an_announcement(self):
         # Otherwise it would be asked about on every check for ever, since it

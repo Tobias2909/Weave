@@ -10,6 +10,7 @@ until the next round reaches that video, which leaves mpv with nothing to play
 and the press looking like it did nothing.
 """
 
+import time
 import unittest
 
 
@@ -86,6 +87,10 @@ def make_bridge(rows):
     # recorded is that it was asked and what the press did with the answer.
     bridge._stream_check = None
     bridge._pending_play = None
+    # Whether an announced stream's time has passed, which is read from the
+    # database. Not yet, unless a test says otherwise.
+    bridge.begun = False
+    bridge._may_have_begun = lambda key: bridge.begun
     # The question a press on a card marked for members asks. Recorded, not
     # asked, like the live one.
     bridge._members_check = None
@@ -129,7 +134,8 @@ def asking_bridge(rows):
 
     bridge = make_bridge(rows)
     bridge._ask_whether_it_is_still_live = (
-        lambda key, url, title: bool(bridge.asked.append((key, url, title)) or True))
+        lambda key, url, title, announced=False: bool(
+            bridge.asked.append((key, url, title) + ((True,) if announced else ())) or True))
     bridge.play = lambda key: Bridge.play(bridge, key)
     return bridge
 
@@ -229,10 +235,85 @@ class PlayRefusesAnAnnouncedVideo(unittest.TestCase):
         self.assertEqual(bridge.opened, [])
 
 
+class AnAnnouncementWhoseTimeHasPassed(unittest.TestCase):
+    """A card says what was said when it was last asked. A premiere that ran
+    went on saying "Starting soon" with a video behind it that plays, and a
+    press only opened the panel."""
+
+    def test_it_is_asked_about_before_anything_else(self):
+        from weave.ui.bridge import Bridge
+
+        bridge = asking_bridge([upcoming_row()])
+        bridge.begun = True
+        Bridge.play(bridge, "yt:aaaaaaaaaaa")
+        self.assertEqual(bridge.asked, [("yt:aaaaaaaaaaa", "https://example/watch",
+                                         "An announced stream", True)])
+        self.assertEqual(bridge.opened, [])
+
+    def test_one_still_to_come_is_not_asked_about(self):
+        from weave.ui.bridge import Bridge
+
+        bridge = asking_bridge([upcoming_row()])
+        Bridge.play(bridge, "yt:aaaaaaaaaaa")
+        self.assertEqual(bridge.asked, [])
+        self.assertEqual(bridge.opened, ["yt:aaaaaaaaaaa"])
+
+    def answered(self, still_live, upcoming):
+        from weave.ui.bridge import Bridge
+
+        bridge = make_bridge([upcoming_row()])
+        bridge._pending_play = ("yt:aaaaaaaaaaa", "https://example/watch",
+                                "An announced stream", True)
+        Bridge._on_stream_checked(bridge, "yt:aaaaaaaaaaa", still_live, upcoming)
+        return bridge
+
+    def test_one_that_ran_plays_as_an_ordinary_video(self):
+        bridge = self.answered(False, False)
+        self.assertEqual(bridge._player.calls, [("https://example/watch", None, False)])
+        self.assertEqual(bridge.reloaded, [True])
+
+    def test_one_on_the_air_plays_as_a_broadcast(self):
+        bridge = self.answered(True, False)
+        self.assertEqual(bridge._player.calls, [("https://example/watch", None, True)])
+        self.assertEqual(bridge.reloaded, [True])
+
+    def test_one_that_still_has_not_begun_opens_the_panel_as_before(self):
+        bridge = self.answered(False, True)
+        self.assertEqual(bridge._player.calls, [])
+        self.assertEqual(bridge.opened, ["yt:aaaaaaaaaaa"])
+
+    def test_a_question_that_could_not_be_asked_does_not_play_it(self):
+        # mpv handed an announcement it cannot open crashes.
+        from weave.ui.bridge import Bridge
+
+        bridge = make_bridge([upcoming_row()])
+        bridge._pending_play = ("yt:aaaaaaaaaaa", "https://example/watch",
+                                "An announced stream", True)
+        Bridge._on_stream_check_failed(bridge, "yt:aaaaaaaaaaa", "offline")
+        self.assertEqual(bridge._player.calls, [])
+        self.assertEqual(bridge.opened, ["yt:aaaaaaaaaaa"])
+
+    def test_when_its_time_has_passed_is_read_from_what_is_stored(self):
+        from weave.ui.bridge import Bridge
+
+        class Db:
+            def __init__(self, starts):
+                self.starts = starts
+
+            def video(self, key):
+                return {"scheduled_at": self.starts}
+
+        bridge = Bridge.__new__(Bridge)
+        now = int(time.time())
+        for starts, begun in ((now - 60, True), (now + 3600, False), (None, True)):
+            bridge._db = Db(starts)
+            self.assertEqual(Bridge._may_have_begun(bridge, "yt:aaaaaaaaaaa"), begun, starts)
+
+
 class WhatTheAnswerDoes(unittest.TestCase):
     def bridge(self):
         made = make_bridge([live_row()])
-        made._pending_play = ("yt:ccccccccccc", "https://example/watch", "A broadcast")
+        made._pending_play = ("yt:ccccccccccc", "https://example/watch", "A broadcast", False)
         return made
 
     def test_still_live_is_handed_over(self):

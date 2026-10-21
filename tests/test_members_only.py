@@ -119,10 +119,10 @@ class StoringIt(unittest.TestCase):
 
     def test_and_is_never_asked_when_it_starts(self):
         self.db.set_upcoming("yt:aaaaaaaaaaa", None)
-        self.assertEqual([row["key"] for row in self.db.upcoming_without_start()],
+        self.assertEqual([row["key"] for row in self.db.announcements_to_ask()],
                          ["yt:aaaaaaaaaaa"])
         self.db.set_members_only("yt:aaaaaaaaaaa")
-        self.assertEqual(self.db.upcoming_without_start(), [],
+        self.assertEqual(self.db.announcements_to_ask(), [],
                          "a members only announcement was asked about again")
 
 
@@ -253,7 +253,7 @@ class TheWatcherRecordsIt(unittest.TestCase):
         self.db.set_upcoming(key, None)
         self.watcher._check_upcoming(self.poller.Budget(self.db, {}, 900))
         self.assertEqual(self.db.video(key)["members_only"], 1)
-        self.assertEqual(self.db.upcoming_without_start(), [])
+        self.assertEqual(self.db.announcements_to_ask(), [])
 
     def test_one_already_in_the_bar_leaves_it(self):
         key = self.video(live_status="is_live")

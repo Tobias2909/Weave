@@ -1878,6 +1878,21 @@ class Database:
                     "UPDATE cached_videos SET live_status='was_live' "
                     "WHERE ext_id=? AND live_status='is_live'", (ext_id,))
 
+    def set_ordinary(self, video_key: str) -> None:
+        """An announcement that turned out to be an ordinary video, which is
+        what a premiere is once it has run. Not a stream any more in any way,
+        so it goes back among the channel's videos, where its start time had
+        kept it out of, and a listing that still says it is coming stops
+        saying so too."""
+        ext_id = video_key.split(":", 1)[-1]
+        with self.conn as conn:
+            conn.execute(
+                "UPDATE videos SET live_status=NULL, live_viewers=NULL, scheduled_at=NULL, "
+                "stream_pending=NULL WHERE key=?", (video_key,))
+            conn.execute(
+                "UPDATE cached_videos SET live_status=NULL, scheduled_at=NULL "
+                "WHERE ext_id=? AND live_status IN ('is_upcoming', 'is_live')", (ext_id,))
+
     def set_scheduled_at(self, video_key: str, starts_at: int | None) -> None:
         """When an announced stream is due, in real time rather than as the
         phrase the sweep hands over, which is nothing at all."""
@@ -1941,17 +1956,30 @@ class Database:
                 "scheduled_at=COALESCE(?, scheduled_at), stream_pending=NULL WHERE key=?",
                 (starts_at, key))
 
-    def upcoming_without_start(self, limit: int = 3) -> list[sqlite3.Row]:
-        """Announced streams whose start time nothing has learned yet.
+    def announcements_to_ask(self, limit: int = 3,
+                             now: int | None = None) -> list[sqlite3.Row]:
+        """Announced streams worth one question about where they stand.
 
-        The subscriptions sweep reports the time as NA for every one of them,
-        so the only way to a real time is to ask about the video itself, which
-        is one request each and is why this is handed out a few at a time.
+        Two kinds. One whose start time nothing has learned yet, since the
+        subscriptions sweep reports the time as NA for every one of them. And
+        one whose start time has passed, because nothing else ever says that it
+        began: a premiere that ran stayed "Starting soon" on its card for
+        weeks, opened as nothing, and its card never said otherwise.
+
+        One request each, so a few are handed out a round. Those due in the
+        last day come first, since that is when somebody is waiting for one.
+        The rest are picked at random rather than newest first: a few waiting
+        rooms that never get a time are asked about every round, and in a
+        fixed order they took every place and nothing behind them was ever
+        asked at all.
         """
+        now = int(time.time()) if now is None else now
         return list(self.conn.execute(
             "SELECT key, ext_id FROM videos "
-            "WHERE live_status='is_upcoming' AND scheduled_at IS NULL AND members_only=0 "
-            "ORDER BY published_at DESC LIMIT ?", (limit,)))
+            "WHERE live_status='is_upcoming' AND members_only=0 "
+            "AND (scheduled_at IS NULL OR scheduled_at <= ?) "
+            "ORDER BY (scheduled_at IS NOT NULL AND scheduled_at > ?) DESC, RANDOM() "
+            "LIMIT ?", (now, now - 86400, limit)))
 
     def live_youtube(self, limit: int = 12) -> list[sqlite3.Row]:
         return list(self.conn.execute(

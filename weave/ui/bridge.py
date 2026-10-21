@@ -627,7 +627,7 @@ class Bridge(QObject):
         # title. Held rather than asked for again, because the view can have
         # moved on by the time the answer arrives and the press was about the
         # thing that was pressed.
-        self._pending_play: tuple[str, str, str] | None = None
+        self._pending_play: tuple[str, str, str, bool] | None = None
         # What the last press of the members button found, and which channel
         # it was about. Said on the channel page rather than only in the bar,
         # because the bar clears itself and the answer is about the page you
@@ -4586,8 +4586,14 @@ class Bridge(QObject):
         if row.get("isUpcoming"):
             # An announced stream is still just a listing. Handing its watch
             # URL to mpv crashes it, since there is nothing there yet, so the
-            # click opens what can actually be shown right now instead.
-            self.openDetail(key)
+            # click opens what can actually be shown right now instead. Unless
+            # it may have begun: the card says what was said when it was last
+            # asked, and a premiere that ran went on saying "Starting soon"
+            # with a video behind it that plays. So that is asked first.
+            if not (self._may_have_begun(key) and self._ask_whether_it_is_still_live(
+                    key, str(row.get("url") or ""), str(row.get("title") or ""),
+                    announced=True)):
+                self.openDetail(key)
             return
         if listen and self._view_kind == HISTORY and self._history_music:
             # These are songs, and they were listened to rather than watched.
@@ -5145,7 +5151,15 @@ class Bridge(QObject):
     def _on_video_gone(self, key: str) -> None:
         self._set_notice("That video is no longer on YouTube", clear_after_s=6)
 
-    def _ask_whether_it_is_still_live(self, key: str, url: str, title: str) -> bool:
+    def _may_have_begun(self, key: str) -> bool:
+        """Whether an announced stream's start has passed, or nothing says
+        when it is."""
+        found = self._db.video(key) if self._db is not None else None
+        starts = (found or {}).get("scheduled_at")
+        return not starts or int(starts) <= int(time.time())
+
+    def _ask_whether_it_is_still_live(self, key: str, url: str, title: str,
+                                      announced: bool = False) -> bool:
         """Make sure a stream is still on air before mpv is given it.
 
         A card says live because something said so when it was last asked, and
@@ -5156,13 +5170,17 @@ class Bridge(QObject):
         Answers whether the press has been taken over. One at a time, since
         pressing twice while the first is in flight would ask the same
         question twice and play it twice when both come back.
+
+        `announced` is a press on a card that says the stream has not begun,
+        asked because its time has passed. One that has begun or ended plays,
+        and one that still has not opens the panel, as such a press always did.
         """
         if self._stream_check is not None and self._stream_check.isRunning():
             return True
         ext_id = key.split(":", 1)[1] if ":" in key else ""
         if not ext_id:
             return False
-        self._pending_play = (key, url, title)
+        self._pending_play = (key, url, title, announced)
         self._stream_check = StreamCheck(self._db, self._cfg, key, ext_id, self)
         self._stream_check.answered.connect(self._on_stream_checked)
         self._stream_check.failed.connect(self._on_stream_check_failed)
@@ -5180,8 +5198,11 @@ class Bridge(QObject):
         self._pending_play = None
         if pending is None or pending[0] != key:
             return
-        _, url, title = pending
+        _, url, title, announced = pending
         if still_live:
+            if announced:
+                self.reload()
+                self.liveChanged.emit()
             self._hand_over(key, url, title, None, True)
             return
         self._set_starting("")
@@ -5190,6 +5211,14 @@ class Bridge(QObject):
             # row is left saying what it says, since it is still true.
             self._set_notice("That stream has not started yet.", clear_after_s=6)
             self._set_status(f"{title} has not started yet")
+            if announced:
+                self.openDetail(key)
+            return
+        if announced:
+            # It ran while the card still said it would. What is there now is
+            # an ordinary video, and the press was a press to watch it.
+            self.reload()
+            self._hand_over(key, url, title, None, False)
             return
         # The worker has already written what it found, so the card only has to
         # be read again to stop saying live.
@@ -5210,7 +5239,14 @@ class Bridge(QObject):
         self._pending_play = None
         if pending is None or pending[0] != key:
             return
-        _, url, title = pending
+        _, url, title, announced = pending
+        if announced:
+            # Handing mpv an announcement it cannot open crashes it, so this
+            # one is not played on a guess. The panel opens, as it always did.
+            self._set_starting("")
+            self._set_status(f"could not tell whether {title} has started, {why}")
+            self.openDetail(key)
+            return
         self._set_status(f"could not tell whether {title} is still live, {why}")
         self._hand_over(key, url, title, None, True)
 

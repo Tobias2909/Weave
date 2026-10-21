@@ -50,6 +50,12 @@ class ParseLine(unittest.TestCase):
         import inspect
         self.assertIn("--ignore-no-formats-error", inspect.getsource(livecheck.check))
 
+    def test_a_premiere_that_ran_is_an_ordinary_video(self):
+        # Measured on one: "not_live", with the time it went up still there.
+        got = livecheck.parse_line("aaaaaaaaaaa", "NA|not_live|1791036009|public|18")
+        self.assertEqual((got.upcoming, got.still_live, got.ordinary), (False, False, True))
+        self.assertFalse(livecheck.parse_line("aaaaaaaaaaa", "NA|was_live|NA").ordinary)
+
     def test_the_id_is_carried_through(self):
         self.assertEqual(livecheck.parse_line("aaaaaaaaaaa", "1|is_live").ext_id,
                          "aaaaaaaaaaa")

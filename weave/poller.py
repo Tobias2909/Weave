@@ -1748,11 +1748,16 @@ class StreamCheck(Worker):
             return
         if self._cancel.is_set():
             return
-        if not state.still_live and not state.upcoming:
+        if not state.upcoming:
             # What it is now, so the card stops saying live whatever else
             # happens next. A stream that has ended is an ordinary video and
-            # stays in the feed.
-            self._db.set_live_state(self._key, None, False)
+            # stays in the feed. One pressed while its card said it had not
+            # begun says it is on the air from here on, and a premiere that
+            # has run is an ordinary video again.
+            if state.ordinary:
+                self._db.set_ordinary(self._key)
+            else:
+                self._db.set_live_state(self._key, state.viewers, state.still_live)
         self.answered.emit(self._key, state.still_live, state.upcoming)
 
 
@@ -1931,16 +1936,17 @@ class LiveWatcher(Worker):
                 self._db.settle_stream(row["key"])
 
     def _check_upcoming(self, budget: Budget) -> None:
-        """Learn when an announced stream is actually due.
+        """Learn when an announced stream is actually due, and whether one
+        that was due has begun.
 
         The subscriptions sweep reports the time as NA for every one of them,
         so the card could say a stream was announced and never when. It is one
-        request per video and the answer never changes, so a few are asked
-        each round and that is the end of it. What comes back also says
-        whether it is still announced, which is what keeps one that has since
-        gone live or been cancelled from being asked about for ever.
+        request per video, so a few are asked each round. What comes back also
+        says whether it is still announced, which is what keeps one that has
+        since gone live, ended or been cancelled from being asked about for
+        ever, and from saying "Starting soon" for ever.
         """
-        rows = self._db.upcoming_without_start(UPCOMING_PER_CHECK)
+        rows = self._db.announcements_to_ask(UPCOMING_PER_CHECK)
         rows = rows[:budget.allowance(PLAYER, len(rows), background=True).granted]
         for row in rows:
             if self._cancel.is_set():
@@ -1958,12 +1964,17 @@ class LiveWatcher(Worker):
                 # opened. Marking it is what takes it out of the list this
                 # walks, so it is asked once and never again.
                 self._db.set_members_only(row["key"])
-            elif state.starts_at is not None:
-                self._db.set_scheduled_at(row["key"], state.starts_at)
             elif not state.upcoming:
                 # It began, or it was called off. Either way it is not an
-                # announcement any more, so it stops being asked about.
-                self._db.set_live_state(row["key"], state.viewers, state.still_live)
+                # announcement any more, so it stops being asked about. Asked
+                # before the time, which a premiere that has run still answers
+                # with: read first, it left the video announced for good.
+                if state.ordinary:
+                    self._db.set_ordinary(row["key"])
+                else:
+                    self._db.set_live_state(row["key"], state.viewers, state.still_live)
+            elif state.starts_at is not None:
+                self._db.set_scheduled_at(row["key"], state.starts_at)
 
     def _check_youtube(self) -> int:
         """Give the YouTube streams a viewer count so they order against the

@@ -1453,7 +1453,7 @@ class Smoke:
         db = Database(paths.DB_FILE)
         db.set_live_state(gone, None, False)
         db.close()
-        bridge._pending_play = (gone, "https://example/watch", "A broadcast")
+        bridge._pending_play = (gone, "https://example/watch", "A broadcast", False)
         bridge._on_stream_checked(gone, False, False)
         settle(0.6)
         call(grid, "forceLayout")
@@ -1530,7 +1530,7 @@ class Smoke:
         db.set_live_state(gone, None, False)
         db.close()
         bridge._set_notice("")
-        bridge._pending_play = (gone, "https://example/watch", "A suggested broadcast")
+        bridge._pending_play = (gone, "https://example/watch", "A suggested broadcast", False)
         bridge._on_stream_checked(gone, False, False)
         settle(0.6)
 

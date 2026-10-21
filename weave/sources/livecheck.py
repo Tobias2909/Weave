@@ -54,6 +54,9 @@ class LiveState:
     # member from anybody else; what separates them is that a member is given
     # formats. Also free, from the same call.
     playable: bool = False
+    # An ordinary video, which is what a premiere is once it has run. Not a
+    # stream that ended, which YouTube calls was_live and keeps as a recording.
+    ordinary: bool = False
 
 
 def _said(text: str) -> bool:
@@ -88,6 +91,7 @@ def parse_line(ext_id: str, text: str) -> LiveState:
         status == "is_upcoming",
         availability == MEMBERS_ONLY,
         playable,
+        status == "not_live",
     )
 
 
